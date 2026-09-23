@@ -1,0 +1,114 @@
+{
+  "id": "mock-023",
+  "source": {
+    "file": "test/mock.test.mjs",
+    "test": "jev_decide normalizes non-finite confidence to null without discarding the pick"
+  },
+  "classes": [
+    "mock"
+  ],
+  "divergences": [],
+  "reference_assertions_failed_under_compatible": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "compatible-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_decide",
+      "arguments": {
+        "decision": "Which database should the service use?",
+        "evidence": "The service is a small CRUD API with one table and no concurrent writers.",
+        "priorities": "Minimize operational overhead.",
+        "candidates": [
+          {
+            "id": "postgres",
+            "description": "A full relational database server"
+          },
+          {
+            "id": "sqlite",
+            "description": "An embedded database stored in one file"
+          }
+        ],
+        "requirements": [
+          "Runs without a separate server process"
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer compatible-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "decision": "Which database should the service use?",
+                "evidence": "The service is a small CRUD API with one table and no concurrent writers.",
+                "priorities": "Minimize operational overhead.",
+                "candidates": [
+                  {
+                    "id": "option_0",
+                    "description": "A full relational database server"
+                  },
+                  {
+                    "id": "option_1",
+                    "description": "An embedded database stored in one file"
+                  }
+                ],
+                "requirements": [
+                  "Runs without a separate server process"
+                ]
+              },
+              "questions": {
+                "recommendation": {
+                  "type": "choice",
+                  "instructions": "Which candidate best fits the decision, evidence, and priorities? Select a candidate or an escape hatch. Do not invent missing facts, preferences, or approvals.",
+                  "criteria": {
+                    "option_0": "A full relational database server",
+                    "option_1": "An embedded database stored in one file",
+                    "ask_user": "A consequential user preference or requirement is missing; ask instead of inventing it",
+                    "investigate": "Gather missing technical or factual evidence before selecting a candidate",
+                    "none": "None of the supplied candidates fits the known requirements"
+                  }
+                },
+                "check_0_0": {
+                  "type": "choice",
+                  "instructions": "How does the mechanism in candidates[0] relate to requirements[0], using the evidence? Judge only this property, not the candidate overall desirability. Missing evidence is not contradiction.",
+                  "criteria": {
+                    "supported": "The evidence and mechanism support this specific requirement",
+                    "contradicted": "The evidence or mechanism contradicts this specific requirement, not merely another requirement",
+                    "unknown": "Relevant evidence is missing; neither satisfaction nor violation is established"
+                  }
+                },
+                "check_1_0": {
+                  "type": "choice",
+                  "instructions": "How does the mechanism in candidates[1] relate to requirements[0], using the evidence? Judge only this property, not the candidate overall desirability. Missing evidence is not contradiction.",
+                  "criteria": {
+                    "supported": "The evidence and mechanism support this specific requirement",
+                    "contradicted": "The evidence or mechanism contradicts this specific requirement, not merely another requirement",
+                    "unknown": "Relevant evidence is missing; neither satisfaction nor violation is established"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"recommendation\":{\"choice\":\"option_1\",\"confidence\":1.7,\"probabilities\":{\"option_1\":0.95,\"option_0\":0.0125,\"ask_user\":0.0125,\"investigate\":0.0125,\"none\":0.0125}},\"check_0_0\":{\"choice\":\"supported\",\"confidence\":0.99,\"probabilities\":{\"supported\":0.95,\"contradicted\":0.025,\"unknown\":0.025}}},\"usage\":{\"input_tokens\":10,\"output_tokens\":10}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_decide\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"recommendation\": {\n    \"selected\": \"sqlite\",\n    \"escaped\": false,\n    \"confidence\": null,\n    \"probabilities\": {\n      \"sqlite\": 0.95,\n      \"postgres\": 0.0125,\n      \"ask_user\": 0.0125,\n      \"investigate\": 0.0125,\n      \"none\": 0.0125\n    }\n  },\n  \"requirements_checked\": 1,\n  \"checks\": [\n    {\n      \"candidate\": \"postgres\",\n      \"requirement\": 0,\n      \"answer\": \"supported\"\n    },\n    {\n      \"candidate\": \"sqlite\",\n      \"requirement\": 0,\n      \"answer\": \"invalid_response\"\n    }\n  ],\n  \"warnings\": [],\n  \"usage\": {\n    \"input_tokens\": 10,\n    \"output_tokens\": 10\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

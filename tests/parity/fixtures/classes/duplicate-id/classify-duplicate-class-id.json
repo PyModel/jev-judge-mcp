@@ -1,0 +1,48 @@
+{
+  "id": "duplicate-id/classify-duplicate-class-id",
+  "source": {
+    "case": "duplicate-id/classify-duplicate-class-id"
+  },
+  "classes": [
+    "duplicate-id"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_classify",
+      "arguments": {
+        "items": [
+          {
+            "id": "t1",
+            "text": "a"
+          }
+        ],
+        "classes": [
+          {
+            "id": "x",
+            "description": "x"
+          },
+          {
+            "id": "x",
+            "description": "y"
+          }
+        ]
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Duplicate class id: x"
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

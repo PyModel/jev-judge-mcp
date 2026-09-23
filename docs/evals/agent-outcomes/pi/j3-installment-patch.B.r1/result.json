@@ -1,0 +1,57 @@
+{
+  "run_id": "j3-installment-patch.B.r1",
+  "task": "j3-installment-patch",
+  "agent": "pi",
+  "arm": "B",
+  "repeat": 1,
+  "status": "ok",
+  "reached_model": true,
+  "jev_tool_called": true,
+  "jev_gate": null,
+  "measurement": null,
+  "success": true,
+  "final_tests_passed": true,
+  "acceptance_passed": 3,
+  "acceptance_total": 3,
+  "regressions": [],
+  "protected_changed": [],
+  "wall_s": 242.77407324999876,
+  "tokens": {
+    "context": 93139,
+    "output": 4703,
+    "total": 97842
+  },
+  "tool_calls": 12,
+  "jev_calls": 1,
+  "jev_call_log": [
+    {
+      "tool": "jev_decide",
+      "ms": 4035.2,
+      "is_error": false,
+      "input_tokens": 3055,
+      "action": null,
+      "headline_action": null,
+      "model": "jev-1.13.0"
+    }
+  ],
+  "test_cycles": 1,
+  "retries": 0,
+  "wrong_branches": [],
+  "decision": "patch-c",
+  "decision_correct": true,
+  "agent_model": "ds4/glm-5.3-flash",
+  "agent_cost_usd": 0.0,
+  "jev_cost_usd": 0.00012831,
+  "cost_usd": 0.00012831,
+  "agent_cost_reported": true,
+  "num_turns": 13,
+  "tool_counts": {
+    "bash": 5,
+    "mcp": 4,
+    "mcp__jev": 2,
+    "mcpScript": 1
+  },
+  "mcp_servers": {},
+  "unsafe": [],
+  "human_review_requests": 0
+}

@@ -1,0 +1,18 @@
+{
+  // keep-me comment
+  "mcp": {
+    "other": {"type": "local", "command": ["echo"]},
+    "jev": {
+      "type": "local",
+      "command": [
+        "/opt/uv/uvx",
+        "--from",
+        "/work/jev-mcp[typesafe]",
+        "jev-judge-mcp"
+      ],
+      "environment": {
+        "TYPESAFE_API_KEY": "{env:TYPESAFE_API_KEY}"
+      }
+    }
+  }
+}

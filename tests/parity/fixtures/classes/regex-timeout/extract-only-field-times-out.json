@@ -1,0 +1,39 @@
+{
+  "id": "regex-timeout/extract-only-field-times-out",
+  "source": {
+    "case": "regex-timeout/extract-only-field-times-out"
+  },
+  "classes": [
+    "regex-timeout"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_extract",
+      "arguments": {
+        "document": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa! Build ABC-123 passed. Build ABC-124 failed.",
+        "fields": [
+          {
+            "id": "slow",
+            "pattern": "(a+)+$",
+            "description": "A pathological pattern."
+          }
+        ]
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_extract\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"none\",\n  \"summary\": {\n    \"fields\": 1,\n    \"extracted\": 0,\n    \"auto\": 0,\n    \"review\": 0,\n    \"not_found\": 0,\n    \"invalid\": 1\n  },\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"results\": [\n    {\n      \"id\": \"slow\",\n      \"value\": null,\n      \"status\": \"invalid_pattern\",\n      \"reason\": \"regex timed out after 1000ms; simplify the pattern\",\n      \"candidates_considered\": 0,\n      \"candidates_truncated\": false,\n      \"matches_skipped_too_long\": 0\n    }\n  ],\n  \"usage\": null\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,3732 @@
+{
+  "reference": {
+    "version": "0.5.0",
+    "commit": "69ffb4b49c88802ec6e49b883f4a36b91d23197e",
+    "node": "v24.19.0"
+  },
+  "counts": {
+    "fixtures": 282,
+    "calls": 322,
+    "by_class": {
+      "mock": 152,
+      "normal": 10,
+      "boundary": 22,
+      "malformed": 14,
+      "truncated": 6,
+      "low-confidence": 9,
+      "tie": 5,
+      "contradicted": 5,
+      "unsupported": 4,
+      "zero-match": 3,
+      "regex-timeout": 2,
+      "invalid-pattern": 6,
+      "provider-failure": 6,
+      "resolver-error": 17,
+      "unicode-astral": 10,
+      "duplicate-id": 11
+    }
+  },
+  "fixtures": [
+    {
+      "file": "classes/boundary/classify-at-thresholds-js-number-format.json",
+      "id": "boundary/classify-at-thresholds-js-number-format",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/boundary/classify-items-x-classes-over-budget.json",
+      "id": "boundary/classify-items-x-classes-over-budget",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/boundary/compare-aspect-count-over-cap.json",
+      "id": "boundary/compare-aspect-count-over-cap",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_compare"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/boundary/compare-margin-single-key-choice.json",
+      "id": "boundary/compare-margin-single-key-choice",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_compare"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/boundary/compare-out-of-range-confidence-is-null.json",
+      "id": "boundary/compare-out-of-range-confidence-is-null",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_compare"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/boundary/decide-candidate-id-pattern-rejected.json",
+      "id": "boundary/decide-candidate-id-pattern-rejected",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/boundary/extract-aggregate-preview-over-budget.json",
+      "id": "boundary/extract-aggregate-preview-over-budget",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/boundary/extract-candidate-at-2000-kept-2001-skipped.json",
+      "id": "boundary/extract-candidate-at-2000-kept-2001-skipped",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/boundary/extract-flags-normalized.json",
+      "id": "boundary/extract-flags-normalized",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/boundary/extract-only-overlong-matches.json",
+      "id": "boundary/extract-only-overlong-matches",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/boundary/find-exists-at-absent-floor.json",
+      "id": "boundary/find-exists-at-absent-floor",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/boundary/find-exists-at-found-tiny-probabilities.json",
+      "id": "boundary/find-exists-at-found-tiny-probabilities",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/boundary/gate-threshold-default-review-at-follows-auto-accept.json",
+      "id": "boundary/gate-threshold-default-review-at-follows-auto-accept",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/boundary/rerank-aggregate-over-budget.json",
+      "id": "boundary/rerank-aggregate-over-budget",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_rerank"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/boundary/review-composite-at-floor.json",
+      "id": "boundary/review-composite-at-floor",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/boundary/review-fractional-scores-clamped-composite.json",
+      "id": "boundary/review-fractional-scores-clamped-composite",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/boundary/review-threshold-invariant-violated.json",
+      "id": "boundary/review-threshold-invariant-violated",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/boundary/screen-injection-at-block-at.json",
+      "id": "boundary/screen-injection-at-block-at",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/boundary/screen-injection-at-custom-review-at.json",
+      "id": "boundary/screen-injection-at-custom-review-at",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/boundary/screen-substance-at-skip-floor-relevance-below.json",
+      "id": "boundary/screen-substance-at-skip-floor-relevance-below",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/boundary/screen-tofixed-half-rounds-up.json",
+      "id": "boundary/screen-tofixed-half-rounds-up",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/boundary/verify-confidence-at-auto-accept.json",
+      "id": "boundary/verify-confidence-at-auto-accept",
+      "classes": [
+        "boundary"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/contradicted/compare-contradicts-auto.json",
+      "id": "contradicted/compare-contradicts-auto",
+      "classes": [
+        "contradicted"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_compare"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/contradicted/decide-requirements-contradicted-plural.json",
+      "id": "contradicted/decide-requirements-contradicted-plural",
+      "classes": [
+        "contradicted"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/contradicted/decide-single-requirement-contradicted.json",
+      "id": "contradicted/decide-single-requirement-contradicted",
+      "classes": [
+        "contradicted"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/contradicted/gate-contradicted-below-auto-accept.json",
+      "id": "contradicted/gate-contradicted-below-auto-accept",
+      "classes": [
+        "contradicted"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/contradicted/verify-contradicted-auto.json",
+      "id": "contradicted/verify-contradicted-auto",
+      "classes": [
+        "contradicted"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/duplicate-id/classify-duplicate-class-id.json",
+      "id": "duplicate-id/classify-duplicate-class-id",
+      "classes": [
+        "duplicate-id"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/duplicate-id/classify-duplicate-item-id.json",
+      "id": "duplicate-id/classify-duplicate-item-id",
+      "classes": [
+        "duplicate-id"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/duplicate-id/classify-omitted-ids-get-positional-fallbacks.json",
+      "id": "duplicate-id/classify-omitted-ids-get-positional-fallbacks",
+      "classes": [
+        "duplicate-id"
+      ],
+      "divergences": [
+        "ADR-0031"
+      ],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/duplicate-id/decide-candidate-collides-with-escape-hatch.json",
+      "id": "duplicate-id/decide-candidate-collides-with-escape-hatch",
+      "classes": [
+        "duplicate-id"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/duplicate-id/decide-duplicate-candidate-id.json",
+      "id": "duplicate-id/decide-duplicate-candidate-id",
+      "classes": [
+        "duplicate-id"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/duplicate-id/decide-hatch-name-allowed-without-hatches.json",
+      "id": "duplicate-id/decide-hatch-name-allowed-without-hatches",
+      "classes": [
+        "duplicate-id"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/duplicate-id/extract-duplicate-field-id.json",
+      "id": "duplicate-id/extract-duplicate-field-id",
+      "classes": [
+        "duplicate-id"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/duplicate-id/find-ids-sanitized-and-suffixed.json",
+      "id": "duplicate-id/find-ids-sanitized-and-suffixed",
+      "classes": [
+        "duplicate-id"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/duplicate-id/rerank-duplicate-id.json",
+      "id": "duplicate-id/rerank-duplicate-id",
+      "classes": [
+        "duplicate-id"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_rerank"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/duplicate-id/rerank-fallback-avoids-supplied-ids.json",
+      "id": "duplicate-id/rerank-fallback-avoids-supplied-ids",
+      "classes": [
+        "duplicate-id"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_rerank"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/duplicate-id/verify-duplicate-evidence-ids-suffixed.json",
+      "id": "duplicate-id/verify-duplicate-evidence-ids-suffixed",
+      "classes": [
+        "duplicate-id"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/invalid-pattern/extract-multiline-flag.json",
+      "id": "invalid-pattern/extract-multiline-flag",
+      "classes": [
+        "invalid-pattern"
+      ],
+      "divergences": [
+        "ADR-0004"
+      ],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/invalid-pattern/extract-named-group.json",
+      "id": "invalid-pattern/extract-named-group",
+      "classes": [
+        "invalid-pattern"
+      ],
+      "divergences": [
+        "ADR-0004"
+      ],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/invalid-pattern/extract-syntax-error.json",
+      "id": "invalid-pattern/extract-syntax-error",
+      "classes": [
+        "invalid-pattern"
+      ],
+      "divergences": [
+        "ADR-0004"
+      ],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/invalid-pattern/extract-unicode-flag.json",
+      "id": "invalid-pattern/extract-unicode-flag",
+      "classes": [
+        "invalid-pattern"
+      ],
+      "divergences": [
+        "ADR-0004"
+      ],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/invalid-pattern/extract-unknown-flag.json",
+      "id": "invalid-pattern/extract-unknown-flag",
+      "classes": [
+        "invalid-pattern"
+      ],
+      "divergences": [
+        "ADR-0004"
+      ],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/invalid-pattern/extract-variable-lookbehind.json",
+      "id": "invalid-pattern/extract-variable-lookbehind",
+      "classes": [
+        "invalid-pattern"
+      ],
+      "divergences": [
+        "ADR-0004"
+      ],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/low-confidence/classify-low-margin.json",
+      "id": "low-confidence/classify-low-margin",
+      "classes": [
+        "low-confidence"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/low-confidence/compare-below-auto-accept.json",
+      "id": "low-confidence/compare-below-auto-accept",
+      "classes": [
+        "low-confidence"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_compare"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/low-confidence/extract-none-matched-ambiguous.json",
+      "id": "low-confidence/extract-none-matched-ambiguous",
+      "classes": [
+        "low-confidence"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/low-confidence/extract-none-matched-confident.json",
+      "id": "low-confidence/extract-none-matched-confident",
+      "classes": [
+        "low-confidence"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/low-confidence/gate-claim-confidence-tiers.json",
+      "id": "low-confidence/gate-claim-confidence-tiers",
+      "classes": [
+        "low-confidence"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/low-confidence/review-min-confidence-below-review-at.json",
+      "id": "low-confidence/review-min-confidence-below-review-at",
+      "classes": [
+        "low-confidence"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/low-confidence/review-safe-to-apply-review-tier.json",
+      "id": "low-confidence/review-safe-to-apply-review-tier",
+      "classes": [
+        "low-confidence"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/low-confidence/screen-injection-review-tier.json",
+      "id": "low-confidence/screen-injection-review-tier",
+      "classes": [
+        "low-confidence"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/low-confidence/verify-low-and-null-confidence.json",
+      "id": "low-confidence/verify-low-and-null-confidence",
+      "classes": [
+        "low-confidence"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/malformed/classify-extra-probability-key.json",
+      "id": "malformed/classify-extra-probability-key",
+      "classes": [
+        "malformed"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/malformed/compare-invalid-overall-and-aspect.json",
+      "id": "malformed/compare-invalid-overall-and-aspect",
+      "classes": [
+        "malformed"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_compare"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/malformed/decide-invalid-check-kept-silent.json",
+      "id": "malformed/decide-invalid-check-kept-silent",
+      "classes": [
+        "malformed"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/malformed/decide-invalid-recommendation.json",
+      "id": "malformed/decide-invalid-recommendation",
+      "classes": [
+        "malformed"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/malformed/envelope-body-array.json",
+      "id": "malformed/envelope-body-array",
+      "classes": [
+        "malformed"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/malformed/envelope-body-not-json.json",
+      "id": "malformed/envelope-body-not-json",
+      "classes": [
+        "malformed"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/malformed/envelope-usage-infinite.json",
+      "id": "malformed/envelope-usage-infinite",
+      "classes": [
+        "malformed"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/malformed/envelope-usage-null-model-absent.json",
+      "id": "malformed/envelope-usage-null-model-absent",
+      "classes": [
+        "malformed"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/malformed/extract-choice-not-argmax.json",
+      "id": "malformed/extract-choice-not-argmax",
+      "classes": [
+        "malformed"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/malformed/extract-sum-0-99-rejected.json",
+      "id": "malformed/extract-sum-0-99-rejected",
+      "classes": [
+        "malformed"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/malformed/gate-rubric-confidence-out-of-range.json",
+      "id": "malformed/gate-rubric-confidence-out-of-range",
+      "classes": [
+        "malformed"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/malformed/rerank-missing-noul.json",
+      "id": "malformed/rerank-missing-noul",
+      "classes": [
+        "malformed"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_rerank"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/malformed/rerank-out-of-range-noul.json",
+      "id": "malformed/rerank-out-of-range-noul",
+      "classes": [
+        "malformed"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_rerank"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/malformed/verify-claim-choice-inherited-key.json",
+      "id": "malformed/verify-claim-choice-inherited-key",
+      "classes": [
+        "malformed"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/normal/classify-batch-with-context.json",
+      "id": "normal/classify-batch-with-context",
+      "classes": [
+        "normal"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/normal/compare-with-aspects.json",
+      "id": "normal/compare-with-aspects",
+      "classes": [
+        "normal"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_compare"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/normal/decide-with-requirements.json",
+      "id": "normal/decide-with-requirements",
+      "classes": [
+        "normal"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/normal/extract-two-fields.json",
+      "id": "normal/extract-two-fields",
+      "classes": [
+        "normal"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/normal/find-ranked-top-k.json",
+      "id": "normal/find-ranked-top-k",
+      "classes": [
+        "normal"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/normal/gate-accepted.json",
+      "id": "normal/gate-accepted",
+      "classes": [
+        "normal"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/normal/rerank-top-k.json",
+      "id": "normal/rerank-top-k",
+      "classes": [
+        "normal"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_rerank"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/normal/review-auto-env-model.json",
+      "id": "normal/review-auto-env-model",
+      "classes": [
+        "normal"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/normal/screen-with-purpose-pass.json",
+      "id": "normal/screen-with-purpose-pass",
+      "classes": [
+        "normal"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/normal/verify-multi-evidence-model-override.json",
+      "id": "normal/verify-multi-evidence-model-override",
+      "classes": [
+        "normal"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/provider-failure/compatible-200-control.json",
+      "id": "provider-failure/compatible-200-control",
+      "classes": [
+        "provider-failure"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/provider-failure/compatible-401-after-regex.json",
+      "id": "provider-failure/compatible-401-after-regex",
+      "classes": [
+        "provider-failure"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/provider-failure/compatible-429-echoes-key-redacted.json",
+      "id": "provider-failure/compatible-429-echoes-key-redacted",
+      "classes": [
+        "provider-failure"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/provider-failure/compatible-500-text.json",
+      "id": "provider-failure/compatible-500-text",
+      "classes": [
+        "provider-failure"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/provider-failure/compatible-502-empty-body.json",
+      "id": "provider-failure/compatible-502-empty-body",
+      "classes": [
+        "provider-failure"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/provider-failure/compatible-503-body-sliced-at-200.json",
+      "id": "provider-failure/compatible-503-body-sliced-at-200",
+      "classes": [
+        "provider-failure"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/regex-timeout/extract-catastrophic-then-valid-field.json",
+      "id": "regex-timeout/extract-catastrophic-then-valid-field",
+      "classes": [
+        "regex-timeout"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/regex-timeout/extract-only-field-times-out.json",
+      "id": "regex-timeout/extract-only-field-times-out",
+      "classes": [
+        "regex-timeout"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/auto-cloudflare-token-without-account.json",
+      "id": "resolver-error/auto-cloudflare-token-without-account",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/auto-compatible-key-without-url.json",
+      "id": "resolver-error/auto-compatible-key-without-url",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/auto-no-credentials.json",
+      "id": "resolver-error/auto-no-credentials",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/auto-openrouter-key-not-sk-or.json",
+      "id": "resolver-error/auto-openrouter-key-not-sk-or",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/auto-unknown-provider-name.json",
+      "id": "resolver-error/auto-unknown-provider-name",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/explicit-cloudflare-account-without-token.json",
+      "id": "resolver-error/explicit-cloudflare-account-without-token",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/explicit-cloudflare-unset.json",
+      "id": "resolver-error/explicit-cloudflare-unset",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/explicit-compatible-both-unset.json",
+      "id": "resolver-error/explicit-compatible-both-unset",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/explicit-compatible-key-unset.json",
+      "id": "resolver-error/explicit-compatible-key-unset",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/explicit-compatible-other-tool.json",
+      "id": "resolver-error/explicit-compatible-other-tool",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/explicit-compatible-url-unset.json",
+      "id": "resolver-error/explicit-compatible-url-unset",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/explicit-openrouter-not-sk-or.json",
+      "id": "resolver-error/explicit-openrouter-not-sk-or",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/explicit-openrouter-unset.json",
+      "id": "resolver-error/explicit-openrouter-unset",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/explicit-typesafe-unset.json",
+      "id": "resolver-error/explicit-typesafe-unset",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/explicit-typesafe-uppercase-unset.json",
+      "id": "resolver-error/explicit-typesafe-uppercase-unset",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/explicit-vercel-unset.json",
+      "id": "resolver-error/explicit-vercel-unset",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [
+        "ADR-0007"
+      ],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/resolver-error/extract-zero-match-never-resolves.json",
+      "id": "resolver-error/extract-zero-match-never-resolves",
+      "classes": [
+        "resolver-error"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/tie/compare-margin-zero.json",
+      "id": "tie/compare-margin-zero",
+      "classes": [
+        "tie"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_compare"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/tie/decide-candidate-tied-with-escape-hatch.json",
+      "id": "tie/decide-candidate-tied-with-escape-hatch",
+      "classes": [
+        "tie"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/tie/extract-tie-picks-second.json",
+      "id": "tie/extract-tie-picks-second",
+      "classes": [
+        "tie"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/tie/find-tie-keeps-caller-order.json",
+      "id": "tie/find-tie-keeps-caller-order",
+      "classes": [
+        "tie"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/tie/rerank-equal-scores-stable.json",
+      "id": "tie/rerank-equal-scores-stable",
+      "classes": [
+        "tie"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_rerank"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/truncated/classify-item-and-class-text-over-cap.json",
+      "id": "truncated/classify-item-and-class-text-over-cap",
+      "classes": [
+        "truncated"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/truncated/find-candidate-text-over-cap.json",
+      "id": "truncated/find-candidate-text-over-cap",
+      "classes": [
+        "truncated"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/truncated/gate-claim-over-cap.json",
+      "id": "truncated/gate-claim-over-cap",
+      "classes": [
+        "truncated"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/truncated/gate-evidence-item-over-cap.json",
+      "id": "truncated/gate-evidence-item-over-cap",
+      "classes": [
+        "truncated"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/truncated/review-request-exactly-at-cap.json",
+      "id": "truncated/review-request-exactly-at-cap",
+      "classes": [
+        "truncated"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/truncated/review-tests-over-cap.json",
+      "id": "truncated/review-tests-over-cap",
+      "classes": [
+        "truncated"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/unicode-astral/classify-astral-ids-preserved.json",
+      "id": "unicode-astral/classify-astral-ids-preserved",
+      "classes": [
+        "unicode-astral"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/unicode-astral/compare-aspect-200-units-astral.json",
+      "id": "unicode-astral/compare-aspect-200-units-astral",
+      "classes": [
+        "unicode-astral"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_compare"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/unicode-astral/compare-aspect-201-units-astral-rejected.json",
+      "id": "unicode-astral/compare-aspect-201-units-astral-rejected",
+      "classes": [
+        "unicode-astral"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_compare"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/unicode-astral/extract-dot-matches-single-units.json",
+      "id": "unicode-astral/extract-dot-matches-single-units",
+      "classes": [
+        "unicode-astral"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/unicode-astral/extract-quantifier-counts-units.json",
+      "id": "unicode-astral/extract-quantifier-counts-units",
+      "classes": [
+        "unicode-astral"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/unicode-astral/extract-whitespace-class.json",
+      "id": "unicode-astral/extract-whitespace-class",
+      "classes": [
+        "unicode-astral"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/unicode-astral/find-truncation-splits-surrogate-pair.json",
+      "id": "unicode-astral/find-truncation-splits-surrogate-pair",
+      "classes": [
+        "unicode-astral"
+      ],
+      "divergences": [
+        "ADR-0005"
+      ],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/unicode-astral/gate-claim-truncation-splits-surrogate.json",
+      "id": "unicode-astral/gate-claim-truncation-splits-surrogate",
+      "classes": [
+        "unicode-astral"
+      ],
+      "divergences": [
+        "ADR-0005"
+      ],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/unicode-astral/screen-purpose-quoted-in-instruction.json",
+      "id": "unicode-astral/screen-purpose-quoted-in-instruction",
+      "classes": [
+        "unicode-astral"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/unicode-astral/verify-astral-rtl-combining-text.json",
+      "id": "unicode-astral/verify-astral-rtl-combining-text",
+      "classes": [
+        "unicode-astral"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/unsupported/decide-escape-none.json",
+      "id": "unsupported/decide-escape-none",
+      "classes": [
+        "unsupported"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/unsupported/find-exists-absent.json",
+      "id": "unsupported/find-exists-absent",
+      "classes": [
+        "unsupported"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/unsupported/gate-unsupported-confident.json",
+      "id": "unsupported/gate-unsupported-confident",
+      "classes": [
+        "unsupported"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/unsupported/verify-says-nothing-source-none.json",
+      "id": "unsupported/verify-says-nothing-source-none",
+      "classes": [
+        "unsupported"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/zero-match/extract-no-matches-no-provider-call.json",
+      "id": "zero-match/extract-no-matches-no-provider-call",
+      "classes": [
+        "zero-match"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "classes/zero-match/extract-one-field-matches.json",
+      "id": "zero-match/extract-one-field-matches",
+      "classes": [
+        "zero-match"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "classes/zero-match/extract-zero-length-matches-dropped.json",
+      "id": "zero-match/extract-zero-length-matches-dropped",
+      "classes": [
+        "zero-match"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "mock/001-compatible-provider-sends-the-standard-request-to-the-configured-endpoint.json",
+      "id": "mock-001",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/002-compatible-provider-parses-verdicts-and-reports-the-endpoint-usage-and-default-m.json",
+      "id": "mock-002",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/003-compatible-provider-auto-selects-when-it-is-the-only-configured-provider.json",
+      "id": "mock-003",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/004-compatible-provider-rejects-a-malformed-response.json",
+      "id": "mock-004",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/005-compatible-provider-reports-non-2xx-status-with-the-body-redacted.json",
+      "id": "mock-005",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/006-compatible-provider-rejects-a-non-object-answers-envelope-and-fails-closed-on-an.json",
+      "id": "mock-006",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 2,
+      "provider_requests": 2
+    },
+    {
+      "file": "mock/007-compatible-provider-fails-closed-in-the-tool-when-an-answer-is-missing.json",
+      "id": "mock-007",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/008-compatible-provider-fails-closed-in-the-tools-for-answers-malformed-per-question.json",
+      "id": "mock-008",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify",
+        "jev_screen",
+        "jev_review"
+      ],
+      "calls": 4,
+      "provider_requests": 4
+    },
+    {
+      "file": "mock/009-compatible-provider-rejects-malformed-or-incomplete-usage.json",
+      "id": "mock-009",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 4,
+      "provider_requests": 4
+    },
+    {
+      "file": "mock/010-compatible-provider-tolerates-an-absent-usage-block-and-reports-zeros.json",
+      "id": "mock-010",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/011-compatible-provider-reports-missing-configuration-before-making-a-request.json",
+      "id": "mock-011",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "mock/012-compatible-provider-names-jev-api-base-url-alone-when-only-it-is-missing.json",
+      "id": "mock-012",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "mock/013-jev-classify-preserves-valid-argmax-outputs-and-auto-review-decisions.json",
+      "id": "mock-013",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/014-jev-classify-rejects-a-choice-that-is-not-the-argmax.json",
+      "id": "mock-014",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/015-jev-classify-accepts-either-tied-maximum.json",
+      "id": "mock-015",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/016-jev-classify-handles-invalid-and-valid-items-independently.json",
+      "id": "mock-016",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/017-jev-classify-applies-the-1e-9-argmax-tolerance.json",
+      "id": "mock-017",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_classify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/018-jev-extract-sends-only-eligible-matches-when-overlong-ones-would-fill-the-cap.json",
+      "id": "mock-018",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/019-jev-extract-turns-a-confident-none-of-them-from-a-truncated-universe-into-review.json",
+      "id": "mock-019",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/020-jev-extract-keeps-a-positive-pick-from-a-truncated-universe-provisional-not-auto.json",
+      "id": "mock-020",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_extract"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/021-jev-decide-recommendation-that-is-not-the-argmax-is-invalid-response.json",
+      "id": "mock-021",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/022-jev-decide-requirement-check-that-is-not-the-argmax-is-invalid-response.json",
+      "id": "mock-022",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/023-jev-decide-normalizes-non-finite-confidence-to-null-without-discarding-the-pick.json",
+      "id": "mock-023",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/024-jev-decide-accepts-a-candidate-id-named-constructor.json",
+      "id": "mock-024",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_decide"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/025-jev-review-returns-auto-on-a-strong-patch-and-sends-anti-injection-framing.json",
+      "id": "mock-025",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/026-jev-review-demotes-auto-when-the-diff-is-truncated-at-the-document-cap.json",
+      "id": "mock-026",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/027-jev-review-escalates-with-invalid-response-when-a-score-answer-is-malformed.json",
+      "id": "mock-027",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/028-jev-review-respects-composite-floor-as-a-parameter.json",
+      "id": "mock-028",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/029-jev-gate-accepts-only-when-review-passes-and-every-claim-verifies.json",
+      "id": "mock-029",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/030-jev-gate-escalates-on-a-confidently-contradicted-claim.json",
+      "id": "mock-030",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/031-jev-gate-marks-invalid-claim-answers-as-invalid-response-and-escalates.json",
+      "id": "mock-031",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/032-jev-gate-rejects-evidence-with-no-non-empty-text-before-calling-jev.json",
+      "id": "mock-032",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "mock/033-jev-review-escalates-on-unknown-rubric-confidence-even-at-zero-thresholds.json",
+      "id": "mock-033",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/034-jev-gate-escalates-on-unknown-claim-confidence-even-at-zero-thresholds.json",
+      "id": "mock-034",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/035-jev-review-escalates-with-invalid-response-when-safe-to-apply-is-malformed.json",
+      "id": "mock-035",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/036-jev-review-treats-an-out-of-range-score-as-invalid-response.json",
+      "id": "mock-036",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_review"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/037-jev-gate-rejects-claim-answers-whose-probabilities-do-not-sum-to-one.json",
+      "id": "mock-037",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/038-jev-gate-rejects-claim-answers-with-out-of-range-or-non-argmax-probabilities.json",
+      "id": "mock-038",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 3,
+      "provider_requests": 3
+    },
+    {
+      "file": "mock/039-jev-gate-demotes-auto-to-review-and-records-incomplete-context-when-the-diff-is.json",
+      "id": "mock-039",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/040-jev-gate-requires-review-for-an-unsupported-claim-and-flags-below-auto-confidenc.json",
+      "id": "mock-040",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/041-jev-gate-rejects-evidence-over-the-item-cap-before-calling-jev.json",
+      "id": "mock-041",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "mock/042-jev-gate-rejects-evidence-over-the-aggregate-character-budget-before-calling-jev.json",
+      "id": "mock-042",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 0
+    },
+    {
+      "file": "mock/043-jev-gate-makes-one-request-keeps-injected-directives-in-state-and-frames-every-q.json",
+      "id": "mock-043",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_gate"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/044-jev-screen-invalid-response-when-answers-are-missing-instead-of-defaulting-to-pa.json",
+      "id": "mock-044",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/045-jev-screen-still-passes-on-complete-benign-answers.json",
+      "id": "mock-045",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/046-jev-find-invalid-response-when-exists-or-best-answers-are-missing.json",
+      "id": "mock-046",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/047-jev-find-still-ranks-candidates-on-complete-answers.json",
+      "id": "mock-047",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/048-jev-verify-marks-a-claim-invalid-response-when-the-relation-answer-is-missing.json",
+      "id": "mock-048",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/049-jev-verify-still-returns-verified-verdicts-on-a-complete-response.json",
+      "id": "mock-049",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/050-jev-screen-rejects-injection-undefined-with-purpose-undefined.json",
+      "id": "mock-050",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/051-jev-screen-rejects-injection-null-with-purpose-undefined.json",
+      "id": "mock-051",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/052-jev-screen-rejects-injection-0-1-with-purpose-undefined.json",
+      "id": "mock-052",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/053-jev-screen-rejects-injection-0-1-with-purpose-undefined.json",
+      "id": "mock-053",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/054-jev-screen-rejects-injection-1-1-with-purpose-undefined.json",
+      "id": "mock-054",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/055-jev-screen-rejects-injection-true-with-purpose-undefined.json",
+      "id": "mock-055",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/056-jev-screen-rejects-substance-undefined-with-purpose-undefined.json",
+      "id": "mock-056",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/057-jev-screen-rejects-substance-null-with-purpose-undefined.json",
+      "id": "mock-057",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/058-jev-screen-rejects-substance-0-1-with-purpose-undefined.json",
+      "id": "mock-058",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/059-jev-screen-rejects-substance-0-1-with-purpose-undefined.json",
+      "id": "mock-059",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/060-jev-screen-rejects-substance-1-1-with-purpose-undefined.json",
+      "id": "mock-060",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/061-jev-screen-rejects-substance-true-with-purpose-undefined.json",
+      "id": "mock-061",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/062-jev-screen-rejects-injection-undefined-with-purpose-check-the-homepage-for-error.json",
+      "id": "mock-062",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/063-jev-screen-rejects-injection-null-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-063",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/064-jev-screen-rejects-injection-0-1-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-064",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/065-jev-screen-rejects-injection-0-1-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-065",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/066-jev-screen-rejects-injection-1-1-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-066",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/067-jev-screen-rejects-injection-true-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-067",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/068-jev-screen-rejects-substance-undefined-with-purpose-check-the-homepage-for-error.json",
+      "id": "mock-068",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/069-jev-screen-rejects-substance-null-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-069",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/070-jev-screen-rejects-substance-0-1-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-070",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/071-jev-screen-rejects-substance-0-1-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-071",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/072-jev-screen-rejects-substance-1-1-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-072",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/073-jev-screen-rejects-substance-true-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-073",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/074-jev-screen-rejects-relevance-undefined-with-purpose-check-the-homepage-for-error.json",
+      "id": "mock-074",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/075-jev-screen-rejects-relevance-null-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-075",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/076-jev-screen-rejects-relevance-0-1-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-076",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/077-jev-screen-rejects-relevance-0-1-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-077",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/078-jev-screen-rejects-relevance-1-1-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-078",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/079-jev-screen-rejects-relevance-true-with-purpose-check-the-homepage-for-errors.json",
+      "id": "mock-079",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/080-jev-screen-accepts-zero-probabilities-and-does-not-require-unrequested-relevance.json",
+      "id": "mock-080",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen"
+      ],
+      "calls": 5,
+      "provider_requests": 5
+    },
+    {
+      "file": "mock/081-jev-find-rejects-malformed-best-case-0.json",
+      "id": "mock-081",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/082-jev-find-rejects-malformed-best-case-1.json",
+      "id": "mock-082",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/083-jev-find-rejects-malformed-best-case-2.json",
+      "id": "mock-083",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/084-jev-find-rejects-malformed-best-case-3.json",
+      "id": "mock-084",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/085-jev-find-rejects-malformed-best-case-4.json",
+      "id": "mock-085",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/086-jev-find-rejects-malformed-best-case-5.json",
+      "id": "mock-086",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/087-jev-find-rejects-malformed-best-case-6.json",
+      "id": "mock-087",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/088-jev-find-rejects-malformed-best-case-7.json",
+      "id": "mock-088",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/089-jev-find-rejects-malformed-best-case-8.json",
+      "id": "mock-089",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/090-jev-find-rejects-malformed-best-case-9.json",
+      "id": "mock-090",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/091-jev-find-rejects-malformed-best-case-10.json",
+      "id": "mock-091",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/092-jev-find-rejects-malformed-best-case-11.json",
+      "id": "mock-092",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/093-jev-find-rejects-malformed-best-case-12.json",
+      "id": "mock-093",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/094-jev-find-rejects-malformed-best-case-13.json",
+      "id": "mock-094",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/095-jev-find-rejects-malformed-best-case-14.json",
+      "id": "mock-095",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/096-jev-find-rejects-malformed-best-case-15.json",
+      "id": "mock-096",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/097-jev-find-rejects-malformed-best-case-16.json",
+      "id": "mock-097",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/098-jev-find-rejects-malformed-best-case-17.json",
+      "id": "mock-098",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/099-jev-find-rejects-malformed-best-case-18.json",
+      "id": "mock-099",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/100-jev-find-rejects-malformed-best-case-19.json",
+      "id": "mock-100",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/101-jev-find-rejects-malformed-best-case-20.json",
+      "id": "mock-101",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/102-jev-find-rejects-exists-undefined.json",
+      "id": "mock-102",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/103-jev-find-rejects-exists-null.json",
+      "id": "mock-103",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/104-jev-find-rejects-exists-0.json",
+      "id": "mock-104",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/105-jev-find-rejects-exists-1.json",
+      "id": "mock-105",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/106-jev-find-rejects-exists-2.json",
+      "id": "mock-106",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/107-jev-find-rejects-exists-false.json",
+      "id": "mock-107",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/108-jev-find-accepts-exists-0-as-absent-and-tied-maximum-choices.json",
+      "id": "mock-108",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_find"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/109-jev-verify-rejects-malformed-relation-case-0-without-affecting-other-claims.json",
+      "id": "mock-109",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/110-jev-verify-rejects-malformed-relation-case-1-without-affecting-other-claims.json",
+      "id": "mock-110",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/111-jev-verify-rejects-malformed-relation-case-2-without-affecting-other-claims.json",
+      "id": "mock-111",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/112-jev-verify-rejects-malformed-relation-case-3-without-affecting-other-claims.json",
+      "id": "mock-112",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/113-jev-verify-rejects-malformed-relation-case-4-without-affecting-other-claims.json",
+      "id": "mock-113",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/114-jev-verify-rejects-malformed-relation-case-5-without-affecting-other-claims.json",
+      "id": "mock-114",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/115-jev-verify-rejects-malformed-relation-case-6-without-affecting-other-claims.json",
+      "id": "mock-115",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/116-jev-verify-rejects-malformed-relation-case-7-without-affecting-other-claims.json",
+      "id": "mock-116",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/117-jev-verify-rejects-malformed-relation-case-8-without-affecting-other-claims.json",
+      "id": "mock-117",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/118-jev-verify-rejects-malformed-relation-case-9-without-affecting-other-claims.json",
+      "id": "mock-118",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/119-jev-verify-rejects-malformed-relation-case-10-without-affecting-other-claims.json",
+      "id": "mock-119",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/120-jev-verify-rejects-malformed-relation-case-11-without-affecting-other-claims.json",
+      "id": "mock-120",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/121-jev-verify-rejects-malformed-relation-case-12-without-affecting-other-claims.json",
+      "id": "mock-121",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/122-jev-verify-rejects-malformed-relation-case-13-without-affecting-other-claims.json",
+      "id": "mock-122",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/123-jev-verify-rejects-malformed-relation-case-14-without-affecting-other-claims.json",
+      "id": "mock-123",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/124-jev-verify-rejects-malformed-relation-case-15-without-affecting-other-claims.json",
+      "id": "mock-124",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/125-jev-verify-rejects-malformed-relation-case-16-without-affecting-other-claims.json",
+      "id": "mock-125",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/126-jev-verify-rejects-malformed-relation-case-17-without-affecting-other-claims.json",
+      "id": "mock-126",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/127-jev-verify-rejects-malformed-relation-case-18-without-affecting-other-claims.json",
+      "id": "mock-127",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/128-jev-verify-rejects-malformed-relation-case-19-without-affecting-other-claims.json",
+      "id": "mock-128",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/129-jev-verify-rejects-malformed-relation-case-20-without-affecting-other-claims.json",
+      "id": "mock-129",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/130-jev-verify-rejects-malformed-relation-case-21-without-affecting-other-claims.json",
+      "id": "mock-130",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/131-jev-verify-rejects-malformed-relation-case-22-without-affecting-other-claims.json",
+      "id": "mock-131",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/132-jev-verify-rejects-malformed-relation-case-23-without-affecting-other-claims.json",
+      "id": "mock-132",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/133-jev-verify-rejects-malformed-relation-case-24-without-affecting-other-claims.json",
+      "id": "mock-133",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/134-jev-verify-rejects-malformed-relation-case-25-without-affecting-other-claims.json",
+      "id": "mock-134",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/135-jev-verify-rejects-malformed-relation-case-26-without-affecting-other-claims.json",
+      "id": "mock-135",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/136-jev-verify-rejects-malformed-relation-case-27-without-affecting-other-claims.json",
+      "id": "mock-136",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/137-jev-verify-rejects-malformed-relation-case-28-without-affecting-other-claims.json",
+      "id": "mock-137",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/138-jev-verify-rejects-malformed-relation-case-29-without-affecting-other-claims.json",
+      "id": "mock-138",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/139-jev-verify-rejects-malformed-relation-case-30-without-affecting-other-claims.json",
+      "id": "mock-139",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/140-jev-verify-rejects-malformed-relation-case-31-without-affecting-other-claims.json",
+      "id": "mock-140",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/141-jev-verify-preserves-valid-relation-with-confidence-undefined.json",
+      "id": "mock-141",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 2,
+      "provider_requests": 2
+    },
+    {
+      "file": "mock/142-jev-verify-preserves-valid-relation-with-confidence-null.json",
+      "id": "mock-142",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 2,
+      "provider_requests": 2
+    },
+    {
+      "file": "mock/143-jev-verify-preserves-valid-relation-with-confidence-0.json",
+      "id": "mock-143",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 2,
+      "provider_requests": 2
+    },
+    {
+      "file": "mock/144-jev-verify-accepts-tied-argmax-and-optional-missing-source-answers-for-multiple.json",
+      "id": "mock-144",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 1,
+      "provider_requests": 1
+    },
+    {
+      "file": "mock/145-all-three-tools-fail-closed-for-answers-undefined.json",
+      "id": "mock-145",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen",
+        "jev_find",
+        "jev_verify"
+      ],
+      "calls": 3,
+      "provider_requests": 3
+    },
+    {
+      "file": "mock/146-all-three-tools-fail-closed-for-answers-null.json",
+      "id": "mock-146",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen",
+        "jev_find",
+        "jev_verify"
+      ],
+      "calls": 3,
+      "provider_requests": 3
+    },
+    {
+      "file": "mock/147-all-three-tools-fail-closed-for-answers.json",
+      "id": "mock-147",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen",
+        "jev_find",
+        "jev_verify"
+      ],
+      "calls": 3,
+      "provider_requests": 3
+    },
+    {
+      "file": "mock/148-all-three-tools-fail-closed-for-answers-bad.json",
+      "id": "mock-148",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen",
+        "jev_find",
+        "jev_verify"
+      ],
+      "calls": 3,
+      "provider_requests": 3
+    },
+    {
+      "file": "mock/149-all-three-tools-fail-closed-for-answers-0.json",
+      "id": "mock-149",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen",
+        "jev_find",
+        "jev_verify"
+      ],
+      "calls": 3,
+      "provider_requests": 3
+    },
+    {
+      "file": "mock/150-all-three-tools-fail-closed-for-answers-true.json",
+      "id": "mock-150",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_screen",
+        "jev_find",
+        "jev_verify"
+      ],
+      "calls": 3,
+      "provider_requests": 3
+    },
+    {
+      "file": "mock/151-jev-verify-validates-source-answers-against-supplied-evidence-ids.json",
+      "id": "mock-151",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify"
+      ],
+      "calls": 12,
+      "provider_requests": 12
+    },
+    {
+      "file": "mock/152-mathematically-exact-0-01-sum-deltas-survive-float-comparison.json",
+      "id": "mock-152",
+      "classes": [
+        "mock"
+      ],
+      "divergences": [],
+      "tools": [
+        "jev_verify",
+        "jev_classify"
+      ],
+      "calls": 2,
+      "provider_requests": 2
+    }
+  ]
+}

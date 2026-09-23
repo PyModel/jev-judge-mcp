@@ -1,0 +1,91 @@
+{
+  "id": "mock-092",
+  "source": {
+    "file": "test/mock.test.mjs",
+    "test": "jev_find rejects malformed best case 11"
+  },
+  "classes": [
+    "mock"
+  ],
+  "divergences": [],
+  "reference_assertions_failed_under_compatible": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "compatible-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_find",
+      "arguments": {
+        "query": "how to file taxes",
+        "candidates": [
+          {
+            "id": "a",
+            "text": "IRS filing instructions"
+          },
+          {
+            "id": "b",
+            "text": "baking bread at home"
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer compatible-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "query": "how to file taxes",
+                "candidates": [
+                  {
+                    "id": "a",
+                    "text": "IRS filing instructions"
+                  },
+                  {
+                    "id": "b",
+                    "text": "baking bread at home"
+                  }
+                ]
+              },
+              "questions": {
+                "best": {
+                  "type": "choice",
+                  "instructions": "Which candidate contains the best answer to: \"how to file taxes\"?",
+                  "criteria": {
+                    "a": null,
+                    "b": null
+                  }
+                },
+                "exists": {
+                  "type": "noul",
+                  "instructions": "Does any candidate address or answer: \"how to file taxes\"?",
+                  "criteria": {
+                    "true": "At least one candidate states or directly implies the answer",
+                    "false": "No candidate addresses this"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"best\":{\"choice\":\"a\",\"probabilities\":{\"a\":null,\"b\":1}},\"exists\":{\"noul\":0.95}},\"usage\":{\"input_tokens\":10,\"output_tokens\":10}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_find\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"query\": \"how to file taxes\",\n  \"status\": \"invalid_response\",\n  \"exists\": 0.95,\n  \"exists_verdict\": null,\n  \"top\": [],\n  \"reason\": \"missing or malformed best or exists answer; cannot rank safely\",\n  \"usage\": {\n    \"input_tokens\": 10,\n    \"output_tokens\": 10\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

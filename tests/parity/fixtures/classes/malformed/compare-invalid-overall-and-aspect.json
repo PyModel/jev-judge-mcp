@@ -1,0 +1,92 @@
+{
+  "id": "malformed/compare-invalid-overall-and-aspect",
+  "source": {
+    "case": "malformed/compare-invalid-overall-and-aspect"
+  },
+  "classes": [
+    "malformed"
+  ],
+  "divergences": [],
+  "note": "overall sums to 1.05 and aspect_1 picks a non-argmax key: both invalid_response, with status last in the shape (index.ts:847-854).",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_compare",
+      "arguments": {
+        "passage_a": "Ships Monday at $10.",
+        "passage_b": "Ships Tuesday at $10.",
+        "aspects": [
+          "price",
+          "ship date"
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": null,
+                "passage_a": "Ships Monday at $10.",
+                "passage_b": "Ships Tuesday at $10.",
+                "aspects": [
+                  "price",
+                  "ship date"
+                ]
+              },
+              "questions": {
+                "overall": {
+                  "type": "choice",
+                  "instructions": "Do the two passages state the same underlying fact, contradict each other, or discuss different facts?",
+                  "criteria": {
+                    "same_fact": "Both passages state the same underlying fact or claim",
+                    "contradicts": "The passages state opposing facts about the same subject",
+                    "different_facts": "The passages discuss different subjects or make non-overlapping claims"
+                  }
+                },
+                "aspect_0": {
+                  "type": "choice",
+                  "instructions": "Judging only the aspect \"price\" of the two passages in the state, which relation holds?",
+                  "criteria": {
+                    "same_fact": "Both passages make comparable assertions about this aspect and they agree",
+                    "contradicts": "Both passages address this aspect and their assertions conflict",
+                    "different_facts": "The passages do not both make a comparable assertion about this aspect: at least one does not address it, or their mentions do not overlap"
+                  }
+                },
+                "aspect_1": {
+                  "type": "choice",
+                  "instructions": "Judging only the aspect \"ship date\" of the two passages in the state, which relation holds?",
+                  "criteria": {
+                    "same_fact": "Both passages make comparable assertions about this aspect and they agree",
+                    "contradicts": "Both passages address this aspect and their assertions conflict",
+                    "different_facts": "The passages do not both make a comparable assertion about this aspect: at least one does not address it, or their mentions do not overlap"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"overall\":{\"choice\":\"contradicts\",\"confidence\":0.9,\"probabilities\":{\"same_fact\":0.1,\"contradicts\":0.9,\"different_facts\":0.05}},\"aspect_0\":{\"choice\":\"same_fact\",\"confidence\":0.9,\"probabilities\":{\"same_fact\":0.9,\"contradicts\":0.05,\"different_facts\":0.05}},\"aspect_1\":{\"choice\":\"same_fact\",\"confidence\":0.7,\"probabilities\":{\"same_fact\":0.2,\"contradicts\":0.7,\"different_facts\":0.1}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_compare\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"overall\": {\n    \"relation\": null,\n    \"probabilities\": null,\n    \"confidence\": null,\n    \"margin\": null,\n    \"decision\": \"review\",\n    \"status\": \"invalid_response\"\n  },\n  \"aspects\": [\n    {\n      \"aspect\": \"price\",\n      \"relation\": \"same_fact\",\n      \"probabilities\": {\n        \"same_fact\": 0.9,\n        \"contradicts\": 0.05,\n        \"different_facts\": 0.05\n      },\n      \"confidence\": 0.9,\n      \"margin\": 0.85,\n      \"decision\": \"auto\"\n    },\n    {\n      \"aspect\": \"ship date\",\n      \"relation\": null,\n      \"probabilities\": null,\n      \"confidence\": null,\n      \"margin\": null,\n      \"decision\": \"review\",\n      \"status\": \"invalid_response\"\n    }\n  ],\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

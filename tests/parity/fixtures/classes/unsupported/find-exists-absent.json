@@ -1,0 +1,89 @@
+{
+  "id": "unsupported/find-exists-absent",
+  "source": {
+    "case": "unsupported/find-exists-absent"
+  },
+  "classes": [
+    "unsupported"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_find",
+      "arguments": {
+        "query": "What is the SLA?",
+        "candidates": [
+          {
+            "id": "a",
+            "text": "Our office is in Lisbon."
+          },
+          {
+            "id": "b",
+            "text": "We were founded in 2019."
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "query": "What is the SLA?",
+                "candidates": [
+                  {
+                    "id": "a",
+                    "text": "Our office is in Lisbon."
+                  },
+                  {
+                    "id": "b",
+                    "text": "We were founded in 2019."
+                  }
+                ]
+              },
+              "questions": {
+                "best": {
+                  "type": "choice",
+                  "instructions": "Which candidate contains the best answer to: \"What is the SLA?\"?",
+                  "criteria": {
+                    "a": null,
+                    "b": null
+                  }
+                },
+                "exists": {
+                  "type": "noul",
+                  "instructions": "Does any candidate address or answer: \"What is the SLA?\"?",
+                  "criteria": {
+                    "true": "At least one candidate states or directly implies the answer",
+                    "false": "No candidate addresses this"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"best\":{\"choice\":\"a\",\"confidence\":0.1,\"probabilities\":{\"a\":0.5,\"b\":0.5}},\"exists\":{\"noul\":0.05}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_find\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"query\": \"What is the SLA?\",\n  \"exists\": 0.05,\n  \"exists_verdict\": \"absent\",\n  \"top\": [\n    {\n      \"id\": \"a\",\n      \"probability\": 0.5,\n      \"text\": \"Our office is in Lisbon.\"\n    },\n    {\n      \"id\": \"b\",\n      \"probability\": 0.5,\n      \"text\": \"We were founded in 2019.\"\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "jev_revision": "a9dc14712ca5e1cf231e37d44feb6be589675525",
+  "fixture_sha256": "0c7d6b910b303c395ca5d0864355034d6981b51ee27393ce954fcfce5e0f7d70",
+  "agent": "pi",
+  "agent_version": "0.87.1",
+  "held_constant": {
+    "timeout": "900s wall per run",
+    "harness server (both arms)": "`request_human_review`",
+    "system addendum (both arms)": "You are working in a small Python repository. Complete the task in the user's message, run the test suite to check your work, and stop when you are done. Use whichever of your available tools help.",
+    "Jev (arm B only)": "`python -m jev_mcp`, `JEV_PROVIDER=typesafe`, `JEV_MCP_MODEL=jev-1.13.0`",
+    "grader": "pristine pre-existing tests + hidden acceptance tests (`evals/ab/grade.py`)",
+    "model": "`ds4/glm-5.3-flash`, thinking `high`",
+    "temperature": "Pi's default for the model, identical in both arms",
+    "tools": "Pi's built-in tools + `pi-mcp-adapter` (loaded in both arms)",
+    "limits": "no turn or token cap exposed by `pi --print`; the timeout bounds the run"
+  },
+  "hardware": "macOS-27.0-arm64-arm-64bit, arm64, 18 CPUs",
+  "started": "2026-09-23"
+}

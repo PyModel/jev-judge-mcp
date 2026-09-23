@@ -1,0 +1,77 @@
+{
+  "id": "malformed/verify-claim-choice-inherited-key",
+  "source": {
+    "case": "malformed/verify-claim-choice-inherited-key"
+  },
+  "classes": [
+    "malformed"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_verify",
+      "arguments": {
+        "claims": [
+          "The service listens on port 8080."
+        ],
+        "evidence": "server.listen(8080)"
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": "Verify each claim in claims against the evidence in evidence.",
+                "claims": [
+                  {
+                    "text": "The service listens on port 8080.",
+                    "id": "claim0"
+                  }
+                ],
+                "evidence": [
+                  {
+                    "id": "evidence",
+                    "text": "server.listen(8080)"
+                  }
+                ]
+              },
+              "questions": {
+                "relation_claim0": {
+                  "type": "choice",
+                  "instructions": "How does the evidence relate to claim `claim0` (The service listens on port 8080.)?",
+                  "criteria": {
+                    "supports": "The evidence states the claim or directly implies that it is true",
+                    "contradicts": "The evidence states the opposite of the claim or implies that it is false",
+                    "says_nothing": "The evidence does not address what the claim asserts, either way"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"relation_claim0\":{\"choice\":\"hasOwnProperty\",\"confidence\":0.9,\"probabilities\":{\"hasOwnProperty\":1}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_verify\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"auto_accept\": 0.8,\n  \"summary\": {\n    \"verified\": 0,\n    \"contradicted\": 0,\n    \"unsupported\": 0,\n    \"needs_review\": 1\n  },\n  \"results\": [\n    {\n      \"id\": \"claim0\",\n      \"claim\": \"The service listens on port 8080.\",\n      \"verdict\": \"unknown\",\n      \"probabilities\": null,\n      \"confidence\": null,\n      \"status\": \"invalid_response\",\n      \"action\": \"review\",\n      \"supporting_evidence\": null\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

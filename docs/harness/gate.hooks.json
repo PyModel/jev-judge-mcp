@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/jev-judge-mcp hook gate",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

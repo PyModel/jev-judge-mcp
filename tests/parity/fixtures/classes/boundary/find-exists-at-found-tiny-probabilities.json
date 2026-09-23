@@ -1,0 +1,108 @@
+{
+  "id": "boundary/find-exists-at-found-tiny-probabilities",
+  "source": {
+    "case": "boundary/find-exists-at-found-tiny-probabilities"
+  },
+  "classes": [
+    "boundary"
+  ],
+  "divergences": [],
+  "note": "exists 0.7 is answered; probabilities go through Number(p.toFixed(4)), so 0.00005 becomes 0.0001 and 1e-7 becomes 0.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_find",
+      "arguments": {
+        "query": "Where is the retry limit configured?",
+        "candidates": [
+          {
+            "id": "a",
+            "text": "MAX_RETRIES = 5 in config/worker.py"
+          },
+          {
+            "id": "b",
+            "text": "Retries are logged at WARN."
+          },
+          {
+            "id": "c",
+            "text": "The worker image is built nightly."
+          },
+          {
+            "id": "d",
+            "text": "Unrelated changelog entry."
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "query": "Where is the retry limit configured?",
+                "candidates": [
+                  {
+                    "id": "a",
+                    "text": "MAX_RETRIES = 5 in config/worker.py"
+                  },
+                  {
+                    "id": "b",
+                    "text": "Retries are logged at WARN."
+                  },
+                  {
+                    "id": "c",
+                    "text": "The worker image is built nightly."
+                  },
+                  {
+                    "id": "d",
+                    "text": "Unrelated changelog entry."
+                  }
+                ]
+              },
+              "questions": {
+                "best": {
+                  "type": "choice",
+                  "instructions": "Which candidate contains the best answer to: \"Where is the retry limit configured?\"?",
+                  "criteria": {
+                    "a": null,
+                    "b": null,
+                    "c": null,
+                    "d": null
+                  }
+                },
+                "exists": {
+                  "type": "noul",
+                  "instructions": "Does any candidate address or answer: \"Where is the retry limit configured?\"?",
+                  "criteria": {
+                    "true": "At least one candidate states or directly implies the answer",
+                    "false": "No candidate addresses this"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"best\":{\"choice\":\"a\",\"confidence\":0.99,\"probabilities\":{\"a\":0.9999499,\"b\":0.00005,\"c\":1e-7,\"d\":0.000032}},\"exists\":{\"noul\":0.7}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_find\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"query\": \"Where is the retry limit configured?\",\n  \"exists\": 0.7,\n  \"exists_verdict\": \"answered\",\n  \"top\": [\n    {\n      \"id\": \"a\",\n      \"probability\": 0.9999,\n      \"text\": \"MAX_RETRIES = 5 in config/worker.py\"\n    },\n    {\n      \"id\": \"b\",\n      \"probability\": 0.0001,\n      \"text\": \"Retries are logged at WARN.\"\n    },\n    {\n      \"id\": \"d\",\n      \"probability\": 0,\n      \"text\": \"Unrelated changelog entry.\"\n    },\n    {\n      \"id\": \"c\",\n      \"probability\": 0,\n      \"text\": \"The worker image is built nightly.\"\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

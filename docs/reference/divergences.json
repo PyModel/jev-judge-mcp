@@ -1,0 +1,268 @@
+{
+  "schema_version": 1,
+  "surface_enum": [
+    "tool_schema",
+    "arguments",
+    "request",
+    "provider",
+    "policy",
+    "result",
+    "wire",
+    "initialize",
+    "lifecycle",
+    "transport"
+  ],
+  "tier_enum": ["tier_a", "tier_b", "both"],
+  "status_enum": ["sanctioned", "gap"],
+  "divergences": [
+    {
+      "id": "envelope-uniform",
+      "surface": "provider",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0003-uniform-envelope-validation-across-providers.md",
+      "tests": ["tests/contract/test_providers.py"],
+      "fixtures": [],
+      "reference_behavior": "Only the compatible provider validates the response envelope; TypeSafe, OpenRouter, and Cloudflare coerce a missing answers object to {} and each tool then reports per-item invalid_response (quirk Q1).",
+      "python_behavior": "Every provider applies the compatible envelope rules and raises one provider error, so a broken envelope is a transport failure, not a set of judgments."
+    },
+    {
+      "id": "truncate-splits-surrogate-dropped",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0005-lengths-measured-in-utf16-code-units.md",
+      "tests": ["tests/unit/test_text.py", "tests/parity/test_tool_fixtures.py"],
+      "fixtures": [
+        "unicode-astral/find-truncation-splits-surrogate-pair#0",
+        "unicode-astral/gate-claim-truncation-splits-surrogate#0"
+      ],
+      "fixture_tags": ["ADR-0005"],
+      "reference_behavior": "A truncation cut that splits a surrogate pair keeps the lone high surrogate (quirk Q8).",
+      "python_behavior": "The split pair is dropped whole, so the truncated result is one UTF-16 unit shorter."
+    },
+    {
+      "id": "vercel-slot-unsupported",
+      "surface": "provider",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0007-vercel-provider-reserved-not-emulated.md",
+      "tests": ["tests/unit/test_resolver.py", "tests/parity/test_tool_fixtures.py"],
+      "fixtures": ["resolver-error/explicit-vercel-unset#0"],
+      "fixture_tags": ["ADR-0007"],
+      "reference_behavior": "Auto resolution reaches Jev on the Vercel AI Gateway through experimental_evaluate().",
+      "python_behavior": "The Vercel slot keeps its resolution order position but raises a clear unsupported-provider error instead of emulating it."
+    },
+    {
+      "id": "redaction-breadth",
+      "surface": "provider",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0008-provider-endpoints-and-credentials-are-process-config-only.md",
+      "tests": ["tests/contract/test_providers.py", "tests/security/test_inputs.py"],
+      "fixtures": [],
+      "reference_behavior": "Redacts only JEV_API_KEY, and only on the compatible provider's error body (quirk Q9).",
+      "python_behavior": "Every configured secret is redacted on every provider, on every error path and log line, with URL-userinfo variants covered."
+    },
+    {
+      "id": "cancellation-propagates",
+      "surface": "lifecycle",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0011-propagate-mcp-cancellation-to-providers.md",
+      "tests": ["tests/contract/test_providers.py", "tests/contract/test_extract.py"],
+      "fixtures": [],
+      "reference_behavior": "A cancelled MCP call keeps its Jev request running to completion (quirk Q10).",
+      "python_behavior": "Cancellation aborts the in-flight request and kills only this call's regex worker; nothing cancelled writes to stdout afterwards."
+    },
+    {
+      "id": "extract-stdlib-re-subset",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0018-extract-runs-on-stdlib-re-with-a-narrower-subset.md",
+      "tests": [
+        "tests/parity/test_tool_fixtures.py",
+        "tests/unit/test_extract_dialect.py",
+        "tests/parity/test_extract_differential.py"
+      ],
+      "fixtures": [
+        "invalid-pattern/extract-multiline-flag#0",
+        "invalid-pattern/extract-unicode-flag#0",
+        "invalid-pattern/extract-named-group#0",
+        "invalid-pattern/extract-variable-lookbehind#0",
+        "invalid-pattern/extract-syntax-error#0",
+        "invalid-pattern/extract-unknown-flag#0"
+      ],
+      "fixture_tags": ["ADR-0004"],
+      "reference_behavior": "Any pattern V8's RegExp accepts runs, in UTF-16 unit space; catastrophic patterns end in the timeout text.",
+      "python_behavior": "stdlib re matches a narrower translated subset; patterns outside it get invalid_pattern with a named reason, and re stalling like V8 keeps the timeout fixtures honest."
+    },
+    {
+      "id": "extract-deadline-includes-queue",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0016-extract-dialect-translates-executors-execute.md",
+      "tests": ["tests/contract/test_extract.py"],
+      "fixtures": [],
+      "reference_behavior": "No cross-call pool exists; the reference runs one worker thread per call, so queueing never affects output.",
+      "python_behavior": "One absolute deadline spans admission, worker start, IPC, and matching; under saturation a pattern the reference would have executed can fail without running."
+    },
+    {
+      "id": "extract-pool-saturation-reason",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0025-extract-pool-saturation-has-its-own-reason.md",
+      "tests": ["tests/contract/test_extract.py"],
+      "fixtures": [],
+      "reference_behavior": "Not applicable: the reference has no cross-call pool and no saturation path.",
+      "python_behavior": "A pattern refused at the queue bound reports the stable reason token regex_pool_saturated instead of the regex-timeout text, so capacity pressure is not misread as a pattern problem."
+    },
+    {
+      "id": "stdio-no-provider-deadline",
+      "surface": "transport",
+      "tier": "tier_a",
+      "status": "sanctioned",
+      "adr": "docs/adr/0021-stdio-is-the-product-transport-http-is-tier-b.md",
+      "tests": ["tests/unit/test_runtime.py"],
+      "fixtures": [],
+      "reference_behavior": "No provider request carries a timeout anywhere in askJev.",
+      "python_behavior": "The stdio product tier keeps parity: Runtime.ask passes timeout=None, and the client's own MCP cancellation is the recovery path."
+    },
+    {
+      "id": "http-tier-b-experimental",
+      "surface": "transport",
+      "tier": "tier_b",
+      "status": "sanctioned",
+      "adr": "docs/adr/0021-stdio-is-the-product-transport-http-is-tier-b.md",
+      "tests": ["tests/integration/test_http.py"],
+      "fixtures": [],
+      "reference_behavior": "The reference is stdio-only; no HTTP transport exists to compare against.",
+      "python_behavior": "streamable-http is an experimental Tier B extension for 1.0: localhost by default, no reliability contract (no provider deadline, no admission control), promotion requires P9 evidence."
+    },
+    {
+      "id": "same-origin-redirects-only",
+      "surface": "request",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0023-same-origin-redirects-only.md",
+      "tests": ["tests/contract/test_providers.py"],
+      "fixtures": [],
+      "reference_behavior": "Node fetch follows redirects; a cross-origin 307/308 re-sends the request body, carrying the caller's state to the redirect target.",
+      "python_behavior": "HttpProvider rejects a redirect that changes origin before the next request is sent; same-origin redirects keep httpx's own method semantics."
+    },
+    {
+      "id": "typesafe-sdk-redirect-policy",
+      "surface": "provider",
+      "tier": "both",
+      "status": "gap",
+      "adr": "docs/adr/0023-same-origin-redirects-only.md",
+      "tests": ["tests/contract/test_providers.py"],
+      "fixtures": [],
+      "reference_behavior": "Node fetch follows redirects, including cross-origin, with the request body.",
+      "python_behavior": "The typesafe-sdk transport rides the SDK's own httpx2 client; its redirect policy is not guarded at our layer and is unaudited (ADR-0023 scope note)."
+    },
+    {
+      "id": "initialize-capabilities-unverified",
+      "surface": "initialize",
+      "tier": "tier_a",
+      "status": "gap",
+      "adr": "docs/adr/0024-record-non-fixture-divergences.md",
+      "tests": ["tests/contract/test_tools_list.py"],
+      "fixtures": [],
+      "reference_behavior": "Unknown: the reference's initialize response was never captured.",
+      "python_behavior": "mcp 2.2 advertises prompts, resources, and experimental alongside tools; the Python shape is pinned, the comparison against the reference is pending a capture."
+    },
+    {
+      "id": "signal-exit-code",
+      "surface": "lifecycle",
+      "tier": "tier_a",
+      "status": "sanctioned",
+      "adr": "docs/adr/0024-record-non-fixture-divergences.md",
+      "tests": ["tests/integration/test_stdio.py"],
+      "fixtures": [],
+      "reference_behavior": "No signal handler: the Node process dies by signal with a signal exit code.",
+      "python_behavior": "SIGINT and SIGTERM stop the loop and exit 0 without a traceback, stdio and HTTP alike."
+    },
+    {
+      "id": "lone-surrogate-http-parse-error",
+      "surface": "wire",
+      "tier": "tier_b",
+      "status": "sanctioned",
+      "adr": "docs/adr/0024-record-non-fixture-divergences.md",
+      "tests": ["tests/integration/test_http.py::test_http_lone_surrogate_escape_is_refused_with_a_reply"],
+      "fixtures": [],
+      "reference_behavior": "The reference accepts a JSON-RPC frame containing a lone surrogate escape and echoes it back as the same escape.",
+      "python_behavior": "Streamable HTTP keeps the MCP SDK's parser, which refuses the frame with a -32700 reply (id null) before any tool runs. stdio serves it as the reference does (src/jev_judge_mcp/stdio.py)."
+    },
+    {
+      "id": "openrouter-referer",
+      "surface": "provider",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0029-openrouter-referer-names-this-repo.md",
+      "tests": ["tests/contract/test_providers.py"],
+      "fixtures": [],
+      "reference_behavior": "The reference sends HTTP-Referer naming its own repository on every OpenRouter request.",
+      "python_behavior": "This server sends HTTP-Referer naming this repository (https://github.com/PyModel/jev-judge-mcp) on every OpenRouter request; nothing else about the request changes."
+    },
+    {
+      "id": "classify-generated-id-collision",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0031-classify-rejects-generated-id-collisions.md",
+      "tests": ["tests/unit/test_tool_boundaries.py", "tests/parity/test_tool_fixtures.py"],
+      "fixtures": ["duplicate-id/classify-omitted-ids-get-positional-fallbacks#0"],
+      "fixture_tags": ["ADR-0031"],
+      "reference_behavior": "An omitted classify id becomes {kind}{index} with no check against supplied ids, so a later entry with that id overwrites the earlier one and both rows report the same id at auto (quirk Q11).",
+      "python_behavior": "A generated id that equals an id already used for that items or classes list raises Duplicate {kind} id before any provider request."
+    },
+    {
+      "id": "posix-only",
+      "surface": "lifecycle",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0032-posix-only-until-windows-is-tested.md",
+      "tests": ["tests/unit/test_platform.py"],
+      "fixtures": [],
+      "reference_behavior": "The Node reference starts on any operating system through npx, including Windows.",
+      "python_behavior": "On a non-POSIX platform (sys.platform starting with win) the process exits at startup with one message naming that platform, before signal handlers or the extract worker pool."
+    },
+    {
+      "id": "key-file-fallback",
+      "surface": "provider",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0046-stored-api-key-and-setup-command.md",
+      "tests": ["tests/unit/test_keyfile.py", "tests/unit/test_resolver.py", "tests/unit/test_setup.py"],
+      "fixtures": [],
+      "reference_behavior": "Only environment variables provide credentials; a missing TYPESAFE_API_KEY fails resolution with the frozen no-credentials text.",
+      "python_behavior": "A key stored by `jev-judge-mcp setup` (0600 file, live-verified before storing) fills the typesafe slot when the variable is unset; the variable always wins, blank or missing files behave exactly as before, and the stored value joins the redaction set when read."
+    },
+    {
+      "id": "response-cache",
+      "surface": "provider",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0047-optional-response-cache-replays-verbatim.md",
+      "tests": ["tests/unit/test_cache.py"],
+      "fixtures": [],
+      "reference_behavior": "Every tool call sends a provider request; nothing is replayed from disk.",
+      "python_behavior": "With JEV_MCP_CACHE on (off by default), a byte-identical request \u2014 provider, model, state, questions \u2014 replays the recorded Evaluation verbatim from the cache directory; tool payloads stay byte-identical to the first answer's, and a corrupt or foreign record is a miss."
+    },
+    {
+      "id": "score-tool-extension",
+      "surface": "tool_schema",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0048-extension-tools-after-the-frozen-ten.md",
+      "tests": ["tests/contract/test_tools_list.py", "tests/contract/test_score_tool.py", "tests/contract/test_fail_closed.py"],
+      "fixtures": [],
+      "reference_behavior": "The reference publishes exactly ten tools; no tool exposes a caller-supplied score rubric.",
+      "python_behavior": "jev_score is published after the snapshot ten (the snapshot stays a byte-identical prefix of tools/list): one score question over a caller rubric of 2-10 levels, strict whole-answer validation (validate_rubric_answer), ADR-owned caps in limits.SCORE, and no policy thresholds."
+    }
+  ]
+}

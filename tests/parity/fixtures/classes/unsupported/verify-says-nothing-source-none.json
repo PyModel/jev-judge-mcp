@@ -1,0 +1,99 @@
+{
+  "id": "unsupported/verify-says-nothing-source-none",
+  "source": {
+    "case": "unsupported/verify-says-nothing-source-none"
+  },
+  "classes": [
+    "unsupported"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_verify",
+      "arguments": {
+        "claims": [
+          "The cache TTL is 60 seconds."
+        ],
+        "evidence": [
+          {
+            "id": "readme",
+            "text": "The service uses Redis."
+          },
+          {
+            "id": "config",
+            "text": "port: 8080"
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": "Verify each claim in claims against the evidence in evidence.",
+                "claims": [
+                  {
+                    "text": "The cache TTL is 60 seconds.",
+                    "id": "claim0"
+                  }
+                ],
+                "evidence": [
+                  {
+                    "id": "readme",
+                    "text": "The service uses Redis."
+                  },
+                  {
+                    "id": "config",
+                    "text": "port: 8080"
+                  }
+                ]
+              },
+              "questions": {
+                "relation_claim0": {
+                  "type": "choice",
+                  "instructions": "How does the evidence relate to claim `claim0` (The cache TTL is 60 seconds.)?",
+                  "criteria": {
+                    "supports": "The evidence states the claim or directly implies that it is true",
+                    "contradicts": "The evidence states the opposite of the claim or implies that it is false",
+                    "says_nothing": "The evidence does not address what the claim asserts, either way"
+                  }
+                },
+                "source_claim0": {
+                  "type": "choice",
+                  "instructions": "Which evidence item does claim `claim0` (The cache TTL is 60 seconds.) rest on?",
+                  "criteria": {
+                    "readme": null,
+                    "config": null,
+                    "none": "No single evidence item contains the content the claim depends on"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"relation_claim0\":{\"choice\":\"says_nothing\",\"confidence\":0.9,\"probabilities\":{\"supports\":0.05,\"contradicts\":0.05,\"says_nothing\":0.9}},\"source_claim0\":{\"choice\":\"none\",\"confidence\":0.9,\"probabilities\":{\"readme\":0.05,\"config\":0.05,\"none\":0.9}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_verify\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"auto_accept\": 0.8,\n  \"summary\": {\n    \"verified\": 0,\n    \"contradicted\": 0,\n    \"unsupported\": 1,\n    \"needs_review\": 0\n  },\n  \"results\": [\n    {\n      \"id\": \"claim0\",\n      \"claim\": \"The cache TTL is 60 seconds.\",\n      \"verdict\": \"unsupported\",\n      \"probabilities\": {\n        \"supports\": 0.05,\n        \"contradicts\": 0.05,\n        \"says_nothing\": 0.9\n      },\n      \"confidence\": 0.9,\n      \"action\": \"auto\",\n      \"supporting_evidence\": null\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "source": "evals/datasets/bench150/items.jsonl",
+  "source_sha256": "bf32772fb3a00c0a10bab6eb66c9ac4c93bfc9e47d77463b78392d765ce844cf",
+  "repository_revision": "12b03639a5f56fc469b4516c1e977d3c3e6137a6",
+  "item_count": 150,
+  "questions_sha256": "f334b84b8e8f322441732e933d03b6d79ffe8cb62a879c4c3cff9ec422751a31",
+  "renderer": "evals.bench.prompt.render",
+  "renderer_sha256": "702af93ddb729b2316e074b7756312671ff5ae254f24d3f58e3ef3764ea8eeb8",
+  "assignments": {
+    "R1": "elkaix",
+    "R2": "elkholy90",
+    "R3": "unicorn"
+  },
+  "distinct_humans_confirmed": true,
+  "status": "awaiting_human_reviews"
+}

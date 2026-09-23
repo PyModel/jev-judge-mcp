@@ -1,0 +1,87 @@
+{
+  "id": "duplicate-id/decide-hatch-name-allowed-without-hatches",
+  "source": {
+    "case": "duplicate-id/decide-hatch-name-allowed-without-hatches"
+  },
+  "classes": [
+    "duplicate-id"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_decide",
+      "arguments": {
+        "decision": "d",
+        "evidence": "e",
+        "priorities": "p",
+        "candidates": [
+          {
+            "id": "none",
+            "description": "Do nothing."
+          },
+          {
+            "id": "ship",
+            "description": "Ship it."
+          }
+        ],
+        "escape_hatches": false
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "decision": "d",
+                "evidence": "e",
+                "priorities": "p",
+                "candidates": [
+                  {
+                    "id": "option_0",
+                    "description": "Do nothing."
+                  },
+                  {
+                    "id": "option_1",
+                    "description": "Ship it."
+                  }
+                ],
+                "requirements": []
+              },
+              "questions": {
+                "recommendation": {
+                  "type": "choice",
+                  "instructions": "Which candidate best fits the decision, evidence, and priorities? Do not invent missing facts, preferences, or approvals.",
+                  "criteria": {
+                    "option_0": "Do nothing.",
+                    "option_1": "Ship it."
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"recommendation\":{\"choice\":\"option_0\",\"confidence\":0.6,\"probabilities\":{\"option_0\":0.7,\"option_1\":0.3}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_decide\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"recommendation\": {\n    \"selected\": \"none\",\n    \"escaped\": false,\n    \"confidence\": 0.6,\n    \"probabilities\": {\n      \"none\": 0.7,\n      \"ship\": 0.3\n    }\n  },\n  \"requirements_checked\": 0,\n  \"checks\": [],\n  \"warnings\": [],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

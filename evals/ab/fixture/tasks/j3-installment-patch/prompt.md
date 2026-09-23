@@ -1,0 +1,1 @@
+Resolve the issue in `ISSUE.md` by applying exactly one of the proposed patches in `patches/` (for example `git apply patches/<name>.diff`). Decide which patch is correct under the rules in `docs/` before you apply it, and do not write your own fix.

@@ -1,0 +1,110 @@
+{
+  "id": "mock-041",
+  "source": {
+    "file": "test/mock.test.mjs",
+    "test": "jev_gate rejects evidence over the item cap before calling Jev"
+  },
+  "classes": [
+    "mock"
+  ],
+  "divergences": [],
+  "reference_assertions_failed_under_compatible": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "compatible-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_gate",
+      "arguments": {
+        "request": "Reject empty parser input",
+        "diff": "+ if (!input) throw new Error('Empty input');",
+        "tests": "parser rejects empty input: PASS",
+        "claims": [
+          "The empty-input parser test passed."
+        ],
+        "evidence": [
+          {
+            "id": "e0",
+            "text": "evidence 0"
+          },
+          {
+            "id": "e1",
+            "text": "evidence 1"
+          },
+          {
+            "id": "e2",
+            "text": "evidence 2"
+          },
+          {
+            "id": "e3",
+            "text": "evidence 3"
+          },
+          {
+            "id": "e4",
+            "text": "evidence 4"
+          },
+          {
+            "id": "e5",
+            "text": "evidence 5"
+          },
+          {
+            "id": "e6",
+            "text": "evidence 6"
+          },
+          {
+            "id": "e7",
+            "text": "evidence 7"
+          },
+          {
+            "id": "e8",
+            "text": "evidence 8"
+          },
+          {
+            "id": "e9",
+            "text": "evidence 9"
+          },
+          {
+            "id": "e10",
+            "text": "evidence 10"
+          },
+          {
+            "id": "e11",
+            "text": "evidence 11"
+          },
+          {
+            "id": "e12",
+            "text": "evidence 12"
+          },
+          {
+            "id": "e13",
+            "text": "evidence 13"
+          },
+          {
+            "id": "e14",
+            "text": "evidence 14"
+          },
+          {
+            "id": "e15",
+            "text": "evidence 15"
+          },
+          {
+            "id": "e16",
+            "text": "evidence 16"
+          }
+        ]
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_gate\",\n  \"error\": \"evidence exceeds 16 items; split the gate or trim the evidence.\"\n}"
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

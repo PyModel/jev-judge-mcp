@@ -1,0 +1,103 @@
+{
+  "id": "tie/rerank-equal-scores-stable",
+  "source": {
+    "case": "tie/rerank-equal-scores-stable"
+  },
+  "classes": [
+    "tie"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_rerank",
+      "arguments": {
+        "query": "q",
+        "candidates": [
+          {
+            "id": "w",
+            "text": "w"
+          },
+          {
+            "id": "x",
+            "text": "x"
+          },
+          {
+            "id": "y",
+            "text": "y"
+          },
+          {
+            "id": "z",
+            "text": "z"
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "query": "q"
+              },
+              "questions": {
+                "rel_0": {
+                  "type": "noul",
+                  "instructions": "Is candidate c0 relevant to the query in the state? Candidate c0: w",
+                  "criteria": {
+                    "true": "The candidate addresses the subject the query asks about, or provides what it seeks",
+                    "false": "The candidate is about a different subject, or only shares vocabulary with the query"
+                  }
+                },
+                "rel_1": {
+                  "type": "noul",
+                  "instructions": "Is candidate c1 relevant to the query in the state? Candidate c1: x",
+                  "criteria": {
+                    "true": "The candidate addresses the subject the query asks about, or provides what it seeks",
+                    "false": "The candidate is about a different subject, or only shares vocabulary with the query"
+                  }
+                },
+                "rel_2": {
+                  "type": "noul",
+                  "instructions": "Is candidate c2 relevant to the query in the state? Candidate c2: y",
+                  "criteria": {
+                    "true": "The candidate addresses the subject the query asks about, or provides what it seeks",
+                    "false": "The candidate is about a different subject, or only shares vocabulary with the query"
+                  }
+                },
+                "rel_3": {
+                  "type": "noul",
+                  "instructions": "Is candidate c3 relevant to the query in the state? Candidate c3: z",
+                  "criteria": {
+                    "true": "The candidate addresses the subject the query asks about, or provides what it seeks",
+                    "false": "The candidate is about a different subject, or only shares vocabulary with the query"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"rel_0\":{\"noul\":0.5},\"rel_1\":{\"noul\":0.8},\"rel_2\":{\"noul\":0.5},\"rel_3\":{\"noul\":0.8}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_rerank\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"query\": \"q\",\n  \"summary\": {\n    \"candidates\": 4,\n    \"returned\": 4\n  },\n  \"ranked\": [\n    {\n      \"rank\": 1,\n      \"id\": \"x\",\n      \"relevance\": 0.8,\n      \"text\": \"x\"\n    },\n    {\n      \"rank\": 2,\n      \"id\": \"z\",\n      \"relevance\": 0.8,\n      \"text\": \"z\"\n    },\n    {\n      \"rank\": 3,\n      \"id\": \"w\",\n      \"relevance\": 0.5,\n      \"text\": \"w\"\n    },\n    {\n      \"rank\": 4,\n      \"id\": \"y\",\n      \"relevance\": 0.5,\n      \"text\": \"y\"\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

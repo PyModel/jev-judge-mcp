@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "jev": {
+      "command": "/opt/uv/uvx",
+      "args": [
+        "--from",
+        "/work/jev-mcp[typesafe]",
+        "jev-judge-mcp"
+      ],
+      "env": {
+        "TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}"
+      }
+    }
+  }
+}

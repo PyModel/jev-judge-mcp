@@ -1,0 +1,99 @@
+{
+  "id": "normal/find-ranked-top-k",
+  "source": {
+    "case": "normal/find-ranked-top-k"
+  },
+  "classes": [
+    "normal"
+  ],
+  "divergences": [],
+  "note": "Caller ids are sanitized for the wire; the third candidate has no id and gets candidate2.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_find",
+      "arguments": {
+        "query": "How do I rotate the API key?",
+        "candidates": [
+          {
+            "id": "docs/install.md",
+            "text": "Install the CLI with brew install acme."
+          },
+          {
+            "id": "docs/keys.md",
+            "text": "Rotate a key with `acme keys rotate`; the old key stays valid for 24 hours."
+          },
+          {
+            "text": "Billing questions go to billing@acme.test."
+          }
+        ],
+        "top_k": 2
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "query": "How do I rotate the API key?",
+                "candidates": [
+                  {
+                    "id": "docs_install.md",
+                    "text": "Install the CLI with brew install acme."
+                  },
+                  {
+                    "id": "docs_keys.md",
+                    "text": "Rotate a key with `acme keys rotate`; the old key stays valid for 24 hours."
+                  },
+                  {
+                    "id": "candidate2",
+                    "text": "Billing questions go to billing@acme.test."
+                  }
+                ]
+              },
+              "questions": {
+                "best": {
+                  "type": "choice",
+                  "instructions": "Which candidate contains the best answer to: \"How do I rotate the API key?\"?",
+                  "criteria": {
+                    "docs_install.md": null,
+                    "docs_keys.md": null,
+                    "candidate2": null
+                  }
+                },
+                "exists": {
+                  "type": "noul",
+                  "instructions": "Does any candidate address or answer: \"How do I rotate the API key?\"?",
+                  "criteria": {
+                    "true": "At least one candidate states or directly implies the answer",
+                    "false": "No candidate addresses this"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"best\":{\"choice\":\"docs_keys.md\",\"confidence\":0.9,\"probabilities\":{\"docs_install.md\":0.07,\"docs_keys.md\":0.9,\"candidate2\":0.03}},\"exists\":{\"noul\":0.94}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_find\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"query\": \"How do I rotate the API key?\",\n  \"exists\": 0.94,\n  \"exists_verdict\": \"answered\",\n  \"top\": [\n    {\n      \"id\": \"docs_keys.md\",\n      \"probability\": 0.9,\n      \"text\": \"Rotate a key with `acme keys rotate`; the old key stays valid for 24 hours.\"\n    },\n    {\n      \"id\": \"docs_install.md\",\n      \"probability\": 0.07,\n      \"text\": \"Install the CLI with brew install acme.\"\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

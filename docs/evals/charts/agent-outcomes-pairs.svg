@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="190" viewBox="0 0 900 190" role="img" aria-label="Measured and excluded pairs: measured versus excluded pairs per agent">
+<text x="20.0" y="24.0" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="14" fill="#24292f" text-anchor="start" font-weight="700">Measured and excluded pairs per agent</text>
+<text x="170.0" y="44.0" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="12" fill="#24292f" text-anchor="middle" font-weight="600">claude — 2.1.281</text>
+<rect x="115.0" y="67.3" width="50.0" height="76.7" rx="3" fill="#94a3b8"/>
+<text x="140.0" y="62.3" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11" fill="#24292f" text-anchor="middle" font-weight="600">9</text>
+<text x="200.0" y="140.0" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11" fill="#57606a" text-anchor="middle" font-weight="normal">0</text>
+<line x1="20.0" y1="144.0" x2="320.0" y2="144.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="140.0" y="160.0" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#57606a" text-anchor="middle" font-weight="normal">measured</text>
+<text x="200.0" y="160.0" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#57606a" text-anchor="middle" font-weight="normal">excluded</text>
+<text x="530.0" y="44.0" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="12" fill="#24292f" text-anchor="middle" font-weight="600">pi — 0.87.1</text>
+<rect x="475.0" y="75.9" width="50.0" height="68.1" rx="3" fill="#94a3b8"/>
+<text x="500.0" y="70.9" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11" fill="#24292f" text-anchor="middle" font-weight="600">8</text>
+<rect x="535.0" y="135.5" width="50.0" height="8.5" rx="3" fill="#d29922"/>
+<text x="560.0" y="130.5" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11" fill="#24292f" text-anchor="middle" font-weight="600">1</text>
+<line x1="380.0" y1="144.0" x2="680.0" y2="144.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="500.0" y="160.0" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#57606a" text-anchor="middle" font-weight="normal">measured</text>
+<text x="560.0" y="160.0" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="10.5" fill="#57606a" text-anchor="middle" font-weight="normal">excluded</text>
+<text x="20.0" y="180.0" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" font-size="11" fill="#57606a" text-anchor="start" font-weight="normal">A pair is evidence only when both arms are measured; an excluded pair contributes no number anywhere in this report.</text>
+</svg>

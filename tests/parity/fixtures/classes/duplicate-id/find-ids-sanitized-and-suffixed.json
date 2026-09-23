@@ -1,0 +1,108 @@
+{
+  "id": "duplicate-id/find-ids-sanitized-and-suffixed",
+  "source": {
+    "case": "duplicate-id/find-ids-sanitized-and-suffixed"
+  },
+  "classes": [
+    "duplicate-id"
+  ],
+  "divergences": [],
+  "note": "Ids are sanitized to [A-Za-z0-9_.-], duplicates get _1, an id that sanitizes to empty falls back to candidate{i}.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_find",
+      "arguments": {
+        "query": "q",
+        "candidates": [
+          {
+            "id": "naïve café",
+            "text": "one"
+          },
+          {
+            "id": "naïve café",
+            "text": "two"
+          },
+          {
+            "id": "😀",
+            "text": "three"
+          },
+          {
+            "id": "__edge__",
+            "text": "four"
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "query": "q",
+                "candidates": [
+                  {
+                    "id": "na_ve_caf",
+                    "text": "one"
+                  },
+                  {
+                    "id": "na_ve_caf_1",
+                    "text": "two"
+                  },
+                  {
+                    "id": "candidate2",
+                    "text": "three"
+                  },
+                  {
+                    "id": "edge",
+                    "text": "four"
+                  }
+                ]
+              },
+              "questions": {
+                "best": {
+                  "type": "choice",
+                  "instructions": "Which candidate contains the best answer to: \"q\"?",
+                  "criteria": {
+                    "na_ve_caf": null,
+                    "na_ve_caf_1": null,
+                    "candidate2": null,
+                    "edge": null
+                  }
+                },
+                "exists": {
+                  "type": "noul",
+                  "instructions": "Does any candidate address or answer: \"q\"?",
+                  "criteria": {
+                    "true": "At least one candidate states or directly implies the answer",
+                    "false": "No candidate addresses this"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"best\":{\"choice\":\"na_ve_caf_1\",\"confidence\":0.6,\"probabilities\":{\"na_ve_caf\":0.1,\"na_ve_caf_1\":0.7,\"candidate2\":0.1,\"edge\":0.1}},\"exists\":{\"noul\":0.8}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_find\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"query\": \"q\",\n  \"exists\": 0.8,\n  \"exists_verdict\": \"answered\",\n  \"top\": [\n    {\n      \"id\": \"na_ve_caf_1\",\n      \"probability\": 0.7,\n      \"text\": \"two\"\n    },\n    {\n      \"id\": \"na_ve_caf\",\n      \"probability\": 0.1,\n      \"text\": \"one\"\n    },\n    {\n      \"id\": \"candidate2\",\n      \"probability\": 0.1,\n      \"text\": \"three\"\n    },\n    {\n      \"id\": \"edge\",\n      \"probability\": 0.1,\n      \"text\": \"four\"\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

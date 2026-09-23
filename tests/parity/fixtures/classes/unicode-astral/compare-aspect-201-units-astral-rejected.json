@@ -1,0 +1,38 @@
+{
+  "id": "unicode-astral/compare-aspect-201-units-astral-rejected",
+  "source": {
+    "case": "unicode-astral/compare-aspect-201-units-astral-rejected"
+  },
+  "classes": [
+    "unicode-astral"
+  ],
+  "divergences": [],
+  "note": "Schema rejection: 'a' + 100 x U+1F600 is 201 units, over the 200 cap, though only 101 code points.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_compare",
+      "arguments": {
+        "passage_a": "x",
+        "passage_b": "y",
+        "aspects": [
+          "a😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+        ]
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "MCP error -32602: Input validation error: Invalid arguments for tool jev_compare: String must contain at most 200 character(s) at aspects[0]"
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

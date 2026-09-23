@@ -1,0 +1,35 @@
+{
+  "id": "resolver-error/explicit-compatible-key-unset",
+  "source": {
+    "case": "resolver-error/explicit-compatible-key-unset"
+  },
+  "classes": [
+    "resolver-error"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "https://jev-compatible.invalid/v1/systemone",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_verify",
+      "arguments": {
+        "claims": [
+          "The service listens on port 8080."
+        ],
+        "evidence": "server.listen(8080)"
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "JEV_PROVIDER=compatible but JEV_API_KEY is not set. JEV_MCP_MODEL is optional and defaults to jev-latest."
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

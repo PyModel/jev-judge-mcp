@@ -1,0 +1,1 @@
+Ticket #4411 in `TICKET.md` landed in the wrong support queue. Decide which queue it belongs in under the routing policy, then change `route` in `routing.py` so tickets like it land there. The documents in `docs/` do not all agree: decide which rule governs before you change the code.

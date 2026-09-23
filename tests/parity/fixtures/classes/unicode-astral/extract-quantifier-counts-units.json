@@ -1,0 +1,78 @@
+{
+  "id": "unicode-astral/extract-quantifier-counts-units",
+  "source": {
+    "case": "unicode-astral/extract-quantifier-counts-units"
+  },
+  "classes": [
+    "unicode-astral"
+  ],
+  "divergences": [],
+  "note": ".{3} over 'a' + U+1F600 is one match of three units.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_extract",
+      "arguments": {
+        "document": "a😀 yz",
+        "fields": [
+          {
+            "id": "three",
+            "pattern": ".{3}",
+            "description": "The first three units."
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": null,
+                "document": "a😀 yz",
+                "fields": [
+                  {
+                    "id": "f0",
+                    "description": "The first three units.",
+                    "pattern": ".{3}"
+                  }
+                ]
+              },
+              "questions": {
+                "f0": {
+                  "type": "choice",
+                  "instructions": "Which candidate is the correct value of the field \"three\" (The first three units.) in the document in the state? Pick the exact substring the document presents as this field's value.",
+                  "criteria": {
+                    "c0": "Candidate value: \"a😀\"",
+                    "c1": "Candidate value: \" yz\"",
+                    "none_of_them": "None of the candidates is the value this field asks for"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"f0\":{\"choice\":\"c0\",\"confidence\":0.9,\"probabilities\":{\"c0\":0.9,\"c1\":0.08,\"none_of_them\":0.02}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_extract\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"summary\": {\n    \"fields\": 1,\n    \"extracted\": 1,\n    \"auto\": 1,\n    \"review\": 0,\n    \"not_found\": 0,\n    \"invalid\": 0\n  },\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"results\": [\n    {\n      \"id\": \"three\",\n      \"value\": \"a😀\",\n      \"status\": \"auto\",\n      \"reason\": null,\n      \"confidence\": 0.9,\n      \"top_probability\": 0.9,\n      \"margin\": 0.8200000000000001,\n      \"candidates_considered\": 2,\n      \"candidates_truncated\": false,\n      \"matches_skipped_too_long\": 0\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,123 @@
+{
+  "id": "normal/verify-multi-evidence-model-override",
+  "source": {
+    "case": "normal/verify-multi-evidence-model-override"
+  },
+  "classes": [
+    "normal"
+  ],
+  "divergences": [],
+  "note": "body.model is a string, so it replaces the requested model in the output (provider.ts:199).",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_verify",
+      "arguments": {
+        "claims": [
+          "The build passes on main.",
+          "Line coverage is 91%."
+        ],
+        "evidence": [
+          {
+            "id": "ci-log",
+            "text": "main #812: all 214 tests passed in 3m12s"
+          },
+          {
+            "id": "coverage",
+            "text": "Statements: 91.4% | Lines: 91.0% | Branches: 84.2%"
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": "Verify each claim in claims against the evidence in evidence.",
+                "claims": [
+                  {
+                    "text": "The build passes on main.",
+                    "id": "claim0"
+                  },
+                  {
+                    "text": "Line coverage is 91%.",
+                    "id": "claim1"
+                  }
+                ],
+                "evidence": [
+                  {
+                    "id": "ci-log",
+                    "text": "main #812: all 214 tests passed in 3m12s"
+                  },
+                  {
+                    "id": "coverage",
+                    "text": "Statements: 91.4% | Lines: 91.0% | Branches: 84.2%"
+                  }
+                ]
+              },
+              "questions": {
+                "relation_claim0": {
+                  "type": "choice",
+                  "instructions": "How does the evidence relate to claim `claim0` (The build passes on main.)?",
+                  "criteria": {
+                    "supports": "The evidence states the claim or directly implies that it is true",
+                    "contradicts": "The evidence states the opposite of the claim or implies that it is false",
+                    "says_nothing": "The evidence does not address what the claim asserts, either way"
+                  }
+                },
+                "source_claim0": {
+                  "type": "choice",
+                  "instructions": "Which evidence item does claim `claim0` (The build passes on main.) rest on?",
+                  "criteria": {
+                    "ci-log": null,
+                    "coverage": null,
+                    "none": "No single evidence item contains the content the claim depends on"
+                  }
+                },
+                "relation_claim1": {
+                  "type": "choice",
+                  "instructions": "How does the evidence relate to claim `claim1` (Line coverage is 91%.)?",
+                  "criteria": {
+                    "supports": "The evidence states the claim or directly implies that it is true",
+                    "contradicts": "The evidence states the opposite of the claim or implies that it is false",
+                    "says_nothing": "The evidence does not address what the claim asserts, either way"
+                  }
+                },
+                "source_claim1": {
+                  "type": "choice",
+                  "instructions": "Which evidence item does claim `claim1` (Line coverage is 91%.) rest on?",
+                  "criteria": {
+                    "ci-log": null,
+                    "coverage": null,
+                    "none": "No single evidence item contains the content the claim depends on"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"relation_claim0\":{\"choice\":\"supports\",\"confidence\":0.91,\"probabilities\":{\"supports\":0.93,\"contradicts\":0.035,\"says_nothing\":0.035}},\"source_claim0\":{\"choice\":\"ci-log\",\"confidence\":0.86,\"probabilities\":{\"ci-log\":0.88,\"coverage\":0.06,\"none\":0.06}},\"relation_claim1\":{\"choice\":\"supports\",\"confidence\":0.87,\"probabilities\":{\"supports\":0.9,\"contradicts\":0.05,\"says_nothing\":0.05}},\"source_claim1\":{\"choice\":\"coverage\",\"confidence\":0.94,\"probabilities\":{\"ci-log\":0.025,\"coverage\":0.95,\"none\":0.025}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17},\"model\":\"jev-1.13\"}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_verify\",\n  \"model\": \"jev-1.13\",\n  \"provider\": \"compatible\",\n  \"auto_accept\": 0.8,\n  \"summary\": {\n    \"verified\": 2,\n    \"contradicted\": 0,\n    \"unsupported\": 0,\n    \"needs_review\": 0\n  },\n  \"results\": [\n    {\n      \"id\": \"claim0\",\n      \"claim\": \"The build passes on main.\",\n      \"verdict\": \"verified\",\n      \"probabilities\": {\n        \"supports\": 0.93,\n        \"contradicts\": 0.035,\n        \"says_nothing\": 0.035\n      },\n      \"confidence\": 0.91,\n      \"action\": \"auto\",\n      \"supporting_evidence\": \"ci-log\"\n    },\n    {\n      \"id\": \"claim1\",\n      \"claim\": \"Line coverage is 91%.\",\n      \"verdict\": \"verified\",\n      \"probabilities\": {\n        \"supports\": 0.9,\n        \"contradicts\": 0.05,\n        \"says_nothing\": 0.05\n      },\n      \"confidence\": 0.87,\n      \"action\": \"auto\",\n      \"supporting_evidence\": \"coverage\"\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+{
+  "id": "provider-failure/compatible-429-echoes-key-redacted",
+  "source": {
+    "case": "provider-failure/compatible-429-echoes-key-redacted"
+  },
+  "classes": [
+    "provider-failure"
+  ],
+  "divergences": [],
+  "note": "The echoed JEV_API_KEY is replaced with [redacted] before slicing (provider.ts:172).",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_classify",
+      "arguments": {
+        "items": [
+          {
+            "id": "a",
+            "text": "x"
+          }
+        ],
+        "classes": [
+          {
+            "id": "p",
+            "description": "p"
+          },
+          {
+            "id": "q",
+            "description": "q"
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": "Assign each item to exactly one class.",
+                "context": null,
+                "classes": [
+                  {
+                    "id": "c0",
+                    "description": "p"
+                  },
+                  {
+                    "id": "c1",
+                    "description": "q"
+                  }
+                ]
+              },
+              "questions": {
+                "i0": {
+                  "type": "choice",
+                  "instructions": {
+                    "task": "Which class does this item belong to?",
+                    "item": {
+                      "id": "i0",
+                      "text": "x"
+                    }
+                  },
+                  "criteria": {
+                    "c0": null,
+                    "c1": null
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 429,
+            "body": "{\"error\":\"rate limited for Bearer parity-test-key\",\"key\":\"parity-test-key\"}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Jev-compatible endpoint 429: {\"error\":\"rate limited for Bearer [redacted]\",\"key\":\"[redacted]\"}"
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}
