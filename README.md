@@ -16,7 +16,7 @@ An MCP server that gives your coding agent eleven judgment tools backed by TypeS
 
 Use it for checks that have a fixed set of answers. When the step needs new text, code, or options you cannot list, the agent should write it itself.
 
-## Quick start
+## Install
 
 You need Python 3.12+, [uv](https://docs.astral.sh/uv/), a POSIX system (Linux or macOS), and a TypeSafe API key from [console.typesafe.ai](https://console.typesafe.ai/settings/keys). The package is not on PyPI yet, so you run it from a clone.
 
@@ -24,7 +24,12 @@ You need Python 3.12+, [uv](https://docs.astral.sh/uv/), a POSIX system (Linux o
 git clone https://github.com/PyModel/jev-judge-mcp
 cd jev-judge-mcp
 uv sync --extra typesafe
+```
 
+<details>
+<summary><b>Install with the installer (recommended)</b></summary>
+
+```sh
 uv run jev-judge-mcp setup     # verify your key, then store it
 uv run jev-judge-mcp install   # add the server to your agents
 uv run jev-judge-mcp doctor    # check the configuration, offline
@@ -44,56 +49,10 @@ uv run jev-judge-mcp install --remove          # undo what install wrote
 
 Terminal agents get a reference to `TYPESAFE_API_KEY`, never the key itself. Desktop apps don't see your shell's environment. Claude Desktop (macOS only) is skipped unless you pass `--desktop-key`, which writes the key into that app's config file. The same flag writes the key into the Codex and Pythinker files when the ChatGPT or Pythinker desktop app shares them; without it, `install` says that app has no key. The installer warns if a file holding the key ends up readable by other users. Pi also needs its MCP adapter first: `pi install npm:pi-mcp-adapter`.
 
-## What to use it for
-
-Ask your agent in plain words. It picks the tool, or you can name it.
-
-| You want to | Tool | You get |
-|---|---|---|
-| Check that the agent's "done" matches the diff and the test log | `jev_gate` | one ship decision over the patch and each completion claim |
-| Check claims in a summary or PR description against the sources | `jev_verify` | verified, contradicted, or unsupported for each claim |
-| Screen a fetched web page for prompt injection before reading it | `jev_screen` | pass, review, block, or skip |
-| Review a patch against the request | `jev_review` | correctness, spec match, test gaps, blast radius |
-| Spot drift between docs and code, or a changelog and a diff | `jev_compare` | same fact, contradiction, or different facts |
-| Find the file or note that answers a question | `jev_find` | the best match, plus whether anything matches at all |
-| Rank search hits or grep results | `jev_rerank` | a relevance score for every candidate, sorted |
-| Route tickets or label many items at once | `jev_classify` | one class per item from your catalog |
-| Pick one option, or decide whether to keep waiting on a slow command | `jev_decide` | your option, or `ask_user` / `investigate` / `none` |
-| Grade severity or risk on your own scale | `jev_score` | a position on your 2 to 10 levels, with the distribution; threshold it in code, since positions between levels are weakly calibrated |
-| Pull a version, date, or price out of a document | `jev_extract` | a value copied from a match of your regex, or null |
-
-For example, "use jev_verify to check your summary against the changelog" returns one row per claim:
-
-```json
-{
-  "claim": "The setup command accepts the API key as a command-line argument.",
-  "verdict": "contradicted",
-  "probabilities": { "supports": 0, "contradicts": 1, "says_nothing": 0 },
-  "confidence": 1,
-  "action": "auto",
-  "supporting_evidence": "setup.py"
-}
-```
-
-Jev sees only what the agent passes in the call, so the agent has to include the evidence. [`docs/skills/jev-mcp/SKILL.md`](docs/skills/jev-mcp/SKILL.md) is a skill you can give your agent: it covers which tool fits which step and what to do with each action. Allow rules for Claude Code are printed by `doctor`, and opt-in setups for Claude Code, Codex, and Pi are in [the harness samples](docs/harness/).
-
-## Configuration
-
-The server reads environment variables only. It does not load a `.env` file.
-
-| Variable | Default | What it does |
-|---|---|---|
-| `TYPESAFE_API_KEY` | unset | TypeSafe key; takes priority over the stored key |
-| `JEV_MCP_KEY_FILE` | `~/.config/jev-mcp/key` | where `setup` stores the key and the server reads it |
-| `JEV_PROVIDER` | `auto` | `auto` takes the first provider with credentials: typesafe, openrouter, cloudflare, compatible. The reference's vercel provider (`AI_GATEWAY_API_KEY`) is not supported |
-| `JEV_MCP_MODEL` | `jev-latest` | Jev model to ask |
-| `JEV_MCP_CACHE` | off | replay identical requests from disk at no API cost; leave it off when answers must be fresh, and delete the directory to clear it |
-| `JEV_MCP_CACHE_DIR` | `~/.cache/jev-mcp` | where the cache lives |
-| `JEV_MCP_TRANSPORT` | `stdio` | `streamable-http` is experimental and binds `JEV_MCP_HTTP_HOST:JEV_MCP_HTTP_PORT`, default `127.0.0.1:8000` |
-| `JEV_MCP_LOG_LEVEL` | `INFO` | logs go to stderr |
+</details>
 
 <details>
-<summary>Register the server by hand</summary>
+<summary><b>Register the server by hand</b></summary>
 
 `<uvx>` is the absolute path of `uvx`. `<spec>` is your clone's absolute path plus `[typesafe]`, for example `/home/me/jev-judge-mcp[typesafe]`.
 
@@ -158,6 +117,54 @@ OpenCode (`~/.config/opencode/opencode.json`):
 ```
 
 </details>
+
+## What to use it for
+
+Ask your agent in plain words. It picks the tool, or you can name it.
+
+| You want to | Tool | You get |
+|---|---|---|
+| Check that the agent's "done" matches the diff and the test log | `jev_gate` | one ship decision over the patch and each completion claim |
+| Check claims in a summary or PR description against the sources | `jev_verify` | verified, contradicted, or unsupported for each claim |
+| Screen a fetched web page for prompt injection before reading it | `jev_screen` | pass, review, block, or skip |
+| Review a patch against the request | `jev_review` | correctness, spec match, test gaps, blast radius |
+| Spot drift between docs and code, or a changelog and a diff | `jev_compare` | same fact, contradiction, or different facts |
+| Find the file or note that answers a question | `jev_find` | the best match, plus whether anything matches at all |
+| Rank search hits or grep results | `jev_rerank` | a relevance score for every candidate, sorted |
+| Route tickets or label many items at once | `jev_classify` | one class per item from your catalog |
+| Pick one option, or decide whether to keep waiting on a slow command | `jev_decide` | your option, or `ask_user` / `investigate` / `none` |
+| Grade severity or risk on your own scale | `jev_score` | a position on your 2 to 10 levels, with the distribution; threshold it in code, since positions between levels are weakly calibrated |
+| Pull a version, date, or price out of a document | `jev_extract` | a value copied from a match of your regex, or null |
+
+For example, "use jev_verify to check your summary against the changelog" returns one row per claim:
+
+```json
+{
+  "claim": "The setup command accepts the API key as a command-line argument.",
+  "verdict": "contradicted",
+  "probabilities": { "supports": 0, "contradicts": 1, "says_nothing": 0 },
+  "confidence": 1,
+  "action": "auto",
+  "supporting_evidence": "setup.py"
+}
+```
+
+Jev sees only what the agent passes in the call, so the agent has to include the evidence. [`docs/skills/jev-mcp/SKILL.md`](docs/skills/jev-mcp/SKILL.md) is a skill you can give your agent: it covers which tool fits which step and what to do with each action. Allow rules for Claude Code are printed by `doctor`, and opt-in setups for Claude Code, Codex, and Pi are in [the harness samples](docs/harness/).
+
+## Configuration
+
+The server reads environment variables only. It does not load a `.env` file.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `TYPESAFE_API_KEY` | unset | TypeSafe key; takes priority over the stored key |
+| `JEV_MCP_KEY_FILE` | `~/.config/jev-mcp/key` | where `setup` stores the key and the server reads it |
+| `JEV_PROVIDER` | `auto` | `auto` takes the first provider with credentials: typesafe, openrouter, cloudflare, compatible. The reference's vercel provider (`AI_GATEWAY_API_KEY`) is not supported |
+| `JEV_MCP_MODEL` | `jev-latest` | Jev model to ask |
+| `JEV_MCP_CACHE` | off | replay identical requests from disk at no API cost; leave it off when answers must be fresh, and delete the directory to clear it |
+| `JEV_MCP_CACHE_DIR` | `~/.cache/jev-mcp` | where the cache lives |
+| `JEV_MCP_TRANSPORT` | `stdio` | `streamable-http` is experimental and binds `JEV_MCP_HTTP_HOST:JEV_MCP_HTTP_PORT`, default `127.0.0.1:8000` |
+| `JEV_MCP_LOG_LEVEL` | `INFO` | logs go to stderr |
 
 ## Architecture
 
