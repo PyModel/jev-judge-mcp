@@ -1,0 +1,111 @@
+{
+  "id": "malformed/classify-extra-probability-key",
+  "source": {
+    "case": "malformed/classify-extra-probability-key"
+  },
+  "classes": [
+    "malformed"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_classify",
+      "arguments": {
+        "items": [
+          {
+            "id": "a",
+            "text": "Refund please."
+          },
+          {
+            "id": "b",
+            "text": "The app crashes."
+          }
+        ],
+        "classes": [
+          {
+            "id": "billing",
+            "description": "Payments."
+          },
+          {
+            "id": "technical",
+            "description": "Bugs."
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": "Assign each item to exactly one class.",
+                "context": null,
+                "classes": [
+                  {
+                    "id": "c0",
+                    "description": "Payments."
+                  },
+                  {
+                    "id": "c1",
+                    "description": "Bugs."
+                  }
+                ]
+              },
+              "questions": {
+                "i0": {
+                  "type": "choice",
+                  "instructions": {
+                    "task": "Which class does this item belong to?",
+                    "item": {
+                      "id": "i0",
+                      "text": "Refund please."
+                    }
+                  },
+                  "criteria": {
+                    "c0": null,
+                    "c1": null
+                  }
+                },
+                "i1": {
+                  "type": "choice",
+                  "instructions": {
+                    "task": "Which class does this item belong to?",
+                    "item": {
+                      "id": "i1",
+                      "text": "The app crashes."
+                    }
+                  },
+                  "criteria": {
+                    "c0": null,
+                    "c1": null
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"i0\":{\"choice\":\"c0\",\"confidence\":0.9,\"probabilities\":{\"c0\":0.9,\"c1\":0.05,\"c2\":0.05}},\"i1\":{\"choice\":\"c1\",\"confidence\":0.95,\"probabilities\":{\"c0\":0.05,\"c1\":0.95}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_classify\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"summary\": {\n    \"items\": 2,\n    \"auto\": 1,\n    \"review\": 0,\n    \"invalid_response\": 1,\n    \"by_class\": {\n      \"technical\": 1\n    }\n  },\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"results\": [\n    {\n      \"id\": \"a\",\n      \"status\": \"invalid_response\",\n      \"classification\": null,\n      \"probabilities\": null,\n      \"confidence\": null,\n      \"margin\": null,\n      \"decision\": \"review\"\n    },\n    {\n      \"id\": \"b\",\n      \"classification\": \"technical\",\n      \"probabilities\": {\n        \"billing\": 0.05,\n        \"technical\": 0.95\n      },\n      \"confidence\": 0.95,\n      \"margin\": 0.8999999999999999,\n      \"top_probability\": 0.95,\n      \"decision\": \"auto\"\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

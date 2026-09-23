@@ -1,0 +1,343 @@
+{
+  "$comment": "Frozen behavior spec for the Python rewrite. Hand-extracted from the TypeScript reference at commit 69ffb4b; input schemas are machine-captured in ts-0.5.0-tools-list.json. Every value here must become a contract test (ADR-0001). Reference facts change only with a new reference freeze. Quirk dispositions and sanctioned divergences change with their ADR. Every known_reference_quirks entry cites file:line at 69ffb4b.",
+  "reference": {
+    "version": "0.5.0",
+    "commit": "69ffb4b49c88802ec6e49b883f4a36b91d23197e",
+    "tree": "aa89f96564c7efe07c94535883de7cbad6af95b1",
+    "commit_date": "2026-09-21",
+    "mcp_sdk": "@modelcontextprotocol/sdk ^1.17.0",
+    "negotiated_protocol_in_snapshot": "2025-06-18",
+    "server_info": {
+      "name": "jev-mcp",
+      "version": "0.5.0"
+    },
+    "source_files": {
+      "src/index.ts": 1502,
+      "src/lib.ts": 374,
+      "src/provider.ts": 261
+    },
+    "tests": {
+      "unit": 27,
+      "mock": 60,
+      "provider": 8,
+      "e2e_live": 18,
+      "total": 113
+    }
+  },
+  "tools": [
+    "jev_verify",
+    "jev_screen",
+    "jev_find",
+    "jev_classify",
+    "jev_decide",
+    "jev_rerank",
+    "jev_compare",
+    "jev_extract",
+    "jev_review",
+    "jev_gate"
+  ],
+  "tools_list_order": "registration order as above; tools/list snapshot: ts-0.5.0-tools-list.json",
+  "output_schemas": "none — every tool returns one text content block containing JSON.stringify(payload, null, 2); see ADR-0006",
+  "numeric_tolerances": {
+    "probability_sum_tolerance": "0.01 + 1e-12 (lib.ts:11 PROBABILITY_SUM_TOLERANCE). jev_extract uses <= 0.01 (index.ts:1060, quirk Q2, ADR-0012). A 0.99 sum is 0.010000000000000009 from 1 and is rejected only by extract.",
+    "argmax_tolerance": 1e-09,
+    "probability_bounds": "[0, 1], finite",
+    "score_bounds": "[0, 2], finite (3-level rubric)",
+    "confidence": "finite in [0,1] else treated as null (unknown)"
+  },
+  "caps": {
+    "$comment": "Lengths are JS string .length = UTF-16 code units (ADR-0005). 'reject' = zod schema rejects; 'truncate' = truncate(text, n) appends ' […truncated]'. Error caps are strict greater-than checks (e.g. '>8000 → error' means 8000 is allowed). null max = deliberately uncapped in the reference; do not add a bound.",
+    "jev_verify": {
+      "claims_min": 1,
+      "claims_max": null,
+      "claim_chars_max": null,
+      "evidence_array_min": 1,
+      "evidence_array_max": null
+    },
+    "jev_screen": {
+      "text_min": 1,
+      "text_max": null,
+      "purpose_max": null
+    },
+    "jev_find": {
+      "candidates": "1..250 reject",
+      "candidate_text": "2000 truncate",
+      "top_k": "int 1..50, default 5"
+    },
+    "jev_classify": {
+      "items": "1..64 reject",
+      "item_text": "2000 truncate",
+      "classes": "..250 reject",
+      "class_description": "2000 truncate",
+      "items_x_classes": ">8000 → error"
+    },
+    "jev_decide": {
+      "decision": "1..1500 reject",
+      "evidence": "1..12000 reject",
+      "priorities": "1..2000 reject",
+      "candidates": "2..6 reject",
+      "candidate_id": "^[a-z][a-z0-9_-]*$ max 64",
+      "candidate_description": "1..2000",
+      "requirements": "0..3 reject",
+      "requirement_text": "1..500"
+    },
+    "jev_rerank": {
+      "candidates": "..250 reject",
+      "aggregate_candidate_chars": ">100000 → error",
+      "query": "1..2000 reject",
+      "top_k": "int 1..250, default all"
+    },
+    "jev_compare": {
+      "passage_a": "1..20000 reject",
+      "passage_b": "1..20000 reject",
+      "aspects": "0..10 reject",
+      "aspect_text": "1..200"
+    },
+    "jev_extract": {
+      "document": "1..50000 reject (then truncate at 50000, a no-op)",
+      "fields": "1..32 reject",
+      "field_id": "^[a-z][a-z0-9_-]*$ max 64",
+      "pattern": "1..500",
+      "flags": "max 8",
+      "description": "1..2000",
+      "candidates_per_field": 20,
+      "candidate_chars": ">2000 → skipped + counted as tooLong, never truncated",
+      "aggregate_preview_chars": ">50000 → error",
+      "regex_timeout_ms": 1000
+    },
+    "jev_review": {
+      "request_diff_tests": ">50000 → truncate each, truncated=true"
+    },
+    "jev_gate": {
+      "claims": "1..16 reject",
+      "claim_chars": "2000 truncate",
+      "evidence_items": ">16 → isError result",
+      "aggregate_evidence_chars": ">200000 → isError result. The error text renders the cap with toLocaleString('en-US'), so the digits appear as 200,000 (index.ts:1397)",
+      "doc_chars": "50000 truncate each (request, diff, tests, evidence item)"
+    }
+  },
+  "defaults": {
+    "model": "env JEV_MCP_MODEL, else 'jev-latest'",
+    "jev_verify": {
+      "auto_accept": 0.8
+    },
+    "jev_screen": {
+      "block_at": 0.75,
+      "review_at": 0.25,
+      "substance_skip_below": "0.3 (hardcoded, not a parameter)",
+      "relevance_skip_below": "0.3 (hardcoded, not a parameter)"
+    },
+    "jev_find": {
+      "top_k": 5,
+      "exists_found_at": 0.7,
+      "exists_absent_below": 0.35
+    },
+    "jev_classify": {
+      "auto_accept": 0.85,
+      "minimum_margin": 0.5
+    },
+    "jev_decide": {
+      "escape_hatches": true
+    },
+    "jev_rerank": {
+      "top_k": null
+    },
+    "jev_compare": {
+      "auto_accept": 0.85,
+      "minimum_margin": 0.5
+    },
+    "jev_extract": {
+      "auto_accept": 0.85,
+      "minimum_margin": 0.5
+    },
+    "jev_review": {
+      "auto_accept": 0.8,
+      "review_at": "min(0.5, auto_accept)",
+      "composite_floor": 0.7
+    },
+    "jev_gate": {
+      "auto_accept": 0.8,
+      "review_at": "min(0.5, auto_accept)",
+      "composite_floor": 0.7
+    },
+    "policy_threshold_invariant": "0 <= review_at <= auto_accept <= 1 else throw 'Thresholds must satisfy 0 <= review_at <= auto_accept <= 1.'"
+  },
+  "policy": {
+    "review_weights": {
+      "correctness": 0.4,
+      "spec_match": 0.3,
+      "test_gap": 0.15,
+      "blast_radius": 0.15
+    },
+    "review_composite": "0.4*c/2 + 0.3*s/2 + 0.15*(1-t/2) + 0.15*(1-b/2); inputs clamped to [0,2]",
+    "review_action": "escalate if min_confidence null or < review_at or safe_to_apply < review_at; auto if safe_to_apply >= auto_accept and composite >= floor and min_confidence >= auto_accept; else review; then requireCompleteContext",
+    "claim_action": "escalate if confidence null or < review_at; escalate if contradicted and confidence >= auto_accept; auto if verified and confidence >= auto_accept; else review; then requireCompleteContext",
+    "worst_action": "escalate > review > auto",
+    "require_complete_context": "truncated && auto → review",
+    "classification_decision": "auto iff top_probability >= auto_accept AND margin >= minimum_margin",
+    "margin": "top1 - top2 of probability values; < 2 values → 0",
+    "verify_action": "auto iff confidence >= auto_accept; confidence null → review; no escalate tier",
+    "screen": "injection >= block_at → block; >= review_at → review; substance < 0.3 → skip; relevance < 0.3 → skip; else pass. Reason strings use toFixed(2).",
+    "exists_verdict": ">= 0.7 answered; < 0.35 absent; else partial",
+    "rank_candidates": "descending probability, ties keep caller order; missing prob → 0",
+    "decide_escape_hatches": [
+      "ask_user",
+      "investigate",
+      "none"
+    ],
+    "gate_reason_codes_in_order": [
+      "incomplete_context",
+      "invalid_response",
+      "review_escalated",
+      "review_required",
+      "claims_contradicted",
+      "claims_unsupported",
+      "claim_confidence_low",
+      "claim_confidence_below_auto_accept",
+      "accepted"
+    ],
+    "extract_statuses": [
+      "auto",
+      "review",
+      "not_found",
+      "invalid_pattern",
+      "invalid_response"
+    ],
+    "extract_reasons": [
+      "no_regex_matches",
+      "matches_too_long",
+      "candidate_limit",
+      "none_matched",
+      "none_matched_ambiguous"
+    ]
+  },
+  "ids": {
+    "sanitize": "replace /[^A-Za-z0-9_.-]+/g with '_', strip leading/trailing '_', slice(0,64); empty → `${prefix}${index}`",
+    "collision": "append _1, _2, … until unique",
+    "wire_keys": {
+      "decide": "option_{i}",
+      "extract_field": "f{i}",
+      "extract_candidate": "c{j} + none_of_them",
+      "compare": "overall, aspect_{i}",
+      "verify": "relation_{id}, source_{id}",
+      "decide_checks": "check_{i}_{j}",
+      "gate_claims": "claim_{i}"
+    },
+    "duplicate_caller_ids_rejected_in": [
+      "jev_classify (supplied item ids and supplied class ids; a generated fallback that equals a supplied id is quirk Q11, diverged in ADR-0031)",
+      "jev_decide (candidates; also escape-hatch collision)",
+      "jev_rerank",
+      "jev_extract (field ids)"
+    ]
+  },
+  "extract_regex_pipeline": {
+    "dialect": "ECMAScript, matched in UTF-16 code units (ADR-0004). Python maps each unit to one character via chr of each UTF-16-LE pair and maps match text back with surrogatepass.",
+    "flags": "Reference: strip non [a-z], append 'g', collapse repeated g (index.ts:992). Python also rejects u, y, d, v, s, m, and i when a literal or class endpoint is outside U+0000-U+007F (ADR-0004).",
+    "order": [
+      "matchAll over document",
+      "drop zero-length",
+      "dedup by value (first occurrence wins)",
+      "if length > 2000: tooLong += 1, skip",
+      "if 20 already kept: truncated = true, stop",
+      "keep"
+    ],
+    "isolation": "Reference: fresh worker thread per field, hard terminate at 1000 ms; fields run sequentially (index.ts:918, index.ts:990-993). Python: process pool of size min(8, cpu count), one pattern per slot, kill and replace that slot on deadline; a full pool queues (ADR-0004).",
+    "field_timing": "Sequential caller order is kept (ADR-0012). Duration is not part of the tool output.",
+    "timeout_error": "regex timed out after 1000ms; simplify the pattern",
+    "invalid_pattern_reason": "Reference passes through V8 SyntaxError.message from the worker (index.ts:906-908). Python returns a named reason. Sanctioned divergence, ADR-0004. The timeout string above is shared.",
+    "zero_api_call_case": "no field has candidates → no provider call; usage null, provider 'none'"
+  },
+  "providers": {
+    "resolution_env": "JEV_PROVIDER (default 'auto', case-insensitive)",
+    "auto_order": [
+      "typesafe (TYPESAFE_API_KEY)",
+      "openrouter (OPENROUTER_API_KEY matching ^sk-or-)",
+      "cloudflare ((JEV_CLOUDFLARE_API_TOKEN || CLOUDFLARE_API_TOKEN) && CLOUDFLARE_ACCOUNT_ID)",
+      "vercel (AI_GATEWAY_API_KEY)",
+      "compatible (JEV_API_KEY && JEV_API_BASE_URL)"
+    ],
+    "typesafe": {
+      "base_url_env": "TYPESAFE_BASE_URL",
+      "envelope_validation": "none (answers passed through)"
+    },
+    "openrouter": {
+      "url": "https://openrouter.ai/api/alpha/decisions",
+      "latest_alias": "jev-latest → jev-1.13",
+      "slug": "Rewrite jev-latest to jev-1.13 first (provider.ts:129-130). If the model already starts with typesafe/, use it verbatim; otherwise prefix typesafe/ (provider.ts:131).",
+      "headers": [
+        "HTTP-Referer: https://github.com/PyModel/jev-judge-mcp",
+        "X-Title: jev-mcp",
+        "X-OpenRouter-Title: jev-mcp"
+      ],
+      "envelope_validation": "none (answers ?? {})",
+      "error_body": "first 200 chars, not redacted"
+    },
+    "cloudflare": {
+      "url": "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/run",
+      "slug": "typesafe/jev for jev-latest else typesafe/{model}",
+      "body": "{model, input:{state, questions}}",
+      "unwrap": "result.result ?? result ?? body. Error only when result.state is a string and not 'Completed' (provider.ts:251-253). A missing state is not an error.",
+      "envelope_validation": "none (answers ?? {})"
+    },
+    "vercel": {
+      "api": "AI SDK experimental_evaluate, model typesafe-ai/jev",
+      "noul_wire_name": "boolean",
+      "confidence_source": "providerMetadata.typesafe.confidence",
+      "python_status": "unsupported — ADR-0007"
+    },
+    "compatible": {
+      "url": "JEV_API_BASE_URL (POST)",
+      "body": "{model, state, questions}",
+      "envelope_validation": "body object; answers object; usage absent|null or finite non-negative input_tokens+output_tokens; model absent|null|string",
+      "error_body": "redact JEV_API_KEY, first 200 chars"
+    }
+  },
+  "known_reference_quirks": {
+    "$comment": "Behaviors in the reference that look accidental. Each cites file:line at commit 69ffb4b and has a keep-or-diverge ADR. Q5 was withdrawn: jev_compare range-validates confidence in validateChoiceAnswer (index.ts:1192-1196); the ?? null at index.ts:860 is redundant (ADR-0012).",
+    "Q1_envelope_validation_uneven": "Only compatible validates the envelope (provider.ts:175-194); OpenRouter and Cloudflare coerce missing answers to {} (provider.ts:149, provider.ts:256) so tools emit per-item invalid_response. Python: diverge (ADR-0003). Source: provider.ts:149, provider.ts:175-194, provider.ts:256.",
+    "Q2_extract_sum_tolerance": "jev_extract inlines its own validation with sum tolerance 0.01 (no +1e-12) and no isRecord(probabilities) check; a 0.99 sum is 0.010000000000000009 from 1, so extract rejects it and validateChoiceAnswer accepts it. Python: keep (ADR-0012). Source: index.ts:1049-1060, lib.ts:11.",
+    "Q3_decide_invalid_checks_silent": "jev_decide records malformed requirement checks as answer invalid_response and keeps them in checks, and drops them from contradiction warnings. No top-level status or escalation. Python: keep (ADR-0012). Source: index.ts:639-670.",
+    "Q4_verify_confidence_strictness": "jev_verify invalidates a relation whose confidence is present but malformed; other tools coerce malformed confidence to null. Python: keep (ADR-0012). Source: index.ts:191-192.",
+    "Q6_tofixed_rounding": "Reason strings use Number.toFixed(2) (ties round half up on the exact binary value: 0.125 becomes 0.13); Python format rounds half-even (0.12). Python reproduces the JS rounding (ADR-0006). Source: lib.ts:79-85.",
+    "Q7_number_serialization": "JSON.stringify: integral floats print as ints (1.0 becomes 1); exponential notation only when exponent >= 21 or <= -7 (3.2e-5 becomes 0.000032, 1.5e-7 becomes 1.5e-7, 1e21 becomes 1e+21). Python json prints 1.0 and switches to exponential below 1e-4 with a zero-padded exponent (3.2e-05, 1.5e-07). Sub-1e-4 probabilities are routine in large Choice distributions. Python reproduces JS formatting (ADR-0006). Source: index.ts:86.",
+    "Q8_utf16_truncation": "truncate() slices UTF-16 code units and can split a surrogate pair, emitting a lone surrogate. Python drops the dangling unit on truncate only (ADR-0005). A one-unit regex match is kept and JSON-escaped (ADR-0004, ADR-0006). Source: lib.ts:47-49.",
+    "Q9_cloudflare_error_unredacted": "Cloudflare and OpenRouter error bodies are not passed through secret redaction. The reference redacts only JEV_API_KEY, and only on the compatible error body. Python redacts every configured secret (ADR-0008). Source: provider.ts:145-146, provider.ts:169-172, provider.ts:246-247.",
+    "Q10_no_cancellation": "index.ts askJev() never passes an AbortSignal, so MCP client cancellation does not abort the provider request even though provider.ts supports it. Python: diverge (ADR-0011). Source: index.ts:81-83, provider.ts:104.",
+    "Q11_classify_omitted_id_collides": "jev_classify assigns an omitted id `{kind}{index}` and does not check it against supplied ids, so an omitted item beside `{id: item0}` returns two results with id item0 and the class probabilities object keeps one key (recorded in duplicate-id/classify-omitted-ids-get-positional-fallbacks). Supplied duplicates are still rejected (index.ts:441, index.ts:450). jev_rerank checks its fallback (index.ts:711-722). Python: diverge, reject before any provider request (ADR-0031). Source: index.ts:398-526."
+  },
+  "conditional_questions": {
+    "jev_verify": "source_{id} only when evidence has >1 item; its absence never invalidates relation_{id}",
+    "jev_screen": "relevance only when purpose is truthy; injection + substance always",
+    "jev_decide": "check_{i}_{j} only for supplied requirements; escape hatches only when escape_hatches=true",
+    "jev_compare": "aspect_{i} only for supplied aspects; overall always",
+    "jev_extract": "f{i} only for fields with ≥1 candidate and no pattern error; zero such fields → no provider call",
+    "jev_gate": "claim_{i} per claim plus the five review questions"
+  },
+  "not_captured": {
+    "$comment": "The manifest is necessary but not sufficient. These are specified only by the pinned source (commit 69ffb4b) and must be copied verbatim or recorded as parity fixtures.",
+    "items": [
+      "question instruction strings and criteria maps for every tool",
+      "ANTI_INJECTION framing and gate claim framing text",
+      "output payload key names and key order for every tool (only gate/extract/verify/screen partially read)",
+      "error message strings thrown from tool handlers, including the jev_gate aggregate-budget error, which renders 200000 as 200,000 via toLocaleString('en-US') (index.ts:1397)",
+      "tool titles and descriptions (captured in ts-0.5.0-tools-list.json)"
+    ],
+    "captured_by": {
+      "$comment": "Parity fixtures recorded from the pinned reference (tests/parity/, make parity-record). Each item above is fixed by the fixture data named here, not transcribed into this manifest.",
+      "question_strings_and_criteria": "calls[].exchanges[].request.body.questions in every fixture whose call reaches the provider; key order is significant",
+      "anti_injection_and_gate_framing": "request.body.questions of jev_review and jev_gate fixtures: tests/parity/fixtures/mock/025-jev-review-returns-auto-on-a-strong-patch-and-sends-anti-injection-framing.json, tests/parity/fixtures/mock/043-jev-gate-makes-one-request-keeps-injected-directives-in-state-and-frames-every-q.json",
+      "output_key_names_and_order": "calls[].result.content[0].text in every fixture; success and invalid_response branches of every tool are both covered (fixtures/index.json lists them by class)",
+      "handler_error_strings": [
+        "tests/parity/fixtures/classes/duplicate-id/ (index.ts:441, 450, 582, 584, 706, 980)",
+        "tests/parity/fixtures/classes/boundary/classify-items-x-classes-over-budget.json (index.ts:456)",
+        "tests/parity/fixtures/classes/boundary/rerank-aggregate-over-budget.json (index.ts:725)",
+        "tests/parity/fixtures/classes/boundary/extract-aggregate-preview-over-budget.json (index.ts:1007)",
+        "tests/parity/fixtures/classes/boundary/review-threshold-invariant-violated.json (lib.ts:273)",
+        "tests/parity/fixtures/mock/041-jev-gate-rejects-evidence-over-the-item-cap-before-calling-jev.json (index.ts:1387)",
+        "tests/parity/fixtures/mock/042-jev-gate-rejects-evidence-over-the-aggregate-character-budget-before-calling-jev.json (index.ts:1397)",
+        "tests/parity/fixtures/classes/resolver-error/ and classes/provider-failure/ (provider.ts:44-75, 173, 176-193)"
+      ],
+      "tool_titles_and_descriptions": "docs/reference/ts-0.5.0-tools-list.json"
+    }
+  }
+}

@@ -1,0 +1,91 @@
+{
+  "id": "contradicted/verify-contradicted-auto",
+  "source": {
+    "case": "contradicted/verify-contradicted-auto"
+  },
+  "classes": [
+    "contradicted"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_verify",
+      "arguments": {
+        "claims": [
+          "The service listens on port 9090.",
+          "The service listens on port 8080."
+        ],
+        "evidence": "server.listen(8080)"
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": "Verify each claim in claims against the evidence in evidence.",
+                "claims": [
+                  {
+                    "text": "The service listens on port 9090.",
+                    "id": "claim0"
+                  },
+                  {
+                    "text": "The service listens on port 8080.",
+                    "id": "claim1"
+                  }
+                ],
+                "evidence": [
+                  {
+                    "id": "evidence",
+                    "text": "server.listen(8080)"
+                  }
+                ]
+              },
+              "questions": {
+                "relation_claim0": {
+                  "type": "choice",
+                  "instructions": "How does the evidence relate to claim `claim0` (The service listens on port 9090.)?",
+                  "criteria": {
+                    "supports": "The evidence states the claim or directly implies that it is true",
+                    "contradicts": "The evidence states the opposite of the claim or implies that it is false",
+                    "says_nothing": "The evidence does not address what the claim asserts, either way"
+                  }
+                },
+                "relation_claim1": {
+                  "type": "choice",
+                  "instructions": "How does the evidence relate to claim `claim1` (The service listens on port 8080.)?",
+                  "criteria": {
+                    "supports": "The evidence states the claim or directly implies that it is true",
+                    "contradicts": "The evidence states the opposite of the claim or implies that it is false",
+                    "says_nothing": "The evidence does not address what the claim asserts, either way"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"relation_claim0\":{\"choice\":\"contradicts\",\"confidence\":0.94,\"probabilities\":{\"supports\":0.025,\"contradicts\":0.95,\"says_nothing\":0.025}},\"relation_claim1\":{\"choice\":\"supports\",\"confidence\":0.94,\"probabilities\":{\"supports\":0.95,\"contradicts\":0.025,\"says_nothing\":0.025}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_verify\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"auto_accept\": 0.8,\n  \"summary\": {\n    \"verified\": 1,\n    \"contradicted\": 1,\n    \"unsupported\": 0,\n    \"needs_review\": 0\n  },\n  \"results\": [\n    {\n      \"id\": \"claim0\",\n      \"claim\": \"The service listens on port 9090.\",\n      \"verdict\": \"contradicted\",\n      \"probabilities\": {\n        \"supports\": 0.025,\n        \"contradicts\": 0.95,\n        \"says_nothing\": 0.025\n      },\n      \"confidence\": 0.94,\n      \"action\": \"auto\",\n      \"supporting_evidence\": null\n    },\n    {\n      \"id\": \"claim1\",\n      \"claim\": \"The service listens on port 8080.\",\n      \"verdict\": \"verified\",\n      \"probabilities\": {\n        \"supports\": 0.95,\n        \"contradicts\": 0.025,\n        \"says_nothing\": 0.025\n      },\n      \"confidence\": 0.94,\n      \"action\": \"auto\",\n      \"supporting_evidence\": null\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

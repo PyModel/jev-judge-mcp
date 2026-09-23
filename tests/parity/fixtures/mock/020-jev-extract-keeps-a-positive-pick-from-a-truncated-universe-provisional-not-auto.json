@@ -1,0 +1,97 @@
+{
+  "id": "mock-020",
+  "source": {
+    "file": "test/mock.test.mjs",
+    "test": "jev_extract keeps a positive pick from a truncated universe provisional, not auto"
+  },
+  "classes": [
+    "mock"
+  ],
+  "divergences": [],
+  "reference_assertions_failed_under_compatible": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "compatible-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_extract",
+      "arguments": {
+        "document": "Changelog: 1.0.0 1.0.1 1.0.2 1.0.3 1.0.4 1.0.5 1.0.6 1.0.7 1.0.8 1.0.9 1.0.10 1.0.11 1.0.12 1.0.13 1.0.14 1.0.15 1.0.16 1.0.17 1.0.18 1.0.19 1.0.20 1.0.21 1.0.22 1.0.23 1.0.24",
+        "fields": [
+          {
+            "id": "ceo",
+            "pattern": "\\d+\\.\\d+\\.\\d+",
+            "description": "The full name of the company's CEO"
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer compatible-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": null,
+                "document": "Changelog: 1.0.0 1.0.1 1.0.2 1.0.3 1.0.4 1.0.5 1.0.6 1.0.7 1.0.8 1.0.9 1.0.10 1.0.11 1.0.12 1.0.13 1.0.14 1.0.15 1.0.16 1.0.17 1.0.18 1.0.19 1.0.20 1.0.21 1.0.22 1.0.23 1.0.24",
+                "fields": [
+                  {
+                    "id": "f0",
+                    "description": "The full name of the company's CEO",
+                    "pattern": "\\d+\\.\\d+\\.\\d+"
+                  }
+                ]
+              },
+              "questions": {
+                "f0": {
+                  "type": "choice",
+                  "instructions": "Which candidate is the correct value of the field \"ceo\" (The full name of the company's CEO) in the document in the state? Pick the exact substring the document presents as this field's value.",
+                  "criteria": {
+                    "c0": "Candidate value: \"1.0.0\"",
+                    "c1": "Candidate value: \"1.0.1\"",
+                    "c2": "Candidate value: \"1.0.2\"",
+                    "c3": "Candidate value: \"1.0.3\"",
+                    "c4": "Candidate value: \"1.0.4\"",
+                    "c5": "Candidate value: \"1.0.5\"",
+                    "c6": "Candidate value: \"1.0.6\"",
+                    "c7": "Candidate value: \"1.0.7\"",
+                    "c8": "Candidate value: \"1.0.8\"",
+                    "c9": "Candidate value: \"1.0.9\"",
+                    "c10": "Candidate value: \"1.0.10\"",
+                    "c11": "Candidate value: \"1.0.11\"",
+                    "c12": "Candidate value: \"1.0.12\"",
+                    "c13": "Candidate value: \"1.0.13\"",
+                    "c14": "Candidate value: \"1.0.14\"",
+                    "c15": "Candidate value: \"1.0.15\"",
+                    "c16": "Candidate value: \"1.0.16\"",
+                    "c17": "Candidate value: \"1.0.17\"",
+                    "c18": "Candidate value: \"1.0.18\"",
+                    "c19": "Candidate value: \"1.0.19\"",
+                    "none_of_them": "None of the candidates is the value this field asks for"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"f0\":{\"choice\":\"c3\",\"confidence\":0.99,\"probabilities\":{\"c3\":0.95,\"c0\":0.0025,\"c1\":0.0025,\"c2\":0.0025,\"c4\":0.0025,\"c5\":0.0025,\"c6\":0.0025,\"c7\":0.0025,\"c8\":0.0025,\"c9\":0.0025,\"c10\":0.0025,\"c11\":0.0025,\"c12\":0.0025,\"c13\":0.0025,\"c14\":0.0025,\"c15\":0.0025,\"c16\":0.0025,\"c17\":0.0025,\"c18\":0.0025,\"c19\":0.0025,\"none_of_them\":0.0025}}},\"usage\":{\"input_tokens\":10,\"output_tokens\":10}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_extract\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"summary\": {\n    \"fields\": 1,\n    \"extracted\": 1,\n    \"auto\": 0,\n    \"review\": 1,\n    \"not_found\": 0,\n    \"invalid\": 0\n  },\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"results\": [\n    {\n      \"id\": \"ceo\",\n      \"value\": \"1.0.3\",\n      \"status\": \"review\",\n      \"reason\": \"candidate_limit\",\n      \"confidence\": 0.99,\n      \"top_probability\": 0.95,\n      \"margin\": 0.9475,\n      \"candidates_considered\": 20,\n      \"candidates_truncated\": true,\n      \"matches_skipped_too_long\": 0\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 10,\n    \"output_tokens\": 10\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

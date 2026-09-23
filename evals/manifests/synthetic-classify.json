@@ -1,0 +1,7 @@
+{
+  "tool": "jev_classify",
+  "dataset": "synthetic/classify.jsonl",
+  "model": "synthetic-offline",
+  "salt": "synthetic-v1",
+  "params": {}
+}

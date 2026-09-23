@@ -1,0 +1,34 @@
+{
+  "id": "resolver-error/auto-cloudflare-token-without-account",
+  "source": {
+    "case": "resolver-error/auto-cloudflare-token-without-account"
+  },
+  "classes": [
+    "resolver-error"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "CLOUDFLARE_API_TOKEN": "cf-token"
+      },
+      "tool": "jev_verify",
+      "arguments": {
+        "claims": [
+          "The service listens on port 8080."
+        ],
+        "evidence": "server.listen(8080)"
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "No Jev provider credentials found. Set TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token + CLOUDFLARE_ACCOUNT_ID, AI_GATEWAY_API_KEY, or JEV_API_KEY + JEV_API_BASE_URL; set JEV_PROVIDER to choose explicitly."
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

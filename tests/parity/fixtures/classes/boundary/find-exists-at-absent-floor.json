@@ -1,0 +1,91 @@
+{
+  "id": "boundary/find-exists-at-absent-floor",
+  "source": {
+    "case": "boundary/find-exists-at-absent-floor"
+  },
+  "classes": [
+    "boundary"
+  ],
+  "divergences": [],
+  "note": "exists 0.35 is not < 0.35, so the verdict is partial.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_find",
+      "arguments": {
+        "query": "What is the refund window?",
+        "candidates": [
+          {
+            "id": "a",
+            "text": "Refunds are handled by support."
+          },
+          {
+            "id": "b",
+            "text": "Shipping takes 3-5 days."
+          }
+        ],
+        "top_k": 1
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "query": "What is the refund window?",
+                "candidates": [
+                  {
+                    "id": "a",
+                    "text": "Refunds are handled by support."
+                  },
+                  {
+                    "id": "b",
+                    "text": "Shipping takes 3-5 days."
+                  }
+                ]
+              },
+              "questions": {
+                "best": {
+                  "type": "choice",
+                  "instructions": "Which candidate contains the best answer to: \"What is the refund window?\"?",
+                  "criteria": {
+                    "a": null,
+                    "b": null
+                  }
+                },
+                "exists": {
+                  "type": "noul",
+                  "instructions": "Does any candidate address or answer: \"What is the refund window?\"?",
+                  "criteria": {
+                    "true": "At least one candidate states or directly implies the answer",
+                    "false": "No candidate addresses this"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"best\":{\"choice\":\"a\",\"confidence\":0.4,\"probabilities\":{\"a\":0.6,\"b\":0.4}},\"exists\":{\"noul\":0.35}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_find\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"query\": \"What is the refund window?\",\n  \"exists\": 0.35,\n  \"exists_verdict\": \"partial\",\n  \"top\": [\n    {\n      \"id\": \"a\",\n      \"probability\": 0.6,\n      \"text\": \"Refunds are handled by support.\"\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

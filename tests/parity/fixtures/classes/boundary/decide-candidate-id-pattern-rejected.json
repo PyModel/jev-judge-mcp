@@ -1,0 +1,46 @@
+{
+  "id": "boundary/decide-candidate-id-pattern-rejected",
+  "source": {
+    "case": "boundary/decide-candidate-id-pattern-rejected"
+  },
+  "classes": [
+    "boundary"
+  ],
+  "divergences": [],
+  "note": "Schema rejection: candidate ids must match ^[a-z][a-z0-9_-]*$.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_decide",
+      "arguments": {
+        "decision": "Pick one.",
+        "evidence": "None.",
+        "priorities": "None.",
+        "candidates": [
+          {
+            "id": "Option-A",
+            "description": "First."
+          },
+          {
+            "id": "option-b",
+            "description": "Second."
+          }
+        ]
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "MCP error -32602: Input validation error: Invalid arguments for tool jev_decide: Invalid at candidates[0].id"
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

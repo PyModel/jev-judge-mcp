@@ -1,0 +1,66 @@
+{
+  "id": "contradicted/compare-contradicts-auto",
+  "source": {
+    "case": "contradicted/compare-contradicts-auto"
+  },
+  "classes": [
+    "contradicted"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_compare",
+      "arguments": {
+        "passage_a": "The API is free.",
+        "passage_b": "The API costs $5 per month."
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": null,
+                "passage_a": "The API is free.",
+                "passage_b": "The API costs $5 per month.",
+                "aspects": []
+              },
+              "questions": {
+                "overall": {
+                  "type": "choice",
+                  "instructions": "Do the two passages state the same underlying fact, contradict each other, or discuss different facts?",
+                  "criteria": {
+                    "same_fact": "Both passages state the same underlying fact or claim",
+                    "contradicts": "The passages state opposing facts about the same subject",
+                    "different_facts": "The passages discuss different subjects or make non-overlapping claims"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"overall\":{\"choice\":\"contradicts\",\"confidence\":0.95,\"probabilities\":{\"same_fact\":0.02,\"contradicts\":0.96,\"different_facts\":0.02}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_compare\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"overall\": {\n    \"relation\": \"contradicts\",\n    \"probabilities\": {\n      \"same_fact\": 0.02,\n      \"contradicts\": 0.96,\n      \"different_facts\": 0.02\n    },\n    \"confidence\": 0.95,\n    \"margin\": 0.94,\n    \"decision\": \"auto\"\n  },\n  \"aspects\": [],\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

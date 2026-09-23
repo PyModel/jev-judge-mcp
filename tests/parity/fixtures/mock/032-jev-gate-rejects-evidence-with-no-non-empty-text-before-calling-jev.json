@@ -1,0 +1,46 @@
+{
+  "id": "mock-032",
+  "source": {
+    "file": "test/mock.test.mjs",
+    "test": "jev_gate rejects evidence with no non-empty text before calling Jev"
+  },
+  "classes": [
+    "mock"
+  ],
+  "divergences": [],
+  "reference_assertions_failed_under_compatible": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "compatible-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_gate",
+      "arguments": {
+        "request": "Reject empty parser input",
+        "diff": "+ if (!input) throw new Error('Empty input');",
+        "tests": "parser rejects empty input: PASS",
+        "claims": [
+          "The empty-input parser test passed."
+        ],
+        "evidence": [
+          {
+            "id": "blank",
+            "text": "   "
+          }
+        ]
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "MCP error -32602: Input validation error: Invalid arguments for tool jev_gate: jev_gate requires at least one evidence item with non-empty text. at evidence"
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

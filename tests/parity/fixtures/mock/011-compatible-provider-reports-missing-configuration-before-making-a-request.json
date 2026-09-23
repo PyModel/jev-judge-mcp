@@ -1,0 +1,38 @@
+{
+  "id": "mock-011",
+  "source": {
+    "file": "test/mock.test.mjs",
+    "test": "compatible provider reports missing configuration before making a request"
+  },
+  "classes": [
+    "mock"
+  ],
+  "divergences": [],
+  "reference_assertions_failed_under_compatible": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "",
+        "JEV_API_KEY": "",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_verify",
+      "arguments": {
+        "claims": [
+          "The patch is ready"
+        ],
+        "evidence": "The tests pass"
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "JEV_PROVIDER=compatible but JEV_API_KEY and JEV_API_BASE_URL are not set. JEV_MCP_MODEL is optional and defaults to jev-latest."
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

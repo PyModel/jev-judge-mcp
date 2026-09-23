@@ -1,0 +1,78 @@
+{
+  "id": "provider-failure/compatible-401-after-regex",
+  "source": {
+    "case": "provider-failure/compatible-401-after-regex"
+  },
+  "classes": [
+    "provider-failure"
+  ],
+  "divergences": [],
+  "note": "extract runs its regex fields, then the request fails: the whole call is a tool error.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_extract",
+      "arguments": {
+        "document": "id 42",
+        "fields": [
+          {
+            "id": "n",
+            "pattern": "\\d+",
+            "description": "The id."
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": null,
+                "document": "id 42",
+                "fields": [
+                  {
+                    "id": "f0",
+                    "description": "The id.",
+                    "pattern": "\\d+"
+                  }
+                ]
+              },
+              "questions": {
+                "f0": {
+                  "type": "choice",
+                  "instructions": "Which candidate is the correct value of the field \"n\" (The id.) in the document in the state? Pick the exact substring the document presents as this field's value.",
+                  "criteria": {
+                    "c0": "Candidate value: \"42\"",
+                    "none_of_them": "None of the candidates is the value this field asks for"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 401,
+            "body": "{\"error\":\"unauthorized\"}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Jev-compatible endpoint 401: {\"error\":\"unauthorized\"}"
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

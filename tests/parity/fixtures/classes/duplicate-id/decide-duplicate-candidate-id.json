@@ -1,0 +1,45 @@
+{
+  "id": "duplicate-id/decide-duplicate-candidate-id",
+  "source": {
+    "case": "duplicate-id/decide-duplicate-candidate-id"
+  },
+  "classes": [
+    "duplicate-id"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_decide",
+      "arguments": {
+        "decision": "d",
+        "evidence": "e",
+        "priorities": "p",
+        "candidates": [
+          {
+            "id": "same",
+            "description": "one"
+          },
+          {
+            "id": "same",
+            "description": "two"
+          }
+        ]
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Duplicate candidate id: same"
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

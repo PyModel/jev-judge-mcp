@@ -1,0 +1,7 @@
+{
+  "tool": "jev_verify",
+  "dataset": "synthetic/live-verify.jsonl",
+  "model": "jev-1.13.0",
+  "salt": "live-v1",
+  "params": {}
+}

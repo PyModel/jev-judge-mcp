@@ -1,0 +1,40 @@
+{
+  "id": "zero-match/extract-no-matches-no-provider-call",
+  "source": {
+    "case": "zero-match/extract-no-matches-no-provider-call"
+  },
+  "classes": [
+    "zero-match"
+  ],
+  "divergences": [],
+  "note": "No field has candidates: no request, provider 'none', usage null, model is the configured model.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_extract",
+      "arguments": {
+        "document": "Build ABC-123 passed. Build ABC-124 failed. Contact: ops@example.test",
+        "fields": [
+          {
+            "id": "phone",
+            "pattern": "\\+\\d{11}",
+            "description": "A phone number."
+          }
+        ]
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_extract\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"none\",\n  \"summary\": {\n    \"fields\": 1,\n    \"extracted\": 0,\n    \"auto\": 0,\n    \"review\": 0,\n    \"not_found\": 1,\n    \"invalid\": 0\n  },\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"results\": [\n    {\n      \"id\": \"phone\",\n      \"value\": null,\n      \"status\": \"not_found\",\n      \"reason\": \"no_regex_matches\",\n      \"candidates_considered\": 0,\n      \"candidates_truncated\": false,\n      \"matches_skipped_too_long\": 0\n    }\n  ],\n  \"usage\": null\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

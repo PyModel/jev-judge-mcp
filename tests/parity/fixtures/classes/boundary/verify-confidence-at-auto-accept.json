@@ -1,0 +1,91 @@
+{
+  "id": "boundary/verify-confidence-at-auto-accept",
+  "source": {
+    "case": "boundary/verify-confidence-at-auto-accept"
+  },
+  "classes": [
+    "boundary"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_verify",
+      "arguments": {
+        "claims": [
+          "Exactly at the threshold.",
+          "Just under it."
+        ],
+        "evidence": "The threshold is 0.8."
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": "Verify each claim in claims against the evidence in evidence.",
+                "claims": [
+                  {
+                    "text": "Exactly at the threshold.",
+                    "id": "claim0"
+                  },
+                  {
+                    "text": "Just under it.",
+                    "id": "claim1"
+                  }
+                ],
+                "evidence": [
+                  {
+                    "id": "evidence",
+                    "text": "The threshold is 0.8."
+                  }
+                ]
+              },
+              "questions": {
+                "relation_claim0": {
+                  "type": "choice",
+                  "instructions": "How does the evidence relate to claim `claim0` (Exactly at the threshold.)?",
+                  "criteria": {
+                    "supports": "The evidence states the claim or directly implies that it is true",
+                    "contradicts": "The evidence states the opposite of the claim or implies that it is false",
+                    "says_nothing": "The evidence does not address what the claim asserts, either way"
+                  }
+                },
+                "relation_claim1": {
+                  "type": "choice",
+                  "instructions": "How does the evidence relate to claim `claim1` (Just under it.)?",
+                  "criteria": {
+                    "supports": "The evidence states the claim or directly implies that it is true",
+                    "contradicts": "The evidence states the opposite of the claim or implies that it is false",
+                    "says_nothing": "The evidence does not address what the claim asserts, either way"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"relation_claim0\":{\"choice\":\"supports\",\"confidence\":0.8,\"probabilities\":{\"supports\":0.9,\"contradicts\":0.05,\"says_nothing\":0.05}},\"relation_claim1\":{\"choice\":\"supports\",\"confidence\":0.7999999,\"probabilities\":{\"supports\":0.9,\"contradicts\":0.05,\"says_nothing\":0.05}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_verify\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"auto_accept\": 0.8,\n  \"summary\": {\n    \"verified\": 2,\n    \"contradicted\": 0,\n    \"unsupported\": 0,\n    \"needs_review\": 1\n  },\n  \"results\": [\n    {\n      \"id\": \"claim0\",\n      \"claim\": \"Exactly at the threshold.\",\n      \"verdict\": \"verified\",\n      \"probabilities\": {\n        \"supports\": 0.9,\n        \"contradicts\": 0.05,\n        \"says_nothing\": 0.05\n      },\n      \"confidence\": 0.8,\n      \"action\": \"auto\",\n      \"supporting_evidence\": null\n    },\n    {\n      \"id\": \"claim1\",\n      \"claim\": \"Just under it.\",\n      \"verdict\": \"verified\",\n      \"probabilities\": {\n        \"supports\": 0.9,\n        \"contradicts\": 0.05,\n        \"says_nothing\": 0.05\n      },\n      \"confidence\": 0.7999999,\n      \"action\": \"review\",\n      \"supporting_evidence\": null\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

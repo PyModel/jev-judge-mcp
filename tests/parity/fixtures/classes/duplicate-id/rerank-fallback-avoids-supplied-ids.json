@@ -1,0 +1,90 @@
+{
+  "id": "duplicate-id/rerank-fallback-avoids-supplied-ids",
+  "source": {
+    "case": "duplicate-id/rerank-fallback-avoids-supplied-ids"
+  },
+  "classes": [
+    "duplicate-id"
+  ],
+  "divergences": [],
+  "note": "Candidate 1 has no id and candidate1 is taken, so it becomes candidate1_2 (index.ts:711-722).",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_rerank",
+      "arguments": {
+        "query": "q",
+        "candidates": [
+          {
+            "id": "candidate1",
+            "text": "a"
+          },
+          {
+            "text": "b"
+          },
+          {
+            "text": "c"
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "query": "q"
+              },
+              "questions": {
+                "rel_0": {
+                  "type": "noul",
+                  "instructions": "Is candidate c0 relevant to the query in the state? Candidate c0: a",
+                  "criteria": {
+                    "true": "The candidate addresses the subject the query asks about, or provides what it seeks",
+                    "false": "The candidate is about a different subject, or only shares vocabulary with the query"
+                  }
+                },
+                "rel_1": {
+                  "type": "noul",
+                  "instructions": "Is candidate c1 relevant to the query in the state? Candidate c1: b",
+                  "criteria": {
+                    "true": "The candidate addresses the subject the query asks about, or provides what it seeks",
+                    "false": "The candidate is about a different subject, or only shares vocabulary with the query"
+                  }
+                },
+                "rel_2": {
+                  "type": "noul",
+                  "instructions": "Is candidate c2 relevant to the query in the state? Candidate c2: c",
+                  "criteria": {
+                    "true": "The candidate addresses the subject the query asks about, or provides what it seeks",
+                    "false": "The candidate is about a different subject, or only shares vocabulary with the query"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"rel_0\":{\"noul\":0.2},\"rel_1\":{\"noul\":0.9},\"rel_2\":{\"noul\":0.6}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_rerank\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"query\": \"q\",\n  \"summary\": {\n    \"candidates\": 3,\n    \"returned\": 3\n  },\n  \"ranked\": [\n    {\n      \"rank\": 1,\n      \"id\": \"candidate1_2\",\n      \"relevance\": 0.9,\n      \"text\": \"b\"\n    },\n    {\n      \"rank\": 2,\n      \"id\": \"candidate2\",\n      \"relevance\": 0.6,\n      \"text\": \"c\"\n    },\n    {\n      \"rank\": 3,\n      \"id\": \"candidate1\",\n      \"relevance\": 0.2,\n      \"text\": \"a\"\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

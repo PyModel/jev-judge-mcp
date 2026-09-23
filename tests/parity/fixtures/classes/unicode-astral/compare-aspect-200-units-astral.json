@@ -1,0 +1,81 @@
+{
+  "id": "unicode-astral/compare-aspect-200-units-astral",
+  "source": {
+    "case": "unicode-astral/compare-aspect-200-units-astral"
+  },
+  "classes": [
+    "unicode-astral"
+  ],
+  "divergences": [],
+  "note": "100 x U+1F600 is 200 UTF-16 units, exactly the aspect cap.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_compare",
+      "arguments": {
+        "passage_a": "😀 yes",
+        "passage_b": "😀 no",
+        "aspects": [
+          "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": null,
+                "passage_a": "😀 yes",
+                "passage_b": "😀 no",
+                "aspects": [
+                  "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+                ]
+              },
+              "questions": {
+                "overall": {
+                  "type": "choice",
+                  "instructions": "Do the two passages state the same underlying fact, contradict each other, or discuss different facts?",
+                  "criteria": {
+                    "same_fact": "Both passages state the same underlying fact or claim",
+                    "contradicts": "The passages state opposing facts about the same subject",
+                    "different_facts": "The passages discuss different subjects or make non-overlapping claims"
+                  }
+                },
+                "aspect_0": {
+                  "type": "choice",
+                  "instructions": "Judging only the aspect \"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\" of the two passages in the state, which relation holds?",
+                  "criteria": {
+                    "same_fact": "Both passages make comparable assertions about this aspect and they agree",
+                    "contradicts": "Both passages address this aspect and their assertions conflict",
+                    "different_facts": "The passages do not both make a comparable assertion about this aspect: at least one does not address it, or their mentions do not overlap"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"overall\":{\"choice\":\"contradicts\",\"confidence\":0.9,\"probabilities\":{\"same_fact\":0.05,\"contradicts\":0.9,\"different_facts\":0.05}},\"aspect_0\":{\"choice\":\"different_facts\",\"confidence\":0.9,\"probabilities\":{\"same_fact\":0.05,\"contradicts\":0.05,\"different_facts\":0.9}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_compare\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"overall\": {\n    \"relation\": \"contradicts\",\n    \"probabilities\": {\n      \"same_fact\": 0.05,\n      \"contradicts\": 0.9,\n      \"different_facts\": 0.05\n    },\n    \"confidence\": 0.9,\n    \"margin\": 0.85,\n    \"decision\": \"auto\"\n  },\n  \"aspects\": [\n    {\n      \"aspect\": \"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\",\n      \"relation\": \"different_facts\",\n      \"probabilities\": {\n        \"same_fact\": 0.05,\n        \"contradicts\": 0.05,\n        \"different_facts\": 0.9\n      },\n      \"confidence\": 0.9,\n      \"margin\": 0.85,\n      \"decision\": \"auto\"\n    }\n  ],\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

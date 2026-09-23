@@ -1,0 +1,57 @@
+{
+  "run_id": "j1-refund-window.B.r1",
+  "task": "j1-refund-window",
+  "agent": "pi",
+  "arm": "B",
+  "repeat": 1,
+  "status": "ok",
+  "reached_model": true,
+  "jev_tool_called": true,
+  "jev_gate": null,
+  "measurement": null,
+  "success": true,
+  "final_tests_passed": true,
+  "acceptance_passed": 5,
+  "acceptance_total": 5,
+  "regressions": [],
+  "protected_changed": [],
+  "wall_s": 127.60282433400062,
+  "tokens": {
+    "context": 47699,
+    "output": 2000,
+    "total": 49699
+  },
+  "tool_calls": 11,
+  "jev_calls": 1,
+  "jev_call_log": [
+    {
+      "tool": "jev_verify",
+      "ms": 4534.9,
+      "is_error": false,
+      "input_tokens": 1665,
+      "action": null,
+      "headline_action": "auto",
+      "model": "jev-1.13.0"
+    }
+  ],
+  "test_cycles": 1,
+  "retries": 0,
+  "wrong_branches": [],
+  "decision": "delivery-date-inclusive",
+  "decision_correct": true,
+  "agent_model": "ds4/glm-5.3-flash",
+  "agent_cost_usd": 0.0,
+  "jev_cost_usd": 6.993e-05,
+  "cost_usd": 6.993e-05,
+  "agent_cost_reported": true,
+  "num_turns": 12,
+  "tool_counts": {
+    "bash": 4,
+    "read": 3,
+    "edit": 1,
+    "mcp": 3
+  },
+  "mcp_servers": {},
+  "unsafe": [],
+  "human_review_requests": 0
+}

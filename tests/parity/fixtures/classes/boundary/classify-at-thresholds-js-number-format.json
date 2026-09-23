@@ -1,0 +1,124 @@
+{
+  "id": "boundary/classify-at-thresholds-js-number-format",
+  "source": {
+    "case": "boundary/classify-at-thresholds-js-number-format"
+  },
+  "classes": [
+    "boundary"
+  ],
+  "divergences": [],
+  "note": "Quirk Q7: 3.2e-5 serializes as 0.000032 and 1e-7 as 1e-7; integral 1 prints as 1.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_classify",
+      "arguments": {
+        "items": [
+          {
+            "id": "x",
+            "text": "Payment failed with card_declined."
+          },
+          {
+            "id": "y",
+            "text": "Please cancel my plan."
+          }
+        ],
+        "classes": [
+          {
+            "id": "billing",
+            "description": "Payments."
+          },
+          {
+            "id": "account",
+            "description": "Plan and account changes."
+          },
+          {
+            "id": "other",
+            "description": "Anything else."
+          }
+        ],
+        "auto_accept": 0.85,
+        "minimum_margin": 0.7
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": "Assign each item to exactly one class.",
+                "context": null,
+                "classes": [
+                  {
+                    "id": "c0",
+                    "description": "Payments."
+                  },
+                  {
+                    "id": "c1",
+                    "description": "Plan and account changes."
+                  },
+                  {
+                    "id": "c2",
+                    "description": "Anything else."
+                  }
+                ]
+              },
+              "questions": {
+                "i0": {
+                  "type": "choice",
+                  "instructions": {
+                    "task": "Which class does this item belong to?",
+                    "item": {
+                      "id": "i0",
+                      "text": "Payment failed with card_declined."
+                    }
+                  },
+                  "criteria": {
+                    "c0": null,
+                    "c1": null,
+                    "c2": null
+                  }
+                },
+                "i1": {
+                  "type": "choice",
+                  "instructions": {
+                    "task": "Which class does this item belong to?",
+                    "item": {
+                      "id": "i1",
+                      "text": "Please cancel my plan."
+                    }
+                  },
+                  "criteria": {
+                    "c0": null,
+                    "c1": null,
+                    "c2": null
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"i0\":{\"choice\":\"c0\",\"confidence\":0.85,\"probabilities\":{\"c0\":0.85,\"c1\":0.15,\"c2\":0}},\"i1\":{\"choice\":\"c1\",\"confidence\":1,\"probabilities\":{\"c0\":0.000032,\"c1\":0.9999679,\"c2\":1e-7}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_classify\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"summary\": {\n    \"items\": 2,\n    \"auto\": 2,\n    \"review\": 0,\n    \"invalid_response\": 0,\n    \"by_class\": {\n      \"billing\": 1,\n      \"account\": 1\n    }\n  },\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.7\n  },\n  \"results\": [\n    {\n      \"id\": \"x\",\n      \"classification\": \"billing\",\n      \"probabilities\": {\n        \"billing\": 0.85,\n        \"account\": 0.15,\n        \"other\": 0\n      },\n      \"confidence\": 0.85,\n      \"margin\": 0.7,\n      \"top_probability\": 0.85,\n      \"decision\": \"auto\"\n    },\n    {\n      \"id\": \"y\",\n      \"classification\": \"account\",\n      \"probabilities\": {\n        \"billing\": 0.000032,\n        \"account\": 0.9999679,\n        \"other\": 1e-7\n      },\n      \"confidence\": 1,\n      \"margin\": 0.9999359,\n      \"top_probability\": 0.9999679,\n      \"decision\": \"auto\"\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "id": "resolver-error/explicit-openrouter-not-sk-or",
+  "source": {
+    "case": "resolver-error/explicit-openrouter-not-sk-or"
+  },
+  "classes": [
+    "resolver-error"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_PROVIDER": "openrouter",
+        "OPENROUTER_API_KEY": "sk-ant-not-openrouter"
+      },
+      "tool": "jev_verify",
+      "arguments": {
+        "claims": [
+          "The service listens on port 8080."
+        ],
+        "evidence": "server.listen(8080)"
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "JEV_PROVIDER=openrouter but OPENROUTER_API_KEY is not set or not an sk-or- key."
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

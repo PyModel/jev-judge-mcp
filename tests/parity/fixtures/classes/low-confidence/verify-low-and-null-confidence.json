@@ -1,0 +1,91 @@
+{
+  "id": "low-confidence/verify-low-and-null-confidence",
+  "source": {
+    "case": "low-confidence/verify-low-and-null-confidence"
+  },
+  "classes": [
+    "low-confidence"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_verify",
+      "arguments": {
+        "claims": [
+          "Low confidence.",
+          "Unknown confidence."
+        ],
+        "evidence": "Some text."
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": "Verify each claim in claims against the evidence in evidence.",
+                "claims": [
+                  {
+                    "text": "Low confidence.",
+                    "id": "claim0"
+                  },
+                  {
+                    "text": "Unknown confidence.",
+                    "id": "claim1"
+                  }
+                ],
+                "evidence": [
+                  {
+                    "id": "evidence",
+                    "text": "Some text."
+                  }
+                ]
+              },
+              "questions": {
+                "relation_claim0": {
+                  "type": "choice",
+                  "instructions": "How does the evidence relate to claim `claim0` (Low confidence.)?",
+                  "criteria": {
+                    "supports": "The evidence states the claim or directly implies that it is true",
+                    "contradicts": "The evidence states the opposite of the claim or implies that it is false",
+                    "says_nothing": "The evidence does not address what the claim asserts, either way"
+                  }
+                },
+                "relation_claim1": {
+                  "type": "choice",
+                  "instructions": "How does the evidence relate to claim `claim1` (Unknown confidence.)?",
+                  "criteria": {
+                    "supports": "The evidence states the claim or directly implies that it is true",
+                    "contradicts": "The evidence states the opposite of the claim or implies that it is false",
+                    "says_nothing": "The evidence does not address what the claim asserts, either way"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"relation_claim0\":{\"choice\":\"supports\",\"confidence\":0.55,\"probabilities\":{\"supports\":0.6,\"contradicts\":0.2,\"says_nothing\":0.2}},\"relation_claim1\":{\"choice\":\"contradicts\",\"confidence\":null,\"probabilities\":{\"supports\":0.15,\"contradicts\":0.7,\"says_nothing\":0.15}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_verify\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"auto_accept\": 0.8,\n  \"summary\": {\n    \"verified\": 1,\n    \"contradicted\": 1,\n    \"unsupported\": 0,\n    \"needs_review\": 2\n  },\n  \"results\": [\n    {\n      \"id\": \"claim0\",\n      \"claim\": \"Low confidence.\",\n      \"verdict\": \"verified\",\n      \"probabilities\": {\n        \"supports\": 0.6,\n        \"contradicts\": 0.2,\n        \"says_nothing\": 0.2\n      },\n      \"confidence\": 0.55,\n      \"action\": \"review\",\n      \"supporting_evidence\": null\n    },\n    {\n      \"id\": \"claim1\",\n      \"claim\": \"Unknown confidence.\",\n      \"verdict\": \"contradicted\",\n      \"probabilities\": {\n        \"supports\": 0.15,\n        \"contradicts\": 0.7,\n        \"says_nothing\": 0.15\n      },\n      \"confidence\": null,\n      \"action\": \"review\",\n      \"supporting_evidence\": null\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

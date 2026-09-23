@@ -1,0 +1,32 @@
+{
+  "id": "resolver-error/explicit-compatible-other-tool",
+  "source": {
+    "case": "resolver-error/explicit-compatible-other-tool"
+  },
+  "classes": [
+    "resolver-error"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_review",
+      "arguments": {
+        "request": "r",
+        "diff": "d"
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "JEV_PROVIDER=compatible but JEV_API_KEY and JEV_API_BASE_URL are not set. JEV_MCP_MODEL is optional and defaults to jev-latest."
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}
