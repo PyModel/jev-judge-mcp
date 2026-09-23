@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json",
+  "mcpServers": {
+    "jev": {
+      "type": "stdio",
+      "command": "/opt/uv/uvx",
+      "args": [
+        "--from",
+        "/work/jev-mcp[typesafe]",
+        "jev-judge-mcp"
+      ],
+      "env": {
+        "TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}"
+      }
+    }
+  }
+}

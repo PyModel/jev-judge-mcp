@@ -1,0 +1,38 @@
+{
+  "id": "mock-012",
+  "source": {
+    "file": "test/mock.test.mjs",
+    "test": "compatible provider names JEV_API_BASE_URL alone when only it is missing"
+  },
+  "classes": [
+    "mock"
+  ],
+  "divergences": [],
+  "reference_assertions_failed_under_compatible": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "",
+        "JEV_API_KEY": "compatible-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_verify",
+      "arguments": {
+        "claims": [
+          "The patch is ready"
+        ],
+        "evidence": "The tests pass"
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "JEV_PROVIDER=compatible but JEV_API_BASE_URL is not set. JEV_MCP_MODEL is optional and defaults to jev-latest."
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

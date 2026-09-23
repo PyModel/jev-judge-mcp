@@ -1,0 +1,80 @@
+{
+  "id": "invalid-pattern/extract-named-group",
+  "source": {
+    "case": "invalid-pattern/extract-named-group"
+  },
+  "classes": [
+    "invalid-pattern"
+  ],
+  "divergences": [
+    "ADR-0004"
+  ],
+  "note": "V8 accepts named groups; the Python subset rejects them.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_extract",
+      "arguments": {
+        "document": "Build ABC-123 passed. Build ABC-124 failed. Contact: ops@example.test",
+        "fields": [
+          {
+            "id": "num",
+            "pattern": "ABC-(?<n>\\d+)",
+            "description": "Build id."
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": null,
+                "document": "Build ABC-123 passed. Build ABC-124 failed. Contact: ops@example.test",
+                "fields": [
+                  {
+                    "id": "f0",
+                    "description": "Build id.",
+                    "pattern": "ABC-(?<n>\\d+)"
+                  }
+                ]
+              },
+              "questions": {
+                "f0": {
+                  "type": "choice",
+                  "instructions": "Which candidate is the correct value of the field \"num\" (Build id.) in the document in the state? Pick the exact substring the document presents as this field's value.",
+                  "criteria": {
+                    "c0": "Candidate value: \"ABC-123\"",
+                    "c1": "Candidate value: \"ABC-124\"",
+                    "none_of_them": "None of the candidates is the value this field asks for"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"f0\":{\"choice\":\"c0\",\"confidence\":0.4,\"probabilities\":{\"c0\":0.5,\"c1\":0.45,\"none_of_them\":0.05}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_extract\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"summary\": {\n    \"fields\": 1,\n    \"extracted\": 1,\n    \"auto\": 0,\n    \"review\": 1,\n    \"not_found\": 0,\n    \"invalid\": 0\n  },\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"results\": [\n    {\n      \"id\": \"num\",\n      \"value\": \"ABC-123\",\n      \"status\": \"review\",\n      \"reason\": null,\n      \"confidence\": 0.4,\n      \"top_probability\": 0.5,\n      \"margin\": 0.04999999999999999,\n      \"candidates_considered\": 2,\n      \"candidates_truncated\": false,\n      \"matches_skipped_too_long\": 0\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "run_id": "j2-ticket-route.B.r2",
+  "task": "j2-ticket-route",
+  "agent": "claude",
+  "arm": "B",
+  "repeat": 2,
+  "status": "ok",
+  "reached_model": true,
+  "jev_tool_called": true,
+  "jev_gate": null,
+  "measurement": null,
+  "success": false,
+  "final_tests_passed": false,
+  "acceptance_passed": 4,
+  "acceptance_total": 5,
+  "regressions": [],
+  "protected_changed": [],
+  "wall_s": 29.346748125000886,
+  "tokens": {
+    "context": 193069,
+    "output": 2204,
+    "total": 195273
+  },
+  "tool_calls": 6,
+  "jev_calls": 1,
+  "jev_call_log": [
+    {
+      "tool": "jev_classify",
+      "ms": 7303.1,
+      "is_error": false,
+      "input_tokens": 820,
+      "action": null,
+      "headline_action": "auto",
+      "model": "jev-1.13.0"
+    }
+  ],
+  "test_cycles": 1,
+  "retries": 0,
+  "wrong_branches": null,
+  "decision": "security",
+  "decision_correct": true,
+  "agent_model": "claude-sonnet-5",
+  "agent_cost_usd": 0.1027336,
+  "jev_cost_usd": 3.444e-05,
+  "cost_usd": 0.10276803999999999,
+  "agent_cost_reported": true,
+  "num_turns": 7,
+  "tool_counts": {
+    "Bash": 3,
+    "mcp__jev__jev_classify": 1,
+    "Edit": 2
+  },
+  "mcp_servers": {
+    "harness": "connected",
+    "jev": "connected"
+  },
+  "unsafe": [],
+  "human_review_requests": 0
+}

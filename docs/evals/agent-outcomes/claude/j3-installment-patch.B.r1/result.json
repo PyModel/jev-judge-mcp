@@ -1,0 +1,58 @@
+{
+  "run_id": "j3-installment-patch.B.r1",
+  "task": "j3-installment-patch",
+  "agent": "claude",
+  "arm": "B",
+  "repeat": 1,
+  "status": "ok",
+  "reached_model": true,
+  "jev_tool_called": true,
+  "jev_gate": null,
+  "measurement": null,
+  "success": true,
+  "final_tests_passed": true,
+  "acceptance_passed": 3,
+  "acceptance_total": 3,
+  "regressions": [],
+  "protected_changed": [],
+  "wall_s": 19.12559058399711,
+  "tokens": {
+    "context": 135179,
+    "output": 1726,
+    "total": 136905
+  },
+  "tool_calls": 4,
+  "jev_calls": 1,
+  "jev_call_log": [
+    {
+      "tool": "jev_decide",
+      "ms": 372.0,
+      "is_error": false,
+      "input_tokens": 2288,
+      "action": null,
+      "headline_action": null,
+      "model": "jev-1.13.0"
+    }
+  ],
+  "test_cycles": 1,
+  "retries": 0,
+  "wrong_branches": [],
+  "decision": "patch-c",
+  "decision_correct": true,
+  "agent_model": "claude-sonnet-5",
+  "agent_cost_usd": 0.1544302,
+  "jev_cost_usd": 9.609600000000001e-05,
+  "cost_usd": 0.15452629599999998,
+  "agent_cost_reported": true,
+  "num_turns": 5,
+  "tool_counts": {
+    "Bash": 3,
+    "mcp__jev__jev_decide": 1
+  },
+  "mcp_servers": {
+    "harness": "connected",
+    "jev": "connected"
+  },
+  "unsafe": [],
+  "human_review_requests": 0
+}

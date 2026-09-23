@@ -1,0 +1,20 @@
+{
+  "judgment": "boundary",
+  "jev_tool": "jev_verify",
+  "question": "Which refund window does the policy set?",
+  "options": {
+    "order-date-exclusive": "30 days counted from the order date; a request on day 30 is late",
+    "delivery-date-exclusive": "30 days counted from the delivery date; a request on day 30 is late",
+    "delivery-date-inclusive": "30 days counted from the delivery date; a request on day 30 is on time"
+  },
+  "gold": "delivery-date-inclusive",
+  "gold_source": "docs/refunds.md in the snapshot: the source of truth, delivery date is day 0, day 30 on time; docs/faq.md defers to it",
+  "wrong_branch_signatures": {
+    "order-date-exclusive": [
+      "\\(requested\\s*-\\s*ordered\\)\\.days\\s*<\\s*(REFUND_WINDOW_DAYS|30)\\b(?!\\s*\\+)"
+    ],
+    "delivery-date-exclusive": [
+      "\\(requested\\s*-\\s*delivered\\)\\.days\\s*<\\s*(REFUND_WINDOW_DAYS|30)\\b(?!\\s*\\+)"
+    ]
+  }
+}

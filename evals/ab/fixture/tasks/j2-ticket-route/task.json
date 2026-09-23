@@ -1,0 +1,14 @@
+{
+  "judgment": "classification",
+  "jev_tool": "jev_classify",
+  "question": "Which queue does ticket #4411 belong in?",
+  "options": {
+    "billing": "billing: the duplicate charge and refund",
+    "security": "security: the unrecognized sign-in",
+    "shipping": "shipping",
+    "general": "general"
+  },
+  "gold": "security",
+  "gold_source": "docs/routing.md in the snapshot: security first for an unrecognized sign-in, whatever else the ticket mentions; docs/faq.md defers to it",
+  "wrong_branch_signatures": {}
+}

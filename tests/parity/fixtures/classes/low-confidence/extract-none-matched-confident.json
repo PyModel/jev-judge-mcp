@@ -1,0 +1,78 @@
+{
+  "id": "low-confidence/extract-none-matched-confident",
+  "source": {
+    "case": "low-confidence/extract-none-matched-confident"
+  },
+  "classes": [
+    "low-confidence"
+  ],
+  "divergences": [],
+  "note": "A confident none_of_them over a complete universe is a definite not_found.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_extract",
+      "arguments": {
+        "document": "Tracking numbers: 1Z999AA10123456784 and 1Z999AA10123456785.",
+        "fields": [
+          {
+            "id": "tracking",
+            "pattern": "1Z[0-9A-Z]{16}",
+            "description": "The tracking number of the second parcel."
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": null,
+                "document": "Tracking numbers: 1Z999AA10123456784 and 1Z999AA10123456785.",
+                "fields": [
+                  {
+                    "id": "f0",
+                    "description": "The tracking number of the second parcel.",
+                    "pattern": "1Z[0-9A-Z]{16}"
+                  }
+                ]
+              },
+              "questions": {
+                "f0": {
+                  "type": "choice",
+                  "instructions": "Which candidate is the correct value of the field \"tracking\" (The tracking number of the second parcel.) in the document in the state? Pick the exact substring the document presents as this field's value.",
+                  "criteria": {
+                    "c0": "Candidate value: \"1Z999AA10123456784\"",
+                    "c1": "Candidate value: \"1Z999AA10123456785\"",
+                    "none_of_them": "None of the candidates is the value this field asks for"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"f0\":{\"choice\":\"none_of_them\",\"confidence\":0.95,\"probabilities\":{\"c0\":0.02,\"c1\":0.02,\"none_of_them\":0.96}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_extract\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"summary\": {\n    \"fields\": 1,\n    \"extracted\": 0,\n    \"auto\": 0,\n    \"review\": 0,\n    \"not_found\": 1,\n    \"invalid\": 0\n  },\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"results\": [\n    {\n      \"id\": \"tracking\",\n      \"value\": null,\n      \"status\": \"not_found\",\n      \"reason\": \"none_matched\",\n      \"confidence\": 0.95,\n      \"top_probability\": 0.96,\n      \"margin\": 0.94,\n      \"candidates_considered\": 2,\n      \"candidates_truncated\": false,\n      \"matches_skipped_too_long\": 0\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

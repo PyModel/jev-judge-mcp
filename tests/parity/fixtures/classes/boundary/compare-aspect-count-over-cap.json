@@ -1,0 +1,48 @@
+{
+  "id": "boundary/compare-aspect-count-over-cap",
+  "source": {
+    "case": "boundary/compare-aspect-count-over-cap"
+  },
+  "classes": [
+    "boundary"
+  ],
+  "divergences": [],
+  "note": "Schema rejection (11 aspects > 10). The text comes from the MCP SDK's input validation.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_compare",
+      "arguments": {
+        "passage_a": "A",
+        "passage_b": "B",
+        "aspects": [
+          "aspect 0",
+          "aspect 1",
+          "aspect 2",
+          "aspect 3",
+          "aspect 4",
+          "aspect 5",
+          "aspect 6",
+          "aspect 7",
+          "aspect 8",
+          "aspect 9",
+          "aspect 10"
+        ]
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "MCP error -32602: Input validation error: Invalid arguments for tool jev_compare: Array must contain at most 10 element(s) at aspects"
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "run_id": "j1-refund-window.A.r1",
+  "task": "j1-refund-window",
+  "agent": "claude",
+  "arm": "A",
+  "repeat": 1,
+  "status": "ok",
+  "reached_model": true,
+  "jev_tool_called": false,
+  "jev_gate": null,
+  "measurement": null,
+  "success": true,
+  "final_tests_passed": true,
+  "acceptance_passed": 5,
+  "acceptance_total": 5,
+  "regressions": [],
+  "protected_changed": [],
+  "wall_s": 12.738062791999255,
+  "tokens": {
+    "context": 95740,
+    "output": 982,
+    "total": 96722
+  },
+  "tool_calls": 7,
+  "jev_calls": 0,
+  "jev_call_log": [],
+  "test_cycles": 1,
+  "retries": 0,
+  "wrong_branches": [],
+  "decision": "delivery-date-inclusive",
+  "decision_correct": true,
+  "agent_model": "claude-sonnet-5",
+  "agent_cost_usd": 0.0622436,
+  "jev_cost_usd": 0.0,
+  "cost_usd": 0.0622436,
+  "agent_cost_reported": true,
+  "num_turns": 8,
+  "tool_counts": {
+    "Bash": 2,
+    "Read": 4,
+    "Edit": 1
+  },
+  "mcp_servers": {
+    "harness": "connected"
+  },
+  "unsafe": [],
+  "human_review_requests": 0
+}

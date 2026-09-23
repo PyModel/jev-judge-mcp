@@ -1,0 +1,43 @@
+{
+  "id": "duplicate-id/rerank-duplicate-id",
+  "source": {
+    "case": "duplicate-id/rerank-duplicate-id"
+  },
+  "classes": [
+    "duplicate-id"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_rerank",
+      "arguments": {
+        "query": "q",
+        "candidates": [
+          {
+            "id": "dup",
+            "text": "a"
+          },
+          {
+            "id": "dup",
+            "text": "b"
+          }
+        ]
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Duplicate candidate id: dup"
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

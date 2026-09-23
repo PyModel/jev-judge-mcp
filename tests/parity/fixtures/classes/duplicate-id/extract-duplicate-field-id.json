@@ -1,0 +1,45 @@
+{
+  "id": "duplicate-id/extract-duplicate-field-id",
+  "source": {
+    "case": "duplicate-id/extract-duplicate-field-id"
+  },
+  "classes": [
+    "duplicate-id"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_extract",
+      "arguments": {
+        "document": "a1 b2",
+        "fields": [
+          {
+            "id": "n",
+            "pattern": "\\d",
+            "description": "d"
+          },
+          {
+            "id": "n",
+            "pattern": "[a-z]",
+            "description": "l"
+          }
+        ]
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Duplicate field id: n"
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

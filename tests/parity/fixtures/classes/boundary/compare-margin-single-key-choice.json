@@ -1,0 +1,67 @@
+{
+  "id": "boundary/compare-margin-single-key-choice",
+  "source": {
+    "case": "boundary/compare-margin-single-key-choice"
+  },
+  "classes": [
+    "boundary"
+  ],
+  "divergences": [],
+  "note": "A choice over the three relation keys where two are 0: margin is the full top probability.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_compare",
+      "arguments": {
+        "passage_a": "The meeting is on Monday.",
+        "passage_b": "The meeting is on Monday."
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": null,
+                "passage_a": "The meeting is on Monday.",
+                "passage_b": "The meeting is on Monday.",
+                "aspects": []
+              },
+              "questions": {
+                "overall": {
+                  "type": "choice",
+                  "instructions": "Do the two passages state the same underlying fact, contradict each other, or discuss different facts?",
+                  "criteria": {
+                    "same_fact": "Both passages state the same underlying fact or claim",
+                    "contradicts": "The passages state opposing facts about the same subject",
+                    "different_facts": "The passages discuss different subjects or make non-overlapping claims"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"overall\":{\"choice\":\"same_fact\",\"confidence\":1,\"probabilities\":{\"same_fact\":1,\"contradicts\":0,\"different_facts\":0}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_compare\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"overall\": {\n    \"relation\": \"same_fact\",\n    \"probabilities\": {\n      \"same_fact\": 1,\n      \"contradicts\": 0,\n      \"different_facts\": 0\n    },\n    \"confidence\": 1,\n    \"margin\": 1,\n    \"decision\": \"auto\"\n  },\n  \"aspects\": [],\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

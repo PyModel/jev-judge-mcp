@@ -1,0 +1,548 @@
+{
+ "schema_version": 1,
+ "diagram_type": "architecture",
+ "meta": {
+  "title": "jev-judge-mcp — Design Architecture",
+  "output": "architecture.html",
+  "locale": "en",
+  "quality_profile": "showcase",
+  "viewBox": [
+   1380,
+   630
+  ],
+  "views": [
+   {
+    "id": "one-call",
+    "label": "One tool call",
+    "focus": [
+     "client",
+     "server",
+     "arguments",
+     "limits",
+     "tools",
+     "runtime",
+     "providers",
+     "validation",
+     "policy",
+     "serialize"
+    ],
+    "note": "The whole judgment path: args in, Jev answer back, action out."
+   },
+   {
+    "id": "fail-closed",
+    "label": "Fail-closed answer path",
+    "focus": [
+     "providers",
+     "validation",
+     "policy",
+     "serialize"
+    ],
+    "note": "Validation rejects; policy decides; malformed never yields auto."
+   },
+   {
+    "id": "extract-isolation",
+    "label": "Extract isolation",
+    "focus": [
+     "tools",
+     "extract",
+     "runtime"
+    ],
+    "note": "The dialect translates; candidates own refusal text; a RegexExecutor (killable workers) runs under one deadline."
+   },
+   {
+    "id": "config-redaction",
+    "label": "Config and redaction",
+    "focus": [
+     "settings",
+     "keyfile",
+     "setup",
+     "runtime",
+     "cache",
+     "providers"
+    ],
+    "note": "Env-only config; setup stores a verified key the resolver falls back to; the optional cache replays identical requests."
+   },
+   {
+    "id": "parity-oracle",
+    "label": "Parity oracle",
+    "focus": [
+     "oracle",
+     "server",
+     "serialize"
+    ],
+    "note": "282 recorded fixtures must replay byte-equal; every divergence is ADR-tagged."
+   }
+  ]
+ },
+ "components": [
+  {
+   "id": "client",
+   "type": "external",
+   "label": "MCP Client",
+   "sublabel": "host agent",
+   "pos": [
+    30,
+    262
+   ],
+   "size": [
+    140,
+    54
+   ]
+  },
+  {
+   "id": "server",
+   "type": "backend",
+   "label": "JevMCPServer + Toolset",
+   "sublabel": "one registry (ADR-0013)",
+   "pos": [
+    330,
+    262
+   ],
+   "size": [
+    160,
+    54
+   ]
+  },
+  {
+   "id": "arguments",
+   "type": "backend",
+   "label": "arguments",
+   "sublabel": "compiled parsers",
+   "pos": [
+    335,
+    172
+   ],
+   "size": [
+    150,
+    52
+   ]
+  },
+  {
+   "id": "limits",
+   "type": "backend",
+   "label": "limits",
+   "sublabel": "frozen caps (ADR-0014)",
+   "pos": [
+    510,
+    172
+   ],
+   "size": [
+    150,
+    52
+   ]
+  },
+  {
+   "id": "tools",
+   "type": "backend",
+   "label": "Eleven JevTools",
+   "sublabel": "10 frozen + jev_score",
+   "pos": [
+    700,
+    262
+   ],
+   "size": [
+    150,
+    54
+   ]
+  },
+  {
+   "id": "runtime",
+   "type": "backend",
+   "label": "Runtime",
+   "sublabel": "lazy provider · pool",
+   "pos": [
+    1010,
+    262
+   ],
+   "size": [
+    150,
+    54
+   ]
+  },
+  {
+   "id": "providers",
+   "type": "cloud",
+   "label": "Providers ×4",
+   "sublabel": "envelope-only ×4",
+   "pos": [
+    1010,
+    424
+   ],
+   "size": [
+    150,
+    48
+   ]
+  },
+  {
+   "id": "settings",
+   "type": "security",
+   "label": "Settings → Redactor",
+   "sublabel": "env-only · derived secrets",
+   "pos": [
+    330,
+    22
+   ],
+   "size": [
+    150,
+    52
+   ]
+  },
+  {
+   "id": "extract",
+   "type": "backend",
+   "label": "extract",
+   "sublabel": "candidates · executor port",
+   "pos": [
+    700,
+    96
+   ],
+   "size": [
+    150,
+    52
+   ]
+  },
+  {
+   "id": "serialize",
+   "type": "backend",
+   "label": "serialize + text",
+   "sublabel": "JSON.stringify · UTF-16",
+   "pos": [
+    25,
+    424
+   ],
+   "size": [
+    150,
+    48
+   ]
+  },
+  {
+   "id": "policy",
+   "type": "backend",
+   "label": "Policy (pure)",
+   "sublabel": "pure · incl. extract",
+   "pos": [
+    330,
+    424
+   ],
+   "size": [
+    140,
+    48
+   ]
+  },
+  {
+   "id": "validation",
+   "type": "backend",
+   "label": "Validation",
+   "sublabel": "answers · caps",
+   "pos": [
+    700,
+    424
+   ],
+   "size": [
+    150,
+    48
+   ]
+  },
+  {
+   "id": "oracle",
+   "type": "external",
+   "label": "Parity oracle",
+   "sublabel": "282 fixtures · replay",
+   "pos": [
+    25,
+    556
+   ],
+   "size": [
+    150,
+    48
+   ]
+  },
+  {
+   "id": "telemetry",
+   "type": "backend",
+   "label": "Telemetry",
+   "sublabel": "spans + metrics · in-process",
+   "pos": [
+    1200,
+    172
+   ],
+   "size": [
+    160,
+    52
+   ]
+  },
+  {
+   "id": "evals",
+   "type": "external",
+   "label": "Eval harness",
+   "sublabel": "evals/agent.py · spend",
+   "pos": [
+    25,
+    96
+   ],
+   "size": [
+    150,
+    52
+   ]
+  },
+  {
+   "id": "keyfile",
+   "type": "backend",
+   "label": "Key file",
+   "sublabel": "env wins over file",
+   "pos": [
+    1010,
+    556
+   ],
+   "size": [
+    150,
+    46
+   ]
+  },
+  {
+   "id": "cache",
+   "type": "backend",
+   "label": "Response cache",
+   "sublabel": "JEV_MCP_CACHE",
+   "pos": [
+    1200,
+    340
+   ],
+   "size": [
+    140,
+    46
+   ]
+  },
+  {
+   "id": "setup",
+   "type": "backend",
+   "label": "setup CLI",
+   "sublabel": "verify, store 0600",
+   "pos": [
+    820,
+    556
+   ],
+   "size": [
+    140,
+    46
+   ]
+  }
+ ],
+ "boundaries": [
+  {
+   "kind": "region",
+   "label": "one-way judgment layers (ADR-0002)",
+   "wraps": [
+    "server",
+    "arguments",
+    "limits",
+    "tools",
+    "runtime",
+    "providers",
+    "extract",
+    "policy",
+    "validation"
+   ]
+  }
+ ],
+ "connections": [
+  {
+   "id": "call",
+   "from": "client",
+   "to": "server",
+   "label": "tools/call",
+   "variant": "emphasis",
+   "fromSide": "right",
+   "toSide": "left"
+  },
+  {
+   "id": "validate-args",
+   "from": "server",
+   "to": "arguments",
+   "label": "validate args",
+   "fromSide": "top",
+   "toSide": "bottom",
+   "labelDx": -30
+  },
+  {
+   "id": "typed-args",
+   "from": "arguments",
+   "to": "tools",
+   "label": "typed args",
+   "fromSide": "bottom",
+   "toSide": "top"
+  },
+  {
+   "id": "cap-values",
+   "from": "limits",
+   "to": "tools",
+   "label": "cap values"
+  },
+  {
+   "id": "ask",
+   "from": "tools",
+   "to": "runtime",
+   "label": "ask Jev",
+   "fromSide": "right",
+   "toSide": "left"
+  },
+  {
+   "id": "evaluate",
+   "from": "runtime",
+   "to": "providers",
+   "label": "evaluate",
+   "fromSide": "bottom",
+   "toSide": "top",
+   "labelDy": 24
+  },
+  {
+   "id": "raw-answers",
+   "from": "providers",
+   "to": "validation",
+   "label": "raw answers",
+   "fromSide": "left",
+   "toSide": "right"
+  },
+  {
+   "id": "judgments",
+   "from": "validation",
+   "to": "policy",
+   "label": "judgments",
+   "fromSide": "left",
+   "toSide": "right"
+  },
+  {
+   "id": "decided",
+   "from": "policy",
+   "to": "serialize",
+   "label": "actions + reasons",
+   "fromSide": "left",
+   "toSide": "right"
+  },
+  {
+   "id": "result-text",
+   "from": "serialize",
+   "to": "server",
+   "label": "result text",
+   "fromSide": "top",
+   "toSide": "bottom"
+  },
+  {
+   "id": "config",
+   "from": "settings",
+   "to": "runtime",
+   "label": "config · redaction",
+   "fromSide": "right",
+   "toSide": "top",
+   "variant": "security"
+  },
+  {
+   "id": "patterns",
+   "from": "tools",
+   "to": "extract",
+   "label": "patterns",
+   "fromSide": "top",
+   "toSide": "bottom",
+   "labelDy": -45
+  },
+  {
+   "id": "byte-equal",
+   "from": "oracle",
+   "to": "serialize",
+   "label": "byte-equal (ADR-0001)",
+   "variant": "dashed",
+   "fromSide": "top",
+   "toSide": "bottom"
+  },
+  {
+   "id": "spans",
+   "from": "runtime",
+   "to": "telemetry",
+   "label": "spans · metrics",
+   "variant": "dashed",
+   "labelAt": [
+    1180,
+    238
+   ]
+  },
+  {
+   "id": "agent-runs",
+   "from": "evals",
+   "to": "client",
+   "label": "paid agent runs",
+   "variant": "dashed",
+   "fromSide": "bottom",
+   "toSide": "top",
+   "labelAt": [
+    100,
+    205
+   ]
+  },
+  {
+   "id": "stored-key",
+   "from": "keyfile",
+   "to": "providers",
+   "label": "stored key fallback",
+   "fromSide": "top",
+   "toSide": "bottom"
+  },
+  {
+   "id": "setup-stores",
+   "from": "setup",
+   "to": "keyfile",
+   "label": "verified key",
+   "fromSide": "right",
+   "toSide": "left",
+   "labelAt": [
+    985,
+    616
+   ]
+  },
+  {
+   "id": "cache-hit",
+   "from": "cache",
+   "to": "runtime",
+   "label": "replay identical",
+   "fromSide": "left",
+   "toSide": "right",
+   "labelAt": [
+    1180,
+    330
+   ]
+  }
+ ],
+ "cards": [
+  {
+   "dot": "cyan",
+   "title": "One registry (ADR-0013)",
+   "items": [
+    "list_tools ≡ call_tool — one Toolset",
+    "unknown tool returns owned text"
+   ]
+  },
+  {
+   "dot": "emerald",
+   "title": "Model judges, policy decides (ADR-0002)",
+   "items": [
+    "validation rejects; policy is pure (traced in tools/observed)",
+    "truncated or unknown confidence ⇒ never auto"
+   ]
+  },
+  {
+   "dot": "rose",
+   "title": "Trust boundary (ADR-0008/0017)",
+   "items": [
+    "env-only config; tool args are model-controlled",
+    "secret set derives from the schema; errors redacted"
+   ]
+  },
+  {
+   "dot": "amber",
+   "title": "Frozen parity (ADR-0001/0006/0016)",
+   "items": [
+    "282 fixtures replay byte-equal; divergences ADR-tagged",
+    "extract: one deadline incl. queue; stdlib re workers"
+   ]
+  }
+ ]
+}

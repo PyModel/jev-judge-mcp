@@ -1,0 +1,16 @@
+{
+  "tool": "jev_verify",
+  "model": "jev-1.13.0",
+  "split": "all",
+  "n": 5,
+  "primary": "contradiction_recall",
+  "metrics": {
+    "contradiction_recall": 1.0,
+    "macro_f1": 1.0,
+    "brier": 4.000000000000004e-05,
+    "ece": 0.0020000000000000018,
+    "selective_accuracy": 1.0,
+    "auto_coverage": 1.0,
+    "invalid": 0
+  }
+}

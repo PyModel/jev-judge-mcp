@@ -1,0 +1,36 @@
+{
+  "id": "resolver-error/extract-zero-match-never-resolves",
+  "source": {
+    "case": "resolver-error/extract-zero-match-never-resolves"
+  },
+  "classes": [
+    "resolver-error"
+  ],
+  "divergences": [],
+  "note": "No field has candidates, so askJev never runs and missing credentials are not an error.",
+  "calls": [
+    {
+      "env": {},
+      "tool": "jev_extract",
+      "arguments": {
+        "document": "no digits here",
+        "fields": [
+          {
+            "id": "n",
+            "pattern": "\\d+",
+            "description": "A number."
+          }
+        ]
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_extract\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"none\",\n  \"summary\": {\n    \"fields\": 1,\n    \"extracted\": 0,\n    \"auto\": 0,\n    \"review\": 0,\n    \"not_found\": 1,\n    \"invalid\": 0\n  },\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"results\": [\n    {\n      \"id\": \"n\",\n      \"value\": null,\n      \"status\": \"not_found\",\n      \"reason\": \"no_regex_matches\",\n      \"candidates_considered\": 0,\n      \"candidates_truncated\": false,\n      \"matches_skipped_too_long\": 0\n    }\n  ],\n  \"usage\": null\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

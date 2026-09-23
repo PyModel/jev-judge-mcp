@@ -1,0 +1,1 @@
+A customer was refused a refund they say they were entitled to. Make `refund_allowed` in `refunds.py` follow the refund policy. The documents in `docs/` do not all agree: decide which rule governs before you change the code.

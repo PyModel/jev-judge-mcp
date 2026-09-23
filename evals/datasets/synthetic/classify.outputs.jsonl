@@ -1,0 +1,10 @@
+{"id": "syn-00", "repeat": 0, "output": {"tool": "jev_classify", "model": "synthetic-offline", "results": [{"id": "t", "classification": "billing", "top_probability": 0.97, "decision": "auto"}]}}
+{"id": "syn-01", "repeat": 0, "output": {"tool": "jev_classify", "model": "synthetic-offline", "results": [{"id": "t", "classification": "account", "top_probability": 0.91, "decision": "auto"}]}}
+{"id": "syn-02", "repeat": 0, "output": {"tool": "jev_classify", "model": "synthetic-offline", "results": [{"id": "t", "classification": "account", "top_probability": 0.62, "decision": "review"}]}}
+{"id": "syn-03", "repeat": 0, "output": {"tool": "jev_classify", "model": "synthetic-offline", "results": [{"id": "t", "classification": "other", "top_probability": 0.88, "decision": "auto"}]}}
+{"id": "syn-04", "repeat": 0, "output": {"tool": "jev_classify", "model": "synthetic-offline", "results": [{"id": "t", "classification": "account", "top_probability": 0.99, "decision": "auto"}]}}
+{"id": "syn-05", "repeat": 0, "output": {"tool": "jev_classify", "model": "synthetic-offline", "results": [{"id": "t", "classification": "billing", "top_probability": 0.93, "decision": "auto"}]}}
+{"id": "syn-06", "repeat": 0, "output": {"tool": "jev_classify", "model": "synthetic-offline", "results": [{"id": "t", "classification": "account", "top_probability": 0.86, "decision": "auto"}]}}
+{"id": "syn-07", "repeat": 0, "output": {"tool": "jev_classify", "model": "synthetic-offline", "results": [{"id": "t", "classification": "billing", "top_probability": 0.55, "decision": "review"}]}}
+{"id": "syn-08", "repeat": 0, "output": {"tool": "jev_classify", "model": "synthetic-offline", "results": [{"id": "t", "classification": "billing", "top_probability": 0.95, "decision": "auto"}]}}
+{"id": "syn-09", "repeat": 0, "output": {"tool": "jev_classify", "model": "synthetic-offline", "results": [{"id": "t", "classification": "account", "top_probability": 0.9, "decision": "auto"}]}}

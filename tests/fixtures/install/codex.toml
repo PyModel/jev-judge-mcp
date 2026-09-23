@@ -1,0 +1,10 @@
+# keep-me comment
+model = "gpt"
+
+[mcp_servers.other]
+command = "echo"
+
+[mcp_servers.jev]
+command = "/opt/uv/uvx"
+args = ["--from", "/work/jev-mcp[typesafe]", "jev-judge-mcp"]
+env_vars = ["TYPESAFE_API_KEY"]

@@ -1,0 +1,45 @@
+{
+  "id": "duplicate-id/decide-candidate-collides-with-escape-hatch",
+  "source": {
+    "case": "duplicate-id/decide-candidate-collides-with-escape-hatch"
+  },
+  "classes": [
+    "duplicate-id"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_decide",
+      "arguments": {
+        "decision": "d",
+        "evidence": "e",
+        "priorities": "p",
+        "candidates": [
+          {
+            "id": "investigate",
+            "description": "one"
+          },
+          {
+            "id": "ship",
+            "description": "two"
+          }
+        ]
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Candidate id \"investigate\" collides with an escape hatch; rename it or set escape_hatches: false."
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

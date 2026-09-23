@@ -1,0 +1,88 @@
+[project]
+name = "jev-judge-mcp"
+version = "0.1.0"
+description = "Behavior-compatible Python MCP server exposing TypeSafe's Jev judgment tools."
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Mohamed Elkholy" }]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX",
+]
+dependencies = [
+    "mcp>=2.2,<3",
+    "httpx",
+    "pydantic>=2",
+    "pydantic-settings",
+    "tomlkit>=0.15.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/PyModel/jev-judge-mcp"
+Repository = "https://github.com/PyModel/jev-judge-mcp"
+Issues = "https://github.com/PyModel/jev-judge-mcp/issues"
+Changelog = "https://github.com/PyModel/jev-judge-mcp/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+typesafe = ["typesafe-sdk"]
+telemetry = ["opentelemetry-sdk", "prometheus-client"]
+
+[project.scripts]
+jev-judge-mcp = "jev_judge_mcp.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "anyio",
+    "respx",
+    "hypothesis",
+    "pytest-cov",
+    "ruff",
+    "pyright",
+    "pytest-benchmark",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jev_judge_mcp"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "RUF"]
+ignore = ["S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["evals"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S603", "S607"]
+# S311: the outcome study's pair schedule is a seeded, reproducible shuffle, not a secret.
+"evals/ab/**" = ["S603", "S607", "S311"]
+"evals/agent.py" = ["S603"]
+"evals/relay.py" = ["S603"]
+# S311: the bench schedule is a seeded, reproducible shuffle, not a secret.
+"evals/bench/**" = ["S603", "S607", "S311"]
+
+[tool.pyright]
+include = ["src", "tests", "evals", "scripts"]
+# The A/B fixture is a throwaway repo the agent under test edits; its imports resolve only inside that copy.
+exclude = ["**/__pycache__", "**/.*", "evals/ab/fixture"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers -m \"not smoke and not live and not load\""
+markers = [
+    "smoke: spawns the server through `uvx --from .` (slow; builds the package)",
+    "live: calls the real TypeSafe API with TYPESAFE_API_KEY (paid; `make eval-live`)",
+    "load: concurrent local-overhead budget with a stubbed provider (`make load`)",
+]

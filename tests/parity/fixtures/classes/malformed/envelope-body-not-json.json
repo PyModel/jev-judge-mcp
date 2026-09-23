@@ -1,0 +1,78 @@
+{
+  "id": "malformed/envelope-body-not-json",
+  "source": {
+    "case": "malformed/envelope-body-not-json"
+  },
+  "classes": [
+    "malformed"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_verify",
+      "arguments": {
+        "claims": [
+          "The service listens on port 8080."
+        ],
+        "evidence": "server.listen(8080)"
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": "Verify each claim in claims against the evidence in evidence.",
+                "claims": [
+                  {
+                    "text": "The service listens on port 8080.",
+                    "id": "claim0"
+                  }
+                ],
+                "evidence": [
+                  {
+                    "id": "evidence",
+                    "text": "server.listen(8080)"
+                  }
+                ]
+              },
+              "questions": {
+                "relation_claim0": {
+                  "type": "choice",
+                  "instructions": "How does the evidence relate to claim `claim0` (The service listens on port 8080.)?",
+                  "criteria": {
+                    "supports": "The evidence states the claim or directly implies that it is true",
+                    "contradicts": "The evidence states the opposite of the claim or implies that it is false",
+                    "says_nothing": "The evidence does not address what the claim asserts, either way"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "<html>gateway</html>"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Jev-compatible endpoint returned an invalid response: expected a JSON object."
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

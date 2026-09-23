@@ -1,0 +1,47 @@
+{
+  "run_id": "j2-ticket-route.A.r3",
+  "task": "j2-ticket-route",
+  "agent": "claude",
+  "arm": "A",
+  "repeat": 3,
+  "status": "ok",
+  "reached_model": true,
+  "jev_tool_called": false,
+  "jev_gate": null,
+  "measurement": null,
+  "success": false,
+  "final_tests_passed": false,
+  "acceptance_passed": 4,
+  "acceptance_total": 5,
+  "regressions": [],
+  "protected_changed": [],
+  "wall_s": 12.068107040999166,
+  "tokens": {
+    "context": 77243,
+    "output": 1009,
+    "total": 78252
+  },
+  "tool_calls": 3,
+  "jev_calls": 0,
+  "jev_call_log": [],
+  "test_cycles": 1,
+  "retries": 0,
+  "wrong_branches": null,
+  "decision": "security",
+  "decision_correct": true,
+  "agent_model": "claude-sonnet-5",
+  "agent_cost_usd": 0.0600684,
+  "jev_cost_usd": 0.0,
+  "cost_usd": 0.0600684,
+  "agent_cost_reported": true,
+  "num_turns": 4,
+  "tool_counts": {
+    "Bash": 2,
+    "Edit": 1
+  },
+  "mcp_servers": {
+    "harness": "connected"
+  },
+  "unsafe": [],
+  "human_review_requests": 0
+}

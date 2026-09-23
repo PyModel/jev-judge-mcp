@@ -1,0 +1,35 @@
+{
+  "id": "resolver-error/auto-unknown-provider-name",
+  "source": {
+    "case": "resolver-error/auto-unknown-provider-name"
+  },
+  "classes": [
+    "resolver-error"
+  ],
+  "divergences": [],
+  "note": "An unknown JEV_PROVIDER falls through to auto resolution.",
+  "calls": [
+    {
+      "env": {
+        "JEV_PROVIDER": "bogus"
+      },
+      "tool": "jev_verify",
+      "arguments": {
+        "claims": [
+          "The service listens on port 8080."
+        ],
+        "evidence": "server.listen(8080)"
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "No Jev provider credentials found. Set TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token + CLOUDFLARE_ACCOUNT_ID, AI_GATEWAY_API_KEY, or JEV_API_KEY + JEV_API_BASE_URL; set JEV_PROVIDER to choose explicitly."
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

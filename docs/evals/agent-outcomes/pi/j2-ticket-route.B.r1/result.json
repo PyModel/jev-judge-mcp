@@ -1,0 +1,57 @@
+{
+  "run_id": "j2-ticket-route.B.r1",
+  "task": "j2-ticket-route",
+  "agent": "pi",
+  "arm": "B",
+  "repeat": 1,
+  "status": "ok",
+  "reached_model": true,
+  "jev_tool_called": true,
+  "jev_gate": null,
+  "measurement": null,
+  "success": false,
+  "final_tests_passed": false,
+  "acceptance_passed": 3,
+  "acceptance_total": 5,
+  "regressions": [],
+  "protected_changed": [],
+  "wall_s": 180.54829354200047,
+  "tokens": {
+    "context": 65590,
+    "output": 2286,
+    "total": 67876
+  },
+  "tool_calls": 12,
+  "jev_calls": 1,
+  "jev_call_log": [
+    {
+      "tool": "jev_classify",
+      "ms": 3223.1,
+      "is_error": false,
+      "input_tokens": 799,
+      "action": null,
+      "headline_action": "auto",
+      "model": "jev-1.13.0"
+    }
+  ],
+  "test_cycles": 1,
+  "retries": 0,
+  "wrong_branches": null,
+  "decision": "security",
+  "decision_correct": true,
+  "agent_model": "ds4/glm-5.3-flash",
+  "agent_cost_usd": 0.0,
+  "jev_cost_usd": 3.3558e-05,
+  "cost_usd": 3.3558e-05,
+  "agent_cost_reported": true,
+  "num_turns": 13,
+  "tool_counts": {
+    "bash": 4,
+    "mcp": 5,
+    "mcp__jev": 2,
+    "edit": 1
+  },
+  "mcp_servers": {},
+  "unsafe": [],
+  "human_review_requests": 0
+}

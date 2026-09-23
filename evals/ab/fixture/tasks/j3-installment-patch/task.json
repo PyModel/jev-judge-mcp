@@ -1,0 +1,22 @@
+{
+  "judgment": "patch choice",
+  "jev_tool": "jev_decide",
+  "question": "Which proposed patch is correct?",
+  "options": {
+    "patch-a": "patches/patch-a.diff: the last installment takes the remainder",
+    "patch-b": "patches/patch-b.diff: the first installment takes the remainder",
+    "patch-c": "patches/patch-c.diff: the first installments each take one extra cent"
+  },
+  "gold": "patch-c",
+  "gold_source": "docs/installments.md in the snapshot: exact total, no two installments more than one cent apart, larger first; only patch-c meets all three for every total",
+  "wrong_branch_signatures": {
+    "patch-a": [
+      "(?m)(git\\s+apply(?![^\\n;&|]*--(check|stat|numstat|summary))|(^|[;&|(]\\s*)patch\\s(?![^\\n;&|]*--dry-run))[^\\n;&|]*patch-a\\.diff",
+      "\\[base\\]\\s*\\*\\s*\\(parts\\s*-\\s*1\\)\\s*\\+\\s*\\["
+    ],
+    "patch-b": [
+      "(?m)(git\\s+apply(?![^\\n;&|]*--(check|stat|numstat|summary))|(^|[;&|(]\\s*)patch\\s(?![^\\n;&|]*--dry-run))[^\\n;&|]*patch-b\\.diff",
+      "\\[total_cents\\s*-\\s*base\\s*\\*\\s*\\(parts\\s*-\\s*1\\)\\]\\s*\\+\\s*\\[base\\]"
+    ]
+  }
+}

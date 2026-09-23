@@ -1,0 +1,797 @@
+{
+  "id": "boundary/classify-items-x-classes-over-budget",
+  "source": {
+    "case": "boundary/classify-items-x-classes-over-budget"
+  },
+  "classes": [
+    "boundary"
+  ],
+  "divergences": [],
+  "note": "64 x 126 = 8064 > 8000: handler error before any request (index.ts:455-459).",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_classify",
+      "arguments": {
+        "items": [
+          {
+            "id": "item-0",
+            "text": "ticket 0"
+          },
+          {
+            "id": "item-1",
+            "text": "ticket 1"
+          },
+          {
+            "id": "item-2",
+            "text": "ticket 2"
+          },
+          {
+            "id": "item-3",
+            "text": "ticket 3"
+          },
+          {
+            "id": "item-4",
+            "text": "ticket 4"
+          },
+          {
+            "id": "item-5",
+            "text": "ticket 5"
+          },
+          {
+            "id": "item-6",
+            "text": "ticket 6"
+          },
+          {
+            "id": "item-7",
+            "text": "ticket 7"
+          },
+          {
+            "id": "item-8",
+            "text": "ticket 8"
+          },
+          {
+            "id": "item-9",
+            "text": "ticket 9"
+          },
+          {
+            "id": "item-10",
+            "text": "ticket 10"
+          },
+          {
+            "id": "item-11",
+            "text": "ticket 11"
+          },
+          {
+            "id": "item-12",
+            "text": "ticket 12"
+          },
+          {
+            "id": "item-13",
+            "text": "ticket 13"
+          },
+          {
+            "id": "item-14",
+            "text": "ticket 14"
+          },
+          {
+            "id": "item-15",
+            "text": "ticket 15"
+          },
+          {
+            "id": "item-16",
+            "text": "ticket 16"
+          },
+          {
+            "id": "item-17",
+            "text": "ticket 17"
+          },
+          {
+            "id": "item-18",
+            "text": "ticket 18"
+          },
+          {
+            "id": "item-19",
+            "text": "ticket 19"
+          },
+          {
+            "id": "item-20",
+            "text": "ticket 20"
+          },
+          {
+            "id": "item-21",
+            "text": "ticket 21"
+          },
+          {
+            "id": "item-22",
+            "text": "ticket 22"
+          },
+          {
+            "id": "item-23",
+            "text": "ticket 23"
+          },
+          {
+            "id": "item-24",
+            "text": "ticket 24"
+          },
+          {
+            "id": "item-25",
+            "text": "ticket 25"
+          },
+          {
+            "id": "item-26",
+            "text": "ticket 26"
+          },
+          {
+            "id": "item-27",
+            "text": "ticket 27"
+          },
+          {
+            "id": "item-28",
+            "text": "ticket 28"
+          },
+          {
+            "id": "item-29",
+            "text": "ticket 29"
+          },
+          {
+            "id": "item-30",
+            "text": "ticket 30"
+          },
+          {
+            "id": "item-31",
+            "text": "ticket 31"
+          },
+          {
+            "id": "item-32",
+            "text": "ticket 32"
+          },
+          {
+            "id": "item-33",
+            "text": "ticket 33"
+          },
+          {
+            "id": "item-34",
+            "text": "ticket 34"
+          },
+          {
+            "id": "item-35",
+            "text": "ticket 35"
+          },
+          {
+            "id": "item-36",
+            "text": "ticket 36"
+          },
+          {
+            "id": "item-37",
+            "text": "ticket 37"
+          },
+          {
+            "id": "item-38",
+            "text": "ticket 38"
+          },
+          {
+            "id": "item-39",
+            "text": "ticket 39"
+          },
+          {
+            "id": "item-40",
+            "text": "ticket 40"
+          },
+          {
+            "id": "item-41",
+            "text": "ticket 41"
+          },
+          {
+            "id": "item-42",
+            "text": "ticket 42"
+          },
+          {
+            "id": "item-43",
+            "text": "ticket 43"
+          },
+          {
+            "id": "item-44",
+            "text": "ticket 44"
+          },
+          {
+            "id": "item-45",
+            "text": "ticket 45"
+          },
+          {
+            "id": "item-46",
+            "text": "ticket 46"
+          },
+          {
+            "id": "item-47",
+            "text": "ticket 47"
+          },
+          {
+            "id": "item-48",
+            "text": "ticket 48"
+          },
+          {
+            "id": "item-49",
+            "text": "ticket 49"
+          },
+          {
+            "id": "item-50",
+            "text": "ticket 50"
+          },
+          {
+            "id": "item-51",
+            "text": "ticket 51"
+          },
+          {
+            "id": "item-52",
+            "text": "ticket 52"
+          },
+          {
+            "id": "item-53",
+            "text": "ticket 53"
+          },
+          {
+            "id": "item-54",
+            "text": "ticket 54"
+          },
+          {
+            "id": "item-55",
+            "text": "ticket 55"
+          },
+          {
+            "id": "item-56",
+            "text": "ticket 56"
+          },
+          {
+            "id": "item-57",
+            "text": "ticket 57"
+          },
+          {
+            "id": "item-58",
+            "text": "ticket 58"
+          },
+          {
+            "id": "item-59",
+            "text": "ticket 59"
+          },
+          {
+            "id": "item-60",
+            "text": "ticket 60"
+          },
+          {
+            "id": "item-61",
+            "text": "ticket 61"
+          },
+          {
+            "id": "item-62",
+            "text": "ticket 62"
+          },
+          {
+            "id": "item-63",
+            "text": "ticket 63"
+          }
+        ],
+        "classes": [
+          {
+            "id": "class-0",
+            "description": "category 0"
+          },
+          {
+            "id": "class-1",
+            "description": "category 1"
+          },
+          {
+            "id": "class-2",
+            "description": "category 2"
+          },
+          {
+            "id": "class-3",
+            "description": "category 3"
+          },
+          {
+            "id": "class-4",
+            "description": "category 4"
+          },
+          {
+            "id": "class-5",
+            "description": "category 5"
+          },
+          {
+            "id": "class-6",
+            "description": "category 6"
+          },
+          {
+            "id": "class-7",
+            "description": "category 7"
+          },
+          {
+            "id": "class-8",
+            "description": "category 8"
+          },
+          {
+            "id": "class-9",
+            "description": "category 9"
+          },
+          {
+            "id": "class-10",
+            "description": "category 10"
+          },
+          {
+            "id": "class-11",
+            "description": "category 11"
+          },
+          {
+            "id": "class-12",
+            "description": "category 12"
+          },
+          {
+            "id": "class-13",
+            "description": "category 13"
+          },
+          {
+            "id": "class-14",
+            "description": "category 14"
+          },
+          {
+            "id": "class-15",
+            "description": "category 15"
+          },
+          {
+            "id": "class-16",
+            "description": "category 16"
+          },
+          {
+            "id": "class-17",
+            "description": "category 17"
+          },
+          {
+            "id": "class-18",
+            "description": "category 18"
+          },
+          {
+            "id": "class-19",
+            "description": "category 19"
+          },
+          {
+            "id": "class-20",
+            "description": "category 20"
+          },
+          {
+            "id": "class-21",
+            "description": "category 21"
+          },
+          {
+            "id": "class-22",
+            "description": "category 22"
+          },
+          {
+            "id": "class-23",
+            "description": "category 23"
+          },
+          {
+            "id": "class-24",
+            "description": "category 24"
+          },
+          {
+            "id": "class-25",
+            "description": "category 25"
+          },
+          {
+            "id": "class-26",
+            "description": "category 26"
+          },
+          {
+            "id": "class-27",
+            "description": "category 27"
+          },
+          {
+            "id": "class-28",
+            "description": "category 28"
+          },
+          {
+            "id": "class-29",
+            "description": "category 29"
+          },
+          {
+            "id": "class-30",
+            "description": "category 30"
+          },
+          {
+            "id": "class-31",
+            "description": "category 31"
+          },
+          {
+            "id": "class-32",
+            "description": "category 32"
+          },
+          {
+            "id": "class-33",
+            "description": "category 33"
+          },
+          {
+            "id": "class-34",
+            "description": "category 34"
+          },
+          {
+            "id": "class-35",
+            "description": "category 35"
+          },
+          {
+            "id": "class-36",
+            "description": "category 36"
+          },
+          {
+            "id": "class-37",
+            "description": "category 37"
+          },
+          {
+            "id": "class-38",
+            "description": "category 38"
+          },
+          {
+            "id": "class-39",
+            "description": "category 39"
+          },
+          {
+            "id": "class-40",
+            "description": "category 40"
+          },
+          {
+            "id": "class-41",
+            "description": "category 41"
+          },
+          {
+            "id": "class-42",
+            "description": "category 42"
+          },
+          {
+            "id": "class-43",
+            "description": "category 43"
+          },
+          {
+            "id": "class-44",
+            "description": "category 44"
+          },
+          {
+            "id": "class-45",
+            "description": "category 45"
+          },
+          {
+            "id": "class-46",
+            "description": "category 46"
+          },
+          {
+            "id": "class-47",
+            "description": "category 47"
+          },
+          {
+            "id": "class-48",
+            "description": "category 48"
+          },
+          {
+            "id": "class-49",
+            "description": "category 49"
+          },
+          {
+            "id": "class-50",
+            "description": "category 50"
+          },
+          {
+            "id": "class-51",
+            "description": "category 51"
+          },
+          {
+            "id": "class-52",
+            "description": "category 52"
+          },
+          {
+            "id": "class-53",
+            "description": "category 53"
+          },
+          {
+            "id": "class-54",
+            "description": "category 54"
+          },
+          {
+            "id": "class-55",
+            "description": "category 55"
+          },
+          {
+            "id": "class-56",
+            "description": "category 56"
+          },
+          {
+            "id": "class-57",
+            "description": "category 57"
+          },
+          {
+            "id": "class-58",
+            "description": "category 58"
+          },
+          {
+            "id": "class-59",
+            "description": "category 59"
+          },
+          {
+            "id": "class-60",
+            "description": "category 60"
+          },
+          {
+            "id": "class-61",
+            "description": "category 61"
+          },
+          {
+            "id": "class-62",
+            "description": "category 62"
+          },
+          {
+            "id": "class-63",
+            "description": "category 63"
+          },
+          {
+            "id": "class-64",
+            "description": "category 64"
+          },
+          {
+            "id": "class-65",
+            "description": "category 65"
+          },
+          {
+            "id": "class-66",
+            "description": "category 66"
+          },
+          {
+            "id": "class-67",
+            "description": "category 67"
+          },
+          {
+            "id": "class-68",
+            "description": "category 68"
+          },
+          {
+            "id": "class-69",
+            "description": "category 69"
+          },
+          {
+            "id": "class-70",
+            "description": "category 70"
+          },
+          {
+            "id": "class-71",
+            "description": "category 71"
+          },
+          {
+            "id": "class-72",
+            "description": "category 72"
+          },
+          {
+            "id": "class-73",
+            "description": "category 73"
+          },
+          {
+            "id": "class-74",
+            "description": "category 74"
+          },
+          {
+            "id": "class-75",
+            "description": "category 75"
+          },
+          {
+            "id": "class-76",
+            "description": "category 76"
+          },
+          {
+            "id": "class-77",
+            "description": "category 77"
+          },
+          {
+            "id": "class-78",
+            "description": "category 78"
+          },
+          {
+            "id": "class-79",
+            "description": "category 79"
+          },
+          {
+            "id": "class-80",
+            "description": "category 80"
+          },
+          {
+            "id": "class-81",
+            "description": "category 81"
+          },
+          {
+            "id": "class-82",
+            "description": "category 82"
+          },
+          {
+            "id": "class-83",
+            "description": "category 83"
+          },
+          {
+            "id": "class-84",
+            "description": "category 84"
+          },
+          {
+            "id": "class-85",
+            "description": "category 85"
+          },
+          {
+            "id": "class-86",
+            "description": "category 86"
+          },
+          {
+            "id": "class-87",
+            "description": "category 87"
+          },
+          {
+            "id": "class-88",
+            "description": "category 88"
+          },
+          {
+            "id": "class-89",
+            "description": "category 89"
+          },
+          {
+            "id": "class-90",
+            "description": "category 90"
+          },
+          {
+            "id": "class-91",
+            "description": "category 91"
+          },
+          {
+            "id": "class-92",
+            "description": "category 92"
+          },
+          {
+            "id": "class-93",
+            "description": "category 93"
+          },
+          {
+            "id": "class-94",
+            "description": "category 94"
+          },
+          {
+            "id": "class-95",
+            "description": "category 95"
+          },
+          {
+            "id": "class-96",
+            "description": "category 96"
+          },
+          {
+            "id": "class-97",
+            "description": "category 97"
+          },
+          {
+            "id": "class-98",
+            "description": "category 98"
+          },
+          {
+            "id": "class-99",
+            "description": "category 99"
+          },
+          {
+            "id": "class-100",
+            "description": "category 100"
+          },
+          {
+            "id": "class-101",
+            "description": "category 101"
+          },
+          {
+            "id": "class-102",
+            "description": "category 102"
+          },
+          {
+            "id": "class-103",
+            "description": "category 103"
+          },
+          {
+            "id": "class-104",
+            "description": "category 104"
+          },
+          {
+            "id": "class-105",
+            "description": "category 105"
+          },
+          {
+            "id": "class-106",
+            "description": "category 106"
+          },
+          {
+            "id": "class-107",
+            "description": "category 107"
+          },
+          {
+            "id": "class-108",
+            "description": "category 108"
+          },
+          {
+            "id": "class-109",
+            "description": "category 109"
+          },
+          {
+            "id": "class-110",
+            "description": "category 110"
+          },
+          {
+            "id": "class-111",
+            "description": "category 111"
+          },
+          {
+            "id": "class-112",
+            "description": "category 112"
+          },
+          {
+            "id": "class-113",
+            "description": "category 113"
+          },
+          {
+            "id": "class-114",
+            "description": "category 114"
+          },
+          {
+            "id": "class-115",
+            "description": "category 115"
+          },
+          {
+            "id": "class-116",
+            "description": "category 116"
+          },
+          {
+            "id": "class-117",
+            "description": "category 117"
+          },
+          {
+            "id": "class-118",
+            "description": "category 118"
+          },
+          {
+            "id": "class-119",
+            "description": "category 119"
+          },
+          {
+            "id": "class-120",
+            "description": "category 120"
+          },
+          {
+            "id": "class-121",
+            "description": "category 121"
+          },
+          {
+            "id": "class-122",
+            "description": "category 122"
+          },
+          {
+            "id": "class-123",
+            "description": "category 123"
+          },
+          {
+            "id": "class-124",
+            "description": "category 124"
+          },
+          {
+            "id": "class-125",
+            "description": "category 125"
+          }
+        ]
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Batch too large: 64 items x 126 classes exceeds the 8,000 item-class budget. Split the batch."
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

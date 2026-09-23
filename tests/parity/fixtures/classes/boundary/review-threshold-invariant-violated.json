@@ -1,0 +1,38 @@
+{
+  "id": "boundary/review-threshold-invariant-violated",
+  "source": {
+    "case": "boundary/review-threshold-invariant-violated"
+  },
+  "classes": [
+    "boundary"
+  ],
+  "divergences": [],
+  "note": "review_at > auto_accept throws from resolvePolicyThresholds (lib.ts:273) before any request.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_review",
+      "arguments": {
+        "request": "Return 404 instead of 500 when a user id is unknown.",
+        "diff": "--- a/api/users.ts\n+++ b/api/users.ts\n@@\n-  if (!user) throw new Error('missing');\n+  if (!user) return res.status(404).json({ error: 'not found' });",
+        "tests": "PASS api/users.test.ts\n  ✓ returns 404 for an unknown id (12 ms)",
+        "auto_accept": 0.6,
+        "review_at": 0.7
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "Thresholds must satisfy 0 <= review_at <= auto_accept <= 1."
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

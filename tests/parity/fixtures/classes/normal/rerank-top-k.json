@@ -1,0 +1,104 @@
+{
+  "id": "normal/rerank-top-k",
+  "source": {
+    "case": "normal/rerank-top-k"
+  },
+  "classes": [
+    "normal"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_rerank",
+      "arguments": {
+        "query": "retry policy for failed webhooks",
+        "candidates": [
+          {
+            "id": "a",
+            "text": "Webhook payload schema reference."
+          },
+          {
+            "id": "b",
+            "text": "Failed webhooks retry with exponential backoff for 72 hours."
+          },
+          {
+            "id": "c",
+            "text": "Webhook signing secrets rotate monthly."
+          },
+          {
+            "id": "d",
+            "text": "Delivery attempts are logged with their HTTP status."
+          }
+        ],
+        "top_k": 3
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "query": "retry policy for failed webhooks"
+              },
+              "questions": {
+                "rel_0": {
+                  "type": "noul",
+                  "instructions": "Is candidate c0 relevant to the query in the state? Candidate c0: Webhook payload schema reference.",
+                  "criteria": {
+                    "true": "The candidate addresses the subject the query asks about, or provides what it seeks",
+                    "false": "The candidate is about a different subject, or only shares vocabulary with the query"
+                  }
+                },
+                "rel_1": {
+                  "type": "noul",
+                  "instructions": "Is candidate c1 relevant to the query in the state? Candidate c1: Failed webhooks retry with exponential backoff for 72 hours.",
+                  "criteria": {
+                    "true": "The candidate addresses the subject the query asks about, or provides what it seeks",
+                    "false": "The candidate is about a different subject, or only shares vocabulary with the query"
+                  }
+                },
+                "rel_2": {
+                  "type": "noul",
+                  "instructions": "Is candidate c2 relevant to the query in the state? Candidate c2: Webhook signing secrets rotate monthly.",
+                  "criteria": {
+                    "true": "The candidate addresses the subject the query asks about, or provides what it seeks",
+                    "false": "The candidate is about a different subject, or only shares vocabulary with the query"
+                  }
+                },
+                "rel_3": {
+                  "type": "noul",
+                  "instructions": "Is candidate c3 relevant to the query in the state? Candidate c3: Delivery attempts are logged with their HTTP status.",
+                  "criteria": {
+                    "true": "The candidate addresses the subject the query asks about, or provides what it seeks",
+                    "false": "The candidate is about a different subject, or only shares vocabulary with the query"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"rel_0\":{\"noul\":0.2},\"rel_1\":{\"noul\":0.93},\"rel_2\":{\"noul\":0.123456},\"rel_3\":{\"noul\":0.71}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_rerank\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"query\": \"retry policy for failed webhooks\",\n  \"summary\": {\n    \"candidates\": 4,\n    \"returned\": 3\n  },\n  \"ranked\": [\n    {\n      \"rank\": 1,\n      \"id\": \"b\",\n      \"relevance\": 0.93,\n      \"text\": \"Failed webhooks retry with exponential backoff for 72 hours.\"\n    },\n    {\n      \"rank\": 2,\n      \"id\": \"d\",\n      \"relevance\": 0.71,\n      \"text\": \"Delivery attempts are logged with their HTTP status.\"\n    },\n    {\n      \"rank\": 3,\n      \"id\": \"a\",\n      \"relevance\": 0.2,\n      \"text\": \"Webhook payload schema reference.\"\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

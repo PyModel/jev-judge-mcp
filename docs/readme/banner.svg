@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="jev-judge-mcp, with a scales-of-justice emblem: typed judgment tools for MCP agents. Model judges, policy decides: auto, review, or escalate. Check: verify, screen. Find: find, classify, rerank. Decide: decide, compare, extract. Ship: review, gate, score.">
+  <defs>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff7b2e"/>
+      <stop offset="0.38" stop-color="#ffc94d"/>
+      <stop offset="0.72" stop-color="#b9e769"/>
+      <stop offset="1" stop-color="#4fd8c4"/>
+    </linearGradient>
+    <linearGradient id="brandDiag" gradientUnits="userSpaceOnUse" x1="104" y1="92" x2="280" y2="268">
+      <stop offset="0" stop-color="#ff7b2e"/>
+      <stop offset="0.45" stop-color="#ffc94d"/>
+      <stop offset="1" stop-color="#b9e769"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff7b2e" stop-opacity="0.85"/>
+      <stop offset="0.35" stop-color="#ffc94d" stop-opacity="0.35"/>
+      <stop offset="0.65" stop-color="#b9e769" stop-opacity="0.2"/>
+      <stop offset="1" stop-color="#4fd8c4" stop-opacity="0.75"/>
+    </linearGradient>
+    <linearGradient id="rail" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff7b2e"/>
+      <stop offset="0.33" stop-color="#ffc94d"/>
+      <stop offset="0.66" stop-color="#b9e769"/>
+      <stop offset="1" stop-color="#4fd8c4"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="170" cy="40" r="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff7b2e" stop-opacity="0.26"/>
+      <stop offset="0.5" stop-color="#ffc94d" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#ffc94d" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="1180" cy="360" r="520" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4fd8c4" stop-opacity="0.2"/>
+      <stop offset="0.55" stop-color="#b9e769" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#b9e769" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="medal" cx="0.5" cy="0.38" r="0.62">
+      <stop offset="0" stop-color="#2a2016"/>
+      <stop offset="1" stop-color="#110f14"/>
+    </radialGradient>
+    <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1.1" fill="#ffffff" fill-opacity="0.05"/>
+    </pattern>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+    <clipPath id="card"><rect width="1280" height="360" rx="24"/></clipPath>
+  </defs>
+  <g clip-path="url(#card)">
+    <rect width="1280" height="360" fill="#0a0a0f"/>
+    <rect width="1280" height="360" fill="url(#dots)"/>
+    <rect width="1280" height="360" fill="url(#glowA)"/>
+    <rect width="1280" height="360" fill="url(#glowB)"/>
+    <rect x="0" y="0" width="1280" height="3" fill="url(#brand)"/>
+  </g>
+  <rect x="1" y="1" width="1278" height="358" rx="23" fill="none" stroke="url(#rim)" stroke-width="2"/>
+  <g>
+    <circle cx="192" cy="180" r="100" fill="#ffc94d" fill-opacity="0.22" filter="url(#soft)"/>
+    <circle cx="192" cy="180" r="92" fill="url(#medal)"/>
+    <circle cx="192" cy="180" r="92" fill="none" stroke="url(#brandDiag)" stroke-width="3"/>
+    <circle cx="192" cy="180" r="81" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="1.5" stroke-dasharray="2 6"/>
+    <g fill="none" stroke="url(#brandDiag)" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M192 122 V236"/>
+      <path d="M136 137 L248 123"/>
+      <path d="M156 242 H228"/>
+      <path d="M172 236 H212"/>
+    </g>
+    <circle cx="192" cy="114" r="6" fill="url(#brandDiag)"/>
+    <circle cx="192" cy="130" r="4" fill="#0a0a0f" stroke="#ffc94d" stroke-width="2.5"/>
+    <path d="M136 137 L114 189 M136 137 L158 189" fill="none" stroke="#ff7b2e" stroke-opacity="0.75" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M109 189 Q136 219 163 189 Z" fill="#ff7b2e" fill-opacity="0.22" stroke="#ff7b2e" stroke-width="3.5" stroke-linejoin="round"/>
+    <circle cx="136" cy="137" r="3.5" fill="#ff7b2e"/>
+    <path d="M248 123 L226 175 M248 123 L270 175" fill="none" stroke="#b9e769" stroke-opacity="0.75" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M221 175 Q248 205 275 175 Z" fill="#b9e769" fill-opacity="0.22" stroke="#b9e769" stroke-width="3.5" stroke-linejoin="round"/>
+    <circle cx="248" cy="123" r="3.5" fill="#b9e769"/>
+  </g>
+  <text x="326" y="152" fill="url(#brand)" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="60" font-weight="800" letter-spacing="-1.5" textLength="430" lengthAdjust="spacingAndGlyphs">jev-judge-mcp</text>
+  <text x="328" y="194" fill="#e4e4e7" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="23" font-weight="500">Typed judgment tools for MCP agents</text>
+  <text x="328" y="228" fill="#8b8b96" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" letter-spacing="0.4">model judges <tspan fill="#52525b">·</tspan> policy decides</text>
+  <rect x="328" y="248" width="74" height="30" rx="15" fill="#4ade80" fill-opacity="0.12" stroke="#4ade80" stroke-opacity="0.6"/>
+  <circle cx="344" cy="263" r="4" fill="#4ade80"/>
+  <text x="356" y="268" fill="#f4f4f5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">auto</text>
+  <rect x="412" y="248" width="90" height="30" rx="15" fill="#fbbf24" fill-opacity="0.12" stroke="#fbbf24" stroke-opacity="0.6"/>
+  <circle cx="428" cy="263" r="4" fill="#fbbf24"/>
+  <text x="440" y="268" fill="#f4f4f5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">review</text>
+  <rect x="512" y="248" width="107" height="30" rx="15" fill="#fb7185" fill-opacity="0.12" stroke="#fb7185" stroke-opacity="0.6"/>
+  <circle cx="528" cy="263" r="4" fill="#fb7185"/>
+  <text x="540" y="268" fill="#f4f4f5" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">escalate</text>
+  <rect x="784" y="50" width="444" height="260" rx="20" fill="#ffffff" fill-opacity="0.035" stroke="#ffffff" stroke-opacity="0.1"/>
+  <text x="810" y="84" fill="#71717a" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="2">PIPELINE</text>
+  <text x="1202" y="84" text-anchor="end" fill="#71717a" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="1">11 tools</text>
+  <path d="M804 98 H1208" stroke="#ffffff" stroke-opacity="0.07"/>
+  <path d="M816 134 V284" stroke="url(#rail)" stroke-width="2" stroke-opacity="0.55"/>
+  <circle cx="816" cy="134" r="9" fill="#ff7b2e" fill-opacity="0.18"/>
+  <circle cx="816" cy="134" r="4.5" fill="#ff7b2e"/>
+  <text x="838" y="138" fill="#ff7b2e" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.8">CHECK</text>
+  <rect x="924" y="119" width="77" height="30" rx="15" fill="#ff7b2e" fill-opacity="0.1" stroke="#ff7b2e" stroke-opacity="0.5"/>
+  <text x="962.5" y="139" text-anchor="middle" fill="#f4f4f5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500">verify</text>
+  <rect x="1009" y="119" width="77" height="30" rx="15" fill="#ff7b2e" fill-opacity="0.1" stroke="#ff7b2e" stroke-opacity="0.5"/>
+  <text x="1047.5" y="139" text-anchor="middle" fill="#f4f4f5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500">screen</text>
+  <circle cx="816" cy="184" r="9" fill="#ffc94d" fill-opacity="0.18"/>
+  <circle cx="816" cy="184" r="4.5" fill="#ffc94d"/>
+  <text x="838" y="188" fill="#ffc94d" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.8">FIND</text>
+  <rect x="924" y="169" width="62" height="30" rx="15" fill="#ffc94d" fill-opacity="0.1" stroke="#ffc94d" stroke-opacity="0.5"/>
+  <text x="955.0" y="189" text-anchor="middle" fill="#f4f4f5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500">find</text>
+  <rect x="994" y="169" width="93" height="30" rx="15" fill="#ffc94d" fill-opacity="0.1" stroke="#ffc94d" stroke-opacity="0.5"/>
+  <text x="1040.5" y="189" text-anchor="middle" fill="#f4f4f5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500">classify</text>
+  <rect x="1095" y="169" width="77" height="30" rx="15" fill="#ffc94d" fill-opacity="0.1" stroke="#ffc94d" stroke-opacity="0.5"/>
+  <text x="1133.5" y="189" text-anchor="middle" fill="#f4f4f5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500">rerank</text>
+  <circle cx="816" cy="234" r="9" fill="#b9e769" fill-opacity="0.18"/>
+  <circle cx="816" cy="234" r="4.5" fill="#b9e769"/>
+  <text x="838" y="238" fill="#b9e769" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.8">DECIDE</text>
+  <rect x="924" y="219" width="77" height="30" rx="15" fill="#b9e769" fill-opacity="0.1" stroke="#b9e769" stroke-opacity="0.5"/>
+  <text x="962.5" y="239" text-anchor="middle" fill="#f4f4f5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500">decide</text>
+  <rect x="1009" y="219" width="85" height="30" rx="15" fill="#b9e769" fill-opacity="0.1" stroke="#b9e769" stroke-opacity="0.5"/>
+  <text x="1051.5" y="239" text-anchor="middle" fill="#f4f4f5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500">compare</text>
+  <rect x="1102" y="219" width="85" height="30" rx="15" fill="#b9e769" fill-opacity="0.1" stroke="#b9e769" stroke-opacity="0.5"/>
+  <text x="1144.5" y="239" text-anchor="middle" fill="#f4f4f5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500">extract</text>
+  <circle cx="816" cy="284" r="9" fill="#4fd8c4" fill-opacity="0.18"/>
+  <circle cx="816" cy="284" r="4.5" fill="#4fd8c4"/>
+  <text x="838" y="288" fill="#4fd8c4" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.8">SHIP</text>
+  <rect x="924" y="269" width="77" height="30" rx="15" fill="#4fd8c4" fill-opacity="0.1" stroke="#4fd8c4" stroke-opacity="0.5"/>
+  <text x="962.5" y="289" text-anchor="middle" fill="#f4f4f5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500">review</text>
+  <rect x="1009" y="269" width="62" height="30" rx="15" fill="#4fd8c4" fill-opacity="0.1" stroke="#4fd8c4" stroke-opacity="0.5"/>
+  <text x="1040.0" y="289" text-anchor="middle" fill="#f4f4f5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500">gate</text>
+  <rect x="1079" y="269" width="70" height="30" rx="15" fill="#4fd8c4" fill-opacity="0.1" stroke="#4fd8c4" stroke-opacity="0.5"/>
+  <text x="1114.0" y="289" text-anchor="middle" fill="#f4f4f5" font-family="Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="14" font-weight="500">score</text>
+</svg>

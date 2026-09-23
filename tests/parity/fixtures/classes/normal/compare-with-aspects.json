@@ -1,0 +1,92 @@
+{
+  "id": "normal/compare-with-aspects",
+  "source": {
+    "case": "normal/compare-with-aspects"
+  },
+  "classes": [
+    "normal"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_compare",
+      "arguments": {
+        "passage_a": "Acme Pro costs $20 per seat per month and launched in March 2026.",
+        "passage_b": "Acme Pro launched in March 2026 at $25 per seat per month.",
+        "aspects": [
+          "launch date",
+          "price"
+        ],
+        "purpose": "reconcile the pricing page with the press release"
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": "reconcile the pricing page with the press release",
+                "passage_a": "Acme Pro costs $20 per seat per month and launched in March 2026.",
+                "passage_b": "Acme Pro launched in March 2026 at $25 per seat per month.",
+                "aspects": [
+                  "launch date",
+                  "price"
+                ]
+              },
+              "questions": {
+                "overall": {
+                  "type": "choice",
+                  "instructions": "Do the two passages state the same underlying fact, contradict each other, or discuss different facts?",
+                  "criteria": {
+                    "same_fact": "Both passages state the same underlying fact or claim",
+                    "contradicts": "The passages state opposing facts about the same subject",
+                    "different_facts": "The passages discuss different subjects or make non-overlapping claims"
+                  }
+                },
+                "aspect_0": {
+                  "type": "choice",
+                  "instructions": "Judging only the aspect \"launch date\" of the two passages in the state, which relation holds?",
+                  "criteria": {
+                    "same_fact": "Both passages make comparable assertions about this aspect and they agree",
+                    "contradicts": "Both passages address this aspect and their assertions conflict",
+                    "different_facts": "The passages do not both make a comparable assertion about this aspect: at least one does not address it, or their mentions do not overlap"
+                  }
+                },
+                "aspect_1": {
+                  "type": "choice",
+                  "instructions": "Judging only the aspect \"price\" of the two passages in the state, which relation holds?",
+                  "criteria": {
+                    "same_fact": "Both passages make comparable assertions about this aspect and they agree",
+                    "contradicts": "Both passages address this aspect and their assertions conflict",
+                    "different_facts": "The passages do not both make a comparable assertion about this aspect: at least one does not address it, or their mentions do not overlap"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"overall\":{\"choice\":\"contradicts\",\"confidence\":0.88,\"probabilities\":{\"same_fact\":0.05,\"contradicts\":0.9,\"different_facts\":0.05}},\"aspect_0\":{\"choice\":\"same_fact\",\"confidence\":0.94,\"probabilities\":{\"same_fact\":0.95,\"contradicts\":0.025,\"different_facts\":0.025}},\"aspect_1\":{\"choice\":\"contradicts\",\"confidence\":0.9,\"probabilities\":{\"same_fact\":0.04,\"contradicts\":0.92,\"different_facts\":0.04}}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_compare\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"overall\": {\n    \"relation\": \"contradicts\",\n    \"probabilities\": {\n      \"same_fact\": 0.05,\n      \"contradicts\": 0.9,\n      \"different_facts\": 0.05\n    },\n    \"confidence\": 0.88,\n    \"margin\": 0.85,\n    \"decision\": \"auto\"\n  },\n  \"aspects\": [\n    {\n      \"aspect\": \"launch date\",\n      \"relation\": \"same_fact\",\n      \"probabilities\": {\n        \"same_fact\": 0.95,\n        \"contradicts\": 0.025,\n        \"different_facts\": 0.025\n      },\n      \"confidence\": 0.94,\n      \"margin\": 0.9249999999999999,\n      \"decision\": \"auto\"\n    },\n    {\n      \"aspect\": \"price\",\n      \"relation\": \"contradicts\",\n      \"probabilities\": {\n        \"same_fact\": 0.04,\n        \"contradicts\": 0.92,\n        \"different_facts\": 0.04\n      },\n      \"confidence\": 0.9,\n      \"margin\": 0.88,\n      \"decision\": \"auto\"\n    }\n  ],\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

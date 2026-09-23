@@ -1,0 +1,34 @@
+{
+  "id": "resolver-error/explicit-cloudflare-unset",
+  "source": {
+    "case": "resolver-error/explicit-cloudflare-unset"
+  },
+  "classes": [
+    "resolver-error"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_PROVIDER": "cloudflare"
+      },
+      "tool": "jev_verify",
+      "arguments": {
+        "claims": [
+          "The service listens on port 8080."
+        ],
+        "evidence": "server.listen(8080)"
+      },
+      "exchanges": [],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "JEV_PROVIDER=cloudflare but a Cloudflare API token (CLOUDFLARE_API_TOKEN or JEV_CLOUDFLARE_API_TOKEN) and CLOUDFLARE_ACCOUNT_ID are not both set."
+          }
+        ],
+        "isError": true
+      }
+    }
+  ]
+}

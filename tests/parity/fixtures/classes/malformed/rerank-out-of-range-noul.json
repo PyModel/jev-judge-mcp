@@ -1,0 +1,79 @@
+{
+  "id": "malformed/rerank-out-of-range-noul",
+  "source": {
+    "case": "malformed/rerank-out-of-range-noul"
+  },
+  "classes": [
+    "malformed"
+  ],
+  "divergences": [],
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_rerank",
+      "arguments": {
+        "query": "q",
+        "candidates": [
+          {
+            "id": "x",
+            "text": "one"
+          },
+          {
+            "id": "y",
+            "text": "two"
+          }
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "query": "q"
+              },
+              "questions": {
+                "rel_0": {
+                  "type": "noul",
+                  "instructions": "Is candidate c0 relevant to the query in the state? Candidate c0: one",
+                  "criteria": {
+                    "true": "The candidate addresses the subject the query asks about, or provides what it seeks",
+                    "false": "The candidate is about a different subject, or only shares vocabulary with the query"
+                  }
+                },
+                "rel_1": {
+                  "type": "noul",
+                  "instructions": "Is candidate c1 relevant to the query in the state? Candidate c1: two",
+                  "criteria": {
+                    "true": "The candidate addresses the subject the query asks about, or provides what it seeks",
+                    "false": "The candidate is about a different subject, or only shares vocabulary with the query"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\":{\"rel_0\":{\"noul\":0.4},\"rel_1\":{\"noul\":1.2}},\"usage\":{\"input_tokens\":321,\"output_tokens\":17}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_rerank\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"query\": \"q\",\n  \"status\": \"invalid_response\",\n  \"ranked\": null,\n  \"usage\": {\n    \"input_tokens\": 321,\n    \"output_tokens\": 17\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}
