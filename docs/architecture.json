@@ -2,7 +2,7 @@
  "schema_version": 1,
  "diagram_type": "architecture",
  "meta": {
-  "title": "jev-judge-mcp — Design Architecture",
+  "title": "jev-judge-mcp \u2014 Design Architecture",
   "output": "architecture.html",
   "locale": "en",
   "quality_profile": "showcase",
@@ -26,7 +26,7 @@
      "policy",
      "serialize"
     ],
-    "note": "The whole judgment path: args in, Jev answer back, action out."
+    "note": "The whole judgment path: args in, Jev answer back, action out \u2014 over stdio or streamable-http."
    },
    {
     "id": "fail-closed",
@@ -47,7 +47,7 @@
      "extract",
      "runtime"
     ],
-    "note": "The dialect translates; candidates own refusal text; a RegexExecutor (killable workers) runs under one deadline."
+    "note": "The dialect translates; candidates own refusal text; killable worker processes run under one deadline."
    },
    {
     "id": "config-redaction",
@@ -63,14 +63,16 @@
     "note": "Env-only config; setup stores a verified key the resolver falls back to; the optional cache replays identical requests."
    },
    {
-    "id": "parity-oracle",
-    "label": "Parity oracle",
+    "id": "operator-surfaces",
+    "label": "Operator surfaces",
     "focus": [
-     "oracle",
-     "server",
-     "serialize"
+     "installer",
+     "client",
+     "hook",
+     "doctor",
+     "keyfile"
     ],
-    "note": "282 recorded fixtures must replay byte-equal; every divergence is ADR-tagged."
+    "note": "install registers agents; hook gate judges one proposed action; doctor checks config offline."
    }
   ]
  },
@@ -93,7 +95,7 @@
    "id": "server",
    "type": "backend",
    "label": "JevMCPServer + Toolset",
-   "sublabel": "one registry (ADR-0013)",
+   "sublabel": "stdio \u00b7 streamable-http",
    "pos": [
     330,
     262
@@ -149,7 +151,7 @@
    "id": "runtime",
    "type": "backend",
    "label": "Runtime",
-   "sublabel": "lazy provider · pool",
+   "sublabel": "lazy provider \u00b7 cache",
    "pos": [
     1010,
     262
@@ -162,8 +164,8 @@
   {
    "id": "providers",
    "type": "cloud",
-   "label": "Providers ×4",
-   "sublabel": "envelope-only ×4",
+   "label": "Providers \u00d74",
+   "sublabel": "envelope-only \u00d74",
    "pos": [
     1010,
     424
@@ -176,8 +178,8 @@
   {
    "id": "settings",
    "type": "security",
-   "label": "Settings → Redactor",
-   "sublabel": "env-only · derived secrets",
+   "label": "Settings \u2192 Redactor",
+   "sublabel": "env-only \u00b7 derived secrets",
    "pos": [
     330,
     22
@@ -191,7 +193,7 @@
    "id": "extract",
    "type": "backend",
    "label": "extract",
-   "sublabel": "candidates · executor port",
+   "sublabel": "dialect \u00b7 killable workers",
    "pos": [
     700,
     96
@@ -205,7 +207,7 @@
    "id": "serialize",
    "type": "backend",
    "label": "serialize + text",
-   "sublabel": "JSON.stringify · UTF-16",
+   "sublabel": "JSON.stringify \u00b7 UTF-16",
    "pos": [
     25,
     424
@@ -219,7 +221,7 @@
    "id": "policy",
    "type": "backend",
    "label": "Policy (pure)",
-   "sublabel": "pure · incl. extract",
+   "sublabel": "thresholds \u00b7 decisions",
    "pos": [
     330,
     424
@@ -233,7 +235,7 @@
    "id": "validation",
    "type": "backend",
    "label": "Validation",
-   "sublabel": "answers · caps",
+   "sublabel": "answers \u00b7 caps",
    "pos": [
     700,
     424
@@ -247,7 +249,7 @@
    "id": "oracle",
    "type": "external",
    "label": "Parity oracle",
-   "sublabel": "282 fixtures · replay",
+   "sublabel": "282 fixtures \u00b7 replay",
    "pos": [
     25,
     556
@@ -261,7 +263,7 @@
    "id": "telemetry",
    "type": "backend",
    "label": "Telemetry",
-   "sublabel": "spans + metrics · in-process",
+   "sublabel": "spans + metrics \u00b7 in-process",
    "pos": [
     1200,
     172
@@ -272,26 +274,12 @@
    ]
   },
   {
-   "id": "evals",
-   "type": "external",
-   "label": "Eval harness",
-   "sublabel": "evals/agent.py · spend",
-   "pos": [
-    25,
-    96
-   ],
-   "size": [
-    150,
-    52
-   ]
-  },
-  {
    "id": "keyfile",
    "type": "backend",
    "label": "Key file",
    "sublabel": "env wins over file",
    "pos": [
-    1010,
+    980,
     556
    ],
    "size": [
@@ -319,11 +307,67 @@
    "label": "setup CLI",
    "sublabel": "verify, store 0600",
    "pos": [
-    820,
+    750,
     556
    ],
    "size": [
     140,
+    46
+   ]
+  },
+  {
+   "id": "evals",
+   "type": "external",
+   "label": "Eval harness",
+   "sublabel": "evals/agent.py \u00b7 spend",
+   "pos": [
+    25,
+    96
+   ],
+   "size": [
+    150,
+    52
+   ]
+  },
+  {
+   "id": "installer",
+   "type": "backend",
+   "label": "install CLI",
+   "sublabel": "8 agent targets \u00b7 uvx",
+   "pos": [
+    330,
+    556
+   ],
+   "size": [
+    150,
+    46
+   ]
+  },
+  {
+   "id": "hook",
+   "type": "backend",
+   "label": "Command hook",
+   "sublabel": "gate \u00b7 deny/ask/abstain",
+   "pos": [
+    25,
+    172
+   ],
+   "size": [
+    150,
+    52
+   ]
+  },
+  {
+   "id": "doctor",
+   "type": "backend",
+   "label": "doctor CLI",
+   "sublabel": "offline config check",
+   "pos": [
+    1210,
+    556
+   ],
+   "size": [
+    150,
     46
    ]
   }
@@ -431,7 +475,7 @@
    "id": "config",
    "from": "settings",
    "to": "runtime",
-   "label": "config · redaction",
+   "label": "config \u00b7 redaction",
    "fromSide": "right",
    "toSide": "top",
    "variant": "security"
@@ -458,7 +502,7 @@
    "id": "spans",
    "from": "runtime",
    "to": "telemetry",
-   "label": "spans · metrics",
+   "label": "spans \u00b7 metrics",
    "variant": "dashed",
    "labelAt": [
     1180,
@@ -471,12 +515,8 @@
    "to": "client",
    "label": "paid agent runs",
    "variant": "dashed",
-   "fromSide": "bottom",
-   "toSide": "top",
-   "labelAt": [
-    100,
-    205
-   ]
+   "fromSide": "right",
+   "toSide": "top"
   },
   {
    "id": "stored-key",
@@ -492,11 +532,7 @@
    "to": "keyfile",
    "label": "verified key",
    "fromSide": "right",
-   "toSide": "left",
-   "labelAt": [
-    985,
-    616
-   ]
+   "toSide": "left"
   },
   {
    "id": "cache-hit",
@@ -509,6 +545,25 @@
     1180,
     330
    ]
+  },
+  {
+   "id": "hook-runs",
+   "from": "client",
+   "to": "hook",
+   "label": "hook gate",
+   "variant": "dashed",
+   "fromSide": "top",
+   "toSide": "bottom",
+   "labelDx": -48
+  },
+  {
+   "id": "reads-key",
+   "from": "doctor",
+   "to": "keyfile",
+   "label": "key presence",
+   "variant": "dashed",
+   "fromSide": "left",
+   "toSide": "right"
   }
  ],
  "cards": [
@@ -516,7 +571,7 @@
    "dot": "cyan",
    "title": "One registry (ADR-0013)",
    "items": [
-    "list_tools ≡ call_tool — one Toolset",
+    "list_tools \u2261 call_tool \u2014 one Toolset",
     "unknown tool returns owned text"
    ]
   },
@@ -525,7 +580,7 @@
    "title": "Model judges, policy decides (ADR-0002)",
    "items": [
     "validation rejects; policy is pure (traced in tools/observed)",
-    "truncated or unknown confidence ⇒ never auto"
+    "truncated or unknown confidence \u21d2 never auto"
    ]
   },
   {
@@ -533,7 +588,7 @@
    "title": "Trust boundary (ADR-0008/0017)",
    "items": [
     "env-only config; tool args are model-controlled",
-    "secret set derives from the schema; errors redacted"
+    "providers: typesafe, openrouter, cloudflare, compatible"
    ]
   },
   {

@@ -159,6 +159,14 @@ OpenCode (`~/.config/opencode/opencode.json`):
 
 </details>
 
+## Architecture
+
+One diagram covers the whole server: the tool-call loop from `tools/call` to the returned action text, the fail-closed answer path, and the local CLI commands around it (`install`, `setup`, `hook gate`, `doctor`) with the stored key file and the optional response cache. Open [`docs/architecture.html`](docs/architecture.html) for the interactive version (guided views, dark mode, node search, relationship tracing).
+
+<p align="center">
+  <img src="docs/readme/architecture.svg" alt="jev-judge-mcp architecture: an MCP client calls eleven Jev tools through one Toolset over stdio or streamable-http; the runtime resolves one of four providers, validation rejects malformed answers, pure policy decides auto, review, or escalate, and the result serializes back to the client. The install, setup, hook, and doctor CLIs, the stored key file, and the optional response cache surround the server." width="880">
+</p>
+
 ## Measured results
 
 Two paid studies, both descriptive, with small samples and no significance test.
