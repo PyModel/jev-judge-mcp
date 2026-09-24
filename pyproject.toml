@@ -67,6 +67,8 @@ known-first-party = ["evals"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S603", "S607"]
+# The CI guard drives uv/uvx/python3 subprocesses on purpose (ADR-0053).
+"scripts/ci_old_python_entry.py" = ["S603"]
 # S104: non-loopback host literals are gate inputs, never bound. S106: fake tokens for the gate.
 "tests/unit/test_http_auth.py" = ["S104", "S106"]
 "tests/integration/test_http_auth.py" = ["S104", "S106"]

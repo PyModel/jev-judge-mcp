@@ -96,6 +96,13 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked --all-extras
       - run: make smoke
+      # ADR-0053 guard: an installer-written entry must start when the first Python on PATH is
+      # older than 3.12. setup-python prepends 3.10, so plain uvx resolution fails; the guard
+      # proves the written `--python` request still gets the entry running (managed download).
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: python scripts/ci_old_python_entry.py
 
   # Offline eval scorer and calibration tests; never run live.
   eval:
