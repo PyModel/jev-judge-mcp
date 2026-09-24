@@ -181,6 +181,22 @@ async def test_cancelled_call_kills_its_worker_and_the_pool_recovers() -> None:
     await pool.aclose()
 
 
+async def test_a_spent_deadline_kills_its_worker_and_the_next_demand_is_served() -> None:
+    """The deadline path mirrors the cancel path: the slot that ran out is killed, the pool rests
+    with no worker until the next demand, and that demand is answered by one fresh worker."""
+    pool = ProcessRegexExecutor(size=1)
+    await pool.warm()
+    pid = pool._idle[0].process.pid  # pyright: ignore[reportPrivateUsage]
+    result = await pool.find(translate("(a|aa)+$", "g"), to_units(SLOW_DOCUMENT), deadline=deadline())
+    assert result == Timeout()
+    assert pool._idle == []  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+    matches = await pool.find(translate("[A-Z]{3}-\\d+", "g"), to_units(DOCUMENT), deadline=deadline())
+    assert matches == Matches(["ABC-123", "ABC-124"], False, 0)
+    await pool.aclose()
+
+
 async def test_cancel_during_start_reaps_the_pid(monkeypatch: pytest.MonkeyPatch) -> None:
     """ADR-0011: a cancel before the worker is ready still kills that process.
 

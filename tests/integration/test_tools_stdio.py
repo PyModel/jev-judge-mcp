@@ -3,6 +3,7 @@ stays protocol-only while worker processes run, and shutdown leaves no worker be
 
 import json
 import os
+import queue
 import shlex
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from jev_judge_mcp.extract.candidates import REGEX_TIMEOUT_REASON
 from tests.support.stdio import StdioServer
 
 SLOW: dict[str, Any] = {
@@ -130,34 +132,66 @@ def test_timeout_does_not_block_other_calls_and_shutdown_reaps_workers() -> None
         started = time.monotonic()
         server.send(call(10, "jev_extract", SLOW))
         server.send(call(11, "jev_extract", NO_MATCH))
+        # Worker-free probe: `ping` needs no regex worker, so under concurrent dispatch it
+        # answers in milliseconds while the slow call cannot reply before its 1 s deadline.
+        server.send({"jsonrpc": "2.0", "id": 12, "method": "ping"})
         replies: dict[int, tuple[float, dict[str, Any]]] = {}
-        while len(replies) < 2:
-            reply = server.receive()
+        workers_seen: set[int] = set()
+        window = time.monotonic() + 10
+        while len(replies) < 3 and time.monotonic() < window:
+            # The pattern must run in a real worker process (ADR-0004), but worker spawn latency
+            # is unbounded host load, so the census polls across the whole window instead of
+            # sampling one instant. The pool rests empty whenever it pleases between demands:
+            # a slot whose deadline ran out is killed and replaced only on the next demand
+            # (extract/worker.py), so "an idle worker exists right now" is not the contract.
+            workers_seen |= worker_pids(server.process.pid)
+            try:
+                reply = server.receive(timeout=0.1)
+            except queue.Empty:
+                continue
             if "id" in reply:
                 replies[reply["id"]] = (time.monotonic() - started, reply)
-        workers = worker_pids(server.process.pid)
+        census = ps_snapshot()  # the table as of the census; after shutdown it shows nothing
         server.close_stdin()
         returncode, stderr = server.wait()
         lines = server.stdout_lines
 
+    assert len(replies) == 3, f"the calls never all replied inside the window; ps:\n{census}"
     quick_at, quick = replies[11]
     slow_at, slow = replies[10]
-    assert quick_at < slow_at
-    assert quick_at < 1
+    ping_at = replies[12][0]
+    # Blocked-versus-unblocked by a wide margin, not a millisecond order race: serialized
+    # dispatch or a stalled event loop would admit the no-match call only after the slow
+    # call finished, and its fresh 1 s budget would still answer `not_found` at ~1.1-1.5 s
+    # (passing any absolute bound); the worker-free ping, however, would wait behind the
+    # slow call's whole handling and reply after it. Concurrent dispatch answers ping while
+    # the slow regex is still spinning.
+    assert ping_at < slow_at
+    # Independent calls have no contractual reply order beyond that, and under load both
+    # extract replies land near their own 1 s deadlines.
+    assert quick_at < 2.5  # the no-match call's own 1 s deadline, a cold worker start, and host load
     assert slow_at < 2.5  # the 1 s deadline, a cold worker start, and host load
     slow_payload = json.loads(slow["result"]["content"][0]["text"])
     assert slow_payload["results"][0]["reason"] == "regex timed out after 1000ms; simplify the pattern"
     quick_payload = json.loads(quick["result"]["content"][0]["text"])
     assert quick_payload["provider"] == "none"
-    assert quick_payload["results"][0]["status"] == "not_found"
+    # A quiet host answers `not_found`; under heavy load the no-match worker's fixed 1 s
+    # budget can be spent before its result lands, and ADR-0016 sanctions exactly that
+    # timeout. Anything else (worker_error, a rejected pattern, a provider answer) fails.
+    # Pool-level serialization is therefore NOT caught here — that contract is owned by
+    # test_timeout_is_invalid_pattern_within_budget_while_other_calls_run in
+    # tests/contract/test_extract.py; this layer owns dispatch, pinned by ping_at < slow_at above.
+    if quick_payload["results"][0]["status"] != "not_found":
+        assert quick_payload["results"][0]["status"] == "invalid_pattern"
+        assert quick_payload["results"][0]["reason"] == REGEX_TIMEOUT_REASON
 
     assert returncode == 0
     assert "Traceback" not in stderr
-    assert workers, f"the no-match call left an idle worker; ps:\n{ps_snapshot()}"
+    assert workers_seen, f"no worker process ever served the calls; ps at census:\n{census}"
     deadline = time.monotonic() + 5
-    while any(alive(pid) for pid in workers) and time.monotonic() < deadline:
+    while any(alive(pid) for pid in workers_seen) and time.monotonic() < deadline:
         time.sleep(0.05)
-    assert not any(alive(pid) for pid in workers)
+    assert not any(alive(pid) for pid in workers_seen)
     for line in lines:
         assert json.loads(line)["jsonrpc"] == "2.0"
 
