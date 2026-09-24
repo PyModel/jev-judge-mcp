@@ -350,7 +350,12 @@ def test_arms_configs_differ_only_in_the_jev_server(tmp_path: Path) -> None:
     assert servers["jev"]["env"] == server_env
     assert servers["jev"]["args"][:3] == ["-m", "evals.ab.proxy", str(tmp_path / "log")]
     assert servers["jev"]["args"][-2:] == ["-m", "jev_judge_mcp"]
-    assert api_key not in json.dumps(configs["A"])
+    # The harness entries quote this repository's own paths (the venv interpreter, PYTHONPATH), and a
+    # runner may check the repository out under a directory named after the key — the eval failure that
+    # motivated the short-secret guard. Ambient path text is not config content; scrub it before
+    # asserting the key is absent, so the assertion stays about the config itself.
+    ambient = json.dumps(configs["A"]).replace(str(arms.REPO_ROOT), "<repo>")
+    assert api_key not in ambient
     assert servers["jev"]["env"]["TYPESAFE_API_KEY"] == api_key
 
 
