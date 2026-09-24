@@ -5,7 +5,7 @@ PYTEST := uv run pytest
 
 .PHONY: ci lint typecheck unit property policy-coverage contract parity security build smoke eval eval-live security-live ab load
 
-ci: lint typecheck unit property policy-coverage contract parity security build smoke
+ci: lint typecheck unit property policy-coverage contract parity security build smoke eval
 
 lint:
 	uv run ruff check
