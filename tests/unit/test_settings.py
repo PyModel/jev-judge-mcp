@@ -36,6 +36,7 @@ def test_defaults() -> None:
     assert settings.jev_judge_mcp_model is None
     assert settings.transport == "stdio"
     assert settings.http_host == "127.0.0.1"
+    assert settings.http_port == 8088
     assert settings.telemetry_payloads is False
     assert settings.secret_values() == []
 

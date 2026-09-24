@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     # Python-only process settings; the reference is stdio-only.
     transport: Transport = Field(default="stdio", validation_alias="JEV_MCP_TRANSPORT")
     http_host: str = Field(default="127.0.0.1", validation_alias="JEV_MCP_HTTP_HOST")
-    http_port: int = Field(default=8000, ge=1, le=65535, validation_alias="JEV_MCP_HTTP_PORT")
+    http_port: int = Field(default=8088, ge=1, le=65535, validation_alias="JEV_MCP_HTTP_PORT")
     # The bearer token every HTTP request must carry (ADR-0050). `SecretStr` joins redaction per ADR-0017.
     http_token: SecretStr | None = Field(default=None, validation_alias="JEV_MCP_HTTP_TOKEN")
     log_level: LogLevel = Field(default="INFO", validation_alias="JEV_MCP_LOG_LEVEL")

@@ -13,6 +13,7 @@ import os
 import signal
 import socket
 import sys
+import time
 from collections.abc import Callable, Generator, Iterable
 from importlib.metadata import PackageNotFoundError
 from typing import Any, override
@@ -118,21 +119,54 @@ def configure_logging(level: LogLevel, secrets: Iterable[str] = ()) -> None:
     root.setLevel(level)
 
 
+HTTP_BIND_ATTEMPTS = 4
+"""Tries of a taken HTTP port before exit. A few, not a hunt for a free one (ADR-0055)."""
+
+HTTP_BIND_BUDGET_S = 2.0
+"""Seconds those tries may take, waits included. The port never changes."""
+
+
 def http_port_in_use_message(port: int) -> str:
     """The one line a taken Streamable HTTP port exits with (ADR-0055)."""
     return f"JEV_MCP_HTTP_PORT={port} is already in use; set JEV_MCP_HTTP_PORT to a free port"
 
 
-def ensure_http_port_free(settings: Settings) -> None:
-    """Refuse a Streamable HTTP start whose port is already taken (ADR-0055).
+def ensure_http_port_free(
+    settings: Settings,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> None:
+    """Refuse a Streamable HTTP start whose port stays taken (ADR-0055).
 
-    Runs before logging and before anything listens, so the failure is one line on stderr, exit 1,
-    and no listener or worker. stdio never binds. A free port is bound only as the check and closed
-    before return. A host that does not resolve is left to the server, as it was before this gate.
+    The configured port is tried `HTTP_BIND_ATTEMPTS` times, and the waits stay inside
+    `HTTP_BIND_BUDGET_S`. It is never replaced with another port. Any other bind error fails on
+    the first try. Runs before logging and before the server listens, so a refusal is one line on
+    stderr, exit 1, and no listener or worker. stdio never binds. A host that does not resolve is
+    left to the server. `sleep` and `clock` are the production clock unless a test injects them.
     """
     if settings.transport != "streamable-http":
         return
     host, port = settings.http_host, settings.http_port
+    deadline = clock() + HTTP_BIND_BUDGET_S
+    gap = HTTP_BIND_BUDGET_S / (HTTP_BIND_ATTEMPTS - 1)
+    for attempt in range(1, HTTP_BIND_ATTEMPTS + 1):
+        try:
+            _bind_http(host, port)
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE:
+                raise
+            remaining = deadline - clock()
+            if attempt == HTTP_BIND_ATTEMPTS or remaining <= 0:
+                raise SystemExit(http_port_in_use_message(port)) from None
+            sleep(min(gap, remaining))
+        else:
+            return
+    raise SystemExit(http_port_in_use_message(port))
+
+
+def _bind_http(host: str, port: int) -> None:
+    """Bind every address `host` resolves to, then close. A taken port raises `EADDRINUSE`."""
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror:
@@ -143,10 +177,6 @@ def ensure_http_port_free(settings: Settings) -> None:
             if family == socket.AF_INET6:
                 sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
             sock.bind(sockaddr)
-        except OSError as exc:
-            if exc.errno == errno.EADDRINUSE:
-                raise SystemExit(http_port_in_use_message(port)) from None
-            raise
         finally:
             sock.close()
 
