@@ -194,6 +194,28 @@ async def test_exhausted_text_is_redacted_and_the_body_cut_survives(fast_retries
 # --- What never retries ---
 
 
+@pytest.mark.parametrize(
+    "transport_error",
+    [
+        httpx.UnsupportedProtocol("the URL scheme ftp is not supported"),
+        httpx.LocalProtocolError("a request this malformed never left the process"),
+    ],
+    ids=["unsupported-protocol", "local-protocol"],
+)
+async def test_permanent_transport_errors_fail_without_a_retry(
+    fast_retries: list[float], transport_error: Exception
+) -> None:
+    """R2: only transient transport failures retry; a request that cannot be made or sent is final."""
+    sent: list[httpx.Request] = []
+    with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
+        router.post(URL).mock(side_effect=serving([transport_error], sent))
+        message = await failure(provider())
+
+    assert message == f"Jev-compatible endpoint request failed: {transport_error}"
+    assert len(sent) == 1
+    assert fast_retries == []
+
+
 @pytest.mark.parametrize("status", [400, 401, 403, 404, 422])
 async def test_other_4xx_fails_without_a_retry(fast_retries: list[float], status: int) -> None:
     sent: list[httpx.Request] = []
@@ -267,6 +289,49 @@ async def test_a_first_failure_stopped_by_the_budget_keeps_todays_text(
     assert fast_retries == []
 
 
+async def test_the_overall_budget_bounds_even_full_length_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R3: with no caller deadline, every attempt is capped at the budget time left, so the whole
+    call never runs past `budget` — the last attempt is shorter than its per-attempt timeout."""
+    # Scaled to real time: three hangs, each capped 50 ms, backoff 10 ms, budget 130 ms. The caps
+    # anyio enforces are recorded; the last must be cut to what the budget has left.
+    policy = RetryPolicy(
+        per_attempt_timeout=0.05, budget=0.13, backoff_initial=0.01, backoff_max=0.01, backoff_jitter=0.0
+    )
+    sent: list[httpx.Request] = []
+
+    async def stall(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        await anyio.sleep(1)
+        return httpx.Response(200, content=OK)  # pragma: no cover - every attempt is cut first
+
+    recorded: list[float | None] = []
+    real_fail_after = anyio.fail_after
+
+    def spying_fail_after(delay: float | None) -> Any:
+        recorded.append(delay)
+        return real_fail_after(delay)
+
+    monkeypatch.setattr(anyio, "fail_after", spying_fail_after)
+
+    started = anyio.current_time()
+    with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
+        router.post(URL).mock(side_effect=stall)
+        with pytest.raises(ProviderTimeoutError) as caught:
+            await evaluate(provider(policy), timeout=None)
+
+    elapsed = anyio.current_time() - started
+    assert str(caught.value) == (
+        "Jev-compatible endpoint request failed after 3 attempts: last failure: the attempt timed out"
+    )
+    assert recorded[0] is None  # no caller deadline: the whole-call scope is unbounded
+    attempt_caps: list[float] = [cap for cap in recorded[1:] if cap is not None]
+    assert len(attempt_caps) == 3
+    assert attempt_caps[0] == 0.05 and attempt_caps[1] == 0.05
+    assert attempt_caps[2] < 0.05  # the budget, not the per-attempt timeout, cut the last attempt
+    assert sum(attempt_caps) <= 0.13  # the whole call stays inside the budget
+    assert elapsed <= 0.165
+
+
 async def test_cancellation_during_the_backoff_sleep_returns_promptly() -> None:
     """Real sleeps here: the caller's cancellation must cut the wait, not a fake one."""
     sent: list[httpx.Request] = []
@@ -319,6 +384,98 @@ async def test_the_typesafe_provider_never_retries_nested(fast_retries: list[flo
     assert evaluation.provider == "typesafe"
     assert len(requested) == 3
     assert fast_retries == [0.5, 1.0]  # jev's policy drove the waits, the SDK's drove none
+
+
+def typesafe_provider(handler: Callable[[httpx2.Request], httpx2.Response], retry: RetryPolicy | None = None):
+    return TypeSafeProvider(
+        Redactor([SECRET]),
+        api_key=SECRET,
+        base_url="https://typesafe-retry.example",
+        transport=httpx2.MockTransport(handler),
+        retry=retry,
+    )
+
+
+async def test_a_typesafe_reset_with_an_empty_cause_is_retried(fast_retries: list[float]) -> None:
+    """R1: an SDK connection error whose cause has no message must be the retryable connection
+    failure it is, not a permanent error; its text stays exactly what a single attempt prints."""
+    requested: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requested.append(request)
+        if len(requested) == 1:
+            raise httpx2.ReadError("")
+        return httpx2.Response(200, content=OK)
+
+    sdk_provider = typesafe_provider(handler)
+    try:
+        evaluation = await sdk_provider.evaluate({"state": True}, QUESTIONS, "m", 5)
+    finally:
+        await sdk_provider.aclose()
+
+    assert evaluation.provider == "typesafe"
+    assert len(requested) == 2
+    assert fast_retries == [0.5]
+
+
+async def test_a_typesafe_reset_with_no_retries_keeps_todays_text(fast_retries: list[float]) -> None:
+    """The single-attempt text is byte-identical, under the off injection."""
+    requested: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requested.append(request)
+        raise httpx2.ReadError("")
+
+    sdk_provider = typesafe_provider(handler, NO_RETRIES)
+    with pytest.raises(ProviderError) as caught:
+        try:
+            await sdk_provider.evaluate({"state": True}, QUESTIONS, "m", 5)
+        finally:
+            await sdk_provider.aclose()
+
+    assert str(caught.value) == "TypeSafe API request failed: Connection error: ReadError"
+    assert len(requested) == 1
+    assert fast_retries == []
+
+
+async def test_an_exhausted_typesafe_reset_names_the_connection_error(fast_retries: list[float]) -> None:
+    requested: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requested.append(request)
+        raise httpx2.ReadError("")
+
+    sdk_provider = typesafe_provider(handler)
+    with pytest.raises(ProviderError) as caught:
+        try:
+            await sdk_provider.evaluate({"state": True}, QUESTIONS, "m", 5)
+        finally:
+            await sdk_provider.aclose()
+
+    assert str(caught.value) == (
+        "TypeSafe API request failed after 3 attempts: last failure: Connection error: ReadError"
+    )
+    assert len(requested) == 3
+
+
+async def test_a_typesafe_429_honors_retry_after_ms_then_succeeds(fast_retries: list[float]) -> None:
+    requested: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requested.append(request)
+        if len(requested) == 1:
+            return httpx2.Response(429, content=b"slow down", headers={"retry-after-ms": "250"})
+        return httpx2.Response(200, content=OK)
+
+    sdk_provider = typesafe_provider(handler)
+    try:
+        evaluation = await sdk_provider.evaluate({"state": True}, QUESTIONS, "m", None)
+    finally:
+        await sdk_provider.aclose()
+
+    assert evaluation.provider == "typesafe"
+    assert len(requested) == 2
+    assert fast_retries == [0.25]
 
 
 @pytest.mark.parametrize("status", [503, 429])

@@ -56,10 +56,10 @@ class RetryPolicy:
     """Seconds before one attempt is abandoned as a retryable timeout."""
 
     backoff_initial: float = 0.5
-    """First backoff delay in seconds, doubled each attempt up to `backoff_max`; zero disables backoff."""
+    """First backoff delay in seconds, doubled each attempt up to `backoff_max`."""
 
     backoff_max: float = 5.0
-    """Cap on every delay, `Retry-After` hints included; zero disables backoff."""
+    """Cap on every delay, `Retry-After` hints included."""
 
     backoff_jitter: float = 0.25
     """Fraction of each backoff delay randomly subtracted, between 0 and 1."""
@@ -116,8 +116,6 @@ class TransientFailure:
 
 def backoff_delay(policy: RetryPolicy, attempt: int) -> float:
     """The exponential backoff after failed `attempt` (1-based): doubling, jittered, capped."""
-    if policy.backoff_initial == 0 or policy.backoff_max == 0:
-        return 0.0
     exponent = attempt - 1
     exponential = (
         policy.backoff_max

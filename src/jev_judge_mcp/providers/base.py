@@ -64,6 +64,14 @@ class ProviderConfigError(ProviderError):
     """Provider resolution failed before any request (`provider.ts:35-77`)."""
 
 
+class ProviderConnectionError(ProviderError):
+    """A connection failure a transport had to wrap to keep today's text (an SDK reset, ADR-0057).
+
+    The retry loop classifies it as a transient connection failure even though it carries no HTTP
+    status and is not a `ConnectionError` instance.
+    """
+
+
 class ProviderTimeoutError(ProviderError):
     """An attempt missed its deadline, or the caller's whole-call deadline fired."""
 
@@ -189,16 +197,18 @@ class JevProvider(ABC):
         wire = questions_to_wire(questions)
         policy = self._retry
         start = retries.clock()
-        budget = policy.budget if timeout is None else min(policy.budget, timeout)
+        # The hard bound on the whole call: the caller's deadline when there is one, else the policy
+        # budget. Every attempt is capped at the time left, so `evaluate` never runs past it.
+        horizon = policy.budget if timeout is None else min(policy.budget, timeout)
         attempt = 0
         retried = False
         try:
             with anyio.fail_after(timeout) as whole:
                 while True:
                     attempt += 1
-                    left = None if timeout is None else timeout - (retries.clock() - start)
-                    cap = policy.per_attempt_timeout if left is None else min(policy.per_attempt_timeout, left)
-                    caller_capped = left is not None and cap >= left
+                    left = horizon - (retries.clock() - start)
+                    cap = min(policy.per_attempt_timeout, left)
+                    caller_capped = timeout is not None and cap >= left
                     try:
                         with anyio.fail_after(cap):
                             return await self._send(state, wire, model, cap)
@@ -210,7 +220,7 @@ class JevProvider(ABC):
                         failure = self._transient(error)
                         if failure is None:
                             raise
-                        delay = retry_delay(policy, attempt, retries.clock() - start, budget, failure.retry_after)
+                        delay = retry_delay(policy, attempt, retries.clock() - start, horizon, failure.retry_after)
                         if delay is None:
                             if not retried:
                                 raise  # the first attempt also is the last: today's exact error text
@@ -232,14 +242,18 @@ class JevProvider(ABC):
     def _transient(self, error: Exception) -> TransientFailure | None:
         """The retryable transport failure `error` describes, or `None` when it must not be retried.
 
-        Retried: a connection failure before any response, a per-attempt timeout, and the policy's
-        status codes (408, 429, 5xx). Never: any other 4xx, an envelope or validation error,
+        Retried: a per-attempt timeout, a transient connection failure (connect, read, write, close,
+        remote-protocol, and proxy errors — a reset among them), and the policy's status codes (408,
+        429, 5xx). Never: a local protocol error or an unsupported URL scheme (a request that cannot
+        be made or sent is final), any other 4xx, an envelope or validation error,
         `ProviderConfigError`, the credentials-in-URL refusal, the cross-origin redirect refusal,
-        cancellation. An attempt that timed out after the server did the work can bill the call
-        twice (ADR-0057); the attempt cap bounds that cost.
+        cancellation. A request can already have reached the server when a read error or a reset
+        ends it, so a retry can bill the call twice (ADR-0057); the attempt cap bounds that cost.
         """
         if isinstance(error, ProviderConfigError):
             return None
+        if isinstance(error, ProviderConnectionError):
+            return TransientFailure("connect", detail=str(error).removeprefix(f"{self.label} request failed: "))
         if isinstance(error, ProviderError):
             if error.status is not None and error.status in self._retry.statuses:
                 return TransientFailure(
@@ -251,7 +265,7 @@ class JevProvider(ABC):
             return None
         if isinstance(error, (TimeoutError, httpx.TimeoutException)):
             return TransientFailure("timeout", detail="the attempt timed out")
-        if isinstance(error, (ConnectionError, httpx.TransportError)):
+        if isinstance(error, (ConnectionError, httpx.NetworkError, httpx.RemoteProtocolError, httpx.ProxyError)):
             return TransientFailure("connect", detail=str(error) or type(error).__name__)
         return None
 

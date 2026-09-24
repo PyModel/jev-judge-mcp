@@ -16,6 +16,7 @@ from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.providers.base import (
     Evaluation,
     JevProvider,
+    ProviderConnectionError,
     ProviderError,
     ProviderName,
     decode_body,
@@ -145,7 +146,9 @@ class TypeSafeProvider(JevProvider):
             cause = error.__cause__
             if isinstance(error, TimeoutError) or cause is None or str(cause):
                 raise
-            raise ProviderError(f"{self.label} request failed: {error}{type(cause).__name__}") from None
+            # A reset is a transient connection failure even without a message (ADR-0057): the
+            # subclass keeps today's text and marks the error retryable.
+            raise ProviderConnectionError(f"{self.label} request failed: {error}{type(cause).__name__}") from None
         envelope = parse_envelope(response.root, self.label)
         # The reference reports the requested model, never one from the body (`provider.ts:122`).
         return Evaluation(envelope.answers, envelope.usage, self.name, model)

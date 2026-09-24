@@ -35,7 +35,9 @@ def _invalid(**overrides: object) -> RetryPolicy:
         _invalid(per_attempt_timeout=0),
         _invalid(per_attempt_timeout=float("inf")),
         _invalid(backoff_initial=-0.5),
+        _invalid(backoff_initial=0),  # zero cannot "disable" backoff: the policy is bounded or it is not
         _invalid(backoff_max=float("nan")),
+        _invalid(backoff_max=0),
         _invalid(budget=0),
         _invalid(backoff_jitter=1.5),
         _invalid(backoff_jitter=-0.1),

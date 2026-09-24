@@ -27,11 +27,15 @@ entry `stdio-no-provider-deadline` becomes `stdio-attempt-deadline`.
 
 ### Retried, and never retried
 
-Retried: a connection failure before any response (refused, reset, DNS), a per-attempt timeout, and
-the status codes `408`, `429`, and `500`–`599` — the SDK's own default set. Never retried: any other
-4xx, an envelope or validation error, `ProviderConfigError`, the credentials-in-URL refusal, the
-cross-origin redirect refusal (ADR-0023), and a cancelled call. Cancellation is a `BaseException`:
-it is never classified, never swallowed, and stops an attempt or a backoff sleep at once.
+Retried: transient transport failures — a per-attempt timeout, and connect, read, write, close,
+remote-protocol (a reset), and proxy errors — plus the status codes `408`, `429`, and `500`–`599` —
+the SDK's own default set. A request that cannot be made or sent is final, never retried: a local
+protocol error or an unsupported URL scheme. So are any other 4xx, an envelope or validation error,
+`ProviderConfigError`, the credentials-in-URL refusal, the cross-origin redirect refusal (ADR-0023),
+and a cancelled call. Cancellation is a `BaseException`: it is never classified, never swallowed,
+and stops an attempt or a backoff sleep at once. An SDK connection error whose cause has no message
+(a reset) is wrapped in a `ProviderConnectionError` so it keeps today's text and is still classified
+as the transient connection failure it is.
 
 ### The numbers, and the evidence behind them
 
@@ -47,17 +51,24 @@ it is never classified, never swallowed, and stops an attempt or a backoff sleep
   The largest legitimate calls are still one model call each: a `jev_gate` at its 200K-character
   limit or a 250-candidate `jev_find` scale the input size, not the round trips, and stay inside
   the deadline with headroom.
-- **Overall budget 90 s**: three attempts at their 30 s deadline plus bounded delays. A retry whose
-  delay would reach the budget (elapsed + delay ≥ budget) is skipped. When the caller passed a
-  deadline, the caller's remaining budget binds instead — retries can never run past it.
+- **Overall budget 90 s**: three attempts at their 30 s deadline plus bounded delays. It is a hard
+  bound on the whole call: every attempt is capped at the budget time left, not only at the
+  per-attempt timeout, so with `timeout=None` the worst case — three hung attempts plus delays —
+  still finishes at or under 90 s. A retry whose delay would reach the budget (elapsed + delay ≥
+  budget) is skipped. When the caller passed a deadline, the caller's remaining budget binds
+  instead — retries can never run past it, and a caller-capped timeout keeps the caller-timeout
+  text, distinct from exhausted-retry text.
 
 ### Double billing
 
-Retrying an attempt that timed out after the server did the work can bill the call twice. A Jev
-evaluation is a read-only judgment, so the risk is cost, not state corruption; the attempt cap
-bounds it at three bills per call. Retries on connection refusals, resets, 408/429 and 5xx carry no
-such ambiguity — the request never completed — and a caller with a hard cap (below) opts out
-entirely.
+Retrying an attempt that ended without a response can bill the call twice: a request can already
+have reached the server when a read error or a reset ends it, and a timeout only proves the answer
+was not received, not that the work was not done. A Jev evaluation is a read-only judgment, so the
+risk is cost, not state corruption; the attempt cap bounds it at three bills per call. Retries on
+connection refusals, 408/429 and 5xx carry no such ambiguity — the request never completed — and a
+caller with a hard cap (below) opts out entirely. Backoff delays are strictly positive: zero cannot
+disable backoff, because a policy that retries without waiting would amplify the failure it is
+reacting to.
 
 ### One injection point turns retries off
 
