@@ -21,6 +21,7 @@ from jev_judge_mcp.providers import NO_RETRIES, JevProvider, ProviderError, Prov
 from jev_judge_mcp.providers import retry as retry_timing
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+from tests.support.retries import fast_retries as fast_retries
 
 pytestmark = pytest.mark.anyio
 
@@ -34,19 +35,6 @@ ENVELOPE_BAD = b"not json"
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
-
-
-@pytest.fixture
-def fast_retries(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """No real sleeping, full (unjittered) backoff, every delay recorded in order."""
-    delays: list[float] = []
-
-    async def instant(seconds: float) -> None:
-        delays.append(seconds)
-
-    monkeypatch.setattr(retry_timing, "sleep", instant)
-    monkeypatch.setattr(retry_timing, "uniform", lambda: 0.0)
-    return delays
 
 
 def provider(retry: RetryPolicy | None = None) -> CompatibleProvider:
@@ -142,14 +130,25 @@ async def test_success_after_a_timeout_failure() -> None:
 # --- Exhausted retries ---
 
 
-async def test_exhausted_attempts_name_provider_count_and_last_failure(fast_retries: list[float]) -> None:
+@pytest.mark.parametrize(
+    ("failures", "expected_detail"),
+    [
+        ([httpx.Response(503, text="first"), httpx.Response(503, text="last")], "503: last"),
+        ([httpx.ConnectError("connection refused")], "connection refused"),
+    ],
+    ids=["status", "connect"],
+)
+async def test_exhausted_attempts_name_provider_count_and_last_failure(
+    fast_retries: list[float], failures: list[Any], expected_detail: str
+) -> None:
+    """Retries exhausted: the final error names the provider, the attempt count, and the last
+    failure — the status and cut body, or the connection error's cause."""
     sent: list[httpx.Request] = []
-    responses = [httpx.Response(503, text="first"), httpx.Response(503, text="last")]
     with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
-        router.post(URL).mock(side_effect=serving(responses, sent))
+        router.post(URL).mock(side_effect=serving(failures, sent))
         message = await failure(provider())
 
-    assert message == "Jev-compatible endpoint request failed after 3 attempts: last failure: 503: last"
+    assert message == f"Jev-compatible endpoint request failed after 3 attempts: last failure: {expected_detail}"
     assert len(sent) == 3
     assert fast_retries == [0.5, 1.0]
 
@@ -166,16 +165,6 @@ async def test_exhausted_timeouts_name_the_timeout(fast_retries: list[float]) ->
         "Jev-compatible endpoint request failed after 2 attempts: last failure: the attempt timed out"
     )
     assert len(sent) == 2
-
-
-async def test_exhausted_connection_failures_name_the_cause(fast_retries: list[float]) -> None:
-    sent: list[httpx.Request] = []
-    with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
-        router.post(URL).mock(side_effect=serving([httpx.ConnectError("connection refused")], sent))
-        message = await failure(provider())
-
-    assert message == "Jev-compatible endpoint request failed after 3 attempts: last failure: connection refused"
-    assert len(sent) == 3
 
 
 async def test_exhausted_text_is_redacted_and_the_body_cut_survives(fast_retries: list[float]) -> None:
@@ -291,11 +280,14 @@ async def test_a_first_failure_stopped_by_the_budget_keeps_todays_text(
 
 async def test_the_overall_budget_bounds_even_full_length_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
     """R3: with no caller deadline, every attempt is capped at the budget time left, so the whole
-    call never runs past `budget` — the last attempt is shorter than its per-attempt timeout."""
-    # Scaled to real time: three hangs, each capped 50 ms, backoff 10 ms, budget 130 ms. The caps
-    # anyio enforces are recorded; the last must be cut to what the budget has left.
+    call never runs past `budget` — the last attempt is shorter than its per-attempt timeout.
+
+    Real time, scaled with wide margins: three 200 ms hangs, 10 ms backoff, a 500 ms budget. The
+    third attempt starts with roughly 80 ms of budget left, so timer lateness cannot promote it to
+    a full per-attempt timeout, and the caps anyio enforces are recorded.
+    """
     policy = RetryPolicy(
-        per_attempt_timeout=0.05, budget=0.13, backoff_initial=0.01, backoff_max=0.01, backoff_jitter=0.0
+        per_attempt_timeout=0.2, budget=0.5, backoff_initial=0.01, backoff_max=0.01, backoff_jitter=0.0
     )
     sent: list[httpx.Request] = []
 
@@ -313,23 +305,52 @@ async def test_the_overall_budget_bounds_even_full_length_attempts(monkeypatch: 
 
     monkeypatch.setattr(anyio, "fail_after", spying_fail_after)
 
-    started = anyio.current_time()
     with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
         router.post(URL).mock(side_effect=stall)
         with pytest.raises(ProviderTimeoutError) as caught:
             await evaluate(provider(policy), timeout=None)
 
-    elapsed = anyio.current_time() - started
     assert str(caught.value) == (
         "Jev-compatible endpoint request failed after 3 attempts: last failure: the attempt timed out"
     )
     assert recorded[0] is None  # no caller deadline: the whole-call scope is unbounded
     attempt_caps: list[float] = [cap for cap in recorded[1:] if cap is not None]
     assert len(attempt_caps) == 3
-    assert attempt_caps[0] == 0.05 and attempt_caps[1] == 0.05
-    assert attempt_caps[2] < 0.05  # the budget, not the per-attempt timeout, cut the last attempt
-    assert sum(attempt_caps) <= 0.13  # the whole call stays inside the budget
-    assert elapsed <= 0.165
+    assert attempt_caps[0] == 0.2 and attempt_caps[1] == 0.2
+    assert attempt_caps[2] < 0.2  # the budget, not the per-attempt timeout, cut the last attempt
+    assert sum(attempt_caps) <= 0.5  # the whole call stays inside the budget
+
+
+async def test_a_budget_bound_timeout_is_not_reported_as_the_callers(fast_retries: list[float]) -> None:
+    """R5: a caller deadline larger than the policy budget does not turn the budget-bound timeout of
+    the last attempt into the caller's. The budget ends the call; the exhausted-retry text reports it.
+
+    Real time, scaled with wide margins: three 200 ms hangs, 10 ms backoff, a 500 ms budget, and a
+    caller deadline of 1 s — twice the budget, so the budget binds and the caller's deadline never
+    fires. The third attempt starts with roughly 80 ms of budget left, so lateness cannot change
+    the attempt count.
+    """
+    policy = RetryPolicy(
+        per_attempt_timeout=0.2, budget=0.5, backoff_initial=0.01, backoff_max=0.01, backoff_jitter=0.0
+    )
+    sent: list[httpx.Request] = []
+
+    async def stall(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        await anyio.sleep(1)
+        return httpx.Response(200, content=OK)  # pragma: no cover - every attempt is cut first
+
+    started = anyio.current_time()
+    with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
+        router.post(URL).mock(side_effect=stall)
+        with pytest.raises(ProviderTimeoutError) as caught:
+            await evaluate(provider(policy), timeout=1.0)
+
+    assert anyio.current_time() - started <= 0.6  # ended by the budget, well inside the caller's 1 s
+    assert str(caught.value) == (
+        "Jev-compatible endpoint request failed after 3 attempts: last failure: the attempt timed out"
+    )
+    assert len(sent) == 3
 
 
 async def test_cancellation_during_the_backoff_sleep_returns_promptly() -> None:
@@ -418,44 +439,44 @@ async def test_a_typesafe_reset_with_an_empty_cause_is_retried(fast_retries: lis
     assert fast_retries == [0.5]
 
 
-async def test_a_typesafe_reset_with_no_retries_keeps_todays_text(fast_retries: list[float]) -> None:
-    """The single-attempt text is byte-identical, under the off injection."""
+@pytest.mark.parametrize(
+    ("retry", "expected_text", "expected_requests", "expected_delays"),
+    [
+        (NO_RETRIES, "TypeSafe API request failed: Connection error: ReadError", 1, []),
+        (
+            None,
+            "TypeSafe API request failed after 3 attempts: last failure: Connection error: ReadError",
+            3,
+            [0.5, 1.0],
+        ),
+    ],
+    ids=["no-retries-todays-text", "exhausted-names-the-connection-error"],
+)
+async def test_a_typesafe_reset_is_classified_by_policy(
+    fast_retries: list[float],
+    retry: RetryPolicy | None,
+    expected_text: str,
+    expected_requests: int,
+    expected_delays: list[float],
+) -> None:
+    """An SDK reset whose cause has no message keeps today's single-attempt text under the off
+    injection, and becomes the exhausted-retries error under the default policy."""
     requested: list[httpx2.Request] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         requested.append(request)
         raise httpx2.ReadError("")
 
-    sdk_provider = typesafe_provider(handler, NO_RETRIES)
+    sdk_provider = typesafe_provider(handler, retry)
     with pytest.raises(ProviderError) as caught:
         try:
             await sdk_provider.evaluate({"state": True}, QUESTIONS, "m", 5)
         finally:
             await sdk_provider.aclose()
 
-    assert str(caught.value) == "TypeSafe API request failed: Connection error: ReadError"
-    assert len(requested) == 1
-    assert fast_retries == []
-
-
-async def test_an_exhausted_typesafe_reset_names_the_connection_error(fast_retries: list[float]) -> None:
-    requested: list[httpx2.Request] = []
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        requested.append(request)
-        raise httpx2.ReadError("")
-
-    sdk_provider = typesafe_provider(handler)
-    with pytest.raises(ProviderError) as caught:
-        try:
-            await sdk_provider.evaluate({"state": True}, QUESTIONS, "m", 5)
-        finally:
-            await sdk_provider.aclose()
-
-    assert str(caught.value) == (
-        "TypeSafe API request failed after 3 attempts: last failure: Connection error: ReadError"
-    )
-    assert len(requested) == 3
+    assert str(caught.value) == expected_text
+    assert len(requested) == expected_requests
+    assert fast_retries == expected_delays
 
 
 async def test_a_typesafe_429_honors_retry_after_ms_then_succeeds(fast_retries: list[float]) -> None:

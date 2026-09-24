@@ -206,9 +206,13 @@ class JevProvider(ABC):
             with anyio.fail_after(timeout) as whole:
                 while True:
                     attempt += 1
-                    left = horizon - (retries.clock() - start)
+                    now = retries.clock() - start
+                    left = horizon - now
                     cap = min(policy.per_attempt_timeout, left)
-                    caller_capped = timeout is not None and cap >= left
+                    # Only a cap the caller's own remaining time binds is the caller's timeout; when
+                    # the budget binds first (timeout above budget), the exhausted-retry text reports.
+                    caller_left = None if timeout is None else timeout - now
+                    caller_capped = caller_left is not None and cap >= caller_left
                     try:
                         with anyio.fail_after(cap):
                             return await self._send(state, wire, model, cap)

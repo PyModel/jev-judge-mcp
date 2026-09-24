@@ -174,11 +174,10 @@ randomness at real boundaries, and that design is not clutter:
   **is** the production behavior. `ensure_http_port_free` takes
   `sleep=time.sleep, clock=time.monotonic` and the unit test passes a Clock
   that advances only when the code sleeps (ADR-0055,
-  `tests/unit/test_http_port.py`). The eval harness passes
-  `RetryPolicy(max_retries=0)` through the provider's optional `retry`
-  parameter while the server keeps its reference-faithful default. A fake that
-  simulates inputs (the parity envelope fake, `respx`) at the real boundary is
-  the same shape.
+  `tests/unit/test_http_port.py`). The eval harness passes `NO_RETRIES`
+  through the provider's optional `retry` parameter while the server keeps
+  its bounded ADR-0057 default. A fake that simulates inputs (the parity
+  envelope fake, `respx`) at the real boundary is the same shape.
 - A test-only production seam: an export, flag, environment variable, module
   global, or wrapper that exists only so a test can reach or alter behavior,
   with no production caller. ADR-0055 is explicit: "There is no retry

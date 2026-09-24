@@ -56,8 +56,9 @@ as the transient connection failure it is.
   per-attempt timeout, so with `timeout=None` the worst case — three hung attempts plus delays —
   still finishes at or under 90 s. A retry whose delay would reach the budget (elapsed + delay ≥
   budget) is skipped. When the caller passed a deadline, the caller's remaining budget binds
-  instead — retries can never run past it, and a caller-capped timeout keeps the caller-timeout
-  text, distinct from exhausted-retry text.
+  instead — retries can never run past it. A timeout the caller's own remaining time cut keeps the
+  caller-timeout text; a timeout the policy budget cut (only possible with a deadline above the
+  budget) is exhausted-retry text, naming the attempts.
 
 ### Double billing
 

@@ -15,7 +15,6 @@ import respx
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Usage
 from jev_judge_mcp.errors import REDACTED, RedactingFilter, Redactor
 from jev_judge_mcp.providers import NO_RETRIES, Evaluation, ProviderError, RetryPolicy
-from jev_judge_mcp.providers import retry as retry_timing
 from jev_judge_mcp.providers.base import decode_body, parse_envelope
 from jev_judge_mcp.providers.cloudflare import CloudflareProvider, cloudflare_slug
 from jev_judge_mcp.providers.compatible import CompatibleProvider
@@ -24,6 +23,7 @@ from jev_judge_mcp.providers.typesafe import TypeSafeProvider
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.server import configure_logging
 from jev_judge_mcp.text import head
+from tests.support.retries import fast_retries as fast_retries
 
 QUESTIONS = {"q": NoulQuestion("Is it?", NoulCriteria("yes", "no"))}
 CF_URL = "https://api.cloudflare.com/client/v4/accounts/acct/ai/run"
@@ -153,19 +153,6 @@ def typesafe(handler: Any, retry: RetryPolicy | None = None) -> TypeSafeProvider
         transport=httpx2.MockTransport(handler),
         retry=retry,
     )
-
-
-@pytest.fixture
-def fast_retries(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """Offline, deterministic retries: no real sleeping, full (unjittered) backoff, delays recorded."""
-    delays: list[float] = []
-
-    async def instant(seconds: float) -> None:
-        delays.append(seconds)
-
-    monkeypatch.setattr(retry_timing, "sleep", instant)
-    monkeypatch.setattr(retry_timing, "uniform", lambda: 0.0)
-    return delays
 
 
 @pytest.mark.anyio

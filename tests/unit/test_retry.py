@@ -6,10 +6,10 @@ import pytest
 
 from jev_judge_mcp.domain import JsonValue, Usage
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.providers import NO_RETRIES, Evaluation, ProviderError, RetryPolicy
+from jev_judge_mcp.providers import Evaluation, ProviderError, RetryPolicy
 from jev_judge_mcp.providers import retry as retry_timing
-from jev_judge_mcp.providers.base import JevProvider, ProviderConfigError, ProviderName, ProviderTimeoutError
-from jev_judge_mcp.providers.retry import TransientFailure
+from jev_judge_mcp.providers.base import JevProvider, ProviderConfigError, ProviderName
+from tests.support.retries import fast_retries as fast_retries
 
 
 def test_defaults_match_adr_0057() -> None:
@@ -46,11 +46,6 @@ def _invalid(**overrides: object) -> RetryPolicy:
 def test_invalid_policies_are_refused(policy: RetryPolicy) -> None:
     with pytest.raises(ValueError):
         policy.__post_init__()
-
-
-def test_no_retries_is_a_single_bounded_attempt() -> None:
-    assert NO_RETRIES.max_attempts == 1
-    assert NO_RETRIES.per_attempt_timeout == 30.0
 
 
 def test_backoff_doubles_and_is_jittered_subtractively(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -155,18 +150,3 @@ def test_provider_config_error_is_never_transient() -> None:
     error.status = 503  # even a carried status must not make configuration retryable
     provider = _Classifier(Redactor(()))
     assert provider._transient(error) is None  # pyright: ignore[reportPrivateUsage]
-
-
-def test_exhausted_error_names_provider_attempts_and_last_failure() -> None:
-    provider = _Classifier(Redactor(()))
-    status = provider._exhausted(  # pyright: ignore[reportPrivateUsage]
-        3, TransientFailure("status", status=503, detail="503: upstream")
-    )
-    assert str(status) == "Jev-compatible endpoint request failed after 3 attempts: last failure: 503: upstream"
-    timeout = provider._exhausted(  # pyright: ignore[reportPrivateUsage]
-        2, TransientFailure("timeout", detail="the attempt timed out")
-    )
-    assert isinstance(timeout, ProviderTimeoutError)
-    assert (
-        str(timeout) == "Jev-compatible endpoint request failed after 2 attempts: last failure: the attempt timed out"
-    )
