@@ -281,6 +281,25 @@ def test_the_docker_leg_fails_closed_without_a_daemon() -> None:
     assert "docker info" in text, "an unreachable Docker must block the check, never skip the Linux leg"
 
 
+def test_linux_leg_matches_the_runner_environment() -> None:
+    """Firstmate's replica evidence: missing ps fails the smoke census, root fails the
+    security wire tests, and a project-scoped 3.10 find resolves 3.12 (ADR-0056)."""
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    for tool in ("git", "make", "procps"):
+        assert tool in dockerfile, f"the CI image must provide {tool}, as ubuntu-latest does"
+    assert "runuser -u node" in dockerfile, "the baked Python must land in the runner user's home"
+    linux = LINUX_CHECK.read_text(encoding="utf-8")
+    assert "runuser -u node" in linux, "the stages must run as a non-root user, like GitHub's runner"
+    preflight = re.search(r"^for tool in (.+?); do$", linux, re.MULTILINE)
+    assert preflight, "the runner must preflight the system tools the tests shell out to"
+    for tool in ("uv", "uvx", "git", "make", "ps", "node", "python3"):
+        assert tool in preflight.group(1).split(), f"the preflight must fail the gate when {tool} is missing"
+    assert "uv python find --no-project 3.10" in linux, (
+        "inside the project, a project-scoped find resolves 3.12; the entry guard needs 3.10"
+    )
+    assert "/home/node/.cache/uv" in linux, "caches live in the runner user's home"
+
+
 # --- the hook chain (ADR-0056): enabling .githooks must not orphan the previous hooks ---
 
 
