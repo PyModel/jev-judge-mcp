@@ -124,19 +124,33 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         }
 
     overall = judge(evaluation.answers.get("overall"))
+    judged = [
+        {"aspect": aspect, **judge(evaluation.answers.get(f"aspect_{i}"))}
+        for i, aspect in enumerate(aspects)
+    ]
+    # ADR-0052: the reference judges the overall independently of the aspects (the aspects are not
+    # the headline), so an aspect contradiction under a non-contradicts overall passes silently.
+    # Python keeps the overall and adds a warning, decide-style, only when one exists — outputs
+    # without it stay byte-identical to the reference.
+    warnings: list[str] = []
+    contradicted = [entry["aspect"] for entry in judged if entry["relation"] == "contradicts"]
+    if contradicted and overall["relation"] != "contradicts":
+        plural = "s" if len(contradicted) > 1 else ""
+        names = ", ".join(f'"{name}"' for name in contradicted)
+        verb = "report" if len(contradicted) > 1 else "reports"
+        warnings.append(
+            f"Aspect{plural} {names} {verb} contradicts while the overall relation does not; inspect before acting"
+        )
+
+    body: dict[str, object] = {
+        "overall": overall,
+        "aspects": judged,
+        "thresholds": {"auto_accept": auto_accept, "minimum_margin": minimum_margin},
+    }
+    if warnings:
+        body["warnings"] = warnings
     return ToolResult(
-        frame(
-            "jev_compare",
-            evaluation,
-            {
-                "overall": overall,
-                "aspects": [
-                    {"aspect": aspect, **judge(evaluation.answers.get(f"aspect_{i}"))}
-                    for i, aspect in enumerate(aspects)
-                ],
-                "thresholds": {"auto_accept": auto_accept, "minimum_margin": minimum_margin},
-            },
-        ),
+        frame("jev_compare", evaluation, body),
         action=headline(caller_actions([overall["decision"]])),  # the aspects are not the headline
         truncated=ledger.scopes,
     )

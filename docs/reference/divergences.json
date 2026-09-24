@@ -263,6 +263,17 @@
       "fixtures": [],
       "reference_behavior": "The reference publishes exactly ten tools; no tool exposes a caller-supplied score rubric.",
       "python_behavior": "jev_score is published after the snapshot ten (the snapshot stays a byte-identical prefix of tools/list): one score question over a caller rubric of 2-10 levels, strict whole-answer validation (validate_rubric_answer), ADR-owned caps in limits.SCORE, and no policy thresholds."
+    },
+    {
+      "id": "compare-aspect-contradiction-warning",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0052-compare-warns-when-aspects-contradict-the-overall.md",
+      "tests": ["tests/contract/test_compare_warnings.py"],
+      "fixtures": [],
+      "reference_behavior": "jev_compare judges the overall independently of the aspects: an aspect that reports contradicts under a same_fact or different_facts overall changes nothing in the output.",
+      "python_behavior": "The overall is unchanged, but a non-empty warnings field names the contradicting aspects in jev_decide's warning style; the field is absent when no aspect contradicts, so every unaffected output stays byte-identical to the reference."
     }
   ]
 }
