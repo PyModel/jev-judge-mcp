@@ -124,10 +124,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         }
 
     overall = judge(evaluation.answers.get("overall"))
-    judged = [
-        {"aspect": aspect, **judge(evaluation.answers.get(f"aspect_{i}"))}
-        for i, aspect in enumerate(aspects)
-    ]
+    judged = [{"aspect": aspect, **judge(evaluation.answers.get(f"aspect_{i}"))} for i, aspect in enumerate(aspects)]
     # ADR-0052: the reference judges the overall independently of the aspects (the aspects are not
     # the headline), so an aspect contradiction under a non-contradicts overall passes silently.
     # Python keeps the overall and adds a warning, decide-style, only when one exists — outputs

@@ -182,19 +182,7 @@ class ProcessRegexExecutor:
 
     async def _start(self, budget: float = _START_TIMEOUT_S) -> _Slot:
         """A ready worker. Raises `TimeoutError` if `budget` runs out first, `_WorkerFailed` on a crash."""
-        try:
-            # Shielded: a cancel (or a spent budget) delivered during the spawn is deferred until
-            # the first checkpoint below, inside the armed try — so the process is never left
-            # without a handle to kill (ADR-0011).
-            with anyio.CancelScope(shield=True):
-                process = await anyio.open_process(
-                    [sys.executable, "-m", __name__], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None
-                )
-        except OSError:
-            # EMFILE/ENOMEM: nowhere to run the pattern at all. This is the `NOT_STARTED` refusal's
-            # failure class — not an escape past the executor contract into a protocol error.
-            raise _WorkerFailed(Unavailable.NOT_STARTED) from None
-        slot = _Slot(process)
+        slot = _Slot(await self._spawn())
         try:
             with anyio.fail_after(budget):
                 ready = await slot.replies.receive_exactly(len(_READY))
@@ -213,6 +201,27 @@ class ProcessRegexExecutor:
             await slot.kill()
             raise _WorkerFailed(Unavailable.NOT_STARTED)
         return slot
+
+    async def _spawn(self) -> Process:
+        """The spawned worker process. A spawn `OSError` is the `NOT_STARTED` refusal's failure
+        class — not an escape past the executor contract into a protocol error."""
+        try:
+            return await self._open_shielded()
+        except OSError:
+            # EMFILE/ENOMEM: nowhere to run the pattern at all.
+            raise _WorkerFailed(Unavailable.NOT_STARTED) from None
+
+    async def _open_shielded(self) -> Process:
+        """`anyio.open_process` in a shielded scope: a cancel (or a spent budget) delivered during
+        the spawn is deferred until the first checkpoint in `_start` — inside the armed try — so
+        the process is never left without a handle to kill (ADR-0011)."""
+        process: Process | None = None
+        with anyio.CancelScope(shield=True):
+            process = await anyio.open_process(
+                [sys.executable, "-m", __name__], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None
+            )
+        assert process is not None  # the spawn either returned a process or raised
+        return process
 
     async def warm(self) -> None:
         """Start one worker ahead of demand."""

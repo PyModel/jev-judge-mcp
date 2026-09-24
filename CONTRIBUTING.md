@@ -17,8 +17,12 @@ https://github.com/PyModel/jev-judge-mcp. Open a pull request against `main`.
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```sh
-uv sync --all-extras
+uv sync --locked --all-extras
 ```
+
+Development and `make typecheck` need every extra. `--extra typesafe` is only for running the
+server: a plain or partial sync fails `make typecheck` with confusing `Import "typesafe_sdk"
+could not be resolved` errors.
 
 ## Prove a change
 

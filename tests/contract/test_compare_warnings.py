@@ -105,10 +105,12 @@ async def test_without_an_aspect_contradiction_the_output_stays_byte_identical()
     assert "warnings" not in payload
     assert list(payload) == ["tool", "model", "provider", "overall", "aspects", "thresholds", "usage"]
     # The low-margin path never warns either: the action, not an aspect relation, carries the doubt.
-    low = {
-        "overall": {"choice": "same_fact", "probabilities": {"same_fact": 0.5, "contradicts": 0.3, "different_facts": 0.2}, "confidence": 0.5},
-        "aspect_0": {"choice": "same_fact", "probabilities": {"same_fact": 0.5, "contradicts": 0.3, "different_facts": 0.2}, "confidence": 0.5},
+    low_margin = {
+        "choice": "same_fact",
+        "probabilities": {"same_fact": 0.5, "contradicts": 0.3, "different_facts": 0.2},
+        "confidence": 0.5,
     }
+    low = {"overall": dict(low_margin), "aspect_0": dict(low_margin)}
     outcome = await call_tool("jev_compare", ARGUMENTS, low)
     assert not outcome.is_error, outcome.text
     assert "warnings" not in outcome.payload
