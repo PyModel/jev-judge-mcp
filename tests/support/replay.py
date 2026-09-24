@@ -16,6 +16,7 @@ import httpx
 import pytest
 import respx
 
+from jev_judge_mcp.providers import NO_RETRIES, resolve_provider
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from tests.parity.divergences import DIVERGENT, Expectation
@@ -74,7 +75,12 @@ async def replay_call(call: FixtureCall, monkeypatch: pytest.MonkeyPatch) -> Non
         response = exchanges[index]["response"]
         return httpx.Response(response["status"], content=response["body"].encode())
 
-    toolset = Toolset(Runtime(load_settings()), TOOLS)
+    # Single-attempt by injection (ADR-0057): a fixture's 408/429/5xx exchange stays deterministic,
+    # fast, and byte-identical to the recording.
+    toolset = Toolset(
+        Runtime(load_settings(), provider_factory=lambda settings: resolve_provider(settings, retry=NO_RETRIES)),
+        TOOLS,
+    )
     with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
         router.route(host="fake.invalid").mock(side_effect=respond)
         try:

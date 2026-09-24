@@ -1,9 +1,10 @@
 """TypeSafe direct through `typesafe-sdk` (`provider.ts:108-124`), the optional `typesafe` extra.
 
 The SDK is imported on first use, so the server runs without it when another provider is configured.
-It keeps its default retry policy, as the reference keeps `@typesafe-ai/sdk`'s. Its typed response
-model is bypassed: the raw body goes through the uniform envelope rules (ADR-0003) and answers stay
-raw for the tools to validate.
+The SDK itself never retries (`RetryPolicy(max_retries=0)`): one retry owner (ADR-0057) drives every
+provider, so the SDK's attempts can never multiply jev's. Its typed response model is bypassed: the
+raw body goes through the uniform envelope rules (ADR-0003) and answers stay raw for the tools to
+validate.
 """
 
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, override
@@ -22,11 +23,12 @@ from jev_judge_mcp.providers.base import (
     parse_envelope,
     refuse_credentials_in_url,
 )
+from jev_judge_mcp.providers.retry import RetryPolicy
 from jev_judge_mcp.serialize import stringify_compact
 
 if TYPE_CHECKING:
     import httpx2
-    from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy
+    from typesafe_sdk import AsyncTypeSafeClient
 
 
 class _RawBody(RootModel[object]):
@@ -59,13 +61,12 @@ class TypeSafeProvider(JevProvider):
         api_key: str,
         base_url: str | None,
         transport: "httpx2.AsyncBaseTransport | None" = None,
-        retry: "RetryPolicy | None" = None,
+        retry: RetryPolicy | None = None,
     ) -> None:
-        super().__init__(redact)
+        super().__init__(redact, retry=retry)
         self._api_key = api_key
         self._base_url = base_url
         self._transport = transport
-        self._retry = retry
         self._client: AsyncTypeSafeClient | None = None
         self._wrapper: httpx2.AsyncClient | None = None
         # The allowed origin is fixed per instance: it comes from process config (ADR-0008), so the
@@ -90,6 +91,7 @@ class TypeSafeProvider(JevProvider):
             try:
                 import httpx2
                 from typesafe_sdk import AsyncTypeSafeClient
+                from typesafe_sdk import RetryPolicy as SdkRetryPolicy
             except ImportError:
                 raise ProviderError(
                     "The typesafe provider needs the typesafe-sdk package: install jev-judge-mcp[typesafe]."
@@ -101,7 +103,11 @@ class TypeSafeProvider(JevProvider):
                 event_hooks={"request": [self._reject_cross_origin]},
             )
             self._client = AsyncTypeSafeClient(
-                api_key=self._api_key, base_url=self._base_url, retry=self._retry, http_client=self._wrapper
+                api_key=self._api_key,
+                base_url=self._base_url,
+                # The SDK never retries (ADR-0057): jev's policy is the one retry owner.
+                retry=SdkRetryPolicy(max_retries=0),
+                http_client=self._wrapper,
             )
         return self._client
 
@@ -121,12 +127,19 @@ class TypeSafeProvider(JevProvider):
                 cast(Any, state),
                 cast(Any, questions),
                 model=model,
-                # `None` must wait, as fetch does: the SDK reads a bare `None` as its 10 s default.
+                # `timeout` is this attempt's deadline from `evaluate` (ADR-0057). `None` must wait, as
+                # fetch does, for a direct `_send` caller: the SDK reads a bare `None` as its 10 s default.
                 timeout=httpx2.Timeout(None) if timeout is None else timeout,
                 response_model=_RawBody,
             )
         except TypeSafeAPIError as error:
-            raise self._status_error(error.status, _body_text(error.body)) from None
+            # Only the 429 subclass carries `retry_after_ms`; other statuses have no hint.
+            retry_after_ms = cast("float | None", getattr(error, "retry_after_ms", None))
+            raise self._status_error(
+                error.status,
+                _body_text(error.body),
+                retry_after=None if retry_after_ms is None else retry_after_ms / 1000,
+            ) from None
         except TypeSafeAPIConnectionError as error:
             # The SDK writes `Connection error: {cause}`; a reset's cause has an empty message.
             cause = error.__cause__

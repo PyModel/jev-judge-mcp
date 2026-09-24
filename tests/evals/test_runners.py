@@ -139,12 +139,12 @@ def test_manifest_must_pin_a_model_and_name_a_tool(tmp_path: Path) -> None:
 
 
 def test_eval_runtime_provider_disables_retries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The eval runtime's provider runs with SDK retries off, so one tool call is at most one request.
+    """The eval runtime's provider runs with retries off (ADR-0057), so one tool call is at most one
+    bounded request.
 
     No network: constructing the provider builds no client. The fixture key never leaves the redactor.
     """
-    from typesafe_sdk import RetryPolicy
-
+    from jev_judge_mcp.providers import NO_RETRIES
     from jev_judge_mcp.providers.typesafe import TypeSafeProvider
     from jev_judge_mcp.settings import Settings
 
@@ -154,7 +154,7 @@ def test_eval_runtime_provider_disables_retries(tmp_path: Path, monkeypatch: pyt
 
     eval_provider = cast(TypeSafeProvider, live.typesafe_without_retries(Settings()))
 
-    assert eval_provider._retry == RetryPolicy(max_retries=0)  # pyright: ignore[reportPrivateUsage]
+    assert eval_provider._retry == NO_RETRIES  # pyright: ignore[reportPrivateUsage]
 
 
 def test_eval_runtime_provider_refuses_without_a_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

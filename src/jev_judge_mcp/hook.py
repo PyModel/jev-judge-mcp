@@ -30,7 +30,8 @@ ESTIMATED_CONFIDENCE_THRESHOLD = 0.4
 """Escalate a margin estimate below this. Hook-only; not a tool threshold."""
 
 PROVIDER_TIMEOUT_SECONDS = 30.0
-"""Bound on this process's provider call. ``Runtime.ask`` is unchanged and still waits."""
+"""Bound on this process's provider call. Retries run inside it (ADR-0057); whatever survives the
+budget is still ``unreachable``."""
 
 _QUESTION_ID = "gate"
 _QUESTION = "Should the agent be allowed to run this proposed action right now?"

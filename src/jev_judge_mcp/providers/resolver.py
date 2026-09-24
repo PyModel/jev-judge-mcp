@@ -14,6 +14,7 @@ from jev_judge_mcp.providers.base import JevProvider, ProviderConfigError
 from jev_judge_mcp.providers.cloudflare import CloudflareProvider
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.openrouter import OpenRouterProvider
+from jev_judge_mcp.providers.retry import RetryPolicy
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
 from jev_judge_mcp.settings import Settings
 
@@ -34,12 +35,13 @@ def resolve_model(settings: Settings) -> str:
     return DEFAULT_MODEL if settings.jev_judge_mcp_model is None else settings.jev_judge_mcp_model
 
 
-def resolve_provider(settings: Settings) -> JevProvider:
+def resolve_provider(settings: Settings, *, retry: RetryPolicy | None = None) -> JevProvider:
     """The provider `settings` select, or `ProviderConfigError` with the reference's text.
 
     A key stored by `jev-judge-mcp setup` stands in for `TYPESAFE_API_KEY` when the variable is
     unset (ADR-0046); the variable always wins. The stored value joins the redaction set for this
-    resolver's providers, so it is covered exactly like a configured secret (ADR-0017).
+    resolver's providers, so it is covered exactly like a configured secret (ADR-0017). `retry`
+    injects the provider retry policy (ADR-0057); `None` means the default.
     """
     stored = keyfile.stored_key(settings)
     redact = Redactor([*settings.secret_values(), stored] if stored else settings.secret_values())
@@ -54,16 +56,18 @@ def resolve_provider(settings: Settings) -> JevProvider:
     base_url = _value(settings.jev_api_base_url)
 
     def typesafe() -> JevProvider:
-        return TypeSafeProvider(redact, api_key=typesafe_key, base_url=_value(settings.typesafe_base_url) or None)
+        return TypeSafeProvider(
+            redact, api_key=typesafe_key, base_url=_value(settings.typesafe_base_url) or None, retry=retry
+        )
 
     def openrouter() -> JevProvider:
-        return OpenRouterProvider(redact, api_key=openrouter_key)
+        return OpenRouterProvider(redact, api_key=openrouter_key, retry=retry)
 
     def cloudflare() -> JevProvider:
-        return CloudflareProvider(redact, api_token=cloudflare_token, account_id=account_id)
+        return CloudflareProvider(redact, api_token=cloudflare_token, account_id=account_id, retry=retry)
 
     def compatible() -> JevProvider:
-        return CompatibleProvider(redact, api_key=api_key, base_url=base_url)
+        return CompatibleProvider(redact, api_key=api_key, base_url=base_url, retry=retry)
 
     match explicit:
         case "typesafe":

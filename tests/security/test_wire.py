@@ -143,7 +143,11 @@ def test_broken_connections_fail_the_call_not_the_server() -> None:
 
     for kind in ("reset", "garbage"):
         assert replies[kind]["result"]["isError"] is True
-        assert text_of(replies[kind]).startswith("Jev-compatible endpoint request failed:"), kind
+        # ADR-0057: the server's default policy retries the broken connection three times, then
+        # fails the call closed with the exhausted-retries text. The server itself survives.
+        assert text_of(replies[kind]).startswith(
+            "Jev-compatible endpoint request failed after 3 attempts: last failure:"
+        ), kind
     assert json.loads(text_of(replies["echo:5"]))["probabilities"]["injection"] == 0.005
     assert_tracebacks_are_logged_tool_failures(stderr)
     for kind in ("reset", "garbage", "echo:5"):

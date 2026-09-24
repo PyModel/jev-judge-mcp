@@ -11,11 +11,11 @@ import httpx
 import httpx2
 import pytest
 import respx
-from typesafe_sdk import RetryPolicy
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Usage
 from jev_judge_mcp.errors import REDACTED, RedactingFilter, Redactor
-from jev_judge_mcp.providers import Evaluation, ProviderError
+from jev_judge_mcp.providers import NO_RETRIES, Evaluation, ProviderError, RetryPolicy
+from jev_judge_mcp.providers import retry as retry_timing
 from jev_judge_mcp.providers.base import decode_body, parse_envelope
 from jev_judge_mcp.providers.cloudflare import CloudflareProvider, cloudflare_slug
 from jev_judge_mcp.providers.compatible import CompatibleProvider
@@ -65,7 +65,7 @@ def test_cloudflare_slug(model: str, slug: str) -> None:
 
 
 async def cloudflare(status: int, body: Any) -> Evaluation:
-    provider = CloudflareProvider(Redactor(["cf-token"]), api_token="cf-token", account_id="acct")  # noqa: S106
+    provider = CloudflareProvider(Redactor(["cf-token"]), api_token="cf-token", account_id="acct", retry=NO_RETRIES)  # noqa: S106
     content = body if isinstance(body, bytes) else json.dumps(body).encode()
     with respx.mock(assert_all_mocked=True) as router:
         router.post(CF_URL).mock(return_value=httpx.Response(status, content=content))
@@ -145,6 +145,7 @@ async def test_cloudflare_http_error_with_unparseable_body_prints_an_empty_objec
 
 
 def typesafe(handler: Any, retry: RetryPolicy | None = None) -> TypeSafeProvider:
+    """A TypeSafe provider over a mock transport; `retry` is jev's policy (ADR-0057)."""
     return TypeSafeProvider(
         Redactor(["typesafe-test-key"]),
         api_key="typesafe-test-key",
@@ -154,10 +155,24 @@ def typesafe(handler: Any, retry: RetryPolicy | None = None) -> TypeSafeProvider
     )
 
 
+@pytest.fixture
+def fast_retries(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Offline, deterministic retries: no real sleeping, full (unjittered) backoff, delays recorded."""
+    delays: list[float] = []
+
+    async def instant(seconds: float) -> None:
+        delays.append(seconds)
+
+    monkeypatch.setattr(retry_timing, "sleep", instant)
+    monkeypatch.setattr(retry_timing, "uniform", lambda: 0.0)
+    return delays
+
+
 @pytest.mark.anyio
-async def test_typesafe_keeps_the_sdk_default_retries() -> None:
-    """The reference keeps `@typesafe-ai/sdk`'s default policy (2 retries on 5xx), so Python keeps the SDK's."""
-    statuses = [503, 200]
+async def test_typesafe_sdk_retries_are_disabled(fast_retries: list[float]) -> None:
+    """One retry owner (ADR-0057): the SDK is built with `max_retries=0`, so a 503 is attempted
+    exactly jev policy's three times — never multiplied by the SDK's own default two retries."""
+    statuses = [503, 503, 200]
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(statuses.pop(0), json={"answers": {"q": 0.5}}, headers={"retry-after-ms": "0"})
@@ -170,6 +185,7 @@ async def test_typesafe_keeps_the_sdk_default_retries() -> None:
 
     assert statuses == []
     assert evaluation.answers == {"q": 0.5}
+    assert fast_retries == [0.5, 1.0]
 
 
 @pytest.mark.anyio
@@ -177,7 +193,7 @@ async def test_typesafe_error_body_as_text() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(400, text="bad key typesafe-test-key")
 
-    provider = typesafe(handler, RetryPolicy(max_retries=0))
+    provider = typesafe(handler, NO_RETRIES)
     with pytest.raises(ProviderError) as caught:
         await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
     await provider.aclose()
@@ -190,7 +206,7 @@ async def test_typesafe_error_without_body() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(404)
 
-    provider = typesafe(handler, RetryPolicy(max_retries=0))
+    provider = typesafe(handler, NO_RETRIES)
     with pytest.raises(ProviderError) as caught:
         await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
     await provider.aclose()
@@ -367,26 +383,29 @@ PHASES = ("connect", "read", "write", "pool")
 @pytest.mark.parametrize(
     ("timeout", "sent"),
     [
-        (None, dict.fromkeys(("connect", "read", "write", "pool"))),
+        (None, dict.fromkeys(("connect", "read", "write", "pool"), 30.0)),
         (2.5, dict.fromkeys(("connect", "read", "write", "pool"), 2.5)),
     ],
-    ids=["none-waits", "bounded"],
+    ids=["stdio-default", "bounded"],
 )
 async def test_typesafe_request_timeout(timeout: float | None, sent: dict[str, float | None]) -> None:
-    """`None` waits, as for the httpx providers; the SDK would otherwise read it as its 10 s default."""
+    """`evaluate` hands each attempt its deadline (ADR-0057): the policy's 30 s when the caller set
+    none (stdio), else the caller's remaining budget. The SDK would read a bare `None` as its 10 s
+    default, so a real number always reaches the transport."""
     seen: list[object] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request.extensions["timeout"])
         return httpx2.Response(200, json={"answers": {}})
 
-    provider = typesafe(handler, RetryPolicy(max_retries=0))
+    provider = typesafe(handler, NO_RETRIES)
     try:
         await provider.evaluate("state", QUESTIONS, "m", timeout)
     finally:
         await provider.aclose()
 
-    assert seen == [sent]
+    # The cap is the caller's remaining budget, so the clock read leaves a sub-millisecond remainder.
+    assert seen == [pytest.approx(sent, rel=1e-3)]
 
 
 @pytest.mark.anyio

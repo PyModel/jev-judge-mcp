@@ -13,14 +13,18 @@ from jev_judge_mcp.providers.base import (
     ProviderTimeoutError,
 )
 from jev_judge_mcp.providers.resolver import resolve_model, resolve_provider
+from jev_judge_mcp.providers.retry import DEFAULT_RETRY_POLICY, NO_RETRIES, RetryPolicy
 
 __all__ = [
+    "DEFAULT_RETRY_POLICY",
+    "NO_RETRIES",
     "Evaluation",
     "JevProvider",
     "ProviderConfigError",
     "ProviderError",
     "ProviderName",
     "ProviderTimeoutError",
+    "RetryPolicy",
     "resolve_model",
     "resolve_provider",
 ]

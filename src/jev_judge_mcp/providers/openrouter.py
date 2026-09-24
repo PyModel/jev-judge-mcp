@@ -11,9 +11,9 @@ from jev_judge_mcp.providers.base import (
     HttpProvider,
     ProviderName,
     decode_body,
-    decode_text,
     parse_envelope,
 )
+from jev_judge_mcp.providers.retry import RetryPolicy
 
 URL = "https://openrouter.ai/api/alpha/decisions"
 LATEST = "jev-1.13"
@@ -32,8 +32,15 @@ class OpenRouterProvider(HttpProvider):
     name: ClassVar[ProviderName] = "openrouter"
     label: ClassVar[str] = "OpenRouter decisions API"
 
-    def __init__(self, redact: Redactor, *, api_key: str, client: httpx.AsyncClient | None = None) -> None:
-        super().__init__(redact, client)
+    def __init__(
+        self,
+        redact: Redactor,
+        *,
+        api_key: str,
+        client: httpx.AsyncClient | None = None,
+        retry: RetryPolicy | None = None,
+    ) -> None:
+        super().__init__(redact, client, retry=retry)
         self._api_key = api_key
 
     async def _send(
@@ -48,7 +55,7 @@ class OpenRouterProvider(HttpProvider):
         }
         response = await self._post(URL, headers, {"model": slug, "state": state, "questions": questions})
         if not response.is_success:
-            raise self._status_error(response.status_code, decode_text(response.content))
+            raise self._error(response)
         envelope = parse_envelope(decode_body(response.content), self.label)
         # The reference reports the slug it sent, never a model from the body (`provider.ts:154`).
         return Evaluation(envelope.answers, envelope.usage, self.name, slug)

@@ -106,10 +106,12 @@ class Runtime:
     async def ask(self, state: Payload, questions: Mapping[str, Question]) -> Evaluation:
         """Ask Jev `questions` about `state`. Raises `ProviderError` with redacted text.
 
-        No deadline: the reference sets none on any provider request. The `jev.evaluate` span
-        includes provider resolution, so a configuration error counts as a provider error. With
-        `JEV_MCP_CACHE` on, an identical request replays the recorded evaluation instead of asking
-        (ADR-0047); the replayed payload is byte-identical to the first answer's.
+        No whole-call deadline: the client's MCP cancellation (ADR-0011) stays the recovery path,
+        while the provider's retry policy bounds every attempt and the whole bounded sequence
+        (ADR-0057). The `jev.evaluate` span includes provider resolution, so a configuration error
+        counts as a provider error. With `JEV_MCP_CACHE` on, an identical request replays the
+        recorded evaluation instead of asking (ADR-0047); the replayed payload is byte-identical to
+        the first answer's.
         """
         with self.telemetry.span("jev.evaluate", questions=len(questions)) as span:
             if self._provider is None:

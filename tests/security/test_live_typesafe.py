@@ -22,12 +22,11 @@ from typing import Any, cast, override
 
 import anyio
 import pytest
-from typesafe_sdk import RetryPolicy
 
 from jev_judge_mcp.domain import Question
 from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.limits import REVIEW
-from jev_judge_mcp.providers import Evaluation, JevProvider
+from jev_judge_mcp.providers import NO_RETRIES, Evaluation, JevProvider
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
@@ -85,9 +84,7 @@ async def toolset(api_key: str, monkeypatch: pytest.MonkeyPatch) -> AsyncIterato
     settings = Settings()
 
     def typesafe(settings: Settings) -> JevProvider:
-        return TypeSafeProvider(
-            Redactor(settings.secret_values()), api_key=api_key, base_url=None, retry=RetryPolicy(max_retries=0)
-        )
+        return TypeSafeProvider(Redactor(settings.secret_values()), api_key=api_key, base_url=None, retry=NO_RETRIES)
 
     tools = Toolset(CappedRuntime(settings, provider_factory=typesafe), TOOLS)
     try:

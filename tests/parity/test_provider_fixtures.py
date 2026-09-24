@@ -17,7 +17,7 @@ import httpx
 import pytest
 import respx
 
-from jev_judge_mcp.providers import ProviderConfigError, ProviderError, resolve_model, resolve_provider
+from jev_judge_mcp.providers import NO_RETRIES, ProviderConfigError, ProviderError, resolve_model, resolve_provider
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.resolver import VERCEL_UNSUPPORTED
 from jev_judge_mcp.settings import load_settings
@@ -79,7 +79,9 @@ async def test_compatible_replays_exchange(
 ) -> None:
     apply_call_env(call, monkeypatch)
     settings = load_settings()
-    provider = resolve_provider(settings)
+    # Single-attempt by injection (ADR-0057): a fixture's 408/429/5xx response stays deterministic
+    # and byte-identical to the recording.
+    provider = resolve_provider(settings, retry=NO_RETRIES)
     assert isinstance(provider, CompatibleProvider)
     recorded: dict[str, Any] = exchange["request"]
     response: dict[str, Any] = exchange["response"]

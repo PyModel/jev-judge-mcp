@@ -1,11 +1,11 @@
-"""`Runtime` pins: the stdio product tier keeps the reference's no-deadline provider contract.
+"""`Runtime` pins: the stdio product tier passes no whole-call provider deadline.
 
-ADR-0021: `Runtime.ask` passes `timeout=None` on every provider request, exactly as the reference
-sets none in `askJev`; the client's own MCP cancellation (ADR-0011) is the recovery path. If a
-deadline is ever added, it is a Tier B decision with its own registry entry — this test fails
-first.
+ADR-0057: `Runtime.ask` still passes no whole-call deadline — the client's MCP cancellation
+(ADR-0011) remains the recovery path for the call — while the provider's retry policy bounds every
+attempt and the whole bounded sequence (registry entry `stdio-attempt-deadline`).
 """
 
+from collections.abc import Mapping
 from typing import ClassVar, override
 
 import pytest
@@ -14,7 +14,7 @@ from jev_judge_mcp.domain import JsonValue, NoulCriteria, NoulQuestion, Question
 from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.extract.executor import InProcessRegexExecutor
 from jev_judge_mcp.extract.worker import ProcessRegexExecutor
-from jev_judge_mcp.providers import Evaluation, JevProvider
+from jev_judge_mcp.providers import DEFAULT_RETRY_POLICY, Evaluation, JevProvider
 from jev_judge_mcp.providers.base import ProviderName
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools.base import Runtime
@@ -28,19 +28,27 @@ def anyio_backend() -> str:
 
 
 class _RecordingProvider(JevProvider):
-    """Records the timeout argument of every evaluate call; answers nothing real."""
+    """Records every evaluate call's whole-call timeout and every attempt's deadline; answers nothing real."""
 
     name: ClassVar[ProviderName] = "compatible"
 
     def __init__(self) -> None:
         super().__init__(Redactor(()))
-        self.timeouts: list[float | None] = []
+        self.call_timeouts: list[float | None] = []
+        self.attempt_timeouts: list[float | None] = []
+
+    @override
+    async def evaluate(
+        self, state: JsonValue, questions: Mapping[str, Question], model: str, timeout: float | None
+    ) -> Evaluation:
+        self.call_timeouts.append(timeout)
+        return await super().evaluate(state, questions, model, timeout)
 
     @override
     async def _send(
         self, state: JsonValue, questions: dict[str, JsonValue], model: str, timeout: float | None
     ) -> Evaluation:
-        self.timeouts.append(timeout)
+        self.attempt_timeouts.append(timeout)
         return Evaluation(answers={}, usage=Usage(), provider="compatible", model=model)
 
     @override
@@ -48,12 +56,15 @@ class _RecordingProvider(JevProvider):
         return None
 
 
-async def test_ask_passes_no_provider_deadline() -> None:
+async def test_ask_passes_no_whole_call_deadline() -> None:
+    """ADR-0057: the caller's argument stays `None` (cancellation is the whole-call recovery path),
+    while each attempt is handed the retry policy's per-attempt deadline."""
     provider = _RecordingProvider()
     runtime = Runtime(Settings(), provider_factory=lambda _: provider)
     questions: dict[str, Question] = {"q": NoulQuestion("Is this a question?", NoulCriteria("yes", "no"))}
     await runtime.ask({"state": True}, questions)
-    assert provider.timeouts == [None]
+    assert provider.call_timeouts == [None]
+    assert provider.attempt_timeouts == [DEFAULT_RETRY_POLICY.per_attempt_timeout]
 
 
 async def test_default_regex_executor_is_the_process_pool() -> None:

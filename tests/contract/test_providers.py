@@ -16,11 +16,10 @@ import httpx
 import httpx2
 import pytest
 import respx
-from typesafe_sdk import RetryPolicy
 
 from jev_judge_mcp.domain import ChoiceQuestion, NoulCriteria, NoulQuestion, Question, ScoreQuestion, Usage
 from jev_judge_mcp.errors import REDACTED, Redactor
-from jev_judge_mcp.providers import JevProvider, ProviderError, ProviderTimeoutError
+from jev_judge_mcp.providers import NO_RETRIES, JevProvider, ProviderError, ProviderTimeoutError
 from jev_judge_mcp.providers.cloudflare import CloudflareProvider, cloudflare_slug
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.openrouter import OpenRouterProvider, openrouter_slug
@@ -127,26 +126,31 @@ def reply(value: Any, status: int = 200) -> Handler:
 
 
 def _compatible(wire: Wire) -> JevProvider:
-    return CompatibleProvider(REDACT, api_key=SECRETS["JEV_API_KEY"], base_url="https://jev.example/v1/systemone")
+    # Retries off here: single-attempt, deterministic; the bounded default is covered in
+    # tests/contract/test_provider_retries.py (ADR-0057).
+    return CompatibleProvider(
+        REDACT, api_key=SECRETS["JEV_API_KEY"], base_url="https://jev.example/v1/systemone", retry=NO_RETRIES
+    )
 
 
 def _typesafe(wire: Wire) -> JevProvider:
-    # Retries off here: the reference-default policy is covered on its own below.
     return TypeSafeProvider(
         REDACT,
         api_key=SECRETS["TYPESAFE_API_KEY"],
         base_url="https://typesafe.example",
         transport=wire.transport2(),
-        retry=RetryPolicy(max_retries=0),
+        retry=NO_RETRIES,
     )
 
 
 def _openrouter(wire: Wire) -> JevProvider:
-    return OpenRouterProvider(REDACT, api_key=SECRETS["OPENROUTER_API_KEY"])
+    return OpenRouterProvider(REDACT, api_key=SECRETS["OPENROUTER_API_KEY"], retry=NO_RETRIES)
 
 
 def _cloudflare(wire: Wire) -> JevProvider:
-    return CloudflareProvider(REDACT, api_token=SECRETS["JEV_CLOUDFLARE_API_TOKEN"], account_id="acct-1")
+    return CloudflareProvider(
+        REDACT, api_token=SECRETS["JEV_CLOUDFLARE_API_TOKEN"], account_id="acct-1", retry=NO_RETRIES
+    )
 
 
 def _flat(model: str) -> dict[str, Any]:
@@ -492,7 +496,7 @@ REDIRECT_ENVELOPE = {"answers": ANSWERS, "usage": {"input_tokens": 1, "output_to
 
 
 def _redirect_provider(url: str) -> CompatibleProvider:
-    return CompatibleProvider(REDACT, api_key="jev-secret-0001", base_url=url)
+    return CompatibleProvider(REDACT, api_key="jev-secret-0001", base_url=url, retry=NO_RETRIES)
 
 
 async def test_cross_origin_redirect_is_blocked_before_the_next_request_leaves(router: respx.MockRouter) -> None:

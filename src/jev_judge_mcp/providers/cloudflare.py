@@ -7,6 +7,7 @@ import httpx
 from jev_judge_mcp.domain import JsonValue, is_json_object
 from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.providers.base import Evaluation, HttpProvider, ProviderName, decode_body, parse_envelope
+from jev_judge_mcp.providers.retry import RetryPolicy, retry_after_seconds
 from jev_judge_mcp.serialize import stringify_compact
 
 
@@ -22,9 +23,15 @@ class CloudflareProvider(HttpProvider):
     label: ClassVar[str] = "Cloudflare AI run"
 
     def __init__(
-        self, redact: Redactor, *, api_token: str, account_id: str, client: httpx.AsyncClient | None = None
+        self,
+        redact: Redactor,
+        *,
+        api_token: str,
+        account_id: str,
+        client: httpx.AsyncClient | None = None,
+        retry: RetryPolicy | None = None,
     ) -> None:
-        super().__init__(redact, client)
+        super().__init__(redact, client, retry=retry)
         self._api_token = api_token
         self._url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run"
 
@@ -43,7 +50,11 @@ class CloudflareProvider(HttpProvider):
         record: dict[str, object] = body if is_json_object(body) else {}
         errors = record.get("errors")
         if not response.is_success or record.get("success") is False:
-            raise self._status_error(response.status_code, stringify_compact(body if errors is None else errors))
+            raise self._status_error(
+                response.status_code,
+                stringify_compact(body if errors is None else errors),
+                retry_after=retry_after_seconds(response.headers),
+            )
         # The v4 envelope double-nests: `result.result` holds the model output.
         outer = record.get("result")
         inner: object = None

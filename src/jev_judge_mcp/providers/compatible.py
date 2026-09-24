@@ -11,10 +11,10 @@ from jev_judge_mcp.providers.base import (
     HttpProvider,
     ProviderName,
     decode_body,
-    decode_text,
     parse_envelope,
     refuse_credentials_in_url,
 )
+from jev_judge_mcp.providers.retry import RetryPolicy
 
 
 class CompatibleProvider(HttpProvider):
@@ -22,9 +22,15 @@ class CompatibleProvider(HttpProvider):
     label: ClassVar[str] = "Jev-compatible endpoint"
 
     def __init__(
-        self, redact: Redactor, *, api_key: str, base_url: str, client: httpx.AsyncClient | None = None
+        self,
+        redact: Redactor,
+        *,
+        api_key: str,
+        base_url: str,
+        client: httpx.AsyncClient | None = None,
+        retry: RetryPolicy | None = None,
     ) -> None:
-        super().__init__(redact, client)
+        super().__init__(redact, client, retry=retry)
         self._api_key = api_key
         self._base_url = base_url
 
@@ -38,6 +44,6 @@ class CompatibleProvider(HttpProvider):
             {"model": model, "state": state, "questions": questions},
         )
         if not response.is_success:
-            raise self._status_error(response.status_code, decode_text(response.content))
+            raise self._error(response)
         envelope = parse_envelope(decode_body(response.content), self.label)
         return Evaluation(envelope.answers, envelope.usage, self.name, envelope.model_or(model))
