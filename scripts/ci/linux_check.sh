@@ -6,7 +6,7 @@
 #
 # The hook calls this against a clean temporary clone of the pushed commit; `make ci-linux`
 # calls it against the working tree. The source directory is copied into a throwaway
-# container and checked as the non-root `node` user, like GitHub's runner — nothing is
+# container and checked as the non-root `runner` user, like GitHub's runner — nothing is
 # written back to the source and the host .venv is untouched.
 #
 # The stage list mirrors .github/workflows/ci.yml job by job; drift in either direction
@@ -19,7 +19,7 @@ DOCKERFILE="$REPO_ROOT/docker/ci-linux.Dockerfile"
 IMAGE=jev-judge-mcp-ci-linux:adr0056
 # Cache wheels and interpreters across checks; nothing else survives a check. They live in
 # the runner user's home: the stages do not run as root.
-CACHE_VOLUMES=(-v jev-judge-mcp-ci-uv-cache:/home/node/.cache/uv -v jev-judge-mcp-ci-uv-pythons:/home/node/.local/share/uv)
+CACHE_VOLUMES=(-v jev-judge-mcp-ci-uv-cache:/home/runner/.cache/uv -v jev-judge-mcp-ci-uv-pythons:/home/runner/.local/share/uv)
 
 SRC=${1:?usage: linux_check.sh <source-dir> [label]}
 SRC=$(cd "$SRC" && pwd -P)
@@ -62,7 +62,7 @@ trap 'exit 129' HUP
 
 cat >"$RUNNER" <<'RUNNER_EOF'
 #!/usr/bin/env bash
-# Runs inside the container as the non-root `node` user: the ci.yml command list, timed and
+# Runs inside the container as the non-root `runner` user: the ci.yml command list, timed and
 # bounded (ADR-0056).
 set -Eeuo pipefail
 cd /src
@@ -118,12 +118,13 @@ run make:eval 1200 make eval
 run py310-install 900 env -u UV_PYTHON uv python install 3.10
 PY310_BIN=$(dirname "$(env -u UV_PYTHON uv python find --no-project 3.10)")
 echo "[pre-push] linux: old-python entry guard: $("$PY310_BIN/python3" --version) first on PATH"
-run ci:old-python-entry 1800 env -u UV_PYTHON PATH="$PY310_BIN:$PATH" HOME=/home/node python3 scripts/ci_old_python_entry.py
+run ci:old-python-entry 1800 env -u UV_PYTHON PATH="$PY310_BIN:$PATH" HOME=/home/runner python3 scripts/ci_old_python_entry.py
 echo "[pre-push] linux all stages ok ($LABEL)"
 RUNNER_EOF
 
 echo "[pre-push] linux ($LABEL): copying source into a throwaway container"
-CID=$(docker create "${CACHE_VOLUMES[@]}" --entrypoint bash -e CI=true -e "PREPUSH_LABEL=$LABEL" "$IMAGE" -c 'chown -R node:node /src && export HOME=/home/node && exec runuser -u node -- /run_stages.sh')
+chmod 755 "$RUNNER"
+CID=$(docker create "${CACHE_VOLUMES[@]}" --entrypoint bash -e CI=true -e "PREPUSH_LABEL=$LABEL" "$IMAGE" -c 'chmod 755 /run_stages.sh && chown -R runner:runner /src /home/runner/.cache/uv /home/runner/.local/share/uv && export HOME=/home/runner && exec runuser -u runner -- /run_stages.sh')
 docker cp "$SRC" "$CID:/src"
 docker cp "$RUNNER" "$CID:/run_stages.sh"
 set +e
