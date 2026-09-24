@@ -4,7 +4,7 @@ Calls the real tools through the configured provider, so it costs money and drif
 It refuses to start unless `JEV_EVAL_LIVE=1` is passed in its environment, unless `JEV_PROVIDER` is
 `typesafe`, unless the server's resolved model is the manifest's pinned model, and when cases x repeats
 exceeds `LIVE_REQUEST_CAP`. Every tool call makes at most one provider request — the runtime's provider
-runs with `RetryPolicy(max_retries=0)`, unlike the server's reference-faithful default — so the cap
+runs with retries off (`NO_RETRIES`, ADR-0057), unlike the server's default bounded policy — so the cap
 bounds requests before any is sent, and a transient provider failure is a recorded `error` row, not an
 unbudgeted retry. A result that reports another model aborts the run. Recorded outputs feed
 `evals.runners.score`. The flag is eval-only and stays out of `jev_judge_mcp.settings` (ADR-0008/0017).
@@ -33,18 +33,17 @@ LIVE_REQUEST_CAP = 25
 
 
 def typesafe_without_retries(settings: "Settings") -> "JevProvider":
-    """The eval runtime's provider factory: the resolved TypeSafe provider with SDK retries off.
+    """The eval runtime's provider factory: the resolved TypeSafe provider with retries off.
 
     Mirrors `resolve_provider`'s typesafe branch — stored-key fallback and its redaction, base URL,
-    the missing-key refusal (ADR-0046/0017) — and passes `RetryPolicy(max_retries=0)` like the paid
-    security gate (`tests/security/test_live_typesafe.py`). The server keeps the SDK's default policy
-    — reference faithful — which would let one tool call cost up to three requests; a capped budget
-    run may not.
+    the missing-key refusal (ADR-0046/0017) — and passes `NO_RETRIES` (ADR-0057) like the paid
+    security gate (`tests/security/test_live_typesafe.py`): one tool call, at most one provider
+    request. The server keeps the default bounded policy, which would let one tool call cost up to
+    three requests; a capped budget run may not.
     """
-    from typesafe_sdk import RetryPolicy
-
     from jev_judge_mcp import keyfile
     from jev_judge_mcp.errors import Redactor
+    from jev_judge_mcp.providers import NO_RETRIES
     from jev_judge_mcp.providers.base import ProviderConfigError
     from jev_judge_mcp.providers.typesafe import TypeSafeProvider
 
@@ -54,7 +53,7 @@ def typesafe_without_retries(settings: "Settings") -> "JevProvider":
     if not api_key:
         raise ProviderConfigError("JEV_PROVIDER=typesafe but TYPESAFE_API_KEY is not set.")
     base_url = (settings.typesafe_base_url.get_secret_value() if settings.typesafe_base_url else "") or None
-    return TypeSafeProvider(redact, api_key=api_key, base_url=base_url, retry=RetryPolicy(max_retries=0))
+    return TypeSafeProvider(redact, api_key=api_key, base_url=base_url, retry=NO_RETRIES)
 
 
 class LiveRunRefusedError(RuntimeError):

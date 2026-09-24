@@ -27,8 +27,8 @@ Live bounds:
 - **Pinned model:** `jev-1.13.0` (TypeSafe, `JEV_PROVIDER=typesafe`), in `manifests/live-*.json`.
 - **Request cap:** `LIVE_REQUEST_CAP = 25` tool calls per run (`runners/live.py`); each tool call makes at
   most one provider request, checked before the first request is sent. The runtime's provider passes
-  `typesafe_sdk.RetryPolicy(max_retries=0)` (the server's default stays reference-faithful), so a failed
-  call is a recorded `error` row, never an unbudgeted retry.
+  `NO_RETRIES` (the server's default stays the bounded ADR-0057 policy), so a failed call is a recorded
+  `error` row, never an unbudgeted retry.
 - **Datasets:** `datasets/synthetic/live-classify.jsonl` and `live-verify.jsonl`, 3 cases each, so
   `make eval-live` sends 6 requests.
 - Neither `make eval` nor `make ci` calls the network; both stay green with the key unset.

@@ -12,11 +12,14 @@ load-tested limits — and must not be promoted to a supported service before P9
 load measurements at the published budgets, observability, and explicit runtime limits
 (env-only settings per ADR-0008, never `limits.py`, which owns frozen reference Caps).
 
-The tier classification also settles the reliability question the reference never had to answer:
-**Tier A keeps the reference's no-deadline behavior.** `Runtime.ask` passes `timeout=None`, the
-client's own MCP cancellation (ADR-0011) is the recovery path, and the property is registered
-(`stdio-no-provider-deadline`). Adding a deadline to stdio would be divergence without a threat;
-a single-client surface whose client can cancel does not need one.
+The tier classification originally settled the reliability question the reference never had to
+answer with the reference's own answer: **Tier A kept the reference's no-deadline behavior** —
+`Runtime.ask` passed `timeout=None`, the client's own MCP cancellation (ADR-0011) was the recovery
+path, and the property was registered (`stdio-no-provider-deadline`). **ADR-0057 supersedes that
+ruling**: `Runtime.ask` still passes no whole-call deadline, but every provider attempt now carries
+a bounded per-attempt deadline and a bounded retry sequence (registry entry
+`stdio-attempt-deadline`), so a hung connection becomes a bounded, retryable failure instead of an
+unbounded wait.
 
 ## Consequences
 

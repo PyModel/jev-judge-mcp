@@ -121,15 +121,15 @@
       "python_behavior": "A pattern refused at the queue bound reports the stable reason token regex_pool_saturated instead of the regex-timeout text, so capacity pressure is not misread as a pattern problem."
     },
     {
-      "id": "stdio-no-provider-deadline",
+      "id": "stdio-attempt-deadline",
       "surface": "transport",
       "tier": "tier_a",
       "status": "sanctioned",
-      "adr": "docs/adr/0021-stdio-is-the-product-transport-http-is-tier-b.md",
-      "tests": ["tests/unit/test_runtime.py"],
+      "adr": "docs/adr/0057-one-retry-owner-bounded-provider-retries.md",
+      "tests": ["tests/unit/test_runtime.py", "tests/contract/test_provider_retries.py"],
       "fixtures": [],
-      "reference_behavior": "No provider request carries a timeout anywhere in askJev.",
-      "python_behavior": "The stdio product tier keeps parity: Runtime.ask passes timeout=None, and the client's own MCP cancellation is the recovery path."
+      "reference_behavior": "No provider request carries a timeout anywhere in askJev; a provider that stops answering keeps the tool call waiting until the client cancels.",
+      "python_behavior": "Runtime.ask still passes no whole-call deadline (the client's MCP cancellation is the recovery path for the call), but every provider attempt is bounded by the retry policy's 30 s per-attempt deadline and the whole bounded sequence by its 90 s budget, so a hung connection becomes a bounded, retryable failure and a transient one is retried (ADR-0057)."
     },
     {
       "id": "http-tier-b-experimental",
@@ -140,7 +140,7 @@
       "tests": ["tests/integration/test_http.py"],
       "fixtures": [],
       "reference_behavior": "The reference is stdio-only; no HTTP transport exists to compare against.",
-      "python_behavior": "streamable-http is an experimental Tier B extension for 1.0: localhost by default, no reliability contract (no provider deadline, no admission control), promotion requires P9 evidence. A bind outside 127.0.0.1/localhost/::1 additionally requires a bearer token (http-bearer-token-required)."
+      "python_behavior": "streamable-http is an experimental Tier B extension for 1.0: localhost by default, no reliability contract of its own (provider attempts are bounded per ADR-0057, but there is no admission control and no load-tested limits), promotion requires P9 evidence. A bind outside 127.0.0.1/localhost/::1 additionally requires a bearer token (http-bearer-token-required)."
     },
     {
       "id": "http-bearer-token-required",

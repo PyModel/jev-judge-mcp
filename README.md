@@ -188,9 +188,13 @@ or latency:
 - `jev_verify` and `jev_screen` put no length bound on their input. The claims, evidence, or page
 text are sent to the provider in one request, however large, so token cost and latency scale with
 what the caller passes. Bound the text at the call site when it is not yours.
-- Requests over stdio carry no provider deadline (the sanctioned divergence
-`stdio-no-provider-deadline`): a provider that stops answering keeps the tool call waiting until
-the client cancels it.
+- Requests over stdio still carry no whole-call provider deadline (the sanctioned divergence
+`stdio-attempt-deadline`): the client's cancellation remains the recovery path for a call. Every
+provider attempt is bounded, though (ADR-0057): a hung connection times out after 30 s and a
+transient failure — connection errors, timeouts, 408/429/5xx — is retried, up to 3 attempts with
+capped exponential backoff (server `Retry-After` hints honored, capped at 5 s) inside a 90 s
+budget. A call whose attempts all fail reports the provider, the attempt count, and the last
+failure.
 - `initialize`'s `serverInfo.version`, the one startup log line, and `jev-judge-mcp --version`
   report the same build. A wheel, and a checkout whose HEAD is the tag `v<version>`, report that
   version. Any other git checkout reports `<version>+g<short sha>` (ADR-0054). The wire name stays
