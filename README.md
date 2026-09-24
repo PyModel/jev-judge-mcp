@@ -18,26 +18,31 @@ Use it for checks that have a fixed set of answers. When the step needs new text
 
 ## Install
 
-You need Python 3.12+, [uv](https://docs.astral.sh/uv/), a POSIX system (Linux or macOS), and a TypeSafe API key from [console.typesafe.ai](https://console.typesafe.ai/settings/keys). The package is not on PyPI yet, so you run it from a clone.
+You need Python 3.12+, [uv](https://docs.astral.sh/uv/), a POSIX system (Linux or macOS), and a TypeSafe API key from [console.typesafe.ai](https://console.typesafe.ai/settings/keys). The published package is on PyPI, and these three commands configure your agents to launch that pinned package (ADR-0051):
+
+```sh
+uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp setup     # verify your key, then store it
+uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install   # add the server to your agents
+uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp doctor    # check the configuration, offline
+```
+
+<details>
+<summary><b>More installer options</b></summary>
+
+To develop against an unreleased tree, install from a clone and pass `--from-checkout`, which pins the entries at your checkout instead of the PyPI package:
 
 ```sh
 git clone https://github.com/PyModel/jev-judge-mcp
 cd jev-judge-mcp
 uv sync --extra typesafe
+uv run jev-judge-mcp install --from-checkout
 ```
 
 That extra is only for running the server. Development and `make typecheck` need the full sync:
 `uv sync --locked --all-extras` — a plain `uv sync` fails `make typecheck` with confusing
 `Import "typesafe_sdk" could not be resolved` errors.
 
-<details>
-<summary><b>Install with the installer (recommended)</b></summary>
-
-```sh
-uv run jev-judge-mcp setup     # verify your key, then store it
-uv run jev-judge-mcp install   # add the server to your agents
-uv run jev-judge-mcp doctor    # check the configuration, offline
-```
+Installed from a clone earlier? One plain re-run of `install` rewrites the entries this installer owns to the version-pinned PyPI spec — that is the whole migration. Entries the installer does not own are left alone.
 
 Restart your agent. The tools show up as `jev_verify`, `jev_gate`, and so on (`mcp__jev__*` in Claude Code).
 
@@ -46,9 +51,9 @@ Restart your agent. The tools show up as `jev_verify`, `jev_gate`, and so on (`m
 `install` finds the agents on your machine, shows what it will change, and asks before writing. It supports Claude Code, Claude Desktop, Codex (CLI and the ChatGPT app), Cursor, OpenCode, Pi, omp, and Pythinker.
 
 ```sh
-uv run jev-judge-mcp install --dry-run         # show the plan, write nothing
-uv run jev-judge-mcp install -a claude-code    # one agent (repeatable)
-uv run jev-judge-mcp install --remove          # undo what install wrote
+uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install --dry-run    # show the plan, write nothing
+uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install -a claude-code    # one agent (repeatable)
+uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install --remove    # undo what install wrote
 ```
 
 Terminal agents get a reference to `TYPESAFE_API_KEY`, never the key itself. Desktop apps don't see your shell's environment. Claude Desktop (macOS only) is skipped unless you pass `--desktop-key`, which writes the key into that app's config file. The same flag writes the key into the Codex and Pythinker files when the ChatGPT or Pythinker desktop app shares them; without it, `install` says that app has no key. The installer warns if a file holding the key ends up readable by other users. Pi also needs its MCP adapter first: `pi install npm:pi-mcp-adapter`.
@@ -58,7 +63,7 @@ Terminal agents get a reference to `TYPESAFE_API_KEY`, never the key itself. Des
 <details>
 <summary><b>Register the server by hand</b></summary>
 
-`<uvx>` is the absolute path of `uvx`. `<spec>` is your clone's absolute path plus `[typesafe]`, for example `/home/me/jev-judge-mcp[typesafe]`.
+`<uvx>` is the absolute path of `uvx`. `<spec>` is `jev-judge-mcp[typesafe]==<version>` (the version-pinned PyPI package, what `install` writes by default) or your checkout's absolute path plus `[typesafe]`, for example `/home/me/jev-judge-mcp[typesafe]`.
 
 Claude Code (`~/.claude.json`), omp (`~/.omp/agent/mcp.json`), Cursor (`~/.cursor/mcp.json`), and Pi (`~/.pi/agent/mcp.json`) use the same shape. Claude Code and omp also add `"type": "stdio"`. Pi also adds the three exposure keys below; without them `pi-mcp-adapter` keeps the server lazy and proxy-only and the tools stay out of the model's initial list (ADR-0036).
 

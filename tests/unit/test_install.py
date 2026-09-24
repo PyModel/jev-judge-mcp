@@ -5,12 +5,25 @@ import os
 import stat
 import sys
 from collections.abc import Callable
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import pytest
 
+from jev_judge_mcp.install import cli as install_cli
+from jev_judge_mcp.install import launch as launch_module
 from jev_judge_mcp.install.engine import Request, run
-from jev_judge_mcp.install.launch import PACKAGE, Launch, local_launch, pi_entry
+from jev_judge_mcp.install.errors import InstallError
+from jev_judge_mcp.install.fs import entry_hash
+from jev_judge_mcp.install.launch import (
+    PACKAGE,
+    Launch,
+    checkout_launch,
+    find_package_root,
+    pi_entry,
+    pypi_launch,
+    supported_spec,
+)
 from jev_judge_mcp.install.layout import Layout
 from jev_judge_mcp.install.verify import EXPECTED_TOOLS, VerifyError, verify_command
 from jev_judge_mcp.server import installer_requested
@@ -18,7 +31,9 @@ from jev_judge_mcp.tools import TOOLS
 
 UVX = "/opt/uv/uvx"
 SPEC = "/work/jev-mcp[typesafe]"
+PIN = f"{PACKAGE}[typesafe]=={version(PACKAGE)}"
 LAUNCH = Launch(uvx=UVX, spec=SPEC)
+PYPI_LAUNCH = pypi_launch(UVX)
 MARKER = "synthetic-secret-value"
 TARGETS = ("claude-code", "claude-desktop", "codex", "cursor", "opencode", "pi", "omp", "pythinker")
 
@@ -48,11 +63,13 @@ def execute(
     remove: bool = False,
     force: bool = False,
     before_write: Callable[[Path], None] | None = None,
+    launch: Launch = LAUNCH,
+    verify: Callable[[list[str]], None] | None = None,
 ) -> tuple[int, str]:
     result = run(
         Request(
             layout=layout(home),
-            launch=LAUNCH,
+            launch=launch,
             agents=agents,
             assume_yes=True,
             platform="darwin",
@@ -63,6 +80,7 @@ def execute(
             remove=remove,
             force=force,
             before_write=before_write,
+            verify=verify,
         )
     )
     if MARKER in result.text:
@@ -87,12 +105,133 @@ def test_no_arguments_stay_on_the_stdio_server() -> None:
 
 
 def test_launch_uses_the_local_path_and_the_distribution_name() -> None:
-    launch = local_launch(UVX)
+    launch = checkout_launch(UVX)
     args = launch.args()
     assert args[-1] == PACKAGE
     assert launch.spec.endswith("[typesafe]")
     assert Path(launch.spec.removesuffix("[typesafe]")).is_absolute()
     assert not any(part == "jev-mcp" or part.startswith("jev-mcp==") or part.startswith("jev-mcp[") for part in args)
+
+
+def test_default_launch_pins_the_installed_version() -> None:
+    """From a checkout or a wheel, the default spec is the running package pinned on PyPI (ADR-0051)."""
+    launch = pypi_launch(UVX)
+    assert launch.spec == PIN
+    assert launch.args() == ["--from", PIN, PACKAGE]
+
+
+def test_default_launch_without_metadata_names_the_alternative(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing(name: str) -> str:
+        raise PackageNotFoundError(name)
+
+    monkeypatch.setattr(launch_module, "version", missing)
+    with pytest.raises(InstallError, match="--from-checkout"):
+        pypi_launch(UVX)
+
+
+def test_find_package_root_without_a_checkout_names_the_flag(tmp_path: Path) -> None:
+    with pytest.raises(InstallError, match="source checkout"):
+        find_package_root(start=tmp_path)
+
+
+def test_specs_accept_exactly_the_two_supported_shapes() -> None:
+    assert supported_spec(PIN)
+    assert supported_spec("jev-judge-mcp[typesafe]==0.1.1rc1")
+    assert supported_spec(SPEC)
+    assert supported_spec("/home/me/jev-judge-mcp[typesafe]")
+    for wrong in (
+        PACKAGE,
+        f"{PACKAGE}[typesafe]",
+        "jev-mcp[typesafe]",
+        f"{PACKAGE}==0.1.1",
+        f"{PACKAGE}[typesafe]==",
+        f"{PACKAGE}[typesafe]==0.1.1 more",
+        "work/jev-mcp[typesafe]",
+        "",
+    ):
+        assert not supported_spec(wrong), wrong
+
+
+def test_engine_refuses_an_unsupported_spec(tmp_path: Path) -> None:
+    with pytest.raises(InstallError, match="unsupported launch spec"):
+        execute(tmp_path, agents=("claude-code",), launch=Launch(uvx=UVX, spec="jev-mcp[typesafe]"))
+
+
+# --- ADR-0051 launch identity, through the command line. Every test uses a throwaway HOME. ---
+
+
+def _fake_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
+    home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    for name in (
+        "XDG_CONFIG_HOME",
+        "XDG_STATE_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "PI_CODING_AGENT_DIR",
+        "PYTHINKER_CODE_HOME",
+        "OMP_PROFILE",
+        "PI_PROFILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    def uvx(name: str) -> str | None:
+        return UVX
+
+    monkeypatch.setattr(install_cli, "which", uvx)
+
+
+def test_wheel_layout_dry_run_renders_the_pinned_pypi_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The critique's wheel probe, inverted: no checkout anywhere, and `install` still works."""
+
+    def no_checkout(start: Path | None = None) -> Path:
+        return find_package_root(start=tmp_path / "nowhere")
+
+    _fake_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(launch_module, "find_package_root", no_checkout)
+    code = install_cli.main(["--dry-run", "-a", "claude-code"])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert PIN in out
+    assert SPEC not in out
+    assert list(tmp_path.rglob("*.json")) == []  # dry-run wrote nothing
+
+
+def test_checkout_flag_renders_the_checkout_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fake_home(monkeypatch, tmp_path)
+    checkout = str(find_package_root())
+    code = install_cli.main(["--dry-run", "-a", "claude-code", "--from-checkout"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert f"{checkout}[typesafe]" in out
+    assert f"=={version(PACKAGE)}" not in out
+
+
+def test_default_from_a_checkout_is_still_the_pypi_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fake_home(monkeypatch, tmp_path)
+    code = install_cli.main(["--dry-run", "-a", "claude-code"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert PIN in out
+    assert str(find_package_root()) not in out
+
+
+def test_checkout_flag_without_a_checkout_fails_accurately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fake_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(launch_module, "find_package_root", lambda: find_package_root(start=tmp_path))
+    code = install_cli.main(["--dry-run", "-a", "claude-code", "--from-checkout"])
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "source checkout" in out
+    assert "before publication" not in out
 
 
 def test_each_target_gains_one_entry(tmp_path: Path) -> None:
@@ -536,6 +675,40 @@ def test_reference_tool_list_matches_the_published_names() -> None:
     published = tuple(tool.name for tool in TOOLS)
     assert EXPECTED_TOOLS == published
     assert EXPECTED_TOOLS[: len(reference_names)] == reference_names
+
+
+def test_remove_drops_both_spec_shapes(tmp_path: Path) -> None:
+    """The state hash covers the written entry, not the spec form, so either shape removes."""
+    execute(tmp_path, agents=("claude-code",), launch=LAUNCH)
+    path = tmp_path / ".claude.json"
+    assert SPEC in path.read_text(encoding="utf-8")
+    code, text = execute(tmp_path, agents=("claude-code",), remove=True, launch=PYPI_LAUNCH)
+    assert code == 0, text
+    assert "jev" not in json.loads(path.read_text(encoding="utf-8"))["mcpServers"]
+
+    home = tmp_path / "second"
+    execute(home, agents=("claude-code",), launch=PYPI_LAUNCH)
+    code, text = execute(home, agents=("claude-code",), remove=True, launch=PYPI_LAUNCH)
+    assert code == 0, text
+    assert "jev" not in json.loads((home / ".claude.json").read_text(encoding="utf-8"))["mcpServers"]
+
+
+def test_reinstall_migrates_a_checkout_entry_to_the_pinned_spec(tmp_path: Path) -> None:
+    """The ADR-0051 migration: one plain re-run rewrites entries this installer owns."""
+    code, _ = execute(tmp_path, agents=("claude-code",), launch=LAUNCH)
+    assert code == 0
+    path = tmp_path / ".claude.json"
+    assert SPEC in path.read_text(encoding="utf-8")
+    code, text = execute(tmp_path, agents=("claude-code",), launch=PYPI_LAUNCH)
+    assert code == 0, text
+    entry = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["jev"]
+    assert entry["args"] == ["--from", PIN, PACKAGE]
+    assert _state_targets(tmp_path)["claude-code"]["entry_sha256"] == entry_hash(entry)
+
+
+def _state_targets(home: Path) -> dict[str, dict[str, object]]:
+    state = json.loads((home / ".local" / "state" / "jev-mcp" / "install.json").read_text(encoding="utf-8"))
+    return state["targets"]
 
 
 def _pi_adapter(home: Path) -> None:

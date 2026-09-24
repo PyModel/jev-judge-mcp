@@ -1,8 +1,14 @@
-"""What each agent config entry launches. The package name is always `jev-judge-mcp` (ADR-0049)."""
+"""What each agent config entry launches. The package name is always `jev-judge-mcp` (ADR-0049).
 
+The default launch is the version-pinned PyPI package; a checkout is an explicit
+`--from-checkout` choice (ADR-0051).
+"""
+
+import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from jev_judge_mcp.domain import is_json_object
@@ -13,11 +19,12 @@ PACKAGE = "jev-judge-mcp"
 SERVER_NAME = "jev-mcp"
 REFERENCE = "${TYPESAFE_API_KEY}"
 OPENCODE_REFERENCE = "{env:TYPESAFE_API_KEY}"
+EXTRA = "typesafe"
 
 
 @dataclass(frozen=True)
 class Launch:
-    """Absolute `uvx` and the local `--from` spec written into every entry."""
+    """Absolute `uvx` and the `--from` spec written into every entry (ADR-0051)."""
 
     uvx: str
     spec: str
@@ -29,17 +36,39 @@ class Launch:
         return [self.uvx, *self.args()]
 
 
-def local_launch(uvx: str, package_root: Path | None = None) -> Launch:
-    """Pin every client at this checkout until the package is published (ADR-0033)."""
+def pypi_launch(uvx: str) -> Launch:
+    """The running package pinned on PyPI: `jev-judge-mcp[typesafe]==<installed version>`.
+
+    Needs no source checkout, so a wheel install can run the installer, and no written entry
+    depends on a checkout that may later move or disappear (ADR-0051). In real use the first
+    launch of a not-yet-cached version may download the package from PyPI.
+    """
+    return Launch(uvx=uvx, spec=f"{PACKAGE}[{EXTRA}]=={installed_version()}")
+
+
+def checkout_launch(uvx: str, package_root: Path | None = None) -> Launch:
+    """This checkout: `<absolute checkout>[typesafe]`, found the way ADR-0033 found it."""
     root = package_root if package_root is not None else find_package_root()
     if not root.is_absolute():
         root = root.resolve()
-    return Launch(uvx=uvx, spec=f"{root}[typesafe]")
+    return Launch(uvx=uvx, spec=f"{root}[{EXTRA}]")
 
 
-def find_package_root() -> Path:
+def installed_version() -> str:
+    """The installed distribution's version; the pin ADR-0051 writes by default."""
+    try:
+        return version(PACKAGE)
+    except PackageNotFoundError as exc:
+        raise InstallError(
+            f"{PACKAGE} is not installed in this environment, so its version cannot be pinned; "
+            "install the package, or use --from-checkout"
+        ) from exc
+
+
+def find_package_root(start: Path | None = None) -> Path:
     """The checkout that contains this installer's `pyproject.toml`."""
-    for parent in Path(__file__).resolve().parents:
+    origin = start if start is not None else Path(__file__)
+    for parent in origin.resolve().parents:
         manifest = parent / "pyproject.toml"
         if not manifest.is_file():
             continue
@@ -52,8 +81,22 @@ def find_package_root() -> Path:
         if name == PACKAGE:
             return parent
     raise InstallError(
-        "could not find the local jev-judge-mcp checkout; refusing to write a PyPI package spec before publication"
+        "could not find a jev-judge-mcp source checkout (a directory whose pyproject.toml names "
+        "jev-judge-mcp); --from-checkout needs one"
     )
+
+
+def supported_spec(spec: str) -> bool:
+    """Exactly the two shapes this installer writes (ADR-0051): the version-pinned PyPI spec and
+    the checkout spec. Anything else — the bare package name, another project, a relative path —
+    is refused before any config is written."""
+    pinned = re.fullmatch(rf"{re.escape(PACKAGE)}\[{re.escape(EXTRA)}\]==(\S+)", spec)
+    if pinned:
+        return '"' not in pinned.group(1)
+    checkout = re.fullmatch(r"(.+)\[typesafe\]", spec)
+    if checkout:
+        return Path(checkout.group(1)).is_absolute()
+    return False
 
 
 def claude_code_entry(launch: Launch) -> dict[str, object]:

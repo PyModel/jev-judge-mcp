@@ -44,6 +44,7 @@ from jev_judge_mcp.install.launch import (
     opencode_entry,
     pi_entry,
     pythinker_entry,
+    supported_spec,
     with_preserved_literal,
 )
 from jev_judge_mcp.install.layout import (
@@ -172,6 +173,11 @@ def _validate(request: Request) -> None:
         raise InstallError(f"unknown agent {unknown[0]!r}; choose from {', '.join(TARGETS)}")
     if request.launch.args()[-1] != PACKAGE:
         raise InstallError("refusing to write a package name other than jev-judge-mcp")
+    if not supported_spec(request.launch.spec):
+        raise InstallError(
+            "unsupported launch spec; use the version-pinned PyPI spec "
+            "'jev-judge-mcp[typesafe]==<version>' or a checkout spec '<absolute path>[typesafe]'"
+        )
 
 
 def _survey(request: Request) -> tuple[list[_Hit], bool]:

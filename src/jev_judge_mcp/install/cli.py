@@ -10,7 +10,7 @@ from shutil import which
 
 from jev_judge_mcp.install.engine import TARGETS, Request, run
 from jev_judge_mcp.install.errors import InstallError
-from jev_judge_mcp.install.launch import local_launch
+from jev_judge_mcp.install.launch import checkout_launch, pypi_launch
 from jev_judge_mcp.install.layout import Layout, layout_from_env
 from jev_judge_mcp.install.verify import verify_command
 
@@ -33,6 +33,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("-y", "--yes", action="store_true", help="install without a confirmation prompt")
     parser.add_argument("--dry-run", action="store_true", help="print the redacted plan and write nothing")
     parser.add_argument("--remove", action="store_true", help="remove entries this installer recorded")
+    parser.add_argument(
+        "--from-checkout",
+        action="store_true",
+        help="launch this source checkout instead of the version-pinned PyPI package (ADR-0051)",
+    )
     parser.add_argument("--force", action="store_true", help="replace an entry this installer does not own")
     parser.add_argument("--name", default="jev", help=argparse.SUPPRESS)
     parser.add_argument(
@@ -46,7 +51,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         uvx = which("uvx")
         if uvx is None:
             raise InstallError("uvx is not on PATH. Install uv from https://docs.astral.sh/uv/ and re-run.")
-        launch = local_launch(str(Path(uvx).resolve()))
+        launch = (
+            checkout_launch(str(Path(uvx).resolve())) if parsed.from_checkout else pypi_launch(str(Path(uvx).resolve()))
+        )
         layout = layout_from_env(environ, home=Path.home())
         key, secrets = _desktop_key(parsed.desktop_key, environ)
         confirmer = _confirmer(parsed.yes, parsed.dry_run)
