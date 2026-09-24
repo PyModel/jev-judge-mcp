@@ -1,11 +1,16 @@
 """Catch short fake credentials before they collide with unrelated text in tests.
 
 The static rule checks literal credential-named assignments/kwargs, string-keyed env/config
-mappings, `setenv` calls, and positional secrets for the known redaction APIs. Empty strings mean
-"unset"; only the exact floor-testing fixtures below are exempt.
+mappings, `setenv` calls, and positional secrets for the known redaction APIs — in `test_*.py`
+files and in `conftest.py` (one AST scan). JSON and JSONL fixtures under tests/ are scanned for
+credential-named keys with short string values (ADR-0059): recorded fixture content is output
+text, so a short fake there collides exactly like one in a test file. No YAML fixtures exist
+under tests/; a format that lands joins the JSON scan. Empty strings mean "unset"; only the
+exact exemptions below are allowed.
 """
 
 import ast
+import json
 import re
 from pathlib import Path
 
@@ -32,6 +37,14 @@ ALLOWED_SHORT_SECRET_USES = {
         "JEV_MCP_HTTP_TOKEN",
         "tok",
     ),
+    # Recorded agent output: Claude's stream metadata names where a key would come from; it is an
+    # enum, never a credential (ADR-0059).
+    (
+        "tests/evals/data/claude-stream-json-sample.jsonl",
+        "<json>",
+        "apiKeySource",
+        "none",
+    ),
 }
 
 
@@ -44,6 +57,17 @@ def literal_string(node: ast.expr) -> str | None:
     return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
 
+def short_fake_violation(path: str, function: str, name: str, value: object, line: int | None) -> str | None:
+    """The one rule every scanned surface shares (ADR-0059): a non-empty credential-named string
+    shorter than `MIN_SECRET_LENGTH`, outside the exact floor-testing exemptions."""
+    if not isinstance(value, str) or not is_credential_name(name) or not value or len(value) >= MIN_SECRET_LENGTH:
+        return None
+    if (path, function, name, value) in ALLOWED_SHORT_SECRET_USES:
+        return None
+    at = f"{path}:{line}" if line is not None else path
+    return f"{at}: short fake {name} ({len(value)} chars)"
+
+
 class ShortSecretVisitor(ast.NodeVisitor):
     def __init__(self, path: str) -> None:
         self.path = path
@@ -52,10 +76,9 @@ class ShortSecretVisitor(ast.NodeVisitor):
 
     def check(self, name: str, node: ast.expr) -> None:
         value = literal_string(node)
-        if not is_credential_name(name) or not value or len(value) >= MIN_SECRET_LENGTH:
-            return
-        if (self.path, self.function, name, value) not in ALLOWED_SHORT_SECRET_USES:
-            self.violations.append(f"{self.path}:{node.lineno}: short fake {name} ({len(value)} chars)")
+        violation = short_fake_violation(self.path, self.function, name, value, node.lineno)
+        if violation is not None:
+            self.violations.append(violation)
 
     def check_values(self, name: str, node: ast.expr) -> None:
         if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
@@ -123,6 +146,46 @@ def scan(source: str, path: str) -> list[str]:
     return visitor.violations
 
 
+def scan_json(source: str, path: str) -> list[str]:
+    """Credential-named keys with short string values in JSON fixtures; `*.jsonl` one document per
+    line. A malformed document is the fixture tests' failure to report, not this guard's."""
+    violations: list[str] = []
+
+    def walk(node: object, line: int | None) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                violation = short_fake_violation(path, "<json>", str(key), value, line)
+                if violation is not None:
+                    violations.append(violation)
+                walk(value, line)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item, line)
+
+    if path.endswith(".jsonl"):
+        for number, text in enumerate(source.splitlines(), start=1):
+            try:
+                walk(json.loads(text), number)
+            except ValueError:
+                continue
+    else:
+        try:
+            walk(json.loads(source), None)
+        except ValueError:
+            pass
+    return violations
+
+
+def scanned_test_files() -> list[Path]:
+    tests = ROOT / "tests"
+    return sorted({*tests.rglob("test_*.py"), *tests.rglob("conftest.py")})
+
+
+def scanned_fixture_files() -> list[Path]:
+    tests = ROOT / "tests"
+    return sorted([*tests.rglob("*.json"), *tests.rglob("*.jsonl")])
+
+
 def test_short_fake_credentials_are_detected() -> None:
     source = (
         'configure(api_key="abc"); env = {"SERVICE_TOKEN": "x"}; '
@@ -131,11 +194,23 @@ def test_short_fake_credentials_are_detected() -> None:
     assert len(scan(source, "tests/example.py")) == 4
 
 
+def test_short_fake_credentials_in_json_fixtures_are_detected() -> None:
+    source = '{"api_key": "abc", "nested": {"CLIENT_SECRET": "z"}, "usage": {"input_tokens": 3}}'
+    assert len(scan_json(source, "tests/example.json")) == 2
+    assert len(scan_json('{"CLIENT_SECRET": "z"}\n', "tests/example.jsonl")) == 1
+    assert scan_json('{"api_key": "marker-api-key"}', "tests/example.json") == []
+    assert scan_json("not json", "tests/example.json") == []
+    assert scan_json("not json", "tests/example.jsonl") == []
+
+
 def test_all_test_files_use_redactable_fake_credentials() -> None:
-    test_files = sorted((ROOT / "tests").rglob("test_*.py"))
     violations = [
         violation
-        for path in test_files
+        for path in scanned_test_files()
         for violation in scan(path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix())
+    ] + [
+        violation
+        for path in scanned_fixture_files()
+        for violation in scan_json(path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix())
     ]
     assert not violations, "\n".join(violations)
