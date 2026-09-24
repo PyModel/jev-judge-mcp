@@ -7,7 +7,8 @@ on:
 permissions:
   contents: read
 
-# ruff -> pyright -> unit -> property -> contract -> parity -> security -> build -> MCP smoke (ROADMAP CI).
+# Fast gates (ruff, pyright, unit, property) run in parallel; every remaining stage is
+# gated on all four and then also runs concurrently (no serial chain).
 jobs:
   ruff:
     runs-on: ubuntu-latest
@@ -18,7 +19,6 @@ jobs:
       - run: make lint
 
   pyright:
-    needs: ruff
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,7 +27,6 @@ jobs:
       - run: make typecheck
 
   unit:
-    needs: pyright
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,7 +35,6 @@ jobs:
       - run: make unit
 
   property:
-    needs: unit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,8 +43,9 @@ jobs:
       - run: make property
       - run: make policy-coverage
 
+  # The remaining stages wait for the fast gates, then run in parallel.
   contract:
-    needs: property
+    needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,20 +54,21 @@ jobs:
       - run: make contract
 
   parity:
-    needs: contract
+    needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      # Node 24 for fixture replay and the serializer differential tests (P0/P2).
+      # Pinned to the parity oracle's Node (Makefile NODE, tests/parity/harness/reference.sh);
+      # a floating 24.x can drift ICU rendering.
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version: "24.19.0"
       - run: uv sync --locked --all-extras
       - run: make parity
 
   security:
-    needs: parity
+    needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,7 +77,7 @@ jobs:
       - run: make security
 
   build:
-    needs: security
+    needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -89,10 +89,11 @@ jobs:
           path: dist/
 
   smoke:
-    needs: build
+    needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --locked --all-extras
       - run: make smoke
+
