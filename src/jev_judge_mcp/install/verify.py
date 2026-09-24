@@ -113,14 +113,31 @@ def verify_command(command: list[str], *, timeout: float = 30.0) -> None:
         stdin.close()
     except VerifyError as exc:
         # The child's own words (uv's resolver, a crash) are the actionable part (ADR-0053). The
-        # installer redacts this message with the same pass as every other summary line.
+        # installer redacts this message with the same pass as every other summary line. The
+        # suffix is built only after the child is gone and the drain has finished: reading the
+        # tail while the drain thread is still reading stderr races the child's last writes and
+        # can drop exactly the lines the message exists to carry. Every wait stays bounded, so a
+        # hung or still-running child can never hang the installer.
         first = exc.args[0] if exc.args else "the check failed"
+        if process.stdin is not None and not process.stdin.closed:
+            process.stdin.close()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        tail.join(timeout=5)
         suffix = tail.suffix()
         raise VerifyError(f"{first}; {suffix}" if suffix else first) from None
     finally:
         if process.stdin is not None and not process.stdin.closed:
             process.stdin.close()
-        process.wait(timeout=5)
+        if process.poll() is None:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
         tail.join(timeout=1)
         if process.stdout is not None:
             process.stdout.close()
