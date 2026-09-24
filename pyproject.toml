@@ -10,12 +10,15 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX",
 ]
+# Bounds are the series uv.lock tests (F17′). mcp and typesafe-sdk are capped at the tested
+# minor: the code uses their private internals (server.py `_lowlevel_server`, the
+# providers/typesafe.py parse override). Everything else is capped at the next breaking series.
 dependencies = [
-    "mcp>=2.2,<3",
-    "httpx",
-    "pydantic>=2",
-    "pydantic-settings",
-    "tomlkit>=0.15.1",
+    "mcp>=2.2,<2.3",
+    "httpx>=0.28,<0.29",
+    "pydantic>=2,<3",
+    "pydantic-settings>=2,<3",
+    "tomlkit>=0.15.1,<0.16",
 ]
 
 [project.urls]
@@ -25,8 +28,8 @@ Issues = "https://github.com/PyModel/jev-judge-mcp/issues"
 Changelog = "https://github.com/PyModel/jev-judge-mcp/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-typesafe = ["typesafe-sdk"]
-telemetry = ["opentelemetry-sdk", "prometheus-client"]
+typesafe = ["typesafe-sdk>=0.7.1,<0.8"]
+telemetry = ["opentelemetry-sdk>=1.44,<2", "prometheus-client>=0.26,<0.27"]
 
 [project.scripts]
 jev-judge-mcp = "jev_judge_mcp.server:main"

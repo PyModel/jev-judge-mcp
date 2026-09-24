@@ -499,14 +499,14 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "httpx" },
-    { name = "mcp", specifier = ">=2.2,<3" },
-    { name = "opentelemetry-sdk", marker = "extra == 'telemetry'" },
-    { name = "prometheus-client", marker = "extra == 'telemetry'" },
-    { name = "pydantic", specifier = ">=2" },
-    { name = "pydantic-settings" },
-    { name = "tomlkit", specifier = ">=0.15.1" },
-    { name = "typesafe-sdk", marker = "extra == 'typesafe'" },
+    { name = "httpx", specifier = ">=0.28,<0.29" },
+    { name = "mcp", specifier = ">=2.2,<2.3" },
+    { name = "opentelemetry-sdk", marker = "extra == 'telemetry'", specifier = ">=1.44,<2" },
+    { name = "prometheus-client", marker = "extra == 'telemetry'", specifier = ">=0.26,<0.27" },
+    { name = "pydantic", specifier = ">=2,<3" },
+    { name = "pydantic-settings", specifier = ">=2,<3" },
+    { name = "tomlkit", specifier = ">=0.15.1,<0.16" },
+    { name = "typesafe-sdk", marker = "extra == 'typesafe'", specifier = ">=0.7.1,<0.8" },
 ]
 provides-extras = ["typesafe", "telemetry"]
 
