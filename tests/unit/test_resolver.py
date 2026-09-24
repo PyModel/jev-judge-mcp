@@ -15,11 +15,11 @@ from jev_judge_mcp.providers.typesafe import TypeSafeProvider
 from jev_judge_mcp.settings import load_settings
 from tests.support.stdio import server_env
 
-TYPESAFE = {"TYPESAFE_API_KEY": "ts"}
+TYPESAFE = {"TYPESAFE_API_KEY": "typesafe-fake-key"}
 OPENROUTER = {"OPENROUTER_API_KEY": "sk-or-v1"}
-CLOUDFLARE = {"CLOUDFLARE_API_TOKEN": "cf", "CLOUDFLARE_ACCOUNT_ID": "acct"}
-VERCEL = {"AI_GATEWAY_API_KEY": "gw"}
-COMPATIBLE = {"JEV_API_KEY": "jev", "JEV_API_BASE_URL": "https://jev.example/v1"}
+CLOUDFLARE = {"CLOUDFLARE_API_TOKEN": "cloudflare-fake-token", "CLOUDFLARE_ACCOUNT_ID": "acct"}
+VERCEL = {"AI_GATEWAY_API_KEY": "gateway-fake-key"}
+COMPATIBLE = {"JEV_API_KEY": "compatible-fake-key", "JEV_API_BASE_URL": "https://jev.example/v1"}
 
 
 @pytest.fixture(autouse=True)
@@ -90,7 +90,7 @@ def test_non_provider_names_fall_through_to_auto(monkeypatch: pytest.MonkeyPatch
         {"TYPESAFE_API_KEY": ""},
         {"OPENROUTER_API_KEY": ""},
         {"OPENROUTER_API_KEY": "SK-OR-upper"},
-        {"CLOUDFLARE_API_TOKEN": "cf", "CLOUDFLARE_ACCOUNT_ID": ""},
+        {"CLOUDFLARE_API_TOKEN": "cloudflare-fake-token", "CLOUDFLARE_ACCOUNT_ID": ""},
         {"CLOUDFLARE_API_TOKEN": "", "JEV_CLOUDFLARE_API_TOKEN": "", "CLOUDFLARE_ACCOUNT_ID": "acct"},
         {"AI_GATEWAY_API_KEY": ""},
         {"JEV_API_KEY": "", "JEV_API_BASE_URL": "https://jev.example"},
@@ -110,15 +110,21 @@ def test_explicit_typesafe_with_empty_key_is_unset(monkeypatch: pytest.MonkeyPat
 
 def test_explicit_compatible_with_empty_url_names_it(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ProviderConfigError, match=r"^JEV_PROVIDER=compatible but JEV_API_BASE_URL is not set\. "):
-        resolve(monkeypatch, {"JEV_PROVIDER": "compatible", "JEV_API_KEY": "k", "JEV_API_BASE_URL": ""})
+        resolve(
+            monkeypatch,
+            {"JEV_PROVIDER": "compatible", "JEV_API_KEY": "compatible-fake-key", "JEV_API_BASE_URL": ""},
+        )
 
 
 @pytest.mark.parametrize(
     ("tokens", "used"),
     [
-        ({"JEV_CLOUDFLARE_API_TOKEN": "jev-cf", "CLOUDFLARE_API_TOKEN": "cf"}, "jev-cf"),
-        ({"JEV_CLOUDFLARE_API_TOKEN": "", "CLOUDFLARE_API_TOKEN": "cf"}, "cf"),
-        ({"CLOUDFLARE_API_TOKEN": "cf"}, "cf"),
+        (
+            {"JEV_CLOUDFLARE_API_TOKEN": "jev-cloudflare-token", "CLOUDFLARE_API_TOKEN": "cloudflare-token"},
+            "jev-cloudflare-token",
+        ),
+        ({"JEV_CLOUDFLARE_API_TOKEN": "", "CLOUDFLARE_API_TOKEN": "cloudflare-token"}, "cloudflare-token"),
+        ({"CLOUDFLARE_API_TOKEN": "cloudflare-token"}, "cloudflare-token"),
     ],
 )
 def test_cloudflare_token_precedence(monkeypatch: pytest.MonkeyPatch, tokens: dict[str, str], used: str) -> None:
@@ -136,7 +142,16 @@ def test_typesafe_gets_the_configured_base_url(monkeypatch: pytest.MonkeyPatch) 
 def test_resolved_providers_redact_every_configured_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = resolve(monkeypatch, TYPESAFE, OPENROUTER, CLOUDFLARE, VERCEL, COMPATIBLE)
     assert isinstance(provider, TypeSafeProvider)
-    text = " ".join(["ts", "sk-or-v1", "cf", "gw", "jev", "https://jev.example/v1"])
+    text = " ".join(
+        [
+            "typesafe-fake-key",
+            "sk-or-v1",
+            "cloudflare-fake-token",
+            "gateway-fake-key",
+            "compatible-fake-key",
+            "https://jev.example/v1",
+        ]
+    )
     assert provider._redact(text) == " ".join(["[redacted]"] * 6)  # pyright: ignore[reportPrivateUsage]
 
 

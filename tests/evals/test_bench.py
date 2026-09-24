@@ -29,6 +29,7 @@ from jev_judge_mcp.tools.arguments import parse_arguments
 
 REPO = Path(__file__).resolve().parents[2]
 DATA = Path(__file__).resolve().parent / "data"
+BENCH_FAKE_API_KEY = "bench-fake-api-key"
 DRYRUN = DATA / "bench-dryrun.jsonl"
 STREAM_SAMPLE = DATA / "claude-stream-json-sample.jsonl"
 WEAK_SPOTS = {"arithmetic", "counting", "date-order", "indirection", "double-negative", "irrelevant-state"}
@@ -626,11 +627,11 @@ def test_early_stops_on_compliance_and_projected_cost() -> None:
 
 def test_live_run_refuses_without_flag_key_or_frozen_labels(tmp_path: Path) -> None:
     with pytest.raises(run.BenchRefusedError, match="JEV_BENCH_LIVE=1"):
-        run.live({"TYPESAFE_API_KEY": "k"}, tmp_path)
+        run.live({"TYPESAFE_API_KEY": BENCH_FAKE_API_KEY}, tmp_path)
     with pytest.raises(run.BenchRefusedError, match="TYPESAFE_API_KEY"):
         run.live({"JEV_BENCH_LIVE": "1"}, tmp_path)
     with pytest.raises(run.BenchRefusedError, match="150 of 150 items are not frozen"):
-        run.live({"JEV_BENCH_LIVE": "1", "TYPESAFE_API_KEY": "k"}, tmp_path)
+        run.live({"JEV_BENCH_LIVE": "1", "TYPESAFE_API_KEY": BENCH_FAKE_API_KEY}, tmp_path)
     assert run.main([], environ={}) == 2
     assert not list(tmp_path.iterdir()), "a refused run writes nothing"
 

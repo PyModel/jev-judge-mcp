@@ -146,8 +146,8 @@ async def test_cloudflare_http_error_with_unparseable_body_prints_an_empty_objec
 
 def typesafe(handler: Any, retry: RetryPolicy | None = None) -> TypeSafeProvider:
     return TypeSafeProvider(
-        Redactor(["ts-key"]),
-        api_key="ts-key",
+        Redactor(["typesafe-test-key"]),
+        api_key="typesafe-test-key",
         base_url="https://ts.example",
         transport=httpx2.MockTransport(handler),
         retry=retry,
@@ -175,7 +175,7 @@ async def test_typesafe_keeps_the_sdk_default_retries() -> None:
 @pytest.mark.anyio
 async def test_typesafe_error_body_as_text() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(400, text="bad key ts-key")
+        return httpx2.Response(400, text="bad key typesafe-test-key")
 
     provider = typesafe(handler, RetryPolicy(max_retries=0))
     with pytest.raises(ProviderError) as caught:
@@ -200,18 +200,23 @@ async def test_typesafe_error_without_body() -> None:
 
 @pytest.mark.anyio
 async def test_typesafe_invalid_api_key_is_a_provider_error() -> None:
-    provider = TypeSafeProvider(Redactor(["bad key"]), api_key="bad key", base_url=None)
+    provider = TypeSafeProvider(
+        Redactor(["bad-test-key"]),
+        api_key="bad-test-key",
+        base_url=None,
+        transport=httpx2.MockTransport(lambda _: httpx2.Response(401, json={"error": "unauthorized"})),
+    )
     with pytest.raises(ProviderError) as caught:
         await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
     await provider.aclose()
 
-    assert str(caught.value).startswith("TypeSafe API request failed: ")
+    assert str(caught.value).startswith("TypeSafe API 401: ")
 
 
 @pytest.mark.anyio
 async def test_typesafe_without_the_sdk_installed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "typesafe_sdk", None)
-    provider = TypeSafeProvider(Redactor([]), api_key="ts-key", base_url=None)
+    provider = TypeSafeProvider(Redactor([]), api_key="typesafe-test-key", base_url=None)
 
     with pytest.raises(ProviderError) as caught:
         await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
@@ -224,7 +229,7 @@ async def test_typesafe_without_the_sdk_installed(monkeypatch: pytest.MonkeyPatc
 def test_typesafe_sdk_is_imported_lazily() -> None:
     script = (
         "import sys, os\n"
-        "os.environ.update(TYPESAFE_API_KEY='ts-key')\n"
+        "os.environ.update(TYPESAFE_API_KEY='typesafe-test-key')\n"
         "from jev_judge_mcp.providers import resolve_provider\n"
         "from jev_judge_mcp.server import build_server\n"
         "from jev_judge_mcp.settings import load_settings\n"
@@ -269,8 +274,10 @@ def test_envelope_keeps_answers_raw_and_in_order() -> None:
 
 
 def test_redactor_replaces_every_occurrence_longest_first() -> None:
-    redact = Redactor(["abc", "abcdef", ""])
-    assert redact("Bearer abcdef / abc / abcabc") == f"Bearer {REDACTED} / {REDACTED} / {REDACTED}{REDACTED}"
+    redact = Redactor(["fake-key", "fake-key-extension", ""])
+    assert redact("Bearer fake-key-extension / fake-key / fake-keyfake-key") == (
+        f"Bearer {REDACTED} / {REDACTED} / {REDACTED}{REDACTED}"
+    )
 
 
 def test_redactor_covers_url_userinfo_in_any_normalized_form() -> None:
@@ -288,21 +295,21 @@ def test_redactor_leaves_urls_without_userinfo_alone_except_whole() -> None:
 def test_redacting_filter_covers_message_args_and_traceback() -> None:
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
-    handler.addFilter(RedactingFilter(Redactor(["s3cret"])))
+    handler.addFilter(RedactingFilter(Redactor(["s3cret-value"])))
     logger = logging.getLogger("tests.redaction")
     logger.addHandler(handler)
     logger.propagate = False
     try:
-        logger.warning("key %s in %r", "s3cret", {"k": "s3cret"})
+        logger.warning("key %s in %r", "s3cret-value", {"k": "s3cret-value"})
         try:
-            raise RuntimeError("boom s3cret")
+            raise RuntimeError("boom s3cret-value")
         except RuntimeError:
-            logger.exception("failed with s3cret")
+            logger.exception("failed with s3cret-value")
     finally:
         logger.removeHandler(handler)
 
     output = stream.getvalue()
-    assert "s3cret" not in output
+    assert "s3cret-value" not in output
     assert "key [redacted] in {'k': '[redacted]'}" in output
     assert "RuntimeError: boom [redacted]" in output
 
@@ -311,14 +318,14 @@ def test_server_logging_redacts_configured_secrets(capsys: pytest.CaptureFixture
     root = logging.getLogger()
     saved = root.handlers[:], root.level
     try:
-        configure_logging("INFO", ["s3cret", "https://u:pw-1@host.example"])
-        logging.getLogger("httpx").info("HTTP Request: POST https://u:pw-1@host.example/ s3cret")
+        configure_logging("INFO", ["s3cret-value", "https://u:pw-1@host.example"])
+        logging.getLogger("httpx").info("HTTP Request: POST https://u:pw-1@host.example/ s3cret-value")
     finally:
         root.handlers[:], level = saved
         root.setLevel(level)
 
     err = capsys.readouterr().err
-    assert "s3cret" not in err
+    assert "s3cret-value" not in err
     assert "pw-1" not in err
     assert "HTTP Request: POST" in err
 
@@ -386,7 +393,7 @@ async def test_typesafe_request_timeout(timeout: float | None, sent: dict[str, f
 async def test_compatible_refuses_a_base_url_with_credentials() -> None:
     """Node `fetch` refuses it; httpx would silently swap the Bearer key for Basic auth."""
     url = "https://user:pw-9@jev.example/v1"
-    provider = CompatibleProvider(Redactor(["key", url]), api_key="key", base_url=url)
+    provider = CompatibleProvider(Redactor(["compatible-test-key", url]), api_key="compatible-test-key", base_url=url)
     with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
         route = router.post("https://jev.example/v1").mock(return_value=httpx.Response(200, json={"answers": {}}))
         with pytest.raises(ProviderError) as caught:
@@ -408,7 +415,10 @@ async def test_typesafe_refuses_a_base_url_with_credentials() -> None:
         return httpx2.Response(200, json={"answers": {}})
 
     provider = TypeSafeProvider(
-        Redactor([]), api_key="ts-key", base_url="https://u:p@ts.example", transport=httpx2.MockTransport(handler)
+        Redactor([]),
+        api_key="typesafe-test-key",
+        base_url="https://u:p@ts.example",
+        transport=httpx2.MockTransport(handler),
     )
     with pytest.raises(ProviderError, match=r"^TypeSafe API request failed: Request cannot be constructed"):
         await provider.evaluate("state", QUESTIONS, "m", 5)
@@ -420,7 +430,7 @@ async def test_typesafe_refuses_a_base_url_with_credentials() -> None:
 @pytest.mark.anyio
 async def test_typesafe_refuses_a_redirect_off_the_configured_origin() -> None:
     """ADR-0023 for the SDK transport too: the origin gate rides the wrapper the SDK is given."""
-    provider = TypeSafeProvider(Redactor([]), api_key="ts-key", base_url="https://ts.example")
+    provider = TypeSafeProvider(Redactor([]), api_key="typesafe-test-key", base_url="https://ts.example")
     gate = provider._reject_cross_origin  # pyright: ignore[reportPrivateUsage]
     await gate(httpx2.Request("POST", "https://ts.example/v1/system-one"))
     with pytest.raises(ProviderError, match="a redirect left the configured origin and was blocked"):
@@ -430,7 +440,7 @@ async def test_typesafe_refuses_a_redirect_off_the_configured_origin() -> None:
 
 @pytest.mark.anyio
 async def test_typesafe_gates_the_client_the_sdk_is_given() -> None:
-    provider = TypeSafeProvider(Redactor([]), api_key="ts-key", base_url="https://ts.example")
+    provider = TypeSafeProvider(Redactor([]), api_key="typesafe-test-key", base_url="https://ts.example")
     try:
         provider._sdk_client()  # pyright: ignore[reportPrivateUsage]
         wrapper = provider._wrapper  # pyright: ignore[reportPrivateUsage]
