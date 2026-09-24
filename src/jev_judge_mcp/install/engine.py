@@ -572,10 +572,11 @@ def _apply(request: Request, actions: list[_Action]) -> None:
             action.after = None
             continue
         changed = True
+        record: dict[str, object] | None = None
         if action.kind == "remove":
             targets.pop(action.target, None)
         elif action.entry is not None:
-            targets[action.target] = {
+            record = {
                 "path": str(action.path),
                 "name": request.name,
                 "installer_version": _version(),
@@ -584,12 +585,22 @@ def _apply(request: Request, actions: list[_Action]) -> None:
         warning = _mode_warning(action.path, holds_literal(action.entry) or action.literal)
         if warning and warning not in action.message:
             action.message = (action.message + " " + warning).strip()
+        verified: bool | None = None
         if request.verify is not None and action.kind in {"add", "update"}:
             try:
                 request.verify(request.launch.invoke())
             except Exception as exc:
                 action.ok = False
                 action.message = (action.message + f" verify failed: {exc}").strip()
+                verified = False
+            else:
+                verified = True
+        if record is not None:
+            # A failed check stays recorded as `verified: false` so `--remove` still owns the
+            # entry, while the summary and exit code report the failure (ADR-0051).
+            if verified is not None:
+                record["verified"] = verified
+            targets[action.target] = record
     if changed:
         payload: dict[str, object] = {"targets": targets}
         _refuse_secret(payload, request.secrets)
@@ -648,6 +659,9 @@ def _applied_lines(actions: list[_Action]) -> list[str]:
     for action in actions:
         if action.kind == "fail":
             lines.append(f"{action.target}: fail {action.message}")
+        elif not action.ok:
+            # The write succeeded but the post-write check failed; say so (ADR-0051).
+            lines.append(f"{action.target}: {action.kind} {action.message}".strip())
         elif action.message and "mode " in action.message:
             lines.append(f"{action.target}: {action.message}")
     return lines

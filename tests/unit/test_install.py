@@ -693,6 +693,42 @@ def test_remove_drops_both_spec_shapes(tmp_path: Path) -> None:
     assert "jev" not in json.loads((home / ".claude.json").read_text(encoding="utf-8"))["mcpServers"]
 
 
+def test_failed_verify_is_recorded_and_exits_non_zero(tmp_path: Path) -> None:
+    """A failed post-write check is reported, recorded as `verified: false`, and non-zero (ADR-0051)."""
+
+    def failing(command: list[str]) -> None:
+        raise VerifyError("no answer")
+
+    code, text = execute(tmp_path, agents=("claude-code",), launch=PYPI_LAUNCH, verify=failing)
+    assert code == 1
+    assert "verify failed: no answer" in text
+    path = tmp_path / ".claude.json"
+    entry = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["jev"]
+    record = _state_targets(tmp_path)["claude-code"]
+    assert record["verified"] is False
+    assert record["entry_sha256"] == entry_hash(entry)
+
+
+def test_remove_still_removes_an_entry_that_failed_verify(tmp_path: Path) -> None:
+    def failing(command: list[str]) -> None:
+        raise VerifyError("no answer")
+
+    code, _ = execute(tmp_path, agents=("claude-code",), launch=PYPI_LAUNCH, verify=failing)
+    assert code == 1
+    code, text = execute(tmp_path, agents=("claude-code",), remove=True, launch=PYPI_LAUNCH)
+    assert code == 0, text
+    assert "jev" not in json.loads((tmp_path / ".claude.json").read_text(encoding="utf-8"))["mcpServers"]
+    assert _state_targets(tmp_path) == {}
+
+
+def test_passed_verify_is_recorded(tmp_path: Path) -> None:
+    calls: list[list[str]] = []
+    code, text = execute(tmp_path, agents=("claude-code",), launch=PYPI_LAUNCH, verify=calls.append)
+    assert code == 0, text
+    assert calls == [PYPI_LAUNCH.invoke()]
+    assert _state_targets(tmp_path)["claude-code"]["verified"] is True
+
+
 def test_reinstall_migrates_a_checkout_entry_to_the_pinned_spec(tmp_path: Path) -> None:
     """The ADR-0051 migration: one plain re-run rewrites entries this installer owns."""
     code, _ = execute(tmp_path, agents=("claude-code",), launch=LAUNCH)
