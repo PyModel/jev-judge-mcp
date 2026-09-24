@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Literal, cast, get_args
 
 from pydantic import Field, SecretStr
+from pydantic.aliases import AliasChoices
+from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 Transport = Literal["stdio", "streamable-http"]
@@ -44,6 +46,8 @@ class Settings(BaseSettings):
     transport: Transport = Field(default="stdio", validation_alias="JEV_MCP_TRANSPORT")
     http_host: str = Field(default="127.0.0.1", validation_alias="JEV_MCP_HTTP_HOST")
     http_port: int = Field(default=8000, ge=1, le=65535, validation_alias="JEV_MCP_HTTP_PORT")
+    # The bearer token every HTTP request must carry (ADR-0050). `SecretStr` joins redaction per ADR-0017.
+    http_token: SecretStr | None = Field(default=None, validation_alias="JEV_MCP_HTTP_TOKEN")
     log_level: LogLevel = Field(default="INFO", validation_alias="JEV_MCP_LOG_LEVEL")
     # Debug only: let telemetry spans record payload text (arguments, results, patterns). Off by default.
     telemetry_payloads: bool = Field(default=False, validation_alias="JEV_MCP_TELEMETRY_PAYLOADS")
@@ -59,21 +63,45 @@ class Settings(BaseSettings):
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         return (env_settings,)
 
+    def named_secrets(self) -> list[tuple[str, str]]:
+        """(environment variable, value) for every configured, non-empty secret (ADR-0008, ADR-0017).
+
+        `secret_values()` feeds the `Redactor`; this pairs each value with its variable name so a
+        startup gate can reject an unsafe one by name (ADR-0050). Empty values stay out: every
+        reader treats an empty variable as unset, and the `Redactor` skips them anyway.
+        """
+        named: list[tuple[str, str]] = []
+        for name, field in type(self).model_fields.items():
+            annotation = field.annotation
+            if annotation is not SecretStr and SecretStr not in get_args(annotation):
+                continue
+            secret = cast("SecretStr | None", getattr(self, name))
+            if secret is None:
+                continue
+            value = secret.get_secret_value()
+            if value:
+                named.append((_env_var_name(name, field), value))
+        return named
+
     def secret_values(self) -> list[str]:
         """Every configured secret value, for redaction — derived from the schema (ADR-0008, ADR-0017).
 
         Every `SecretStr` field participates, so a new credential cannot be forgotten; the naming
         guard in `tests/unit/test_settings.py` fails if a credential-named field is not `SecretStr`.
         """
-        values: list[str] = []
-        for name, field in type(self).model_fields.items():
-            annotation = field.annotation
-            if annotation is not SecretStr and SecretStr not in get_args(annotation):
-                continue
-            secret = cast("SecretStr | None", getattr(self, name))
-            if secret is not None:
-                values.append(secret.get_secret_value())
-        return values
+        return [value for _, value in self.named_secrets()]
+
+
+def _env_var_name(name: str, field: FieldInfo) -> str:
+    """The variable name a field reads: its validation alias, else the uppercased field name."""
+    alias = field.validation_alias
+    if isinstance(alias, str):
+        return alias
+    if isinstance(alias, AliasChoices):
+        for choice in alias.choices:
+            if isinstance(choice, str):
+                return choice
+    return name.upper()
 
 
 def load_settings() -> Settings:

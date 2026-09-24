@@ -168,6 +168,7 @@ The server reads environment variables only. It does not load a `.env` file.
 | `JEV_MCP_CACHE` | off | replay identical requests from disk at no API cost; leave it off when answers must be fresh, and delete the directory to clear it |
 | `JEV_MCP_CACHE_DIR` | `~/.cache/jev-mcp` | where the cache lives |
 | `JEV_MCP_TRANSPORT` | `stdio` | `streamable-http` is experimental and binds `JEV_MCP_HTTP_HOST:JEV_MCP_HTTP_PORT`, default `127.0.0.1:8000` |
+| `JEV_MCP_HTTP_TOKEN` | unset | bearer token for the HTTP transport; required on every request, and required for any non-loopback `JEV_MCP_HTTP_HOST` |
 | `JEV_MCP_LOG_LEVEL` | `INFO` | logs go to stderr |
 
 ## Operator notes
@@ -181,6 +182,31 @@ what the caller passes. Bound the text at the call site when it is not yours.
 - Requests over stdio carry no provider deadline (the sanctioned divergence
 `stdio-no-provider-deadline`): a provider that stops answering keeps the tool call waiting until
 the client cancels it.
+
+### Running over HTTP (experimental)
+
+The HTTP transport is Tier B experimental: it has no reliability contract and no admission control, and it is not covered by the parity suite. Only `127.0.0.1`, `localhost`, and `::1` are exempt from the token: exactly those hosts get the SDK's automatic Host/Origin validation. Every other host — `127.9.9.9`, `0:0:0:0:0:0:0:1`, `0.0.0.0`, a LAN address, a hostname — refuses to start unless `JEV_MCP_HTTP_TOKEN` is set, because every tool call would otherwise spend your provider key on behalf of anyone who can reach the port.
+
+Generate a token:
+
+```sh
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Run the server with it:
+
+```sh
+JEV_MCP_TRANSPORT=streamable-http JEV_MCP_HTTP_HOST=0.0.0.0 JEV_MCP_HTTP_TOKEN=<token> jev-judge-mcp
+```
+
+Every HTTP request must then carry the token; a request without it, or with a wrong one, gets `401` before any tool runs:
+
+```sh
+curl -H "Authorization: Bearer <token>" \
+  -H "Accept: application/json, text/event-stream" -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"example","version":"0"}}}' \
+  http://127.0.0.1:8000/mcp
+```
 
 ## Architecture
 

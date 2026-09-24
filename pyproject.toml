@@ -67,6 +67,9 @@ known-first-party = ["evals"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S603", "S607"]
+# S104: non-loopback host literals are gate inputs, never bound. S106: fake tokens for the gate.
+"tests/unit/test_http_auth.py" = ["S104", "S106"]
+"tests/integration/test_http_auth.py" = ["S104", "S106"]
 # S311: the outcome study's pair schedule is a seeded, reproducible shuffle, not a secret.
 "evals/ab/**" = ["S603", "S607", "S311"]
 "evals/agent.py" = ["S603"]

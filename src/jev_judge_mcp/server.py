@@ -20,8 +20,11 @@ import uvicorn
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.shared.exceptions import MCPError
 from mcp.types import INTERNAL_ERROR, CallToolResult, CancelledNotificationParams, NotificationParams, Tool
+from starlette.types import ASGIApp
 
+from jev_judge_mcp import keyfile
 from jev_judge_mcp.errors import RedactingFilter, Redactor
+from jev_judge_mcp.http_auth import BearerTokenMiddleware, ensure_http_access_control
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import LogLevel, Settings, load_settings
 from jev_judge_mcp.stdio import stdio_streams
@@ -29,6 +32,9 @@ from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 
 SERVER_NAME = "jev-mcp"
 DISTRIBUTION = "jev-judge-mcp"
+
+MIN_SECRET_LENGTH = 8
+"""Shortest configured secret the Redactor accepts: shorter values would blank matching text."""
 
 logger = logging.getLogger("jev_judge_mcp")
 
@@ -109,6 +115,28 @@ def configure_logging(level: LogLevel, secrets: Iterable[str] = ()) -> None:
     root.setLevel(level)
 
 
+def ensure_secrets_redactable(settings: Settings) -> None:
+    """Refuse any configured secret too short to redact safely (ADR-0050).
+
+    The Redactor replaces exact values, so a 1-2 character secret would blank every matching
+    fragment of tool output and logs. Each configured `SecretStr` setting and the key-file key
+    (ADR-0046) is held to `MIN_SECRET_LENGTH`; the error names the variable, never the value.
+    """
+    for variable, value in settings.named_secrets():
+        if len(value) < MIN_SECRET_LENGTH:
+            raise SystemExit(
+                f"{variable} is shorter than {MIN_SECRET_LENGTH} characters; refusing to start: "
+                "a secret that short cannot be redacted without corrupting text"
+            )
+    stored = keyfile.stored_key(settings)
+    if stored and len(stored) < MIN_SECRET_LENGTH:
+        raise SystemExit(
+            f"the key file {keyfile.stored_key_path(settings)} set by JEV_MCP_KEY_FILE holds a key shorter "
+            f"than {MIN_SECRET_LENGTH} characters; refusing to start: a secret that short cannot be "
+            "redacted without corrupting text"
+        )
+
+
 class _UvicornServer(uvicorn.Server):
     """Leaves signals to `serve`, which owns them for both transports."""
 
@@ -139,7 +167,7 @@ async def _serve(server: JevMCPServer, settings: Settings) -> None:
             tg.start_soon(_stop_on_signal, tg.cancel_scope.cancel)
             await server.run_stdio_async()
         else:
-            app = server.streamable_http_app(host=settings.http_host)
+            app = http_asgi_app(server, settings)
             # log_config=None: uvicorn's loggers propagate to the stderr root handler.
             config = uvicorn.Config(app, host=settings.http_host, port=settings.http_port, log_config=None)
             http = _UvicornServer(config)
@@ -150,6 +178,19 @@ async def _serve(server: JevMCPServer, settings: Settings) -> None:
             tg.start_soon(_stop_on_signal, stop)
             await http.serve()
         tg.cancel_scope.cancel()
+
+
+def http_asgi_app(server: JevMCPServer, settings: Settings) -> ASGIApp:
+    """The Streamable HTTP app, behind the bearer-token gate when a token is set (ADR-0050).
+
+    The Host/Origin (DNS-rebinding) validation is the SDK's own: automatic exactly on the
+    protected hosts (`127.0.0.1`, `localhost`, `::1`), untouched here. Every other host must have
+    passed the startup gate, and the token is its access control.
+    """
+    app: ASGIApp = server.streamable_http_app(host=settings.http_host)
+    if settings.http_token is not None:
+        app = BearerTokenMiddleware(app, settings.http_token)
+    return app
 
 
 def freeze_startup_heap() -> None:
@@ -216,6 +257,10 @@ def main() -> None:
 
         sys.exit(setup_main(sys.argv[2:]))
     settings = load_settings()
+    # The gates run before logging and before anything binds, so a misconfiguration is one clear
+    # line on stderr and a non-zero exit, never a live unauthenticated server (ADR-0050).
+    ensure_secrets_redactable(settings)
+    ensure_http_access_control(settings)
     configure_logging(settings.log_level, settings.secret_values())
     server = build_server(settings)
     freeze_startup_heap()
