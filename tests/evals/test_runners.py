@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -95,6 +96,42 @@ def test_manifest_must_pin_a_model_and_name_a_tool(tmp_path: Path) -> None:
         load_manifest(_manifest(tmp_path, model="jev-latest"))
     with pytest.raises(ValueError, match="unknown tool"):
         load_manifest(_manifest(tmp_path, tool="jev_nope"))
+
+
+def test_eval_runtime_provider_disables_retries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The eval runtime's provider runs with SDK retries off, so one tool call is at most one request.
+
+    No network: constructing the provider builds no client. The fixture key never leaves the redactor.
+    """
+    from typesafe_sdk import RetryPolicy
+
+    from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+    from jev_judge_mcp.settings import Settings
+
+    monkeypatch.setenv("JEV_PROVIDER", "typesafe")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "eval-fixture-key")
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(tmp_path / "absent-key"))
+
+    eval_provider = cast(TypeSafeProvider, live.typesafe_without_retries(Settings()))
+
+    assert eval_provider._retry == RetryPolicy(max_retries=0)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_eval_runtime_provider_refuses_without_a_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No env key and no stored key: the factory refuses exactly like the server's resolver, before
+    the runtime could start a run. The temp HOME and absent key file prove no stored key is picked up.
+    """
+    from jev_judge_mcp.providers.base import ProviderConfigError
+    from jev_judge_mcp.settings import Settings
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / ".config"))
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(tmp_path / "absent-key"))
+    monkeypatch.setenv("JEV_PROVIDER", "typesafe")
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+
+    with pytest.raises(ProviderConfigError, match=r"^JEV_PROVIDER=typesafe but TYPESAFE_API_KEY is not set\.$"):
+        live.typesafe_without_retries(Settings())
 
 
 def test_a_case_without_a_recorded_output_is_an_error(tmp_path: Path) -> None:

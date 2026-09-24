@@ -3,8 +3,10 @@
 Calls the real tools through the configured provider, so it costs money and drifts with the model.
 It refuses to start unless `JEV_EVAL_LIVE=1` is passed in its environment, unless `JEV_PROVIDER` is
 `typesafe`, unless the server's resolved model is the manifest's pinned model, and when cases x repeats
-exceeds `LIVE_REQUEST_CAP`. Every tool call makes at most one provider request, so the cap bounds
-requests before any is sent; a result that reports another model aborts the run. Recorded outputs feed
+exceeds `LIVE_REQUEST_CAP`. Every tool call makes at most one provider request — the runtime's provider
+runs with `RetryPolicy(max_retries=0)`, unlike the server's reference-faithful default — so the cap
+bounds requests before any is sent, and a transient provider failure is a recorded `error` row, not an
+unbudgeted retry. A result that reports another model aborts the run. Recorded outputs feed
 `evals.runners.score`. The flag is eval-only and stays out of `jev_judge_mcp.settings` (ADR-0008/0017).
 """
 
@@ -14,15 +16,45 @@ import os
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import anyio
 
 from evals.calibration.flips import MAX_REPEATS
 from evals.runners.manifest import Manifest, load_cases, load_manifest
 
+if TYPE_CHECKING:
+    from jev_judge_mcp.providers.base import JevProvider
+    from jev_judge_mcp.settings import Settings
+
 LIVE_FLAG = "JEV_EVAL_LIVE"
 LIVE_REQUEST_CAP = 25
 """Hard ceiling on tool calls (each at most one provider request) per live run."""
+
+
+def typesafe_without_retries(settings: "Settings") -> "JevProvider":
+    """The eval runtime's provider factory: the resolved TypeSafe provider with SDK retries off.
+
+    Mirrors `resolve_provider`'s typesafe branch — stored-key fallback and its redaction, base URL,
+    the missing-key refusal (ADR-0046/0017) — and passes `RetryPolicy(max_retries=0)` like the paid
+    security gate (`tests/security/test_live_typesafe.py`). The server keeps the SDK's default policy
+    — reference faithful — which would let one tool call cost up to three requests; a capped budget
+    run may not.
+    """
+    from typesafe_sdk import RetryPolicy
+
+    from jev_judge_mcp import keyfile
+    from jev_judge_mcp.errors import Redactor
+    from jev_judge_mcp.providers.base import ProviderConfigError
+    from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+
+    stored = keyfile.stored_key(settings)
+    redact = Redactor([*settings.secret_values(), stored] if stored else settings.secret_values())
+    api_key = (settings.typesafe_api_key.get_secret_value() if settings.typesafe_api_key else "") or stored
+    if not api_key:
+        raise ProviderConfigError("JEV_PROVIDER=typesafe but TYPESAFE_API_KEY is not set.")
+    base_url = (settings.typesafe_base_url.get_secret_value() if settings.typesafe_base_url else "") or None
+    return TypeSafeProvider(redact, api_key=api_key, base_url=base_url, retry=RetryPolicy(max_retries=0))
 
 
 class LiveRunRefusedError(RuntimeError):
@@ -63,7 +95,7 @@ async def collect(manifest: Manifest, out: Path, repeats: int) -> None:
     require_typesafe(settings.jev_provider)
     cases = load_cases(manifest.dataset)
     require_within_cap(len(cases), repeats)
-    toolset = Toolset(Runtime(settings), TOOLS)
+    toolset = Toolset(Runtime(settings, provider_factory=typesafe_without_retries), TOOLS)
     try:
         require_pinned_model(manifest, toolset.runtime.model)
         with out.open("w", encoding="utf-8") as sink:
