@@ -37,6 +37,30 @@ Report the command you ran and its result with the change.
 
 Load `.agents/skills/test-audit` before writing, changing, reviewing, or sweeping tests.
 
+## The pre-push gate
+
+Every push from an enabled clone runs the full gate first: `make ci` natively plus the whole
+workflow again inside a Linux container, against a clean temporary clone of the pushed commit
+— never your working tree. A failure blocks the push and names the check plus the command
+that reruns it (`make ci`, or `make ci-linux` for the Linux leg alone against the working
+tree). Expect a few minutes per push: roughly 4–5 minutes native, 5–15 minutes Linux on a
+warm cache (the first run builds the image and fills the caches, so allow more).
+
+Enable it once per clone:
+
+```sh
+make hooks
+```
+
+`make hooks` points `core.hooksPath` at the tracked `.githooks/`, proves the gate is
+reachable (a banner check with empty stdin — nothing is pushed, nothing is checked), and
+chains every git client hook to whatever your global or system hooks directory ran before, so
+your machine's own hooks keep working. Docker must be running: an unreachable daemon blocks
+the push rather than silently skipping the Linux leg. The gate mirrors `.github/workflows/
+ci.yml`; the drift guard (`tests/unit/test_ci_prepush_coverage.py`) fails `make ci` if the
+workflow and the gate ever diverge. Rationale and environment-fidelity notes:
+`docs/adr/0056-pre-push-ci-gate.md`.
+
 CI guards prevent these failure classes:
 
 - The unit-stage fake-secret scanner rejects non-empty test credentials shorter than the server's

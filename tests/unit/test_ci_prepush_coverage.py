@@ -261,23 +261,40 @@ def test_the_gate_never_runs_a_paid_stage_or_sets_a_live_flag() -> None:
 
 
 def test_both_legs_clean_up_after_themselves() -> None:
+    """Temp state (clone, container, stdin file) must go on success, failure and signals."""
     pre = PRE_PUSH_CHECK.read_text(encoding="utf-8")
-    assert "rm -rf" in pre and "trap cleanup EXIT" in pre
+    assert "rm -rf" in pre, "the temporary clone must be removed"
+    assert re.search(r"^trap \S+ EXIT", pre, re.MULTILINE), "cleanup must run on exit"
     for signal, code in (("INT", 130), ("TERM", 143), ("HUP", 129)):
-        assert f"trap 'exit {code}' {signal}" in pre, f"the hook must clean up on SIG{signal}"
+        assert re.search(rf"^trap 'exit {code}' {signal}$", pre, re.MULTILINE), (
+            f"a push killed by SIG{signal} must still clean up"
+        )
     linux = LINUX_CHECK.read_text(encoding="utf-8")
-    assert "docker rm -f" in linux and "trap cleanup EXIT" in linux
+    assert "docker rm -f" in linux, "the throwaway container must be removed"
+    assert re.search(r"^trap \S+ EXIT", linux, re.MULTILINE)
     for signal, code in (("INT", 130), ("TERM", 143), ("HUP", 129)):
-        assert f"trap 'exit {code}' {signal}" in linux, f"the container must be removed on SIG{signal}"
+        assert re.search(rf"^trap 'exit {code}' {signal}$", linux, re.MULTILINE), (
+            f"a check killed by SIG{signal} must still remove the container"
+        )
     chain = HOOK_CHAIN.read_text(encoding="utf-8")
-    assert "trap cleanup EXIT" in chain
-    for signal, code in (("INT", 130), ("TERM", 143), ("HUP", 129)):
-        assert f"trap 'exit {code}' {signal}" in chain, f"the chain must clean up on SIG{signal}"
+    assert re.search(r"^trap \S+ EXIT", chain, re.MULTILINE), "the chain must remove its saved stdin"
 
 
-def test_the_docker_leg_fails_closed_without_a_daemon() -> None:
-    text = LINUX_CHECK.read_text(encoding="utf-8")
-    assert "docker info" in text, "an unreachable Docker must block the check, never skip the Linux leg"
+def test_the_docker_leg_fails_closed_without_a_daemon(tmp_path: Path) -> None:
+    """An unreachable Docker must block the check, never skip the Linux leg."""
+    no_docker = {k: v for k, v in os.environ.items() if k != "DOCKER_HOST"}
+    no_docker["PATH"] = "/usr/bin:/bin"  # no docker binary on PATH at all
+    proc = subprocess.run(
+        ["bash", str(LINUX_CHECK), str(tmp_path)],
+        cwd=tmp_path,
+        env=no_docker,
+        capture_output=True,
+        timeout=60,
+    )
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode != 0, "a missing or unreachable docker must block the check"
+    assert b"docker is unreachable" in combined, "the block must name docker and the rerun command"
+    assert b"make ci-linux" in combined
 
 
 def test_linux_leg_matches_the_runner_environment() -> None:
