@@ -13,9 +13,12 @@ exemptions below are allowed.
 
 import ast
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
+
+import pytest
 
 from jev_judge_mcp.server import MIN_SECRET_LENGTH
 
@@ -187,17 +190,19 @@ def repo_owned_test_files(root: Path = ROOT) -> list[Path]:
     (`--exclude-standard`), so a new test file not yet staged is still scanned while a fetched
     gitignored tree — `tests/parity/reference/`, node_modules and all — never is. Tracked files
     deleted from the working tree but not yet staged are skipped: a normal mid-refactor state
-    must not error an unrelated guard. A failed listing — or one that names nothing scannable —
-    raises: the guard must be loud, never vacuously green (ADR-0059)."""
+    must not error an unrelated guard. Paths come back NUL-separated (`-z`), because git C-quotes
+    non-ASCII and special-character paths otherwise and an existence check would silently drop
+    them — a vacuous green ADR-0059 forbids. A failed listing — or one that names nothing
+    scannable — raises: the guard must be loud, never vacuously green."""
     listing = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "tests"],
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "tests"],
         capture_output=True,
         text=True,
         cwd=root,
     )
     if listing.returncode != 0:
         raise RuntimeError(f"git could not list repo-owned test files: {listing.stderr.strip()}")
-    files = [root / line for line in listing.stdout.splitlines() if (root / line).exists()]
+    files = [root / line for line in listing.stdout.split("\0") if line and (root / line).exists()]
     if not files:
         raise RuntimeError("git listed no repo-owned test files; refusing to scan nothing")
     return files
@@ -215,11 +220,19 @@ def scanned_fixture_files(root: Path = ROOT) -> list[Path]:
     return sorted(path for path in repo_owned_test_files(root) if path.suffix in {".json", ".jsonl"})
 
 
-def test_the_scan_lists_existing_repo_owned_files(tmp_path: Path) -> None:
+def test_the_scan_lists_existing_repo_owned_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Pins the listing contract in a throwaway repo, with real git and no mocking (ADR-0059):
-    a gitignored fixture with a short fake is never listed, an unstaged new file is, a tracked
-    file deleted without staging is skipped without erroring, and an empty listing raises
-    instead of scanning nothing."""
+    a gitignored fixture with a short fake is never listed, an unstaged new file is — whatever
+    its name's characters, which git would C-quote without `-z` —, a tracked file deleted
+    without staging is skipped without erroring, and an empty listing raises instead of scanning
+    nothing. The environment is hermetic: the developer's global git config, ignore file, and
+    hooks never reach the throwaway repo or the function under test."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
 
     def git(repo: Path, *args: str) -> None:
         subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
@@ -238,11 +251,13 @@ def test_the_scan_lists_existing_repo_owned_files(tmp_path: Path) -> None:
     unstaged_py.write_text("")
     unstaged_json = repo / "tests" / "brand_new.json"
     unstaged_json.write_text('{"ok": "marker-client-secret"}')
+    unstaged_nonascii = repo / "tests" / "fixture-é.json"
+    unstaged_nonascii.write_text('{"key": "a"}')
 
     tests = scanned_test_files(repo)
     fixtures = scanned_fixture_files(repo)
     assert ignored not in tests and ignored not in fixtures
-    assert unstaged_py in tests and unstaged_json in fixtures
+    assert unstaged_py in tests and unstaged_json in fixtures and unstaged_nonascii in fixtures
     assert repo / "tests" / "test_tracked.py" in tests and repo / "tests" / "tracked.json" in fixtures
 
     (repo / "tests" / "test_tracked.py").unlink()  # deleted, not staged: skipped, not an error
@@ -252,12 +267,8 @@ def test_the_scan_lists_existing_repo_owned_files(tmp_path: Path) -> None:
     empty = tmp_path / "empty"
     (empty / "tests").mkdir(parents=True)
     git(empty, "init", "-q")
-    try:
+    with pytest.raises(RuntimeError):
         scanned_test_files(empty)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("an empty listing must raise, not scan nothing")
 
 
 def test_short_fake_credentials_are_detected() -> None:

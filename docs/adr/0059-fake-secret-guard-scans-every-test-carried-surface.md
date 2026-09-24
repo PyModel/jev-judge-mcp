@@ -37,5 +37,7 @@ short credential in `conftest.py` and one in a JSON fixture.
   stage joins `ci` when its tests arrive).
 
 The permanent self-tests cover the rule per surface: the synthetic short key in Python source
-and in JSON, including the JSONL line form; and the scope contract against the real repo — the
-listing is non-empty and names nothing gitignored (no git mocking).
+and in JSON, including the JSONL line form; and the listing contract in a throwaway git repo
+with a hermetic environment (real git, no mocking): gitignored files are never listed, unstaged
+new files always are — whatever their name's characters, which git would C-quote without `-z` —,
+deleted-tracked files are skipped without erroring, and an empty listing raises.
