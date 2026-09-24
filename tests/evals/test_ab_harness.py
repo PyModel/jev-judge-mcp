@@ -341,7 +341,8 @@ def test_cost_of_is_the_agent_cost_plus_the_priced_jev_tokens(tmp_path: Path) ->
 
 
 def test_arms_configs_differ_only_in_the_jev_server(tmp_path: Path) -> None:
-    server_env = arms.jev_env(api_key="k", path="/p")
+    api_key = "sk-test-arm-a-must-not-see-this"
+    server_env = arms.jev_env(api_key=api_key, path="/p")
     configs = {arm: arms.mcp_config(arm, jev_log=tmp_path / "log", server_env=server_env) for arm in arms.ARMS}
     assert set(configs["A"]["mcpServers"]) == {"harness"}
     servers = configs["B"]["mcpServers"]
@@ -349,7 +350,8 @@ def test_arms_configs_differ_only_in_the_jev_server(tmp_path: Path) -> None:
     assert servers["jev"]["env"] == server_env
     assert servers["jev"]["args"][:3] == ["-m", "evals.ab.proxy", str(tmp_path / "log")]
     assert servers["jev"]["args"][-2:] == ["-m", "jev_judge_mcp"]
-    assert "k" not in json.dumps(configs["A"])
+    assert api_key not in json.dumps(configs["A"])
+    assert servers["jev"]["env"]["TYPESAFE_API_KEY"] == api_key
 
 
 @pytest.mark.parametrize("agent", ab_run.AGENTS)
