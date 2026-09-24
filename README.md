@@ -26,6 +26,8 @@ uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install   # add the server to
 uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp doctor    # check the configuration, offline
 ```
 
+Every entry the installer writes also requests a Python the package itself declares — `--python '>=3.12'`, taken from the package's `Requires-Python` metadata (ADR-0053). On a machine whose first interpreter is older (Ubuntu 22.04's 3.10, macOS system 3.9), uv picks or downloads one that qualifies instead of refusing to start the server.
+
 <details>
 <summary><b>More installer options</b></summary>
 
@@ -41,6 +43,8 @@ uv run jev-judge-mcp install --from-checkout
 That extra is only for running the server. Development and `make typecheck` need the full sync:
 `uv sync --locked --all-extras` — a plain `uv sync` fails `make typecheck` with confusing
 `Import "typesafe_sdk" could not be resolved` errors.
+
+Running `install` from an unreleased clone without `--from-checkout`? It prints a note that the pinned PyPI build does not include your local changes, and points here. The post-write check then exercises the published build, not your tree.
 
 Installed from a clone earlier? One plain re-run of `install` rewrites the entries this installer owns to the version-pinned PyPI spec — that is the whole migration. Entries the installer does not own are left alone.
 
@@ -63,7 +67,7 @@ Terminal agents get a reference to `TYPESAFE_API_KEY`, never the key itself. Des
 <details>
 <summary><b>Register the server by hand</b></summary>
 
-`<uvx>` is the absolute path of `uvx`. `<spec>` is `jev-judge-mcp[typesafe]==<version>` (the version-pinned PyPI package, what `install` writes by default) or your checkout's absolute path plus `[typesafe]`, for example `/home/me/jev-judge-mcp[typesafe]`.
+`<uvx>` is the absolute path of `uvx`. `<spec>` is `jev-judge-mcp[typesafe]==<version>` (the version-pinned PyPI package, what `install` writes by default) or your checkout's absolute path plus `[typesafe]`, for example `/home/me/jev-judge-mcp[typesafe]`. `--python '>=3.12'` is what `install` derives from the package metadata; keep it when you register by hand.
 
 Claude Code (`~/.claude.json`), omp (`~/.omp/agent/mcp.json`), Cursor (`~/.cursor/mcp.json`), and Pi (`~/.pi/agent/mcp.json`) use the same shape. Claude Code and omp also add `"type": "stdio"`. Pi also adds the three exposure keys below; without them `pi-mcp-adapter` keeps the server lazy and proxy-only and the tools stay out of the model's initial list (ADR-0036).
 
@@ -72,7 +76,7 @@ Claude Code (`~/.claude.json`), omp (`~/.omp/agent/mcp.json`), Cursor (`~/.curso
   "mcpServers": {
     "jev": {
       "command": "<uvx>",
-      "args": ["--from", "<spec>", "jev-judge-mcp"],
+      "args": ["--python", ">=3.12", "--from", "<spec>", "jev-judge-mcp"],
       "env": {"TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}"}
     }
   }
@@ -86,7 +90,7 @@ Pi's full entry:
   "mcpServers": {
     "jev": {
       "command": "<uvx>",
-      "args": ["--from", "<spec>", "jev-judge-mcp"],
+      "args": ["--python", ">=3.12", "--from", "<spec>", "jev-judge-mcp"],
       "env": {"TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}"},
       "lifecycle": "eager",
       "directTools": true,
@@ -105,7 +109,7 @@ Codex CLI and the ChatGPT app share `~/.codex/config.toml`:
 ```toml
 [mcp_servers.jev]
 command = "<uvx>"
-args = ["--from", "<spec>", "jev-judge-mcp"]
+args = ["--python", ">=3.12", "--from", "<spec>", "jev-judge-mcp"]
 env_vars = ["TYPESAFE_API_KEY"]
 ```
 
@@ -118,7 +122,7 @@ OpenCode (`~/.config/opencode/opencode.json`):
   "mcp": {
     "jev": {
       "type": "local",
-      "command": ["<uvx>", "--from", "<spec>", "jev-judge-mcp"],
+      "command": ["<uvx>", "--python", ">=3.12", "--from", "<spec>", "jev-judge-mcp"],
       "environment": {"TYPESAFE_API_KEY": "{env:TYPESAFE_API_KEY}"}
     }
   }
