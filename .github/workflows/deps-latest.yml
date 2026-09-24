@@ -1,0 +1,28 @@
+name: deps-latest
+
+# F17′ drift alarm: re-resolve to the newest versions the pyproject.toml bounds allow
+# and run the offline suite, so a dependency release that would break a fresh
+# `pip install jev-judge-mcp` shows up here as a red run instead of a user report.
+# The upgraded lockfile stays in the runner workspace and is never committed.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      # Parity needs the oracle's pinned Node (CI fails a missing Node instead of skipping).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.19.0"
+      - run: uv lock --upgrade
+      - run: uv sync --all-extras
+      - run: make ci # offline suite (includes eval); no paid stage, no secrets, live-eval flag never set
