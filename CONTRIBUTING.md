@@ -35,6 +35,16 @@ env -u TYPESAFE_API_KEY make ci
 `make ci` must pass. The parity stage needs Node 24 and skips locally without it.
 Report the command you ran and its result with the change.
 
+CI guards prevent these failure classes:
+
+- The unit-stage fake-secret scanner rejects non-empty test credentials shorter than the server's
+  eight-character redaction floor, preventing short values from corrupting unrelated text.
+- The stdio integration census counts only exact extract-worker invocations descended from its own
+  server, so unrelated agent sessions cannot fail worker-shutdown checks. A real cancellation test
+  also verifies that the server stays responsive and cancellation leaves no new PPID-1 worker.
+- The HTTP integration suite keeps local binds on loopback. On CI only, it binds `0.0.0.0` with a
+  token and verifies unauthenticated requests get 401 while authenticated initialization gets 200.
+
 - Fix a bug by first adding a test that fails, then making it pass.
 - Never hand-edit `tests/parity/fixtures/`; change `tests/parity/cases/` and
   re-record with `make parity-record`.
@@ -78,9 +88,14 @@ with `republish_tag` set to its tag.
   commit after the `v0.1.0` release merges. `.release-please-manifest.json` tracks the
   released version from then on. A release pull request needs a `feat` or `fix` commit in
   the scanned history.
-- The release pull request is opened with the workflow token, so GitHub does not
-  run `ci` on it. Run `env -u TYPESAFE_API_KEY make ci` on its branch before
-  merging.
+- The release pull request is opened or updated with the workflow token, so its `pull_request`
+  event does not trigger `ci`. After release-please updates it, `release.yml` dispatches
+  `ci.yml` with `workflow_dispatch` on the release branch. GitHub documents that this
+  token-triggered event is allowed and that selecting a ref runs on that branch ([event docs](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch),
+  [manual dispatch docs](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow));
+  the resulting checks attach to its head commit and report on the pull request ([run fields](https://docs.github.com/en/rest/actions/workflow-runs#get-a-workflow-run),
+  [check runs](https://docs.github.com/en/rest/checks/runs)). If that dispatch or CI run is unavailable,
+  use `env -u TYPESAFE_API_KEY make ci` on the release branch as a fallback.
 - The version gate is `scripts/check_release_version.py`, tested offline in
   `tests/unit/test_release_version.py`.
 
