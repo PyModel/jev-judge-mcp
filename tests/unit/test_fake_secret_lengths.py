@@ -16,6 +16,9 @@ from pathlib import Path
 
 from jev_judge_mcp.server import MIN_SECRET_LENGTH
 
+type Json = dict[str, "Json"] | list["Json"] | str | int | float | bool | None
+"""What `json.loads` can return; keeps the fixture walk type-safe without `Any`."""
+
 ROOT = Path(__file__).resolve().parents[2]
 POSITIONAL_SECRET_PARAMETERS = {"Redactor": (0,), "configure_logging": (1,)}
 ALLOWED_SHORT_SECRET_USES = {
@@ -151,10 +154,10 @@ def scan_json(source: str, path: str) -> list[str]:
     line. A malformed document is the fixture tests' failure to report, not this guard's."""
     violations: list[str] = []
 
-    def walk(node: object, line: int | None) -> None:
+    def walk(node: Json, line: int | None) -> None:
         if isinstance(node, dict):
             for key, value in node.items():
-                violation = short_fake_violation(path, "<json>", str(key), value, line)
+                violation = short_fake_violation(path, "<json>", key, value, line)
                 if violation is not None:
                     violations.append(violation)
                 walk(value, line)
