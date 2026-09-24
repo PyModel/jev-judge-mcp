@@ -7,7 +7,7 @@ never evidence, claims, diffs, candidate text, or keys. Payload text is recorded
 Every finished span goes to two sinks: `SpanLog` keeps recent spans and logs each one at DEBUG
 (stderr, through the redacting handler), and `Metrics` folds it into counters and duration
 histograms. The span tree follows the call: `mcp.tool` is the root, and `jev.evaluate`,
-`jev.validate`, `jev.policy`, and `regex.extract` open under it through a context variable, so the
+`jev.validate`, and `regex.extract` open under it through a context variable, so the
 pure layers stay free of any recorder.
 """
 
@@ -22,7 +22,7 @@ from time import perf_counter
 from types import TracebackType
 from typing import Final, Literal, Protocol
 
-type SpanName = Literal["mcp.tool", "jev.evaluate", "jev.validate", "jev.policy", "regex.extract"]
+type SpanName = Literal["mcp.tool", "jev.evaluate", "jev.validate", "regex.extract"]
 type Attribute = bool | int | float | str
 
 logger = logging.getLogger("jev_judge_mcp.telemetry")
@@ -112,8 +112,6 @@ class Metrics:
             case "regex.extract":
                 if attributes.get("outcome") == "timeout":
                     self._add("regex_timeouts")
-            case "jev.policy":
-                pass
         self._observe(span.name, span.duration * 1000)
 
     def _add(self, key: str, amount: float = 1) -> None:

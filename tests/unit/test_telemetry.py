@@ -10,7 +10,7 @@ from typing import Any, get_args, override
 
 import pytest
 
-from jev_judge_mcp import policy, validation
+from jev_judge_mcp import validation
 from jev_judge_mcp.domain import JsonValue
 from jev_judge_mcp.providers import Evaluation, ProviderError
 from jev_judge_mcp.server import configure_logging
@@ -75,12 +75,10 @@ async def test_a_gate_call_records_the_span_tree() -> None:
     assert root.attributes["tool"] == "jev_gate"
     assert root.attributes["outcome"] == "ok"
     assert root.attributes["action"] == "auto"
-    assert {s.name for s in spans} == {"mcp.tool", "jev.evaluate", "jev.validate", "jev.policy"}
+    assert {s.name for s in spans} == {"mcp.tool", "jev.evaluate", "jev.validate"}
     assert all(s.parent is root for s in spans[:-1])
     evaluate = next(s for s in spans if s.name == "jev.evaluate")
     assert evaluate.attributes == {"questions": 6, "provider": "compatible", "input_tokens": 1, "output_tokens": 1}
-    policies = {s.attributes["decision"] for s in spans if s.name == "jev.policy"}
-    assert {"claim_action", "worst_action", "gate_reason_codes", "review_action"} <= policies
     for s in spans:
         assert s.duration >= 0
         assert all(isinstance(value, ALLOWED_ATTRIBUTE_TYPES) for value in s.attributes.values())
@@ -325,7 +323,7 @@ async def test_debug_span_logs_are_redacted_of_configured_secrets(
 
 
 def test_outside_a_tool_call_nothing_is_recorded() -> None:
-    with span("jev.policy", decision="x") as detached:
+    with span("regex.extract", outcome="ok") as detached:
         assert validate_choice(None, ["a"]) is None
     assert detached.parent is None
 
@@ -333,13 +331,13 @@ def test_outside_a_tool_call_nothing_is_recorded() -> None:
 async def test_nested_spans_restore_the_parent() -> None:
     telemetry = Telemetry()
     with telemetry.span("mcp.tool", tool="t") as root:
-        with span("jev.policy", decision="a") as first:
+        with span("regex.extract", outcome="ok") as first:
             pass
-        with span("jev.policy", decision="b") as second:
+        with span("regex.extract", outcome="timeout") as second:
             pass
     assert first.parent is root
     assert second.parent is root
-    assert [s.attributes.get("decision") for s in telemetry.spans.spans] == ["a", "b", None]
+    assert [s.attributes.get("outcome") for s in telemetry.spans.spans] == ["ok", "timeout", None]
 
 
 def test_escaping_errors_are_named_not_quoted() -> None:
@@ -350,12 +348,11 @@ def test_escaping_errors_are_named_not_quoted() -> None:
     assert recorded.attributes == {"kind": "choice", "error": "ValueError"}
 
 
-def test_every_policy_and_validation_callable_is_traced() -> None:
+def test_every_validation_callable_is_traced() -> None:
     functions = {
         name
-        for module in (policy, validation)
-        for name in module.__all__
-        if inspect.isfunction(getattr(module, name)) and (module is policy or name.startswith("validate_"))
+        for name in validation.__all__
+        if inspect.isfunction(getattr(validation, name)) and name.startswith("validate_")
     }
     assert functions == set(TRACED)
 

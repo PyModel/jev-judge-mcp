@@ -175,7 +175,7 @@ Does Jev improve a coding agent (Claude Code, Pi) while it uses the Jev MCP tool
 In-process spans, metrics, and the 64-concurrent load gate are landed (`src/jev_judge_mcp/telemetry.py`,
 `make load`); HTTP-mode export (OpenTelemetry, a Prometheus endpoint) is not built.
 
-Spans `mcp.tool`, `jev.evaluate`, `jev.validate`, `jev.policy`, `regex.extract` with counts/flags/durations only — never evidence, claims, diffs, candidate text, or keys unless an explicit debug env flag is set. Metrics: calls, provider errors, fail-closed, auto/review/escalate, truncated, regex timeouts, tokens, durations. Load at 1/4/16/32/64 concurrent calls; local overhead excluding provider: p50 < 5 ms, p95 < 20 ms.
+Spans `mcp.tool`, `jev.evaluate`, `jev.validate`, `regex.extract` with counts/flags/durations only — never evidence, claims, diffs, candidate text, or keys unless an explicit debug env flag is set. Metrics: calls, provider errors, fail-closed, auto/review/escalate, truncated, regex timeouts, tokens, durations. Load at 1/4/16/32/64 concurrent calls; local overhead excluding provider: p50 < 5 ms, p95 < 20 ms.
 
 ### P10 — Rollout [PY-16]
 
