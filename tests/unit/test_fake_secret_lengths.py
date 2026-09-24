@@ -2,16 +2,19 @@
 
 The static rule checks literal credential-named assignments/kwargs, string-keyed env/config
 mappings, `setenv` calls, and positional secrets for the known redaction APIs — in `test_*.py`
-files and in `conftest.py` (one AST scan). JSON and JSONL fixtures under tests/ are scanned for
+files and in `conftest.py` (one AST scan). JSON and JSONL fixtures are scanned for
 credential-named keys with short string values (ADR-0059): recorded fixture content is output
-text, so a short fake there collides exactly like one in a test file. No YAML fixtures exist
-under tests/; a format that lands joins the JSON scan. Empty strings mean "unset"; only the
-exact exemptions below are allowed.
+text, so a short fake there collides exactly like one in a test file. Both scans cover exactly
+the repo-owned files under tests/ — tracked plus untracked-but-not-ignored — so a fetched
+gitignored tree (`tests/parity/reference/`) is never scanned. No YAML fixtures exist under
+tests/; a format that lands joins the JSON scan. Empty strings mean "unset"; only the exact
+exemptions below are allowed.
 """
 
 import ast
 import json
 import re
+import subprocess
 from pathlib import Path
 
 from jev_judge_mcp.server import MIN_SECRET_LENGTH
@@ -179,14 +182,51 @@ def scan_json(source: str, path: str) -> list[str]:
     return violations
 
 
+def repo_owned_test_files() -> list[Path]:
+    """Tests-scope files git owns: tracked plus untracked-but-not-ignored (`--exclude-standard`),
+    so a new test file not yet staged is still scanned while a fetched gitignored tree —
+    `tests/parity/reference/`, node_modules and all — never is. A failed or empty listing raises:
+    a broken listing must fail the guard loudly, never go green scanning nothing (ADR-0059)."""
+    listing = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "tests"],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    if listing.returncode != 0:
+        raise RuntimeError(f"git could not list repo-owned test files: {listing.stderr.strip()}")
+    files = [ROOT / line for line in listing.stdout.splitlines()]
+    if not files:
+        raise RuntimeError("git listed no repo-owned test files; refusing to scan nothing")
+    return files
+
+
 def scanned_test_files() -> list[Path]:
-    tests = ROOT / "tests"
-    return sorted({*tests.rglob("test_*.py"), *tests.rglob("conftest.py")})
+    return sorted(
+        path
+        for path in repo_owned_test_files()
+        if path.name == "conftest.py" or (path.name.startswith("test_") and path.suffix == ".py")
+    )
 
 
 def scanned_fixture_files() -> list[Path]:
-    tests = ROOT / "tests"
-    return sorted([*tests.rglob("*.json"), *tests.rglob("*.jsonl")])
+    return sorted(path for path in repo_owned_test_files() if path.suffix in {".json", ".jsonl"})
+
+
+def test_the_scan_lists_only_repo_owned_files() -> None:
+    """Pins the scope contract against the real repo, no git mocking: the listing is non-empty
+    (a broken listing must never go green) and names nothing gitignored, so `make
+    parity-reference`'s fetched tree stays out of the scan however deep it sits under tests/."""
+    files = [*scanned_test_files(), *scanned_fixture_files()]
+    assert files
+    ignored = subprocess.run(
+        ["git", "check-ignore", "--quiet", "--stdin"],
+        input="\n".join(str(path) for path in files),
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    assert ignored.returncode == 1, "the scan listed gitignored files:\n" + ignored.stdout
 
 
 def test_short_fake_credentials_are_detected() -> None:
