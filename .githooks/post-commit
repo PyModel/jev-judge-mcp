@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Forwarder to the hook chain: see scripts/ci/hook_chain.sh (ADR-0056). `make hooks`
+# points core.hooksPath at this directory, so this file stands in for post-commit and chains
+# to whatever would have run without the repo-local setting.
+exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../scripts/ci/hook_chain.sh" post-commit "$@"
