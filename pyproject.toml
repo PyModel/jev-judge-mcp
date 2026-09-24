@@ -53,6 +53,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/jev_judge_mcp"]
 
+# Agent-facing skill material (the test-audit skill and its .pi/.claude symlinks)
+# is contributor tooling, never shipped content.
+[tool.hatch.build.targets.sdist]
+exclude = [".agents", ".pi", ".claude"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"

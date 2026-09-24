@@ -35,6 +35,8 @@ env -u TYPESAFE_API_KEY make ci
 `make ci` must pass. The parity stage needs Node 24 and skips locally without it.
 Report the command you ran and its result with the change.
 
+Load `.agents/skills/test-audit` before writing, changing, reviewing, or sweeping tests.
+
 CI guards prevent these failure classes:
 
 - The unit-stage fake-secret scanner rejects non-empty test credentials shorter than the server's
