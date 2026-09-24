@@ -3,6 +3,7 @@
 import json
 import signal
 import socket
+import subprocess
 import time
 
 import httpx
@@ -50,6 +51,50 @@ def test_http_initialize_and_clean_shutdown(signum: signal.Signals) -> None:
     assert returncode == 0
     assert "Traceback" not in stderr
     assert stdout == b""
+
+
+def _worker_pids() -> set[str]:
+    result = subprocess.run(["ps", "-ax", "-o", "pid=,command="], capture_output=True, text=True, check=False)
+    found: set[str] = set()
+    for line in result.stdout.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if "jev_judge_mcp.extract.worker" in command:
+            found.add(pid)
+    return found
+
+
+def _port_is_free(port: int) -> bool:
+    sock = socket.socket()
+    try:
+        sock.bind(("127.0.0.1", port))
+    except OSError:
+        return False
+    else:
+        return True
+    finally:
+        sock.close()
+
+
+def test_a_taken_port_exits_with_one_line_and_leaves_nothing() -> None:
+    """A Streamable HTTP start on a bound 127.0.0.1 port exits non-zero, no traceback, no leftover (ADR-0055)."""
+    holder = socket.socket()
+    holder.bind(("127.0.0.1", 0))
+    holder.listen(1)
+    port: int = holder.getsockname()[1]
+    before = _worker_pids()
+    try:
+        with StdioServer(env={"JEV_MCP_TRANSPORT": "streamable-http", "JEV_MCP_HTTP_PORT": str(port)}) as server:
+            returncode, stderr = server.wait()
+            stdout = b"".join(server.stdout_lines)
+    finally:
+        holder.close()
+    assert returncode == 1
+    assert stdout == b""
+    assert stderr == f"JEV_MCP_HTTP_PORT={port} is already in use; set JEV_MCP_HTTP_PORT to a free port\n"
+    assert "Traceback" not in stderr
+    assert "Started server process" not in stderr
+    assert _port_is_free(port)
+    assert _worker_pids() == before
 
 
 def test_http_lone_surrogate_escape_is_refused_with_a_reply() -> None:

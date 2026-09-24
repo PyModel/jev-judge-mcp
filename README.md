@@ -176,7 +176,7 @@ The server reads environment variables only. It does not load a `.env` file.
 | `JEV_MCP_MODEL` | `jev-latest` | Jev model to ask |
 | `JEV_MCP_CACHE` | off | replay identical requests from disk at no API cost; leave it off when answers must be fresh, and delete the directory to clear it |
 | `JEV_MCP_CACHE_DIR` | `~/.cache/jev-mcp` | where the cache lives |
-| `JEV_MCP_TRANSPORT` | `stdio` | `streamable-http` is experimental and binds `JEV_MCP_HTTP_HOST:JEV_MCP_HTTP_PORT`, default `127.0.0.1:8000` |
+| `JEV_MCP_TRANSPORT` | `stdio` | `streamable-http` is experimental and binds `JEV_MCP_HTTP_HOST:JEV_MCP_HTTP_PORT`, default `127.0.0.1:8000`. Port 8000 is often already taken |
 | `JEV_MCP_HTTP_TOKEN` | unset | bearer token for the HTTP transport; required on every request, and required for any non-loopback `JEV_MCP_HTTP_HOST` |
 | `JEV_MCP_LOG_LEVEL` | `INFO` | logs go to stderr |
 
@@ -199,6 +199,8 @@ the client cancels it.
 ### Running over HTTP (experimental)
 
 The HTTP transport is Tier B experimental: it has no reliability contract and no admission control, and it is not covered by the parity suite. Only `127.0.0.1`, `localhost`, and `::1` are exempt from the token: exactly those hosts get the SDK's automatic Host/Origin validation. Every other host — `127.9.9.9`, `0:0:0:0:0:0:0:1`, `0.0.0.0`, a LAN address, a hostname — refuses to start unless `JEV_MCP_HTTP_TOKEN` is set, because every tool call would otherwise spend your provider key on behalf of anyone who can reach the port.
+
+Port 8000, the default of `JEV_MCP_HTTP_PORT`, is often already taken (a local model server, another dev server). If it is, the process exits non-zero with one line naming `JEV_MCP_HTTP_PORT` and the port, and it leaves no listener behind (ADR-0055). Set the variable to a free port.
 
 Generate a token:
 

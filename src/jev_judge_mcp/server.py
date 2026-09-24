@@ -6,10 +6,12 @@ before the server starts.
 """
 
 import contextlib
+import errno
 import gc
 import logging
 import os
 import signal
+import socket
 import sys
 from collections.abc import Callable, Generator, Iterable
 from importlib.metadata import PackageNotFoundError
@@ -114,6 +116,39 @@ def configure_logging(level: LogLevel, secrets: Iterable[str] = ()) -> None:
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level)
+
+
+def http_port_in_use_message(port: int) -> str:
+    """The one line a taken Streamable HTTP port exits with (ADR-0055)."""
+    return f"JEV_MCP_HTTP_PORT={port} is already in use; set JEV_MCP_HTTP_PORT to a free port"
+
+
+def ensure_http_port_free(settings: Settings) -> None:
+    """Refuse a Streamable HTTP start whose port is already taken (ADR-0055).
+
+    Runs before logging and before anything listens, so the failure is one line on stderr, exit 1,
+    and no listener or worker. stdio never binds. A free port is bound only as the check and closed
+    before return. A host that does not resolve is left to the server, as it was before this gate.
+    """
+    if settings.transport != "streamable-http":
+        return
+    host, port = settings.http_host, settings.http_port
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return
+    for family, socktype, proto, _canon, sockaddr in infos:
+        sock = socket.socket(family, socktype, proto)
+        try:
+            if family == socket.AF_INET6:
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            sock.bind(sockaddr)
+        except OSError as exc:
+            if exc.errno == errno.EADDRINUSE:
+                raise SystemExit(http_port_in_use_message(port)) from None
+            raise
+        finally:
+            sock.close()
 
 
 def ensure_secrets_redactable(settings: Settings) -> None:
@@ -279,6 +314,7 @@ def main() -> None:
     # line on stderr and a non-zero exit, never a live unauthenticated server (ADR-0050).
     ensure_secrets_redactable(settings)
     ensure_http_access_control(settings)
+    ensure_http_port_free(settings)
     configure_logging(settings.log_level, settings.secret_values())
     server = build_server(settings)
     # One line, the same identity `initialize` will report (ADR-0054). Not logged by `--version`.
