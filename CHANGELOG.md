@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/PyModel/jev-judge-mcp/compare/v0.1.0...v0.1.1) (2026-09-24)
+
+
+### Documentation
+
+* **readme:** collapse installation into disclosure blocks and tidy the layout ([2625ff0](https://github.com/PyModel/jev-judge-mcp/commit/2625ff07a2f61357e0b8f408d6dae9aee810db50))
+* regenerate the architecture diagram for the jev-judge-mcp rename and embed it in the README ([f3820b2](https://github.com/PyModel/jev-judge-mcp/commit/f3820b2c21258cbed8bf7d3eb6715440e3f4a8ad))
+
 ## 0.1.0 (2026-09-23)
 
 
