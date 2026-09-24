@@ -195,6 +195,10 @@ the client cancels it.
   report the same build. A wheel, and a checkout whose HEAD is the tag `v<version>`, report that
   version. Any other git checkout reports `<version>+g<short sha>` (ADR-0054). The wire name stays
   `jev-mcp` (ADR-0049).
+- `jev_rerank` returns every candidate in `ranked`, highest `relevance` first. `relevance` is that
+  candidate's probability, to four decimal places. The response has no spread field. A flat band of
+  low values means the candidates were not distinguishable: treat the order as weak, and read
+  `ranked[].relevance` rather than the rank numbers.
 
 ### Running over HTTP (experimental)
 
