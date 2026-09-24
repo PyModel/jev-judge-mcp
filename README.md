@@ -191,6 +191,10 @@ what the caller passes. Bound the text at the call site when it is not yours.
 - Requests over stdio carry no provider deadline (the sanctioned divergence
 `stdio-no-provider-deadline`): a provider that stops answering keeps the tool call waiting until
 the client cancels it.
+- `initialize`'s `serverInfo.version`, the one startup log line, and `jev-judge-mcp --version`
+  report the same build. A wheel, and a checkout whose HEAD is the tag `v<version>`, report that
+  version. Any other git checkout reports `<version>+g<short sha>` (ADR-0054). The wire name stays
+  `jev-mcp` (ADR-0049).
 
 ### Running over HTTP (experimental)
 

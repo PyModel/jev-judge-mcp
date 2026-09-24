@@ -1,5 +1,6 @@
 """`uvx --from . jev-judge-mcp` starts and initializes (slow: builds the package)."""
 
+import importlib.metadata
 import shutil
 
 import pytest
@@ -17,4 +18,7 @@ def test_uvx_from_source_initializes() -> None:
         returncode, stderr = server.wait(timeout=120)
     assert reply["result"]["serverInfo"]["name"] == "jev-mcp"
     assert reply["result"]["protocolVersion"] == PROTOCOL_VERSION
+    # A wheel has no source-tree suffix, even when `uvx --from .` built it from a checkout (ADR-0054).
+    assert reply["result"]["serverInfo"]["version"] == importlib.metadata.version("jev-judge-mcp")
+    assert "+" not in reply["result"]["serverInfo"]["version"]
     assert returncode == 0, stderr

@@ -285,6 +285,21 @@
       "fixtures": [],
       "reference_behavior": "jev_compare judges the overall independently of the aspects: an aspect that reports contradicts under a same_fact or different_facts overall changes nothing in the output.",
       "python_behavior": "The overall is unchanged, but a non-empty warnings field names the contradicting aspects in jev_decide's warning style; the field is absent when no aspect contradicts, so every unaffected output stays byte-identical to the reference."
+    },
+    {
+      "id": "checkout-version-suffix",
+      "surface": "initialize",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0054-build-identity-on-the-wire.md",
+      "tests": [
+        "tests/unit/test_identity.py",
+        "tests/integration/test_stdio.py",
+        "tests/integration/test_uvx_smoke.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "initialize reports serverInfo.version as the reference package version (0.5.0), with no local suffix.",
+      "python_behavior": "A wheel, and a git checkout whose HEAD commit is exactly the tag v<version>, report the installed version. Any other git source tree of this distribution reports the PEP 440 local version <version>+g<short sha>. serverInfo.name stays jev-mcp."
     }
   ]
 }

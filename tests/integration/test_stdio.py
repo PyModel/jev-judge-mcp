@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+from jev_judge_mcp.identity import reported_version
 from tests.support.stdio import PROTOCOL_VERSION, StdioServer
 
 
@@ -18,6 +19,20 @@ def test_initialize_negotiates_2025_06_18() -> None:
     assert reply["result"]["protocolVersion"] == PROTOCOL_VERSION
     assert reply["result"]["serverInfo"]["name"] == "jev-mcp"
     assert returncode == 0
+
+
+def test_initialize_reports_the_build_identity() -> None:
+    """`serverInfo.version` and the one startup log line are the checkout identity (ADR-0054)."""
+    identity = reported_version()
+    with StdioServer() as server:
+        reply = server.initialize()
+        server.close_stdin()
+        returncode, stderr = server.wait()
+    assert returncode == 0, stderr
+    info = reply["result"]["serverInfo"]
+    assert info["name"] == "jev-mcp"
+    assert info["version"] == identity
+    assert stderr.count(f"identity jev-mcp {identity}") == 1
 
 
 def test_stdout_carries_only_protocol_frames() -> None:

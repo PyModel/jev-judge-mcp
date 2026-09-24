@@ -12,7 +12,7 @@ import os
 import signal
 import sys
 from collections.abc import Callable, Generator, Iterable
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError
 from typing import Any, override
 
 import anyio
@@ -25,6 +25,7 @@ from starlette.types import ASGIApp
 from jev_judge_mcp import keyfile
 from jev_judge_mcp.errors import RedactingFilter, Redactor
 from jev_judge_mcp.http_auth import BearerTokenMiddleware, ensure_http_access_control
+from jev_judge_mcp.identity import reported_version
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import LogLevel, Settings, load_settings
 from jev_judge_mcp.stdio import stdio_streams
@@ -61,7 +62,7 @@ class JevMCPServer(MCPServer):
     """
 
     def __init__(self, *, toolset: Toolset, log_level: LogLevel) -> None:
-        super().__init__(name=SERVER_NAME, version=version(DISTRIBUTION), log_level=log_level)
+        super().__init__(name=SERVER_NAME, version=reported_version(), log_level=log_level)
         self.toolset = toolset
         # The SDK acts on both before any handler runs (the dispatcher cancels the request, the
         # runner marks the session initialized); without a handler it logs each as unhandled.
@@ -236,10 +237,27 @@ def setup_requested(argv: list[str]) -> bool:
     return len(argv) > 1 and argv[1] == "setup"
 
 
+def version_requested(argv: list[str]) -> bool:
+    """True only for `--version`. It prints the build identity and does not start the server (ADR-0054)."""
+    return len(argv) > 1 and argv[1] == "--version"
+
+
+def print_version() -> None:
+    """The same identity `initialize` reports, on stdout, then exit 0."""
+    try:
+        identity = reported_version()
+    except PackageNotFoundError:
+        raise SystemExit(f"{DISTRIBUTION} is not installed; its version cannot be reported") from None
+    print(f"{DISTRIBUTION} {identity}")
+
+
 def main() -> None:
     # The platform gate covers the installer, the command hook, the doctor, setup, and the server.
     # No arguments keep stdout protocol-only (ADR-0032, ADR-0033).
     require_posix()
+    if version_requested(sys.argv):
+        print_version()
+        return
     if installer_requested(sys.argv):
         from jev_judge_mcp.install.cli import main as install_main
 
@@ -263,6 +281,8 @@ def main() -> None:
     ensure_http_access_control(settings)
     configure_logging(settings.log_level, settings.secret_values())
     server = build_server(settings)
+    # One line, the same identity `initialize` will report (ADR-0054). Not logged by `--version`.
+    logger.info("identity %s %s", server.name, server.version)
     freeze_startup_heap()
     anyio.run(serve, server, settings)
     # A stdin read abandoned at shutdown still blocks one of anyio's non-daemon worker threads, and
