@@ -1,5 +1,6 @@
 """A taken HTTP port is retried on a clock the test owns, then refused by name (ADR-0055)."""
 
+import asyncio
 import errno
 import socket
 
@@ -95,13 +96,17 @@ def test_another_bind_error_fails_on_the_first_try(monkeypatch: pytest.MonkeyPat
     assert clock.sleeps == []
 
 
-def _time_wait_port() -> int:
+def _time_wait_port(*, listener_sets_reuseaddr: bool) -> int:
     """A loopback port whose only holder is a `TIME_WAIT` entry, not a listener.
 
     Closing the accepted socket first puts this side in `TIME_WAIT`. No sleep: the entry is there
-    as soon as the sockets close, and a bind without `SO_REUSEADDR` is the proof.
+    as soon as the sockets close, and a bind without `SO_REUSEADDR` is the proof. Linux keeps the
+    entry's flag from the listener that made it, so that flag decides whether a new `SO_REUSEADDR`
+    bind succeeds; macOS consults only the new socket (ADR-0055).
     """
     listener = socket.socket()
+    if listener_sets_reuseaddr:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
     port: int = listener.getsockname()[1]
@@ -114,9 +119,26 @@ def _time_wait_port() -> int:
     return port
 
 
-def test_time_wait_is_not_taken_and_a_live_listener_is(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`SO_REUSEADDR` matches uvicorn: `TIME_WAIT` is free, a listener is not (ADR-0055)."""
-    port = _time_wait_port()
+def _real_bind_free(host: str, port: int) -> bool:
+    """Whether uvicorn's bind would succeed right now: asyncio `loop.create_server`, which defaults
+    `reuse_address` to true on POSIX, on this host and port. Its server is closed immediately."""
+
+    async def attempt() -> bool:
+        loop = asyncio.get_running_loop()
+        try:
+            server = await loop.create_server(asyncio.Protocol, host=host, port=port)
+        except OSError:
+            return False
+        server.close()
+        await server.wait_closed()
+        return True
+
+    return asyncio.run(attempt())
+
+
+def test_a_time_wait_from_a_reuseaddr_listener_is_free(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The realistic restart: the previous server set `SO_REUSEADDR`, and so does the probe."""
+    port = _time_wait_port(listener_sets_reuseaddr=True)
     bare = socket.socket()
     try:
         with pytest.raises(OSError) as blocked:
@@ -124,21 +146,43 @@ def test_time_wait_is_not_taken_and_a_live_listener_is(monkeypatch: pytest.Monke
     finally:
         bare.close()
     assert blocked.value.errno == errno.EADDRINUSE
+    assert _real_bind_free("127.0.0.1", port)
     clock = Clock()
     ensure_http_port_free(http_settings(monkeypatch, port), sleep=clock.sleep, clock=clock.clock)
     assert clock.sleeps == []
 
+
+def test_a_time_wait_from_a_bare_listener_agrees_with_the_real_bind(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux keeps the entry's flag, so a bare `TIME_WAIT` blocks the probe exactly as it blocks
+    uvicorn's own bind; macOS frees both. The verdict the process wants is the real bind's."""
+    port = _time_wait_port(listener_sets_reuseaddr=False)
+    real_free = _real_bind_free("127.0.0.1", port)
+    clock = Clock()
+    try:
+        ensure_http_port_free(http_settings(monkeypatch, port), sleep=clock.sleep, clock=clock.clock)
+    except SystemExit as exited:
+        probe_free = False
+        assert exited.code == f"JEV_MCP_HTTP_PORT={port} is already in use; set JEV_MCP_HTTP_PORT to a free port"
+    else:
+        probe_free = True
+        assert clock.sleeps == []
+    assert probe_free == real_free
+
+
+def test_a_live_listener_is_taken(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A socket that is still listening is `EADDRINUSE` for the real bind and the probe alike."""
     holder = socket.socket()
     holder.bind(("127.0.0.1", 0))
     holder.listen(1)
-    live: int = holder.getsockname()[1]
+    port: int = holder.getsockname()[1]
     clock = Clock()
     try:
-        with pytest.raises(SystemExit, match=f"JEV_MCP_HTTP_PORT={live} is already in use") as raised:
-            ensure_http_port_free(http_settings(monkeypatch, live), sleep=clock.sleep, clock=clock.clock)
+        assert not _real_bind_free("127.0.0.1", port)
+        with pytest.raises(SystemExit, match=f"JEV_MCP_HTTP_PORT={port} is already in use") as raised:
+            ensure_http_port_free(http_settings(monkeypatch, port), sleep=clock.sleep, clock=clock.clock)
     finally:
         holder.close()
-    assert raised.value.code == f"JEV_MCP_HTTP_PORT={live} is already in use; set JEV_MCP_HTTP_PORT to a free port"
+    assert raised.value.code == f"JEV_MCP_HTTP_PORT={port} is already in use; set JEV_MCP_HTTP_PORT to a free port"
 
 
 def test_an_exhausted_budget_does_not_keep_retrying(monkeypatch: pytest.MonkeyPatch) -> None:
