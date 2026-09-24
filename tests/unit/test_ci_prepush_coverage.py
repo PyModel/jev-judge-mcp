@@ -298,6 +298,10 @@ def test_linux_leg_matches_the_runner_environment() -> None:
         "inside the project, a project-scoped find resolves 3.12; the entry guard needs 3.10"
     )
     assert "/home/runner/.cache/uv" in linux, "caches live in the runner user's home"
+    assert "--init" in linux, (
+        "the container must reap orphans like the runner does; without init, killed"
+        " process groups linger as zombies and the eval group-death assertions see them alive"
+    )
 
 
 # --- the hook chain (ADR-0056): enabling .githooks must not orphan the previous hooks ---

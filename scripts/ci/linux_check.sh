@@ -124,7 +124,10 @@ RUNNER_EOF
 
 echo "[pre-push] linux ($LABEL): copying source into a throwaway container"
 chmod 755 "$RUNNER"
-CID=$(docker create "${CACHE_VOLUMES[@]}" --entrypoint bash -e CI=true -e "PREPUSH_LABEL=$LABEL" "$IMAGE" -c 'chmod 755 /run_stages.sh && chown -R runner:runner /src /home/runner/.cache/uv /home/runner/.local/share/uv && export HOME=/home/runner && exec runuser -u runner -- /run_stages.sh')
+# --init: the runner reaps orphans, as GitHub's environment does; without an init the
+# killed agent groups in tests/evals linger as unreaped zombies and the group-death
+# assertions see them alive.
+CID=$(docker create --init "${CACHE_VOLUMES[@]}" --entrypoint bash -e CI=true -e "PREPUSH_LABEL=$LABEL" "$IMAGE" -c 'chmod 755 /run_stages.sh && chown -R runner:runner /src /home/runner/.cache/uv /home/runner/.local/share/uv && export HOME=/home/runner && exec runuser -u runner -- /run_stages.sh')
 docker cp "$SRC" "$CID:/src"
 docker cp "$RUNNER" "$CID:/run_stages.sh"
 set +e
