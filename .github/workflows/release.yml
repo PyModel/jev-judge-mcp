@@ -40,6 +40,8 @@ jobs:
       release_created: ${{ steps.releaser.outputs.release_created }}
       tag_name: ${{ steps.releaser.outputs.tag_name }}
       sha: ${{ steps.releaser.outputs.sha }}
+      prs_created: ${{ steps.releaser.outputs.prs_created }}
+      pr: ${{ steps.releaser.outputs.pr }}
     steps:
       # Config and manifest only: a `release-type` input would bypass both and drop `draft`.
       - id: releaser
@@ -48,6 +50,23 @@ jobs:
           token: ${{ github.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  release-pr-ci:
+    name: Dispatch CI for release PR
+    needs: version
+    if: needs.version.outputs.prs_created == 'true' && needs.version.outputs.pr != ''
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch CI on the release PR branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PR: ${{ needs.version.outputs.pr }}
+        run: |
+          set -euo pipefail
+          branch="$(jq -er '.headBranchName' <<<"$RELEASE_PR")"
+          gh workflow run ci.yml --ref "$branch" --repo "$GITHUB_REPOSITORY"
 
   build:
     name: Build
