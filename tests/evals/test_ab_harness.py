@@ -380,10 +380,19 @@ def test_the_user_prompt_names_every_option_and_the_decision_line(task: tasks.Ta
 
 
 def test_agent_env_drops_keys_and_the_virtualenv() -> None:
+    fake_key = "sk-test-agent-env-not-a-real-key"
+    fake_auth_marker = "sk-test-agent-env-not-a-real-token"
     env = arms.agent_env(
-        {"PATH": "/venv/bin:/usr/bin", "VIRTUAL_ENV": "/venv", "HOME": "/h", "TYPESAFE_API_KEY": "k", "X_TOKEN": "t"}
+        {
+            "PATH": "/venv/bin:/usr/bin",
+            "VIRTUAL_ENV": "/venv",
+            "HOME": "/h",
+            "TYPESAFE_API_KEY": fake_key,
+            "X_TOKEN": fake_auth_marker,
+        }
     )
     assert env == {"HOME": "/h", "PATH": "/usr/bin", "TERM": "dumb"}
+    assert fake_key not in str(env) and fake_auth_marker not in str(env)
 
 
 def test_claude_command_pins_model_and_budget(tmp_path: Path) -> None:
@@ -407,14 +416,15 @@ def test_schedule_is_seeded_and_pairs_every_task_and_repeat() -> None:
 
 
 def test_the_study_refuses_without_its_flag_or_key(tmp_path: Path) -> None:
+    fake_key = "sk-test-ab-refusal-not-a-real-key"
     with pytest.raises(ab_run.StudyRefusedError, match="JEV_AB_LIVE=1"):
-        ab_run.live({"TYPESAFE_API_KEY": "k"}, tmp_path, agent="claude")
+        ab_run.live({"TYPESAFE_API_KEY": fake_key}, tmp_path, agent="claude")
     with pytest.raises(ab_run.StudyRefusedError, match="TYPESAFE_API_KEY"):
         ab_run.live({"JEV_AB_LIVE": "1"}, tmp_path, agent="claude")
     with pytest.raises(ab_run.StudyRefusedError, match="claude not found"):
-        ab_run.live({"JEV_AB_LIVE": "1", "TYPESAFE_API_KEY": "k", "PATH": ""}, tmp_path, agent="claude")
+        ab_run.live({"JEV_AB_LIVE": "1", "TYPESAFE_API_KEY": fake_key, "PATH": ""}, tmp_path, agent="claude")
     with pytest.raises(ab_run.StudyRefusedError, match="pi not found"):
-        ab_run.live({"JEV_AB_LIVE": "1", "TYPESAFE_API_KEY": "k", "PATH": ""}, tmp_path, agent="pi")
+        ab_run.live({"JEV_AB_LIVE": "1", "TYPESAFE_API_KEY": fake_key, "PATH": ""}, tmp_path, agent="pi")
     assert ab_run.main([], environ={}) == 2
 
 
