@@ -26,6 +26,10 @@ cd jev-judge-mcp
 uv sync --extra typesafe
 ```
 
+That extra is only for running the server. Development and `make typecheck` need the full sync:
+`uv sync --locked --all-extras` — a plain `uv sync` fails `make typecheck` with confusing
+`Import "typesafe_sdk" could not be resolved` errors.
+
 <details>
 <summary><b>Install with the installer (recommended)</b></summary>
 
@@ -166,6 +170,18 @@ The server reads environment variables only. It does not load a `.env` file.
 | `JEV_MCP_TRANSPORT` | `stdio` | `streamable-http` is experimental and binds `JEV_MCP_HTTP_HOST:JEV_MCP_HTTP_PORT`, default `127.0.0.1:8000` |
 | `JEV_MCP_LOG_LEVEL` | `INFO` | logs go to stderr |
 
+## Operator notes
+
+Two parity-sanctioned facts — the reference server behaves the same way — that show up as cost
+or latency:
+
+- `jev_verify` and `jev_screen` put no length bound on their input. The claims, evidence, or page
+text are sent to the provider in one request, however large, so token cost and latency scale with
+what the caller passes. Bound the text at the call site when it is not yours.
+- Requests over stdio carry no provider deadline (the sanctioned divergence
+`stdio-no-provider-deadline`): a provider that stops answering keeps the tool call waiting until
+the client cancels it.
+
 ## Architecture
 
 One diagram covers the whole server: the tool-call loop from `tools/call` to the returned action text, the fail-closed answer path, and the local CLI commands around it (`install`, `setup`, `hook gate`, `doctor`) with the stored key file and the optional response cache. Open [`docs/architecture.html`](docs/architecture.html) for the interactive version (guided views, dark mode, node search, relationship tracing).
@@ -205,9 +221,8 @@ The agent outcome study ran on 2026-09-23 with `jev-1.13.0`: three tasks, three 
 This is a Python rewrite of the TypeScript `@jkudish/jev-mcp` 0.5.0. The ten reference tools match it on the wire, checked by recorded parity fixtures; `jev_score` is an addition. Vocabulary is in [`docs/CONTEXT.md`](docs/CONTEXT.md), decisions in [`docs/adr/`](docs/adr/), and security notes in [`SECURITY.md`](SECURITY.md). Windows is not supported; the server exits at startup on a non-POSIX platform.
 
 ```sh
-uv sync --all-extras
-make ci      # lint, types, unit, property, policy coverage, contract, parity, security, build, smoke
-make eval    # offline scorer checks
+uv sync --locked --all-extras   # development needs every extra; --extra typesafe alone only runs the server
+make ci      # lint, types, unit, property, policy coverage, contract, parity, security, build, smoke, eval
 ```
 
 `make eval-live`, `make security-live`, and `JEV_AB_LIVE=1 make ab` call paid services and stay off CI. Contribution notes are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
