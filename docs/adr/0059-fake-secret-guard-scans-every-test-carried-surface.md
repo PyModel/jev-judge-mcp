@@ -23,8 +23,9 @@ short credential in `conftest.py` and one in a JSON fixture.
   untracked-but-not-ignored ones, so a new test file not yet staged is still scanned, while a
   fetched gitignored tree — `make parity-reference`'s `tests/parity/reference/`, node_modules
   and all — never is (a third-party `{"key": "a"}` must not redden `make unit` locally; GitHub
-  CI never sees that tree). A failed or empty git listing raises: the guard must be loud, never
-  vacuously green.
+  CI never sees that tree). Tracked files deleted from the working tree but not yet staged are
+  skipped. A failed listing — or one that names nothing scannable — raises: the guard must be
+  loud, never vacuously green.
 - **Exact exemptions only.** A credential-shaped name that is not a credential is exempt by
   exact (path, surface, name, value), never by pattern: the floor-testing fixtures and Claude's
   recorded `apiKeySource: "none"` stream metadata (an enum, not a credential). A pattern-based

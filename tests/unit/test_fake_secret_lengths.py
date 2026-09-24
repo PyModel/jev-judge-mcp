@@ -182,51 +182,82 @@ def scan_json(source: str, path: str) -> list[str]:
     return violations
 
 
-def repo_owned_test_files() -> list[Path]:
-    """Tests-scope files git owns: tracked plus untracked-but-not-ignored (`--exclude-standard`),
-    so a new test file not yet staged is still scanned while a fetched gitignored tree —
-    `tests/parity/reference/`, node_modules and all — never is. A failed or empty listing raises:
-    a broken listing must fail the guard loudly, never go green scanning nothing (ADR-0059)."""
+def repo_owned_test_files(root: Path = ROOT) -> list[Path]:
+    """Tests-scope files git owns under `root`: tracked plus untracked-but-not-ignored
+    (`--exclude-standard`), so a new test file not yet staged is still scanned while a fetched
+    gitignored tree — `tests/parity/reference/`, node_modules and all — never is. Tracked files
+    deleted from the working tree but not yet staged are skipped: a normal mid-refactor state
+    must not error an unrelated guard. A failed listing — or one that names nothing scannable —
+    raises: the guard must be loud, never vacuously green (ADR-0059)."""
     listing = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "tests"],
         capture_output=True,
         text=True,
-        cwd=ROOT,
+        cwd=root,
     )
     if listing.returncode != 0:
         raise RuntimeError(f"git could not list repo-owned test files: {listing.stderr.strip()}")
-    files = [ROOT / line for line in listing.stdout.splitlines()]
+    files = [root / line for line in listing.stdout.splitlines() if (root / line).exists()]
     if not files:
         raise RuntimeError("git listed no repo-owned test files; refusing to scan nothing")
     return files
 
 
-def scanned_test_files() -> list[Path]:
+def scanned_test_files(root: Path = ROOT) -> list[Path]:
     return sorted(
         path
-        for path in repo_owned_test_files()
+        for path in repo_owned_test_files(root)
         if path.name == "conftest.py" or (path.name.startswith("test_") and path.suffix == ".py")
     )
 
 
-def scanned_fixture_files() -> list[Path]:
-    return sorted(path for path in repo_owned_test_files() if path.suffix in {".json", ".jsonl"})
+def scanned_fixture_files(root: Path = ROOT) -> list[Path]:
+    return sorted(path for path in repo_owned_test_files(root) if path.suffix in {".json", ".jsonl"})
 
 
-def test_the_scan_lists_only_repo_owned_files() -> None:
-    """Pins the scope contract against the real repo, no git mocking: the listing is non-empty
-    (a broken listing must never go green) and names nothing gitignored, so `make
-    parity-reference`'s fetched tree stays out of the scan however deep it sits under tests/."""
-    files = [*scanned_test_files(), *scanned_fixture_files()]
-    assert files
-    ignored = subprocess.run(
-        ["git", "check-ignore", "--quiet", "--stdin"],
-        input="\n".join(str(path) for path in files),
-        capture_output=True,
-        text=True,
-        cwd=ROOT,
-    )
-    assert ignored.returncode == 1, "the scan listed gitignored files:\n" + ignored.stdout
+def test_the_scan_lists_existing_repo_owned_files(tmp_path: Path) -> None:
+    """Pins the listing contract in a throwaway repo, with real git and no mocking (ADR-0059):
+    a gitignored fixture with a short fake is never listed, an unstaged new file is, a tracked
+    file deleted without staging is skipped without erroring, and an empty listing raises
+    instead of scanning nothing."""
+
+    def git(repo: Path, *args: str) -> None:
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
+
+    repo = tmp_path / "repo"
+    (repo / "tests" / "ignored").mkdir(parents=True)
+    git(repo, "init", "-q")
+    (repo / ".gitignore").write_text("tests/ignored/\n")
+    (repo / "tests" / "test_tracked.py").write_text("")
+    (repo / "tests" / "tracked.json").write_text('{"ok": "marker-api-key"}')
+    git(repo, "add", ".")
+    git(repo, "-c", "user.name=guard", "-c", "user.email=guard@example.invalid", "commit", "-qm", "init")
+    ignored = repo / "tests" / "ignored" / "fixture.json"
+    ignored.write_text('{"key": "a"}')
+    unstaged_py = repo / "tests" / "test_brand_new.py"
+    unstaged_py.write_text("")
+    unstaged_json = repo / "tests" / "brand_new.json"
+    unstaged_json.write_text('{"ok": "marker-client-secret"}')
+
+    tests = scanned_test_files(repo)
+    fixtures = scanned_fixture_files(repo)
+    assert ignored not in tests and ignored not in fixtures
+    assert unstaged_py in tests and unstaged_json in fixtures
+    assert repo / "tests" / "test_tracked.py" in tests and repo / "tests" / "tracked.json" in fixtures
+
+    (repo / "tests" / "test_tracked.py").unlink()  # deleted, not staged: skipped, not an error
+    tests = scanned_test_files(repo)
+    assert repo / "tests" / "test_tracked.py" not in tests and unstaged_py in tests
+
+    empty = tmp_path / "empty"
+    (empty / "tests").mkdir(parents=True)
+    git(empty, "init", "-q")
+    try:
+        scanned_test_files(empty)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("an empty listing must raise, not scan nothing")
 
 
 def test_short_fake_credentials_are_detected() -> None:
