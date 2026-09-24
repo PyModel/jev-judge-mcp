@@ -1,14 +1,17 @@
 """What each agent config entry launches. The package name is always `jev-judge-mcp` (ADR-0049).
 
 The default launch is the version-pinned PyPI package; a checkout is an explicit
-`--from-checkout` choice (ADR-0051).
+`--from-checkout` choice (ADR-0051). Every entry also requests a Python that satisfies the
+package's `Requires-Python` (ADR-0053), so `uvx` cannot resolve the package against an
+interpreter it refuses.
 """
 
+import json
 import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError, distribution, version
 from pathlib import Path
 
 from jev_judge_mcp.domain import is_json_object
@@ -24,13 +27,16 @@ EXTRA = "typesafe"
 
 @dataclass(frozen=True)
 class Launch:
-    """Absolute `uvx` and the `--from` spec written into every entry (ADR-0051)."""
+    """Absolute `uvx`, the `--from` spec, and the `--python` request written into every entry (ADR-0051, ADR-0053)."""
 
     uvx: str
     spec: str
+    python: str | None = None
 
     def args(self) -> list[str]:
-        return ["--from", self.spec, PACKAGE]
+        # An argument array, never a shell string: the request rides as one argv element.
+        head = ["--python", self.python] if self.python is not None else []
+        return [*head, "--from", self.spec, PACKAGE]
 
     def invoke(self) -> list[str]:
         return [self.uvx, *self.args()]
@@ -43,7 +49,7 @@ def pypi_launch(uvx: str) -> Launch:
     depends on a checkout that may later move or disappear (ADR-0051). In real use the first
     launch of a not-yet-cached version may download the package from PyPI.
     """
-    return Launch(uvx=uvx, spec=f"{PACKAGE}[{EXTRA}]=={installed_version()}")
+    return Launch(uvx=uvx, spec=f"{PACKAGE}[{EXTRA}]=={installed_version()}", python=requires_python())
 
 
 def checkout_launch(uvx: str, package_root: Path | None = None) -> Launch:
@@ -51,7 +57,7 @@ def checkout_launch(uvx: str, package_root: Path | None = None) -> Launch:
     root = package_root if package_root is not None else find_package_root()
     if not root.is_absolute():
         root = root.resolve()
-    return Launch(uvx=uvx, spec=f"{root}[{EXTRA}]")
+    return Launch(uvx=uvx, spec=f"{root}[{EXTRA}]", python=requires_python())
 
 
 def installed_version() -> str:
@@ -63,6 +69,48 @@ def installed_version() -> str:
             f"{PACKAGE} is not installed in this environment, so its version cannot be pinned; "
             "install the package, or use --from-checkout"
         ) from exc
+
+
+def requires_python() -> str | None:
+    """The installed distribution's `Requires-Python`, as `uvx --python`'s value (ADR-0053).
+
+    Taken from the metadata, not hardcoded: the request must track what the package itself
+    declares. None when the metadata does not say, in which case the entry behaves exactly as
+    before this request existed.
+    """
+    try:
+        raw = distribution(PACKAGE).metadata.get("Requires-Python")
+    except PackageNotFoundError:
+        return None
+    value = " ".join((raw or "").split())  # metadata headers can line-wrap a specifier
+    return value or None
+
+
+def local_install_warning() -> str | None:
+    """The checkout warning: the default pin names a PyPI build without this tree's changes (ADR-0053).
+
+    True for an editable install and any other local source install, which `importlib.metadata`
+    records in `direct_url.json` as a `file://` URL. A PyPI wheel install carries no such record,
+    so it prints nothing.
+    """
+    try:
+        raw = distribution(PACKAGE).read_text("direct_url.json")
+    except PackageNotFoundError:
+        return None
+    if not raw:
+        return None
+    try:
+        parsed: object = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    url = parsed.get("url") if is_json_object(parsed) else None
+    if not isinstance(url, str) or not url.startswith("file://"):
+        return None
+    return (
+        "note: this installer runs from a local checkout, so the pinned PyPI build "
+        f"{PACKAGE}[{EXTRA}]=={installed_version()} does not include your local changes; "
+        "pass --from-checkout to install this tree instead"
+    )
 
 
 def find_package_root(start: Path | None = None) -> Path:

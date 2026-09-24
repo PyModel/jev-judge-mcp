@@ -14,14 +14,16 @@ from jev_judge_mcp.install import cli as install_cli
 from jev_judge_mcp.install import launch as launch_module
 from jev_judge_mcp.install.engine import Request, run
 from jev_judge_mcp.install.errors import InstallError
-from jev_judge_mcp.install.fs import entry_hash
+from jev_judge_mcp.install.fs import entry_hash, write_state
 from jev_judge_mcp.install.launch import (
     PACKAGE,
     Launch,
     checkout_launch,
     find_package_root,
+    local_install_warning,
     pi_entry,
     pypi_launch,
+    requires_python,
     supported_spec,
 )
 from jev_judge_mcp.install.layout import Layout
@@ -108,6 +110,7 @@ def test_launch_uses_the_local_path_and_the_distribution_name() -> None:
     launch = checkout_launch(UVX)
     args = launch.args()
     assert args[-1] == PACKAGE
+    assert args[0] == "--python"  # the installed metadata declares Requires-Python (ADR-0053)
     assert launch.spec.endswith("[typesafe]")
     assert Path(launch.spec.removesuffix("[typesafe]")).is_absolute()
     assert not any(part == "jev-mcp" or part.startswith("jev-mcp==") or part.startswith("jev-mcp[") for part in args)
@@ -117,7 +120,7 @@ def test_default_launch_pins_the_installed_version() -> None:
     """From a checkout or a wheel, the default spec is the running package pinned on PyPI (ADR-0051)."""
     launch = pypi_launch(UVX)
     assert launch.spec == PIN
-    assert launch.args() == ["--from", PIN, PACKAGE]
+    assert launch.args() == ["--python", requires_python() or "", "--from", PIN, PACKAGE]
 
 
 def test_default_launch_without_metadata_names_the_alternative(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -127,6 +130,45 @@ def test_default_launch_without_metadata_names_the_alternative(monkeypatch: pyte
     monkeypatch.setattr(launch_module, "version", missing)
     with pytest.raises(InstallError, match="--from-checkout"):
         pypi_launch(UVX)
+
+
+# --- ADR-0053: every entry requests a Python the package itself declares. ---
+
+
+def test_pypi_launch_requests_the_metadata_python(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The request is derived from the installed metadata, not hardcoded to one version."""
+    _installed_like_wheel(monkeypatch, requires_python=">=3.12,<4")
+    launch = pypi_launch(UVX)
+    assert launch.python == ">=3.12,<4"
+    assert launch.args() == ["--python", ">=3.12,<4", "--from", PIN, PACKAGE]
+
+
+def test_checkout_launch_requests_the_metadata_python(monkeypatch: pytest.MonkeyPatch) -> None:
+    _installed_like_wheel(monkeypatch, requires_python=">=3.12,<4")
+    launch = checkout_launch(UVX, package_root=Path("/work/jev-mcp"))
+    assert launch.args() == ["--python", ">=3.12,<4", "--from", SPEC, PACKAGE]
+
+
+def test_a_wrapped_specifier_is_collapsed_for_uvx(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Metadata headers can line-wrap; uvx still gets one clean specifier argument."""
+    _installed_like_wheel(monkeypatch, requires_python=">=3.12,\n <4")
+    assert requires_python() == ">=3.12, <4"
+
+
+def test_without_a_metadata_python_the_entry_stays_an_argument_array_without_the_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _installed_like_wheel(monkeypatch, requires_python="")
+    assert pypi_launch(UVX).args() == ["--from", PIN, PACKAGE]
+
+
+def test_requires_python_without_an_install_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing(name: str) -> _FakeDistribution:
+        raise PackageNotFoundError(name)
+
+    monkeypatch.setattr(launch_module, "distribution", missing)
+    assert requires_python() is None
+    assert local_install_warning() is None
 
 
 def test_find_package_root_without_a_checkout_names_the_flag(tmp_path: Path) -> None:
@@ -174,11 +216,44 @@ def _fake_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
         "PI_PROFILE",
     ):
         monkeypatch.delenv(name, raising=False)
+    _installed_like_wheel(monkeypatch)
 
     def uvx(name: str) -> str | None:
         return UVX
 
     monkeypatch.setattr(install_cli, "which", uvx)
+
+
+class _FakeDistribution:
+    """Stands in for the installed distribution: metadata and direct_url.json, nothing else."""
+
+    def __init__(self, *, metadata: dict[str, str], direct_url: str | None) -> None:
+        self.metadata: dict[str, str] = metadata
+        self._direct_url = direct_url
+
+    def read_text(self, name: str) -> str | None:
+        return self._direct_url if name == "direct_url.json" else None
+
+
+def _installed_like_wheel(monkeypatch: pytest.MonkeyPatch, requires_python: str = ">=3.12") -> None:
+    """A PyPI wheel install: Requires-Python present, no direct_url.json (ADR-0053)."""
+    dist = _FakeDistribution(metadata={"Requires-Python": requires_python}, direct_url=None)
+
+    def found(_name: str) -> _FakeDistribution:
+        return dist
+
+    monkeypatch.setattr(launch_module, "distribution", found)
+
+
+def _installed_like_local_checkout(monkeypatch: pytest.MonkeyPatch, requires_python: str = ">=3.12") -> None:
+    """An editable source install: importlib.metadata records a file:// direct_url (ADR-0053)."""
+    direct_url = json.dumps({"url": "file:///work/jev-mcp/src/jev_judge_mcp", "dir_info": {"editable": True}})
+    dist = _FakeDistribution(metadata={"Requires-Python": requires_python}, direct_url=direct_url)
+
+    def found(_name: str) -> _FakeDistribution:
+        return dist
+
+    monkeypatch.setattr(launch_module, "distribution", found)
 
 
 def test_wheel_layout_dry_run_renders_the_pinned_pypi_spec(
@@ -220,6 +295,46 @@ def test_default_from_a_checkout_is_still_the_pypi_spec(
     out = capsys.readouterr().out
     assert PIN in out
     assert str(find_package_root()) not in out
+
+
+# --- ADR-0053: an unreleased tree says so before pinning the published build. ---
+
+
+def test_install_from_a_local_checkout_warns_about_the_pypi_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fake_home(monkeypatch, tmp_path)
+    _installed_like_local_checkout(monkeypatch)
+    code = install_cli.main(["--dry-run", "-a", "claude-code"])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert "local checkout" in out
+    assert "does not include your local changes" in out
+    assert f"{PACKAGE}[typesafe]=={version(PACKAGE)}" in out  # names the pinned version
+    assert "--from-checkout" in out
+    assert PIN in out  # the plan still shows the default pin
+
+
+def test_install_from_a_pypi_wheel_prints_no_local_checkout_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fake_home(monkeypatch, tmp_path)  # already a wheel-like install: no direct_url.json
+    code = install_cli.main(["--dry-run", "-a", "claude-code"])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert "local checkout" not in out
+
+
+def test_from_checkout_prints_no_local_checkout_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fake_home(monkeypatch, tmp_path)
+    _installed_like_local_checkout(monkeypatch)
+    code = install_cli.main(["--dry-run", "-a", "claude-code", "--from-checkout"])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert "local checkout" not in out
+    assert f"{find_package_root()}[typesafe]" in out
 
 
 def test_checkout_flag_without_a_checkout_fails_accurately(
@@ -668,6 +783,82 @@ def test_verify_handshake(tmp_path: Path) -> None:
         verify_command([sys.executable, str(script)], timeout=5)
 
 
+def test_verify_error_carries_the_child_stderr(tmp_path: Path) -> None:
+    """A uv-style resolver failure on stderr reaches the operator's summary (ADR-0053)."""
+    script = tmp_path / "uv_style_failure.py"
+    script.write_text(
+        "import sys\n"
+        "sys.stderr.write('  x Because the current Python version (3.10.19) does not satisfy\\n')\n"
+        "sys.stderr.write('    Python>=3.12, the requirements are unsatisfiable.\\n')\n"
+        "sys.stderr.flush()\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(VerifyError) as caught:
+        verify_command([sys.executable, str(script)], timeout=5)
+    message = str(caught.value)
+    assert "server closed stdout" in message
+    assert "3.10.19" in message
+    assert "Python>=3.12" in message
+
+
+def test_verify_drains_a_flooding_stderr_before_the_child_answers(tmp_path: Path) -> None:
+    """A chatty child cannot fill the stderr pipe and stall the handshake (ADR-0053).
+
+    The flood is several pipe buffers deep and written before the initialize reply; without a
+    concurrent drain the child blocks on write and this test dies at the timeout instead.
+    """
+    script = tmp_path / "flooding_server.py"
+    names = ", ".join(f'"{name}"' for name in EXPECTED_TOOLS)
+    script.write_text(
+        "import json,sys\n"
+        "sys.stderr.write(('stderr noise ' * 40 + '\\n') * 2000)\n"
+        "sys.stderr.flush()\n"
+        "init = json.loads(sys.stdin.readline())\n"
+        "sys.stdout.write(json.dumps({'jsonrpc':'2.0','id':init['id'],'result':{'serverInfo':{'name':'jev-mcp'}}})+'\\n')\n"
+        "sys.stdout.flush()\n"
+        "while True:\n"
+        "    line = sys.stdin.readline()\n"
+        "    if not line:\n"
+        "        break\n"
+        "    msg = json.loads(line)\n"
+        "    if msg.get('method') == 'tools/list':\n"
+        f"        tools = [{{'name': name}} for name in [{names}]]\n"
+        "        sys.stdout.write(json.dumps({'jsonrpc':'2.0','id':msg['id'],'result':{'tools':tools}})+'\\n')\n"
+        "        sys.stdout.flush()\n"
+        "        break\n",
+        encoding="utf-8",
+    )
+    verify_command([sys.executable, str(script)], timeout=10)
+
+
+def test_the_stderr_tail_is_capped(tmp_path: Path) -> None:
+    """One enormous stderr line must not flood the installer's summary (ADR-0053)."""
+    script = tmp_path / "one_long_line.py"
+    script.write_text(
+        "import sys\nsys.stderr.write('x' * 100000 + '\\n')\nsys.stderr.flush()\nsys.exit(1)\n", encoding="utf-8"
+    )
+    with pytest.raises(VerifyError) as caught:
+        verify_command([sys.executable, str(script)], timeout=5)
+    message = str(caught.value)
+    assert "x" * 201 not in message
+    assert "x" * 200 in message
+
+
+def test_verify_failure_text_is_redacted_like_every_summary_line(tmp_path: Path) -> None:
+    """The stderr tail flows through the installer's redaction, never out raw (ADR-0053)."""
+
+    def failing(command: list[str]) -> None:
+        raise VerifyError(f"the child said {MARKER}")
+
+    code, text = execute(tmp_path, agents=("claude-code",), verify=failing, secrets=(MARKER,))
+    assert code == 1
+    assert "verify failed" in text
+    assert "the child said" in text
+    assert MARKER not in text
+    assert "[redacted]" in text
+
+
 def test_reference_tool_list_matches_the_published_names() -> None:
     """The install handshake expects every published tool: the reference ten plus the extension (ADR-0048)."""
     document = json.loads(Path("docs/reference/ts-0.5.0-tools-list.json").read_text(encoding="utf-8"))
@@ -738,8 +929,38 @@ def test_reinstall_migrates_a_checkout_entry_to_the_pinned_spec(tmp_path: Path) 
     code, text = execute(tmp_path, agents=("claude-code",), launch=PYPI_LAUNCH)
     assert code == 0, text
     entry = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["jev"]
-    assert entry["args"] == ["--from", PIN, PACKAGE]
+    assert entry["args"] == PYPI_LAUNCH.args()
     assert _state_targets(tmp_path)["claude-code"]["entry_sha256"] == entry_hash(entry)
+
+
+def test_reinstall_replaces_an_entry_without_the_python_request(tmp_path: Path) -> None:
+    """The ADR-0053 upgrade: a pre-fix entry (no --python) is rewritten by a plain re-run."""
+    old: dict[str, object] = {
+        "command": UVX,
+        "args": ["--from", PIN, PACKAGE],
+        "env": {"TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}"},
+    }
+    path = tmp_path / ".claude.json"
+    path.write_text(json.dumps({"mcpServers": {"jev": old}}, indent=2) + "\n", encoding="utf-8")
+    _record_entry(tmp_path, "claude-code", path, old)
+    code, text = execute(tmp_path, agents=("claude-code",), launch=PYPI_LAUNCH)
+    assert code == 0, text
+    assert "update" in text
+    entry = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["jev"]
+    assert entry["args"] == PYPI_LAUNCH.args()
+    assert entry["args"][0] == "--python"
+    assert _state_targets(tmp_path)["claude-code"]["entry_sha256"] == entry_hash(entry)
+
+
+def _record_entry(home: Path, target: str, path: Path, entry: dict[str, object]) -> None:
+    """Seed the state file so the installer owns an entry it did not write this run."""
+    record: dict[str, object] = {
+        "path": str(path),
+        "name": "jev",
+        "installer_version": "0",
+        "entry_sha256": entry_hash(entry),
+    }
+    write_state(home / ".local" / "state" / "jev-mcp" / "install.json", {"targets": {target: record}})
 
 
 def _state_targets(home: Path) -> dict[str, dict[str, object]]:

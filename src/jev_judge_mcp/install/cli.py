@@ -10,7 +10,7 @@ from shutil import which
 
 from jev_judge_mcp.install.engine import TARGETS, Request, run
 from jev_judge_mcp.install.errors import InstallError
-from jev_judge_mcp.install.launch import checkout_launch, pypi_launch
+from jev_judge_mcp.install.launch import checkout_launch, local_install_warning, pypi_launch
 from jev_judge_mcp.install.layout import Layout, layout_from_env
 from jev_judge_mcp.install.verify import verify_command
 
@@ -81,6 +81,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except InstallError as exc:
         sys.stdout.write(f"{exc}\n")
         return 1
+    if not parsed.from_checkout:
+        note = local_install_warning()
+        if note is not None:
+            sys.stdout.write(note + "\n\n")
     sys.stdout.write(result.text)
     return result.code
 

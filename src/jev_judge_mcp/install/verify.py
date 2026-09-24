@@ -3,7 +3,9 @@
 import json
 import select
 import subprocess
+import threading
 import time
+from collections import deque
 from collections.abc import Mapping
 from typing import IO, cast
 
@@ -25,9 +27,54 @@ EXPECTED_TOOLS: tuple[str, ...] = (
 )
 """The published tool names: the reference ten in snapshot order, then the extension (ADR-0048)."""
 
+STDERR_TAIL_LINES = 5
+"""How many of the child's last stderr lines a VerifyError carries (ADR-0053)."""
+
+STDERR_LINE_LIMIT = 200
+"""Per-line character cap, so one enormous stderr line cannot flood the installer's summary."""
+
 
 class VerifyError(Exception):
     """The server did not answer the install check. The message has no secrets."""
+
+
+class _StderrTail:
+    """The child's last stderr lines, drained while stdout is read.
+
+    The pipe is drained from a thread, so a chatty child cannot fill it and stall the handshake
+    until the timeout (ADR-0053): the child keeps writing, the thread keeps reading, and only the
+    short tail is kept for the error message.
+    """
+
+    def __init__(self, stream: IO[str] | None) -> None:
+        self._lines: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._drain, args=(stream,), daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def join(self, timeout: float) -> None:
+        self._thread.join(timeout)
+
+    def _drain(self, stream: IO[str] | None) -> None:
+        if stream is None:
+            return
+        try:
+            for line in stream:
+                text = line.rstrip("\r\n")[:STDERR_LINE_LIMIT]
+                with self._lock:
+                    self._lines.append(text)
+        except (OSError, ValueError):
+            pass  # the pipe closed under us during teardown; the tail so far is enough
+
+    def suffix(self) -> str:
+        """The tail as an error-message suffix, or an empty string when the child said nothing."""
+        with self._lock:
+            kept = [line for line in self._lines if line]
+        if not kept:
+            return ""
+        return "the child's stderr, last lines:\n" + "\n".join(f"  {line}" for line in kept)
 
 
 def verify_command(command: list[str], *, timeout: float = 30.0) -> None:
@@ -40,6 +87,8 @@ def verify_command(command: list[str], *, timeout: float = 30.0) -> None:
         stderr=subprocess.PIPE,
         text=True,
     )
+    tail = _StderrTail(process.stderr)
+    tail.start()
     try:
         stdin = process.stdin
         stdout = process.stdout
@@ -62,10 +111,17 @@ def verify_command(command: list[str], *, timeout: float = 30.0) -> None:
         if missing:
             raise VerifyError("tools/list is missing " + ", ".join(missing))
         stdin.close()
+    except VerifyError as exc:
+        # The child's own words (uv's resolver, a crash) are the actionable part (ADR-0053). The
+        # installer redacts this message with the same pass as every other summary line.
+        first = exc.args[0] if exc.args else "the check failed"
+        suffix = tail.suffix()
+        raise VerifyError(f"{first}; {suffix}" if suffix else first) from None
     finally:
         if process.stdin is not None and not process.stdin.closed:
             process.stdin.close()
         process.wait(timeout=5)
+        tail.join(timeout=1)
         if process.stdout is not None:
             process.stdout.close()
         if process.stderr is not None:
