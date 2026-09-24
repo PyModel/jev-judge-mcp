@@ -3,7 +3,9 @@ stays protocol-only while worker processes run, and shutdown leaves no worker be
 
 import json
 import os
+import shlex
 import subprocess
+import sys
 import time
 from typing import Any
 
@@ -30,13 +32,51 @@ def call(request_id: int, name: str, arguments: dict[str, Any]) -> dict[str, Any
     }
 
 
-def worker_pids() -> set[int]:
-    """Every live extract worker, whatever its parent: a launcher such as `uvx` can sit between the
-    server and its workers, so parentage is not part of the contract."""
-    listing = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,command="], capture_output=True, text=True, check=True)
-    return {
-        int(line.split(None, 1)[0]) for line in listing.stdout.splitlines() if "jev_judge_mcp.extract.worker" in line
-    }
+WORKER_MODULE = "jev_judge_mcp.extract.worker"
+
+
+def process_snapshot() -> dict[int, tuple[int, list[str]]]:
+    listing = subprocess.run(
+        ["ps", "-A", "-ww", "-o", "pid=,ppid=,command="], capture_output=True, text=True, check=True
+    )
+    processes: dict[int, tuple[int, list[str]]] = {}
+    for line in listing.stdout.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) != 3:
+            continue
+        try:
+            pid, ppid = int(fields[0]), int(fields[1])
+            argv = shlex.split(fields[2])
+        except ValueError:
+            continue
+        if argv:
+            processes[pid] = (ppid, argv)
+    return processes
+
+
+def is_worker(argv: list[str]) -> bool:
+    return any(argv[index : index + 2] == ["-m", WORKER_MODULE] for index in range(len(argv) - 1))
+
+
+def worker_pids(root_pid: int, processes: dict[int, tuple[int, list[str]]] | None = None) -> set[int]:
+    """Workers below root, including through launchers, matched by the exact `-m MODULE` argv pair."""
+    table = processes if processes is not None else process_snapshot()
+    children: dict[int, list[int]] = {}
+    for pid, (ppid, _) in table.items():
+        children.setdefault(ppid, []).append(pid)
+    descendants: set[int] = set()
+    pending = [root_pid]
+    while pending:
+        parent = pending.pop()
+        for child in children.get(parent, []):
+            if child not in descendants:
+                descendants.add(child)
+                pending.append(child)
+    return {pid for pid in descendants if pid in table and is_worker(table[pid][1])}
+
+
+def orphan_worker_pids() -> set[int]:
+    return {pid for pid, (ppid, argv) in process_snapshot().items() if ppid == 1 and is_worker(argv)}
 
 
 def alive(pid: int) -> bool:
@@ -55,6 +95,35 @@ def ps_snapshot() -> str:
     ).stdout
 
 
+def test_worker_census_ignores_a_decoy_command_line() -> None:
+    decoy = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)", WORKER_MODULE],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 2
+        processes = process_snapshot()
+        while decoy.pid not in processes and time.monotonic() < deadline:
+            time.sleep(0.01)
+            processes = process_snapshot()
+        assert decoy.pid in processes
+        assert WORKER_MODULE in processes[decoy.pid][1]
+        assert is_worker([sys.executable, "-m", WORKER_MODULE])
+        assert not is_worker([sys.executable, "-c", WORKER_MODULE])
+        with StdioServer() as server:
+            server.initialize()
+            processes = process_snapshot()
+            assert decoy.pid not in worker_pids(server.process.pid, processes)
+            server.close_stdin()
+            returncode, _ = server.wait()
+        assert returncode == 0
+    finally:
+        if decoy.poll() is None:
+            decoy.terminate()
+            decoy.wait(timeout=5)
+
+
 def test_timeout_does_not_block_other_calls_and_shutdown_reaps_workers() -> None:
     with StdioServer() as server:
         server.initialize()
@@ -66,7 +135,7 @@ def test_timeout_does_not_block_other_calls_and_shutdown_reaps_workers() -> None
             reply = server.receive()
             if "id" in reply:
                 replies[reply["id"]] = (time.monotonic() - started, reply)
-        workers = worker_pids()
+        workers = worker_pids(server.process.pid)
         server.close_stdin()
         returncode, stderr = server.wait()
         lines = server.stdout_lines
@@ -91,6 +160,42 @@ def test_timeout_does_not_block_other_calls_and_shutdown_reaps_workers() -> None
     assert not any(alive(pid) for pid in workers)
     for line in lines:
         assert json.loads(line)["jsonrpc"] == "2.0"
+
+
+def test_cancelled_extract_reaps_worker_and_keeps_server_responsive() -> None:
+    orphans_before = orphan_worker_pids()
+    with StdioServer() as server:
+        server.initialize()
+        server.send(call(10, "jev_extract", SLOW))
+        deadline = time.monotonic() + 5
+        workers = worker_pids(server.process.pid)
+        while not workers and time.monotonic() < deadline:
+            time.sleep(0.02)
+            workers = worker_pids(server.process.pid)
+        assert workers, f"extract did not start a worker; ps:\n{ps_snapshot()}"
+        time.sleep(0.05)
+
+        server.send(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/cancelled",
+                "params": {"requestId": 10, "reason": "integration test"},
+            }
+        )
+        deadline = time.monotonic() + 0.75
+        while any(alive(pid) for pid in workers) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not any(alive(pid) for pid in workers), f"cancel left a worker alive; ps:\n{ps_snapshot()}"
+
+        quick = server.request(call(11, "jev_extract", NO_MATCH))
+        quick_payload = json.loads(quick["result"]["content"][0]["text"])
+        assert quick_payload["results"][0]["status"] == "not_found"
+        server.close_stdin()
+        returncode, stderr = server.wait()
+
+    assert returncode == 0
+    assert "Traceback" not in stderr
+    assert not (orphan_worker_pids() - orphans_before), f"cancel left an orphan worker; ps:\n{ps_snapshot()}"
 
 
 @pytest.mark.parametrize("name", ["jev_verify", "jev_nope"])

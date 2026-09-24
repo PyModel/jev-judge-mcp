@@ -1,15 +1,17 @@
-"""The HTTP access-control gate and bearer token, end to end on a real loopback socket (ADR-0050).
+"""The HTTP access-control gate and bearer token, end to end on real sockets (ADR-0050).
 
-Every bind here is `127.0.0.1`. The refusal cases exit before anything binds, so a non-loopback
-`JEV_MCP_HTTP_HOST` value only ever reaches the startup gate.
+Local binds use only `127.0.0.1`. One CI-only test binds `0.0.0.0` with a token; refusal cases exit
+before binding, so an unauthenticated non-loopback host only reaches the startup gate.
 """
 
 import json
+import os
 import signal
 import socket
 import time
 
 import httpx
+import pytest
 
 from tests.support.stdio import INITIALIZE, PROTOCOL_VERSION, StdioServer
 
@@ -88,6 +90,33 @@ def test_the_token_is_required_and_admits_initialize() -> None:
     assert returncode == 0
     assert "Traceback" not in stderr
     # The token joins redaction (ADR-0017) and is printed nowhere, on the success path or the 401s.
+    assert TOKEN not in stderr
+
+
+@pytest.mark.skipif(not os.getenv("CI"), reason="binding beyond loopback is CI-only")
+def test_non_loopback_bind_with_token_authenticates_requests() -> None:
+    port = free_port()
+    url = f"http://127.0.0.1:{port}/mcp"
+    env = {
+        "JEV_MCP_TRANSPORT": "streamable-http",
+        "JEV_MCP_HTTP_HOST": "0.0.0.0",
+        "JEV_MCP_HTTP_PORT": str(port),
+        "JEV_MCP_HTTP_TOKEN": TOKEN,
+    }
+    with StdioServer(env=env) as server:
+        missing = post(url, INITIALIZE)
+        assert missing.status_code == 401
+        assert missing.headers["www-authenticate"] == "Bearer"
+        assert TOKEN not in missing.text
+
+        authenticated = post(url, INITIALIZE, headers={"Authorization": f"Bearer {TOKEN}"})
+        assert authenticated.status_code == 200
+        data = next(line[len("data: ") :] for line in authenticated.text.splitlines() if line.startswith("data: "))
+        assert json.loads(data)["result"]["serverInfo"]["name"] == "jev-mcp"
+        server.process.send_signal(signal.SIGTERM)
+        returncode, stderr = server.wait()
+    assert returncode == 0
+    assert "Traceback" not in stderr
     assert TOKEN not in stderr
 
 
