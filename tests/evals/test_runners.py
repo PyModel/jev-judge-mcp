@@ -10,6 +10,7 @@ from evals.calibration.bounds import clopper_pearson_upper
 from evals.runners import live
 from evals.runners.manifest import (
     EVALS_DIR,
+    Case,
     Manifest,
     examples,
     load_cases,
@@ -17,7 +18,8 @@ from evals.runners.manifest import (
     load_outputs,
     select_split,
 )
-from evals.runners.score import score
+from evals.runners.score import calibrate, score
+from evals.scorers.fields import Json
 
 SYNTHETIC_MANIFEST = EVALS_DIR / "manifests" / "synthetic-classify.json"
 SYNTHETIC_OUTPUTS = EVALS_DIR / "datasets" / "synthetic" / "classify.outputs.jsonl"
@@ -70,6 +72,9 @@ def test_calibration_split_reports_an_operating_point_and_borderline_flips(tmp_p
     right = [i for i in range(1000) if f"k{i}" in calibration_ids and i % 40 != 0]
     wobbly = [i for i in right if i % 10 == 1]
     assert wobbly and len(right) < len(calibration_ids)  # the split holds both flips and wrong rows
+    locked_ids = {c.id for c in select_split(load_cases(manifest.dataset), "locked_test", manifest.salt)}
+    right_locked = [i for i in range(1000) if f"k{i}" in locked_ids and i % 40 != 0]
+    assert right_locked  # the held-out split holds rows the selected point accepts
 
     report = score(manifest, _write_jsonl(tmp_path / "out.jsonl", outputs), "calibration")
 
@@ -88,7 +93,42 @@ def test_calibration_split_reports_an_operating_point_and_borderline_flips(tmp_p
         "borderline": len(right),
         "borderline_unrepeated": 0,
         "flip_rate": pytest.approx(len(wobbly) / len(right)),
+        # The point is certified on locked_test, never on the calibration rows that chose it.
+        "certification": {
+            "split": "locked_test",
+            "auto": len(right_locked),
+            "errors": 0,
+            "coverage": len(right_locked) / len(locked_ids),
+            "error_upper_bound": pytest.approx(clopper_pearson_upper(0, len(right_locked))),
+        },
+        "gate": "pass",
     }
+
+
+def test_a_point_within_budget_on_calibration_fails_the_gate_on_locked_test() -> None:
+    # 100 calibration rows with zero errors select 0.99 (upper bound ~2.95% <= the 3% budget); the
+    # held-out split's two wrong AUTO rows bound far above it, so the gate fails on locked_test alone.
+    calibration = [Case(f"c{i}", f"cf{i}", {}, {"labels": {"t": "a"}}) for i in range(100)]
+    locked = [Case(f"t{i}", f"tf{i}", {}, {"labels": {"t": "a"}}) for i in range(20)]
+    wrong = {f"t{i}" for i in range(2)}
+
+    def output(case: Case) -> Json:
+        return {
+            "results": [{"id": "t", "classification": "a" if case.id not in wrong else "b", "top_probability": 0.99}]
+        }
+
+    outputs = {case.id: [output(case)] for case in (*calibration, *locked)}
+
+    report = calibrate("jev_classify", calibration, locked, outputs)
+
+    point = cast(dict[str, object], report["operating_point"])
+    assert cast(float, point["error_upper_bound"]) <= cast(float, report["max_error"])
+    certification = cast(dict[str, object], report["certification"])
+    assert certification["split"] == "locked_test"
+    assert (certification["auto"], certification["errors"]) == (20, 2)
+    assert cast(float, certification["error_upper_bound"]) == pytest.approx(clopper_pearson_upper(2, 20))
+    assert cast(float, certification["error_upper_bound"]) > cast(float, report["max_error"])
+    assert report["gate"] == "fail"
 
 
 def test_manifest_must_pin_a_model_and_name_a_tool(tmp_path: Path) -> None:

@@ -10,7 +10,7 @@ from evals.calibration.bounds import Bound, clopper_pearson_upper, upper_error_b
 from evals.calibration.flips import flip_rate, is_borderline
 from evals.calibration.split import split_by_family
 from evals.calibration.targets import PRECISION_TARGETS, error_budget
-from evals.calibration.threshold import select_threshold
+from evals.calibration.threshold import certify, select_threshold
 
 # Upper ends of two-sided 95% intervals (= one-sided 0.975) for k errors in 10.
 PUBLISHED_UPPER = [(0, 0.3085, 0.2775), (1, 0.4450, 0.4042), (5, 0.8129, 0.7634)]
@@ -85,6 +85,26 @@ def test_threshold_prefers_the_most_coverage_among_feasible_points() -> None:
 
 def test_threshold_with_no_rows_is_none() -> None:
     assert select_threshold([], max_error=0.5) is None
+
+
+def test_certify_reports_the_held_out_rows_bound() -> None:
+    # The selection rows certify nothing: certify measures only the rows it is given.
+    point = select_threshold([(0.99, True)] * 300 + [(0.5, False)] * 100, max_error=0.03)
+    assert point is not None
+    certified = certify(point, [(0.99, True), (0.99, True), (0.99, False), (0.5, False)])
+    assert certified.auto == 3
+    assert certified.errors == 1
+    assert certified.coverage == 0.75
+    assert certified.error_upper_bound == pytest.approx(clopper_pearson_upper(1, 3))
+
+
+def test_certify_without_evidence_bounds_at_one() -> None:
+    point = select_threshold([(0.99, True)] * 300, max_error=0.03)
+    assert point is not None
+    empty = certify(point, [])
+    assert (empty.auto, empty.errors, empty.coverage, empty.error_upper_bound) == (0, 0, 0.0, 1.0)
+    all_below = certify(point, [(0.5, True), (0.5, False)])
+    assert (all_below.auto, all_below.errors, all_below.error_upper_bound) == (0, 0, 1.0)
 
 
 def test_split_puts_every_family_in_exactly_one_split() -> None:

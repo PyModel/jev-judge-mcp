@@ -8,7 +8,7 @@ Sanctioned Divergence and needs an ADR).
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from evals.calibration.bounds import Bound, upper_error_bound
+from evals.calibration.bounds import Bound, clopper_pearson_upper, upper_error_bound
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,3 +44,34 @@ def select_threshold(
         if upper <= max_error and (best is None or len(auto) > best.auto):
             best = OperatingPoint(threshold, len(auto), errors, len(auto) / len(rows), upper)
     return best
+
+
+@dataclass(frozen=True, slots=True)
+class Certification:
+    """A selected `OperatingPoint` applied to rows it was not chosen on (the `locked_test` split)."""
+
+    auto: int
+    """Rows at or above the threshold."""
+    errors: int
+    """AUTO rows whose judgment was wrong."""
+    coverage: float
+    """auto / all rows."""
+    error_upper_bound: float
+    """One-sided 95% Clopper-Pearson upper bound on the error rate, measured on these rows only."""
+
+
+def certify(point: OperatingPoint, rows: Sequence[tuple[float, bool]], confidence: float = 0.95) -> Certification:
+    """Apply `point` — selected on other rows — to held-out `rows` and bound its error rate there.
+
+    Always Clopper-Pearson: a certification claim uses the exact bound. Rows with no evidence bound at
+    1.0 (`bounds.py`), so an empty split — or one with no row at or above the threshold — fails the
+    gate rather than certifying by default.
+    """
+    auto = [correct for score, correct in rows if score >= point.threshold]
+    errors = auto.count(False)
+    return Certification(
+        len(auto),
+        errors,
+        len(auto) / len(rows) if rows else 0.0,
+        clopper_pearson_upper(errors, len(auto), confidence),
+    )

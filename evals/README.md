@@ -26,8 +26,9 @@ Live bounds:
 
 - **Pinned model:** `jev-1.13.0` (TypeSafe, `JEV_PROVIDER=typesafe`), in `manifests/live-*.json`.
 - **Request cap:** `LIVE_REQUEST_CAP = 25` tool calls per run (`runners/live.py`); each tool call makes at
-  most one provider request, checked before the first request is sent. The `typesafe-sdk`'s own retry
-  policy can resend a failed request; the cap counts logical requests.
+  most one provider request, checked before the first request is sent. The runtime's provider passes
+  `typesafe_sdk.RetryPolicy(max_retries=0)` (the server's default stays reference-faithful), so a failed
+  call is a recorded `error` row, never an unbudgeted retry.
 - **Datasets:** `datasets/synthetic/live-classify.jsonl` and `live-verify.jsonl`, 3 cases each, so
   `make eval-live` sends 6 requests.
 - Neither `make eval` nor `make ci` calls the network; both stay green with the key unset.
@@ -73,11 +74,23 @@ policy rather than a copy of it. An undefined metric (no positives, no AUTO rows
 `score --split calibration` on a tool in `calibration/rows.py` adds a `calibration` block: the threshold
 with the most AUTO rows whose upper error bound (Clopper-Pearson, one-sided 95%) is at most
 `1 - target` from `calibration/targets.py`, or `null` when none qualifies. Rows within ±0.05 of that
-threshold (inclusive) are borderline; with 3–5 recorded repeats their flip rate is reported. The
-operating point is a report. It never edits `jev_judge_mcp.policy.thresholds`: moving a frozen default is a
+threshold (inclusive) are borderline; with 3–5 recorded repeats their flip rate is reported. The block
+then certifies the selected point on the `locked_test` split (`calibration/threshold.py` `certify`):
+that split's own AUTO rows and errors, its one-sided 95% Clopper-Pearson upper bound, and a `gate` of
+`pass` only when that held-out bound is within the budget. A point that fits the budget on calibration
+but not on `locked_test` fails the gate: the calibration rows chose the point, so they cannot certify
+it. An empty or evidence-free `locked_test` split bounds at 1.0 and fails. The operating point is a
+report. It never edits `jev_judge_mcp.policy.thresholds`: moving a frozen default is a
 Sanctioned Divergence and needs its own ADR.
 
 ## Open gaps (not decided by the ROADMAP or an ADR)
+
+- **Held-out certification needs `locked_test` rows.** `score --split calibration` requires a recorded
+  output for every `locked_test` case (an error, not a skip, per `runners/manifest.py`), and the
+  Clopper-Pearson bound cannot fall under a realistic budget without enough of them: zero errors in 20
+  rows already bound at ~14%, so a 3% budget needs ≳100 error-free rows per tool (jev_gate's 0.5%
+  budget, ≳600). Until a per-tool `locked_test` corpus of that size is recorded, a failing gate is the
+  expected state, not a defect.
 
 - **Screen's fixed false-block rate** has no specified value; `score_screen` requires
   `params.max_false_block_rate` in the manifest rather than picking one.
