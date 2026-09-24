@@ -183,9 +183,13 @@ class ProcessRegexExecutor:
     async def _start(self, budget: float = _START_TIMEOUT_S) -> _Slot:
         """A ready worker. Raises `TimeoutError` if `budget` runs out first, `_WorkerFailed` on a crash."""
         try:
-            process = await anyio.open_process(
-                [sys.executable, "-m", __name__], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None
-            )
+            # Shielded: a cancel (or a spent budget) delivered during the spawn is deferred until
+            # the first checkpoint below, inside the armed try — so the process is never left
+            # without a handle to kill (ADR-0011).
+            with anyio.CancelScope(shield=True):
+                process = await anyio.open_process(
+                    [sys.executable, "-m", __name__], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None
+                )
         except OSError:
             # EMFILE/ENOMEM: nowhere to run the pattern at all. This is the `NOT_STARTED` refusal's
             # failure class — not an escape past the executor contract into a protocol error.

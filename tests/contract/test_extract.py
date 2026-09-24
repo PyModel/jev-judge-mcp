@@ -224,6 +224,48 @@ async def test_cancel_during_start_reaps_the_pid(monkeypatch: pytest.MonkeyPatch
                 os.kill(pid, signal.SIGKILL)
 
 
+async def test_cancel_delivered_inside_the_spawn_leaves_no_orphan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR-0011: the spawn window itself is covered.
+
+    A cancel delivered while `_start` is suspended inside `anyio.open_process` — before any
+    kill-on-cancel handler exists — must still leave no orphan worker after `aclose()`.
+    """
+    spawned = anyio.Event()
+    release = anyio.Event()
+    pids: list[int] = []
+    real_open = anyio.open_process
+
+    async def open_then_wait_for_cancel(*args: object, **kwargs: object) -> anyio.abc.Process:
+        process = await real_open(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+        pids.append(process.pid)
+        spawned.set()
+        await release.wait()  # suspended inside `open_process`: a cancel delivered here is the test's
+        return process
+
+    monkeypatch.setattr(anyio, "open_process", open_then_wait_for_cancel)
+    pool = ProcessRegexExecutor(size=1)
+
+    async def match() -> None:
+        await pool.find(translate("a", "g"), to_units("a"), deadline=time.monotonic() + 30)
+
+    try:
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(match)
+                await spawned.wait()
+                tg.cancel_scope.cancel()
+                release.set()
+        assert pids
+        with pytest.raises(ProcessLookupError):
+            os.kill(pids[0], 0)
+        assert pool._idle == []  # pyright: ignore[reportPrivateUsage]
+    finally:
+        await pool.aclose()
+        for pid in pids:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+
+
 async def test_spawn_failure_is_the_not_started_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
     """EMFILE at spawn stays inside the executor contract: `Invalid(NOT_STARTED)`, never an escape."""
 
