@@ -3,15 +3,22 @@
 The reference judges the overall independently of the aspects and never connects them. Python
 keeps the overall unchanged and adds a decide-style `warnings` field only when an aspect reports
 `contradicts` under a non-`contradicts` overall — so every unaffected output stays byte-identical
-to the reference (no recorded fixture carries the contradiction, so the parity replay needs no
-expectation).
+to the reference. The parity corpus still has no such call, so its replay needs no expectation.
+A live answer that did fire the warning is replayed from `tests/fixtures/compare/`, outside that
+corpus, so the warning is pinned to a real judgment and not only to constructed answers.
 """
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from tests.support.fixtures import Fixture, FixtureCall
 from tests.support.jev import call_tool
+from tests.support.replay import replay_call
+
+LIVE_FIXTURE = Path(__file__).parents[1] / "fixtures" / "compare" / "live-humidity-aspect-contradiction.json"
 
 pytestmark = pytest.mark.anyio
 
@@ -133,4 +140,24 @@ async def test_a_fail_closed_overall_still_warns_on_a_contradicting_aspect() -> 
     assert payload["overall"]["status"] == "invalid_response"
     assert payload["warnings"] == [
         'Aspect "launch date" reports contradicts while the overall relation does not; inspect before acting'
+    ]
+
+
+async def test_the_live_humidity_contradiction_replays_the_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The 2026-09-24 live answer (ADR-0052): overall same_fact, humidity contradicts."""
+    payload = json.loads(LIVE_FIXTURE.read_text(encoding="utf-8"))
+    call = FixtureCall(Fixture(LIVE_FIXTURE, payload), 0, payload["calls"][0])
+    await replay_call(call, monkeypatch)
+    body = json.loads(call.payload["result"]["content"][0]["text"])
+    assert body["overall"]["relation"] == "same_fact"
+    assert [item["relation"] for item in body["aspects"]] == [
+        "same_fact",
+        "same_fact",
+        "same_fact",
+        "same_fact",
+        "contradicts",
+    ]
+    assert body["aspects"][-1]["aspect"] == "humidity"
+    assert body["warnings"] == [
+        'Aspect "humidity" reports contradicts while the overall relation does not; inspect before acting'
     ]

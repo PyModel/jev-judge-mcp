@@ -1,0 +1,121 @@
+{
+  "id": "live-compare/humidity-aspect-contradiction",
+  "source": "live jev_compare, 2026-09-24, server key discovery, model jev-latest",
+  "divergences": [],
+  "note": "Live answers from the humidity-point attempt (ADR-0052). Overall same_fact, aspect humidity contradicts. Usage was not retained; the envelope omits it. The authorization header is the parity placeholder, not a credential. Not part of the reference corpus.",
+  "calls": [
+    {
+      "env": {
+        "JEV_API_BASE_URL": "{{FAKE_URL}}/v1/systemone",
+        "JEV_API_KEY": "parity-test-key",
+        "JEV_PROVIDER": "compatible"
+      },
+      "tool": "jev_compare",
+      "arguments": {
+        "purpose": "Are these the same weather observation for the day?",
+        "passage_a": "Dublin, 4 April 2024: high 11 C, low 6 C, wind west at 20 km/h, no rain, humidity 40 percent.",
+        "passage_b": "Dublin, 4 April 2024: high 11 C, low 6 C, wind west at 20 km/h, no rain, humidity 41 percent.",
+        "aspects": [
+          "city",
+          "date",
+          "high",
+          "wind",
+          "humidity"
+        ]
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "POST",
+            "path": "/v1/systemone",
+            "authorization": "Bearer parity-test-key",
+            "content_type": "application/json",
+            "body": {
+              "model": "jev-latest",
+              "state": {
+                "purpose": "Are these the same weather observation for the day?",
+                "passage_a": "Dublin, 4 April 2024: high 11 C, low 6 C, wind west at 20 km/h, no rain, humidity 40 percent.",
+                "passage_b": "Dublin, 4 April 2024: high 11 C, low 6 C, wind west at 20 km/h, no rain, humidity 41 percent.",
+                "aspects": [
+                  "city",
+                  "date",
+                  "high",
+                  "wind",
+                  "humidity"
+                ]
+              },
+              "questions": {
+                "overall": {
+                  "type": "choice",
+                  "instructions": "Do the two passages state the same underlying fact, contradict each other, or discuss different facts?",
+                  "criteria": {
+                    "same_fact": "Both passages state the same underlying fact or claim",
+                    "contradicts": "The passages state opposing facts about the same subject",
+                    "different_facts": "The passages discuss different subjects or make non-overlapping claims"
+                  }
+                },
+                "aspect_0": {
+                  "type": "choice",
+                  "instructions": "Judging only the aspect \"city\" of the two passages in the state, which relation holds?",
+                  "criteria": {
+                    "same_fact": "Both passages make comparable assertions about this aspect and they agree",
+                    "contradicts": "Both passages address this aspect and their assertions conflict",
+                    "different_facts": "The passages do not both make a comparable assertion about this aspect: at least one does not address it, or their mentions do not overlap"
+                  }
+                },
+                "aspect_1": {
+                  "type": "choice",
+                  "instructions": "Judging only the aspect \"date\" of the two passages in the state, which relation holds?",
+                  "criteria": {
+                    "same_fact": "Both passages make comparable assertions about this aspect and they agree",
+                    "contradicts": "Both passages address this aspect and their assertions conflict",
+                    "different_facts": "The passages do not both make a comparable assertion about this aspect: at least one does not address it, or their mentions do not overlap"
+                  }
+                },
+                "aspect_2": {
+                  "type": "choice",
+                  "instructions": "Judging only the aspect \"high\" of the two passages in the state, which relation holds?",
+                  "criteria": {
+                    "same_fact": "Both passages make comparable assertions about this aspect and they agree",
+                    "contradicts": "Both passages address this aspect and their assertions conflict",
+                    "different_facts": "The passages do not both make a comparable assertion about this aspect: at least one does not address it, or their mentions do not overlap"
+                  }
+                },
+                "aspect_3": {
+                  "type": "choice",
+                  "instructions": "Judging only the aspect \"wind\" of the two passages in the state, which relation holds?",
+                  "criteria": {
+                    "same_fact": "Both passages make comparable assertions about this aspect and they agree",
+                    "contradicts": "Both passages address this aspect and their assertions conflict",
+                    "different_facts": "The passages do not both make a comparable assertion about this aspect: at least one does not address it, or their mentions do not overlap"
+                  }
+                },
+                "aspect_4": {
+                  "type": "choice",
+                  "instructions": "Judging only the aspect \"humidity\" of the two passages in the state, which relation holds?",
+                  "criteria": {
+                    "same_fact": "Both passages make comparable assertions about this aspect and they agree",
+                    "contradicts": "Both passages address this aspect and their assertions conflict",
+                    "different_facts": "The passages do not both make a comparable assertion about this aspect: at least one does not address it, or their mentions do not overlap"
+                  }
+                }
+              }
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": "{\"answers\": {\"overall\": {\"choice\": \"same_fact\", \"confidence\": 0.34, \"probabilities\": {\"same_fact\": 0.56, \"different_facts\": 0.01, \"contradicts\": 0.43}}, \"aspect_0\": {\"choice\": \"same_fact\", \"confidence\": 1, \"probabilities\": {\"same_fact\": 1, \"different_facts\": 0, \"contradicts\": 0}}, \"aspect_1\": {\"choice\": \"same_fact\", \"confidence\": 1, \"probabilities\": {\"same_fact\": 1, \"different_facts\": 0, \"contradicts\": 0}}, \"aspect_2\": {\"choice\": \"same_fact\", \"confidence\": 1, \"probabilities\": {\"same_fact\": 1, \"different_facts\": 0, \"contradicts\": 0}}, \"aspect_3\": {\"choice\": \"same_fact\", \"confidence\": 1, \"probabilities\": {\"same_fact\": 1, \"different_facts\": 0, \"contradicts\": 0}}, \"aspect_4\": {\"choice\": \"contradicts\", \"confidence\": 0.92, \"probabilities\": {\"same_fact\": 0.04, \"different_facts\": 0.01, \"contradicts\": 0.95}}}}"
+          }
+        }
+      ],
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"tool\": \"jev_compare\",\n  \"model\": \"jev-latest\",\n  \"provider\": \"compatible\",\n  \"overall\": {\n    \"relation\": \"same_fact\",\n    \"probabilities\": {\n      \"same_fact\": 0.56,\n      \"different_facts\": 0.01,\n      \"contradicts\": 0.43\n    },\n    \"confidence\": 0.34,\n    \"margin\": 0.13000000000000006,\n    \"decision\": \"review\"\n  },\n  \"aspects\": [\n    {\n      \"aspect\": \"city\",\n      \"relation\": \"same_fact\",\n      \"probabilities\": {\n        \"same_fact\": 1,\n        \"different_facts\": 0,\n        \"contradicts\": 0\n      },\n      \"confidence\": 1,\n      \"margin\": 1,\n      \"decision\": \"auto\"\n    },\n    {\n      \"aspect\": \"date\",\n      \"relation\": \"same_fact\",\n      \"probabilities\": {\n        \"same_fact\": 1,\n        \"different_facts\": 0,\n        \"contradicts\": 0\n      },\n      \"confidence\": 1,\n      \"margin\": 1,\n      \"decision\": \"auto\"\n    },\n    {\n      \"aspect\": \"high\",\n      \"relation\": \"same_fact\",\n      \"probabilities\": {\n        \"same_fact\": 1,\n        \"different_facts\": 0,\n        \"contradicts\": 0\n      },\n      \"confidence\": 1,\n      \"margin\": 1,\n      \"decision\": \"auto\"\n    },\n    {\n      \"aspect\": \"wind\",\n      \"relation\": \"same_fact\",\n      \"probabilities\": {\n        \"same_fact\": 1,\n        \"different_facts\": 0,\n        \"contradicts\": 0\n      },\n      \"confidence\": 1,\n      \"margin\": 1,\n      \"decision\": \"auto\"\n    },\n    {\n      \"aspect\": \"humidity\",\n      \"relation\": \"contradicts\",\n      \"probabilities\": {\n        \"same_fact\": 0.04,\n        \"different_facts\": 0.01,\n        \"contradicts\": 0.95\n      },\n      \"confidence\": 0.92,\n      \"margin\": 0.9099999999999999,\n      \"decision\": \"auto\"\n    }\n  ],\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"warnings\": [\n    \"Aspect \\\"humidity\\\" reports contradicts while the overall relation does not; inspect before acting\"\n  ],\n  \"usage\": {\n    \"input_tokens\": 0,\n    \"output_tokens\": 0\n  }\n}"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -34,3 +34,27 @@ including every fixture in the recorded corpus — stays byte-identical to the r
 - A fail-closed overall (`relation: null`, `status: invalid_response`) still warns when an aspect
   contradicts: the headline row already says the overall judgment failed, and the warning adds the
   aspect disagreement on top.
+
+## Live evidence (2026-09-24)
+
+Six `jev_compare` calls through the server, using its own key discovery, model `jev-latest`. Cap
+was 10. Stopped when a response carried `warnings`. No credential was recorded. The parity corpus
+is untouched: the triggering answers are replayed from
+`tests/fixtures/compare/live-humidity-aspect-contradiction.json`, which is not a reference fixture.
+Usage from the live call was not retained; that envelope omits it.
+
+| attempt | what differed | overall | aspect that was meant to disagree | that aspect | warning |
+|---|---|---|---|---|---|
+| five-of-six-office | release office Dublin vs Cork | contradicts | office | contradicts | no |
+| footnote-page | footnote page 12 vs 13 | contradicts | footnote page | contradicts | no |
+| example-port | example port 8000 vs 8080 | contradicts | example port | contradicts | no |
+| middle-initial | one passage restates the initial, the other does not | same_fact | middle initial | different_facts | no |
+| patch-digit | build 1841 vs 1842 | contradicts | build number | contradicts | no |
+| humidity-point | humidity 40 percent vs 41 percent | same_fact | humidity | contradicts | yes |
+
+On the first five, the overall either followed the contradiction or the aspect did not contradict,
+which is the dogfood result. The sixth is the missing live case: city, date, high, and wind were
+`same_fact`, humidity was `contradicts` at 0.95, and the overall stayed `same_fact` (0.56, margin
+0.13, decision `review`). The warning was `Aspect "humidity" reports contradicts while the overall
+relation does not; inspect before acting`. The contract test replays that answer and asserts the
+warning.
