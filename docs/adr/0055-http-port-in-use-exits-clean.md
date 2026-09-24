@@ -25,6 +25,20 @@ The waits are `time.sleep` and `time.monotonic` unless a test injects them. Ther
 environment variable: the budget is part of the startup contract, not operator configuration.
 Upstream Jev calls are a different retry owner and are not part of this gate.
 
+The probe sets `SO_REUSEADDR`, the same option uvicorn sets before its POSIX bind, and keeps
+`IPV6_V6ONLY` on an IPv6 socket. After a stop, the server side of a connection can sit in
+`TIME_WAIT` for tens of seconds. A bind without `SO_REUSEADDR` reports that as `EADDRINUSE`, so a
+restart would exit "already in use" even though uvicorn could bind. With the option set,
+`TIME_WAIT` is not taken. A socket that is still listening is still taken, and the process exits
+with the one line.
+
+The probe is not the listen. It closes the socket and returns, then uvicorn binds. If another
+process takes the port in that gap, the gate has already passed. The operator sees the identity
+log line, uvicorn's "Started server process" line, and uvicorn's own bind error (the `OSError` it
+logs, then `sys.exit(3)`), not the one-line `JEV_MCP_HTTP_PORT` message. The gate does not retry
+that later failure. The cases it decides are a port held at start, and a port left in `TIME_WAIT`
+by a previous process.
+
 ## Consequences
 
 - An operator who omits the variable gets 8088. One who finds that taken sets `JEV_MCP_HTTP_PORT`.

@@ -166,7 +166,13 @@ def ensure_http_port_free(
 
 
 def _bind_http(host: str, port: int) -> None:
-    """Bind every address `host` resolves to, then close. A taken port raises `EADDRINUSE`."""
+    """Bind every address `host` resolves to, then close. A taken port raises `EADDRINUSE`.
+
+    `SO_REUSEADDR` matches the socket uvicorn binds on POSIX. Without it, a restart while the
+    previous process's connections sit in `TIME_WAIT` looks taken, and the process exits even
+    though the real bind would succeed. A socket that is still listening is still `EADDRINUSE`.
+    `IPV6_V6ONLY` stays set so an IPv6 probe does not also claim the IPv4 port.
+    """
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror:
@@ -174,6 +180,7 @@ def _bind_http(host: str, port: int) -> None:
     for family, socktype, proto, _canon, sockaddr in infos:
         sock = socket.socket(family, socktype, proto)
         try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             if family == socket.AF_INET6:
                 sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
             sock.bind(sockaddr)
