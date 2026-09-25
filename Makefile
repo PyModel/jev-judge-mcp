@@ -5,7 +5,7 @@ PYTEST := uv run pytest
 
 .PHONY: ci lint typecheck unit property policy-coverage contract parity security build smoke eval eval-live security-live ab load hooks ci-linux
 
-ci: lint typecheck unit property policy-coverage contract parity security build smoke eval
+ci: lint typecheck unit property policy-coverage contract parity policy-replay security build smoke eval
 
 # The pre-push gate (ADR-0056). `make hooks` enables the gate for this clone and proves it
 # is reachable — with empty stdin nothing is checked, but the gate's banner must appear. The
@@ -41,6 +41,10 @@ contract:
 
 parity:
 	$(PYTEST) tests/parity
+
+# Recorded fixture answers through policy/, diffed against the recorded actions (design slice 5).
+policy-replay:
+	$(PYTEST) tests/parity/test_policy_replay.py -q
 
 # ROADMAP P6: the scripted adversary, offline. Real now, so an empty stage fails (pytest exit 5).
 security:
