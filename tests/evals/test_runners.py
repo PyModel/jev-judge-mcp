@@ -2,8 +2,9 @@
 
 import json
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
+import httpx2
 import pytest
 
 from evals.calibration.bounds import clopper_pearson_upper
@@ -138,13 +139,22 @@ def test_manifest_must_pin_a_model_and_name_a_tool(tmp_path: Path) -> None:
         load_manifest(_manifest(tmp_path, tool="jev_nope"))
 
 
-def test_eval_runtime_provider_disables_retries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The eval runtime's provider runs with retries off (ADR-0057), so one tool call is at most one
-    bounded request.
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
 
-    No network: constructing the provider builds no client. The fixture key never leaves the redactor.
+
+@pytest.mark.anyio
+async def test_eval_runtime_provider_disables_retries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The eval runtime's provider runs with retries off (ADR-0057), so one tool call is at most one
+    bounded request: a retryable 500 is answered by exactly one request on the wire, where the
+    server's default policy would make three attempts.
+
+    No network: the counting transport is injected at the provider's own constructor, the boundary
+    the factory builds through. The fixture key never leaves the redactor.
     """
-    from jev_judge_mcp.providers import NO_RETRIES
+    from jev_judge_mcp.domain import NoulCriteria, NoulQuestion
+    from jev_judge_mcp.providers import ProviderError
     from jev_judge_mcp.providers.typesafe import TypeSafeProvider
     from jev_judge_mcp.settings import Settings
 
@@ -152,9 +162,24 @@ def test_eval_runtime_provider_disables_retries(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setenv("TYPESAFE_API_KEY", "eval-fixture-key")
     monkeypatch.setenv("JEV_MCP_KEY_FILE", str(tmp_path / "absent-key"))
 
-    eval_provider = cast(TypeSafeProvider, live.typesafe_without_retries(Settings()))
+    sent: list[httpx2.Request] = []
 
-    assert eval_provider._retry == NO_RETRIES  # pyright: ignore[reportPrivateUsage]
+    def retryable(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        return httpx2.Response(500, text="no")
+
+    class Counting(TypeSafeProvider):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, transport=httpx2.MockTransport(retryable), **kwargs)
+
+    monkeypatch.setattr("jev_judge_mcp.providers.typesafe.TypeSafeProvider", Counting)
+    provider = live.typesafe_without_retries(Settings())
+    try:
+        with pytest.raises(ProviderError):
+            await provider.evaluate("state", {"q": NoulQuestion("Is it?", NoulCriteria("yes", "no"))}, "jev-pinned", 5)
+    finally:
+        await provider.aclose()
+    assert len(sent) == 1
 
 
 def test_eval_runtime_provider_refuses_without_a_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
