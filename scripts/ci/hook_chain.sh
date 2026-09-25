@@ -1,21 +1,30 @@
 #!/usr/bin/env bash
-# The hook chain (ADR-0056). `make hooks` points core.hooksPath at .githooks, which makes git
-# stop consulting every other hook directory for this clone — including the global one this
-# machine keeps its commit-msg hooks in. Every client-side hook name from githooks(5) there-
-# fore lives in .githooks as a forwarder to this script, which re-runs the hook that would
-# have run without the repo-local setting: the global core.hooksPath, then the system one,
-# then the repo's own .git/hooks. It never recurses into .githooks itself, and a missing or
+# The hook chain (ADR-0056). `make hooks` installs forwarders outside the tracked tree
+# (scripts/ci/install_hooks.sh) and points core.hooksPath at them; those forwarders
+# delegate here when the checked-out tree carries it. Every client-side hook name from
+# githooks(5) except reference-transaction is forwarded — that one fires on every ref
+# transaction, on the client too, and forwarding it would cost one bash spawn per ref
+# update for no gate value, so it is excluded on purpose.
+#
+# This script re-runs the hook that would have run without the repo-local setting: the
+# global core.hooksPath, then the system one, then the repo's own .git/hooks. It never
+# recurses into the enabled hooks directory or the legacy .githooks, and a missing or
 # non-executable previous hook is a no-op, exactly as git treats it.
 #
-# pre-push is special: the gate runs first — whether or not a previous pre-push exists — and
-# the previous pre-push, if any, then sees the same saved stdin. Either one failing blocks
-# the push.
+# pre-push is special: the gate runs first — whether or not a previous pre-push exists —
+# and the previous pre-push, if any, then sees the same saved stdin. Either one failing
+# blocks the push.
 set -Eeuo pipefail
 
 name=${1:?usage: hook_chain.sh <hook-name> [args...]}
 shift
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
-GITHOOKS_DIR=$(cd "$SCRIPT_DIR/../../.githooks" && pwd -P)
+# The tracked forwarders of the earliest gate lived here; the enablement has since moved to
+# scripts/ci/install_hooks.sh, so this directory may not exist in a given checkout.
+GITHOOKS_DIR=""
+if [ -d "$SCRIPT_DIR/../../.githooks" ]; then
+	GITHOOKS_DIR=$(cd "$SCRIPT_DIR/../../.githooks" && pwd -P)
+fi
 
 stdin_file=""
 cleanup() {
@@ -60,10 +69,18 @@ if [ -z "$prev_dir" ]; then
 fi
 prev_dir=$(cd "$prev_dir" 2>/dev/null && pwd -P) || prev_dir=""
 
-# Never recurse: if the previous path is this directory, the hook the chain would run is
-# the chain itself. Git does not run an absent or non-executable hook, so neither does the
-# chain.
-if [ -z "$prev_dir" ] || [ "$prev_dir" = "$GITHOOKS_DIR" ]; then
+# Never recurse: skip the previous path when it is this checkout's .githooks (the earliest
+# enablement) or the hooks directory that invoked this chain. Git does not run an absent or
+# non-executable hook, so neither does the chain.
+active=$(git config core.hooksPath 2>/dev/null || true)
+if [ -n "$active" ]; then
+	case "$active" in
+		/*) ;;
+		*) active="$(git rev-parse --show-toplevel 2>/dev/null || echo .)/$active" ;;
+	esac
+	active=$(cd "$active" 2>/dev/null && pwd -P) || active=""
+fi
+if [ -z "$prev_dir" ] || [ "$prev_dir" = "$GITHOOKS_DIR" ] || { [ -n "$active" ] && [ "$prev_dir" = "$active" ]; }; then
 	exit 0
 fi
 prev_hook=$prev_dir/$name
@@ -74,7 +91,9 @@ fi
 if [ -n "$stdin_file" ]; then
 	# A previous pre-push's failure falls through as this script's exit status and blocks
 	# the push all the same.
-	bash "$prev_hook" "$@" <"$stdin_file"
+	"$prev_hook" "$@" <"$stdin_file"
 else
-	exec bash "$prev_hook" "$@"
+	# Direct exec, not through bash: git executes hooks directly, shebang included, and a
+	# non-bash previous hook (python, zsh) dies as shell-syntax noise when bash reads it.
+	exec "$prev_hook" "$@"
 fi

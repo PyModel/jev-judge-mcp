@@ -52,13 +52,14 @@ Enable it once per clone:
 make hooks
 ```
 
-`make hooks` points `core.hooksPath` at the tracked `.githooks/`, proves the gate is
-reachable (a banner check with empty stdin — nothing is pushed, nothing is checked), and
-chains every git client hook to whatever your global or system hooks directory ran before, so
-your machine's own hooks keep working. Docker must be running: an unreachable daemon blocks
-the push rather than silently skipping the Linux leg. The gate mirrors `.github/workflows/
-ci.yml`; the drift guard (`tests/unit/test_ci_prepush_coverage.py`) fails `make ci` if the
-workflow and the gate ever diverge. Rationale and environment-fidelity notes:
+`make hooks` installs forwarders outside the tracked tree and points `core.hooksPath` at
+them, then proves the gate is reachable (a banner check with empty stdin — nothing is
+pushed, nothing is checked). Every checkout of the clone keeps its previous hooks: the
+forwarders delegate to the checked-out gate when it has one and chain to your global or
+system hooks otherwise. Docker must be running: an unreachable daemon blocks the push
+rather than silently skipping the Linux leg. The gate mirrors `.github/workflows/ci.yml`;
+the drift guard (`tests/unit/test_ci_prepush_coverage.py`) fails `make ci` if the workflow
+and the gate ever diverge. Rationale and environment-fidelity notes:
 `docs/adr/0056-pre-push-ci-gate.md`.
 
 CI guards prevent these failure classes:

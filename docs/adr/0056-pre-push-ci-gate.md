@@ -11,24 +11,32 @@ red run after the fact. This ADR puts the whole workflow in front of every push.
 
 ## Decision
 
-- **A tracked hook, enabled per clone.** `.githooks/pre-push` is tracked; `make hooks` runs
-  `git config core.hooksPath .githooks` and nothing else. Git ignores `.git/hooks` for this
-  unless the config is set, so enablement is one deliberate command with no hidden default.
-- **The chain.** A repo-local `core.hooksPath` makes git stop consulting every other hook
+- **Enabled per clone, reachable from every checkout.** `make hooks` runs
+  `scripts/ci/install_hooks.sh`, which installs forwarders in the repository's common dir
+  (`.git/jev-hooks`) — shared by every linked worktree — and points `core.hooksPath` there
+  absolutely. Each forwarder delegates to the checked-out tree's `scripts/ci/hook_chain.sh`
+  when the checkout carries it, and otherwise chains straight to the previous hooks, so no
+  checkout of this repo — a worktree, an old commit, a bisect step, a hotfix off an old
+  tag — is ever left with zero hooks, the machine's global commit-msg hooks included.
+  `reference-transaction` is the one githooks(5) client hook not forwarded, on purpose: it
+  fires on every ref transaction and a forwarder there costs one bash spawn per ref update
+  for no gate value.
+- **Reachability self-check, no bypass switch.** After installing the forwarders, the
+  enablement runs `git hook run pre-push -- origin <url>` with empty stdin and fails unless
+  the gate's banner appears. Nothing is checked with empty stdin, so the self-check costs
+  nothing; a broken enable fails at `make hooks` instead of silently at push time. No flag
+  or environment variable skips the checks.
+- **The chain.** The repo-local `core.hooksPath` makes git stop consulting every other hook
   directory — on this project's machines, the global one that carries commit-msg hooks
-  stripping AI attribution. Enabling the gate must not orphan those. Every client-side hook
-  name in githooks(5) lives in `.githooks` as a forwarder to `scripts/ci/hook_chain.sh`,
-  which re-runs the hook that would have run without the repo-local setting: the global
-  `core.hooksPath`, then the system one (each read with `--includes` so include directives
-  expand and `--type path` so `~` does), else the repo's own `.git/hooks`. It never recurses
-  into `.githooks` (real-path comparison), and an absent or non-executable previous hook is a
-  no-op, exactly as git treats it. `pre-push` runs the gate first and then hands the previous
-  pre-push the same saved stdin; either failing blocks the push.
-- **Reachability self-check, no bypass switch.** After setting the config, `make hooks` runs
-  `git hook run pre-push -- origin <url>` with empty stdin and fails unless the gate's banner
-  appears. Nothing is checked with empty stdin, so the self-check costs nothing; a broken
-  enable fails at `make hooks` instead of silently at push time. No flag or environment
-  variable skips the checks.
+  stripping AI attribution. Enabling the gate must not orphan those. The chain re-runs the
+  hook that would have run without the repo-local setting: the global `core.hooksPath`, then
+  the system one (each read with `--includes` so include directives expand and `--type path`
+  so `~` does), else the repo's own `.git/hooks`. It never recurses into the enabled hooks
+  directory or the legacy `.githooks` (real-path comparison), and an absent or
+  non-executable previous hook is a no-op, exactly as git treats it. `pre-push` runs the
+  gate first and then hands the previous pre-push the same saved stdin; either failing
+  blocks the push. Previous hooks are executed directly — git executes hooks, shebang and
+  all, and a python previous hook dies as bash-syntax noise when read as shell text.
 - **The pushed commit, never the working tree.** For each distinct pushed commit (deletions
   skipped), the gate makes a real temporary `git clone` of the repository, detached at exactly
   that commit, and runs the checks there. A real clone has the `.git` directory
@@ -37,9 +45,12 @@ red run after the fact. This ADR puts the whole workflow in front of every push.
   the check's verdict is a function of what would actually be pushed.
 - **The machinery vs the commands.** The hook machinery runs from the checkout where the hook
   lives, but the commands it runs come from the pushed commit's `ci.yml` and `Makefile`,
-  exactly as GitHub runs the pushed commit's workflow. That is what lets the gate be validated
-  against older commits: it ran dded642 (failing on Linux, as GitHub did) and 3281a99
-  (passing) from a later checkout.
+  exactly as GitHub runs the pushed commit's workflow — including the Linux leg itself: a
+  pushed commit that carries `scripts/ci/linux_check.sh` gets its own stage list and its own
+  Dockerfile run against it, and only a commit that predates the gate falls back to the
+  checkout's copy, with a printed notice. That is what lets the gate be validated against
+  older commits: it ran dded642 (failing on Linux, as GitHub did) and 3281a99 (passing) from
+  a later checkout.
 - **Natively and on Linux.** The gate runs `make ci` natively (macOS or Linux, whatever the
   developer pushes from) and then the whole workflow again inside Linux: `scripts/ci/
   linux_check.sh` copies the source into a throwaway container from the digest-pinned image
@@ -66,11 +77,18 @@ red run after the fact. This ADR puts the whole workflow in front of every push.
   ways, every stage time-bounded, base images digest-pinned, and paid stages or live flags
   absent from the machinery. Unknown workflow shapes fail closed. A stage can only enter CI by
   teaching the gate in the same commit.
-- **Bounded and honest.** Every stage runs under a generous but finite timeout; the container,
-  its source copy and the temporary clone are removed on success, failure, and
-  SIGINT/SIGTERM/SIGHUP. Any failure — a failing stage, an unreachable daemon, an image build
-  that will not come up — blocks the push with one line naming the failed check and the
-  command that reruns it (`make ci`, `make ci-linux`).
+- **Bounded and honest.** Every stage runs under a generous but finite timeout — the Linux
+  stages through `timeout(1)` in the container, the native sync and `make ci` through a
+  portable watchdog (`JEV_PREPUSH_TIMEOUT` moves the bound for slow machines; it can only
+  make the gate stricter) — so a hung test fails the push instead of wedging it. The
+  container, its source copy and the temporary clone are removed on success, failure, and
+  SIGINT/SIGTERM/SIGHUP. Any failure — a failing stage, an unreachable daemon, an image
+  build that will not come up — blocks the push with one line naming the failed check and
+  the command that reruns it (`make ci`, `make ci-linux`).
+- **The container image is addressed by its recipe.** The image tag carries the Dockerfile's
+  content hash, so a changed recipe (a Node bump, a new tool) builds a fresh image on the
+  next check instead of a machine that already ran the gate checking every later push on a
+  stale one.
 
 ## Consequences
 

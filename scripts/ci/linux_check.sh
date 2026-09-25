@@ -16,7 +16,9 @@ set -Eeuo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd -P)
 DOCKERFILE="$REPO_ROOT/docker/ci-linux.Dockerfile"
-IMAGE=jev-judge-mcp-ci-linux:adr0056
+# The tag carries the Dockerfile's content hash: a changed image recipe (a Node bump, a new
+# tool) builds a fresh image on the next check instead of reusing a stale one forever.
+IMAGE=jev-judge-mcp-ci-linux:adr0056-$(cksum "$DOCKERFILE" | cut -d' ' -f1)
 # Cache wheels and interpreters across checks; nothing else survives a check. They live in
 # the runner user's home: the stages do not run as root.
 CACHE_VOLUMES=(-v jev-judge-mcp-ci-uv-cache:/home/runner/.cache/uv -v jev-judge-mcp-ci-uv-pythons:/home/runner/.local/share/uv)

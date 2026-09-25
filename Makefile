@@ -7,15 +7,12 @@ PYTEST := uv run pytest
 
 ci: lint typecheck unit property policy-coverage contract parity security build smoke eval
 
-# The pre-push gate (ADR-0056). `make hooks` enables the tracked .githooks for this clone
-# and then proves the gate is actually reachable through the new core.hooksPath — with empty
-# stdin nothing is checked, but the gate's banner must appear, so a broken enable fails here
-# rather than silently at push time. There is no flag or variable that skips the checks.
+# The pre-push gate (ADR-0056). `make hooks` enables the gate for this clone and proves it
+# is reachable — with empty stdin nothing is checked, but the gate's banner must appear. The
+# forwarders live outside the tracked tree, so every worktree and every checked-out commit
+# keeps its previous hooks. See scripts/ci/install_hooks.sh.
 hooks:
-	git config core.hooksPath .githooks
-	@out=$$(git hook run pre-push -- origin "$$(git config --get remote.origin.url 2>/dev/null || echo no-remote)" </dev/null 2>&1); \
-		echo "$$out" | grep -q "\[pre-push\]" || { echo "$$out"; echo "make hooks: core.hooksPath does not reach the pre-push gate" >&2; exit 1; }; \
-		echo "hooks: enabled — core.hooksPath=.githooks, pre-push gate reachable, previous hooks chained"
+	bash scripts/ci/install_hooks.sh
 
 # The gate's Linux leg against the working tree (the hook runs it against the pushed commit's
 # temporary clone instead). Needs Docker; the image is built once from a digest-pinned base.
