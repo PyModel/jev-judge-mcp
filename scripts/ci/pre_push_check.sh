@@ -42,7 +42,9 @@ run_bounded() {
 	watchdog=$!
 	wait "$pid" || status=$?
 	pkill -TERM -P "$watchdog" 2>/dev/null || true
-	kill "$watchdog" 2>/dev/null
+	# The subshell may have already torn itself down (its pkill woke it the moment this
+	# side's pkill killed its sleep); losing that race must not kill the gate (set -e).
+	kill "$watchdog" 2>/dev/null || true
 	wait "$watchdog" 2>/dev/null || true
 	return "$status"
 }
