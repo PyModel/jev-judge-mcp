@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/PyModel/jev-judge-mcp/compare/v0.2.0...v0.2.1) (2026-09-25)
+
+
+### Documentation
+
+* add a PyPI download count badge to the README ([39b1544](https://github.com/PyModel/jev-judge-mcp/commit/39b1544b334adfadb6fa45e117b4a4fe39837a4e))
+
 ## [0.2.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.1.1...v0.2.0) (2026-09-24)
 
 
