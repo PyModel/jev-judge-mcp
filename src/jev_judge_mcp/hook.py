@@ -15,8 +15,9 @@ from typing import Literal
 
 import anyio
 
-from jev_judge_mcp.domain.json import JsonValue, decode_json, is_json_object
+from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.domain.questions import ChoiceQuestion, Question
+from jev_judge_mcp.hook_render import render_decision
 from jev_judge_mcp.providers import JevProvider, ProviderConfigError, ProviderError, resolve_model, resolve_provider
 from jev_judge_mcp.redact_action import redact_action
 from jev_judge_mcp.serialize import stringify_compact
@@ -30,6 +31,9 @@ ESTIMATED_CONFIDENCE_THRESHOLD = 0.4
 """Escalate a margin estimate below this. Hook-only; not a tool threshold."""
 
 PROVIDER_TIMEOUT_SECONDS = 30.0
+
+HOOK_INPUT_UNITS = 100_000
+"""Stdin over this, when ``JEV_HOOK_REQUIRED=1``, asks instead of being judged or staying silent."""
 """Bound on this process's provider call. Retries run inside it (ADR-0057); whatever survives the
 budget is still ``unreachable``."""
 
@@ -63,16 +67,18 @@ def main(
         sys.stderr.write(_USAGE)
         return 2
     body = sys.stdin.read() if text is None else text
+    env = os.environ if environ is None else environ
+    required = env.get("JEV_HOOK_REQUIRED") == "1"
     try:
         parsed = decode_json(body)
     except ValueError:
-        sys.stderr.write(_FAIL_OPEN_STDIN)
-        return 0
+        return _precall_fail(required, _FAIL_OPEN_STDIN, "stdin was not hook-event JSON")
     if not is_json_object(parsed):
-        sys.stderr.write(_FAIL_OPEN_STDIN)
+        return _precall_fail(required, _FAIL_OPEN_STDIN, "stdin was not hook-event JSON")
+    if required and len(body) > HOOK_INPUT_UNITS:
+        sys.stdout.write(render_decision("ask", "Jev hook: not sure this is safe (input_too_large).") + "\n")
         return 0
 
-    env = os.environ if environ is None else environ
     settings = load_settings()
     model = resolve_model(settings)
     chosen = provider
@@ -80,8 +86,7 @@ def main(
         try:
             chosen = resolve_provider(settings)
         except ProviderConfigError as error:
-            sys.stderr.write(f"jev-judge-mcp hook: fail-open ({error})\n")
-            return 0
+            return _precall_fail(required, f"jev-judge-mcp hook: fail-open ({error})\n", "auth")
 
     outcome = _run(chosen, _state(parsed, env.get("JEV_GATE_STATE")), model)
     if outcome.kind == "allow":
@@ -172,13 +177,14 @@ def _ask_reason(word: _ReasonWord) -> str:
     return f"Jev hook: not sure this is safe ({word})."
 
 
+def _precall_fail(required: bool, silent: str, reason: str) -> int:
+    """ADR-0035 default is silence. ``JEV_HOOK_REQUIRED=1`` asks instead (ADR-0065)."""
+    if not required:
+        sys.stderr.write(silent)
+        return 0
+    sys.stdout.write(render_decision("ask", f"Jev hook: not sure this is safe ({reason}).") + "\n")
+    return 0
+
+
 def _decision(outcome: _Outcome) -> str:
-    kind: Literal["deny", "ask"] = "deny" if outcome.kind == "deny" else "ask"
-    payload: dict[str, JsonValue] = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": kind,
-            "permissionDecisionReason": outcome.reason,
-        }
-    }
-    return stringify_compact(payload)
+    return render_decision(outcome.kind, outcome.reason)

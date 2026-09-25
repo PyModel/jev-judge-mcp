@@ -467,6 +467,16 @@ def test_posix_guard_covers_the_hook(monkeypatch: pytest.MonkeyPatch) -> None:
     assert caught.value.code == _POSIX_MESSAGE
 
 
+def test_required_flag_asks_on_bad_stdin_instead_of_silence(capsys: pytest.CaptureFixture[str]) -> None:
+    code = main(["gate"], text="not-json", environ={"JEV_HOOK_REQUIRED": "1"})
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.err == ""
+    decision = json.loads(captured.out)
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+    assert "allow" not in captured.out
+
+
 def test_hook_module_is_not_the_completion_tool() -> None:
     source = _HOOK.read_text(encoding="utf-8")
     assert "jev_gate" not in source
