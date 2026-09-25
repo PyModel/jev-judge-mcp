@@ -14,6 +14,7 @@ from collections.abc import Mapping, Sequence
 from mcp.types import CallToolResult, TextContent, Tool
 
 from jev_judge_mcp.providers import ProviderError
+from jev_judge_mcp.responses import error_code
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.telemetry import ACTIONS, CAP_SCOPES, Span
 from jev_judge_mcp.tools.arguments import INVALID_PARAMS, ArgumentParser, ArgumentsError, compile_argument_schema
@@ -74,8 +75,11 @@ class Toolset:
             span.attributes["action"] = result.action
         for action in ACTIONS:
             span.attributes[f"item_actions.{action}"] = result.item_actions.count(action)
+        text = stringify(result.payload)
         return CallToolResult(
-            content=[TextContent(type="text", text=stringify(result.payload))], is_error=result.is_error
+            content=[TextContent(type="text", text=text)],
+            structured_content={"code": error_code(text)} if result.is_error else None,
+            is_error=result.is_error,
         )
 
     async def aclose(self) -> None:
@@ -102,4 +106,8 @@ def _text(result: CallToolResult) -> str:
 
 
 def _error(text: str) -> CallToolResult:
-    return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
+    return CallToolResult(
+        content=[TextContent(type="text", text=text)],
+        structured_content={"code": error_code(text)},
+        is_error=True,
+    )

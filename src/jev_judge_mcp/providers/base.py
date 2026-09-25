@@ -84,6 +84,7 @@ class Evaluation:
     usage: Usage
     provider: ProviderName
     model: str
+    request_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +94,7 @@ class Envelope:
     answers: dict[str, RawAnswer]
     usage: Usage
     model: str | None
+    request_id: str | None = None
 
     def model_or(self, default: str) -> str:
         return default if self.model is None else self.model
@@ -124,7 +126,7 @@ def parse_envelope(body: object, label: str) -> Envelope:
     model = envelope.get("model")
     if model is not None and not isinstance(model, str):
         raise invalid("model must be absent or a string.")
-    return Envelope(answers=answers, usage=usage, model=model)  # pyright: ignore[reportUnknownArgumentType]
+    return Envelope(answers=answers, usage=usage, model=model, request_id=request_id_of(envelope))  # pyright: ignore[reportUnknownArgumentType]
 
 
 def _usage_counts(usage: object) -> tuple[int | float, int | float] | None:
@@ -139,6 +141,20 @@ def _usage_counts(usage: object) -> tuple[int | float, int | float] | None:
             return None
         counts.append(value if isinstance(value, int) else number)
     return counts[0], counts[1]
+
+
+def request_id_of(body: Mapping[str, object], headers: Mapping[str, str] | None = None) -> str | None:
+    """A provider request id, or none. Never invented (ADR-0068)."""
+    value = body.get("request_id")
+    if isinstance(value, str) and value:
+        return value
+    if headers is None:
+        return None
+    for name in ("x-request-id", "request-id"):
+        for key, header in headers.items():
+            if key.lower() == name and header:
+                return header
+    return None
 
 
 def decode_text(content: bytes) -> str:

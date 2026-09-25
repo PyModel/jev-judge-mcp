@@ -6,7 +6,7 @@
   "classes": [
     "unsupported"
   ],
-  "divergences": [],
+  "divergences": ["ADR-0062"],
   "calls": [
     {
       "env": {

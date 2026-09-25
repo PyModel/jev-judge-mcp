@@ -18,7 +18,7 @@ from evals.scorers.fields import Json, as_object, as_objects
 from evals.scorers.tools import SCORERS, Example, Judgment, judgments
 from jev_judge_mcp.tools import TOOLS
 from tests.security.tools import BY_TOOL, CASES, auto_anywhere
-from tests.support.fixtures import divergences, iter_calls
+from tests.support.fixtures import iter_calls
 from tests.support.jev import call_tool
 
 pytestmark = pytest.mark.anyio
@@ -148,11 +148,15 @@ def gold_from(tool: str, output: Json) -> Json:
 
 
 def recorded_examples() -> dict[str, list[Example]]:
-    """Every successful, divergence-free recorded call, parsed and grouped by tool."""
+    """Every successful recorded call, parsed and grouped by tool.
+
+    Sanctioned divergences still carry the old keys the scorer reads. Skipping them
+    would drop jev_gate, jev_verify, and jev_review once every call is tagged.
+    """
     grouped: dict[str, list[Example]] = {}
     for call in iter_calls():
         tool, result = call.payload["tool"], call.payload["result"]
-        if result.get("isError") or divergences(call):
+        if result.get("isError"):
             continue
         output = json.loads(result["content"][0]["text"])
         grouped.setdefault(tool, []).append(

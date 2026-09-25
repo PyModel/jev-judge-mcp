@@ -6,7 +6,7 @@
   "classes": [
     "malformed"
   ],
-  "divergences": [],
+  "divergences": ["ADR-0062"],
   "note": "correctness confidence 1.5 becomes null; unknown rubric confidence escalates the review half.",
   "calls": [
     {

@@ -13,6 +13,7 @@ from jev_judge_mcp.providers.base import (
     decode_body,
     parse_envelope,
     refuse_credentials_in_url,
+    request_id_of,
 )
 from jev_judge_mcp.providers.retry import RetryPolicy
 
@@ -46,4 +47,10 @@ class CompatibleProvider(HttpProvider):
         if not response.is_success:
             raise self._error(response)
         envelope = parse_envelope(decode_body(response.content), self.label)
-        return Evaluation(envelope.answers, envelope.usage, self.name, envelope.model_or(model))
+        return Evaluation(
+            envelope.answers,
+            envelope.usage,
+            self.name,
+            envelope.model_or(model),
+            request_id=envelope.request_id or request_id_of({}, response.headers),
+        )

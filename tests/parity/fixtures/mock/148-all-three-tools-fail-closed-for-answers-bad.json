@@ -7,7 +7,7 @@
   "classes": [
     "mock"
   ],
-  "divergences": [],
+  "divergences": ["ADR-0062"],
   "reference_assertions_failed_under_compatible": [
     "Expected \"actual\" to be strictly unequal to: true",
     "threw: Unexpected token 'J', \"Jev-compat\"... is not valid JSON",

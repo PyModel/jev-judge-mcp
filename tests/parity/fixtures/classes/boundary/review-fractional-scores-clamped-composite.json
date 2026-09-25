@@ -6,7 +6,7 @@
   "classes": [
     "boundary"
   ],
-  "divergences": [],
+  "divergences": ["ADR-0062"],
   "calls": [
     {
       "env": {

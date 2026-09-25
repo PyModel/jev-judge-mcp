@@ -265,7 +265,10 @@ def test_missing_arguments_are_reported_at_the_root() -> None:
         server.close_stdin()
         server.wait()
     prefix = "MCP error -32602: Input validation error: Invalid arguments for tool jev_screen: "
-    assert missing["result"] == {"content": [{"type": "text", "text": prefix + "Required"}], "isError": True}
+    result = missing["result"]
+    assert result["isError"] is True
+    assert result["content"] == [{"type": "text", "text": prefix + "Required"}]
+    assert result["structuredContent"] == {"code": "invalid_arguments"}
     assert empty["result"]["content"][0]["text"] == prefix + "Required at text"
 
 

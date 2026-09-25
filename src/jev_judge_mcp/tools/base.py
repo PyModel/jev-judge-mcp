@@ -71,13 +71,16 @@ def frame(
     """
     if evaluation is None:
         return {"tool": tool, "model": model, "provider": "none", **body, "usage": None}
-    return {
+    framed: dict[str, object] = {
         "tool": tool,
         "model": evaluation.model,
         "provider": evaluation.provider,
         **body,
         "usage": evaluation.usage.to_wire(),
     }
+    if evaluation.request_id:
+        framed["request_id"] = evaluation.request_id
+    return framed
 
 
 class Runtime:

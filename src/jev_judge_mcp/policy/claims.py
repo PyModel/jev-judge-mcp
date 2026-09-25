@@ -4,7 +4,7 @@ Sources: `claimAction` (`lib.ts:344-353`), the gate's reason-code assembly (`ind
 and `contradictsRecommendation` (`lib.ts:153-160`).
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -22,9 +22,18 @@ GATE_REASON_CODES = (
     "claims_unsupported",
     "claim_confidence_low",
     "claim_confidence_below_auto_accept",
+    "caller_note_only",
     "accepted",
 )
 """Every gate reason code, in the frozen order they are emitted (`parity-manifest.json` `policy`)."""
+
+
+def note_blocks_auto(action: str, support: object, evidence: Sequence[Mapping[str, object]]) -> bool:
+    """A claim whose only cited support is a caller note cannot be auto (ADR-0067)."""
+    if action != "auto" or not isinstance(support, str):
+        return False
+    item = next((entry for entry in evidence if str(entry.get("id")) == support), None)
+    return item is not None and item.get("kind") == "caller_note"
 
 
 def claim_action(verdict: ClaimVerdict, confidence: float | None, auto_accept: float, review_at: float) -> Action:
@@ -55,6 +64,7 @@ def gate_reason_codes(
     claims: Sequence[ClaimJudgment | None],
     action: Action,
     thresholds: PolicyThresholds,
+    caller_note: bool = False,
 ) -> list[str]:
     """The gate's reason codes, in `GATE_REASON_CODES` order (`index.ts:1472-1482`).
 
@@ -81,6 +91,8 @@ def gate_reason_codes(
         codes.append("claim_confidence_low")
     if any(thresholds.review_at <= c < thresholds.auto_accept for c in confidences):
         codes.append("claim_confidence_below_auto_accept")
+    if caller_note:
+        codes.append("caller_note_only")
     if action == "auto":
         codes.append("accepted")
     return codes

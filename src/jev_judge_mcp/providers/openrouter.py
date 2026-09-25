@@ -58,4 +58,4 @@ class OpenRouterProvider(HttpProvider):
             raise self._error(response)
         envelope = parse_envelope(decode_body(response.content), self.label)
         # The reference reports the slug it sent, never a model from the body (`provider.ts:154`).
-        return Evaluation(envelope.answers, envelope.usage, self.name, slug)
+        return Evaluation(envelope.answers, envelope.usage, self.name, slug, request_id=envelope.request_id)

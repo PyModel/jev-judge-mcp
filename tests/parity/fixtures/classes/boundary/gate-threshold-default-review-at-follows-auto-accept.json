@@ -6,7 +6,7 @@
   "classes": [
     "boundary"
   ],
-  "divergences": [],
+  "divergences": ["ADR-0062"],
   "note": "auto_accept 0.3 makes the default review_at min(0.5, 0.3) = 0.3.",
   "calls": [
     {

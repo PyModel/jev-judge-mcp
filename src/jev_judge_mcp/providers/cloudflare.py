@@ -67,4 +67,10 @@ class CloudflareProvider(HttpProvider):
         payload = inner if inner is not None else outer if outer is not None else body
         # ADR-0003: the unwrapped payload gets the uniform envelope rules; the reference used `answers ?? {}`.
         envelope = parse_envelope(payload, self.label)
-        return Evaluation(envelope.answers, envelope.usage, self.name, envelope.model_or(slug))
+        return Evaluation(
+            envelope.answers,
+            envelope.usage,
+            self.name,
+            envelope.model_or(slug),
+            request_id=envelope.request_id,
+        )

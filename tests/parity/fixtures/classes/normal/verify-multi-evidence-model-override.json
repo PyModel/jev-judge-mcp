@@ -6,7 +6,7 @@
   "classes": [
     "normal"
   ],
-  "divergences": [],
+  "divergences": ["ADR-0062"],
   "note": "body.model is a string, so it replaces the requested model in the output (provider.ts:199).",
   "calls": [
     {

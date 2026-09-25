@@ -6,7 +6,7 @@
   "classes": [
     "boundary"
   ],
-  "divergences": [],
+  "divergences": ["ADR-0062"],
   "note": "review_at > auto_accept throws from resolvePolicyThresholds (lib.ts:273) before any request.",
   "calls": [
     {

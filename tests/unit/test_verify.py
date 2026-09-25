@@ -44,6 +44,8 @@ async def test_null_confidence_reviews() -> None:
         "contradicted": 0,
         "unsupported": 0,
         "needs_review": 1,
+        "by_verdict": {"verified": 1},
+        "by_action": {"review": 1},
     }
 
 
@@ -82,6 +84,10 @@ async def test_malformed_confidence_invalidates(confidence: object) -> None:
         "status": "invalid_response",
         "action": "review",
         "supporting_evidence": None,
+        "stands": False,
+        "evidence_ids": [],
+        "excerpt": None,
+        "missing_evidence": None,
     }
     assert "confidence_kind" not in outcome.text
 

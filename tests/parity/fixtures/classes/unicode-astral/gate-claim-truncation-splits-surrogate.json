@@ -8,7 +8,7 @@
   ],
   "divergences": [
     "ADR-0005"
-  ],
+  , "ADR-0062"],
   "note": "'a' + 1000 x U+1F600 is 2001 units; the 2000-unit cut ends on a high surrogate in the request state.",
   "calls": [
     {

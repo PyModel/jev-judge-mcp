@@ -6,7 +6,7 @@
   "classes": [
     "normal"
   ],
-  "divergences": [],
+  "divergences": ["ADR-0062"],
   "note": "JEV_MCP_MODEL reaches the wire and the output; body.model is null, so it is not overridden.",
   "calls": [
     {

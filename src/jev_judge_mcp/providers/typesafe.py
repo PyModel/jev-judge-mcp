@@ -151,7 +151,7 @@ class TypeSafeProvider(JevProvider):
             raise ProviderConnectionError(f"{self.label} request failed: {error}{type(cause).__name__}") from None
         envelope = parse_envelope(response.root, self.label)
         # The reference reports the requested model, never one from the body (`provider.ts:122`).
-        return Evaluation(envelope.answers, envelope.usage, self.name, model)
+        return Evaluation(envelope.answers, envelope.usage, self.name, model, request_id=envelope.request_id)
 
     @override
     async def aclose(self) -> None:

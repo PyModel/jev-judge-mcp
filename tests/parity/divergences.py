@@ -14,6 +14,7 @@ from typing import Any
 from jev_judge_mcp.providers.resolver import VERCEL_UNSUPPORTED
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.text import TRUNCATION_MARKER
+from tests.parity.program_expect import expect_program
 
 type Expectation = Callable[[list[Any], str, bool], tuple[list[Any], str, bool]]
 
@@ -122,6 +123,21 @@ _EXPECTATIONS: dict[str, Expectation] = {
     "resolver-error/explicit-vercel-unset#0": _vercel_unsupported,
     "duplicate-id/classify-omitted-ids-get-positional-fallbacks#0": _classify_generated_id_collision,
 }
+
+
+def _chain(previous: Expectation) -> Expectation:
+    def expect(bodies: list[Any], text: str, is_error: bool) -> tuple[list[Any], str, bool]:
+        bodies, text, is_error = previous(bodies, text, is_error)
+        return expect_program(bodies, text, is_error)
+
+    return expect
+
+
+for _entry in REGISTRY["divergences"]:
+    if _entry["id"] == "program-response-fields":
+        for _fid in _entry["fixtures"]:
+            _previous = _EXPECTATIONS.get(_fid)
+            _EXPECTATIONS[_fid] = expect_program if _previous is None else _chain(_previous)
 
 _UNEXPECTED = sorted(
     {fid for divergence in REGISTRY["divergences"] for fid in divergence["fixtures"]} - _EXPECTATIONS.keys()

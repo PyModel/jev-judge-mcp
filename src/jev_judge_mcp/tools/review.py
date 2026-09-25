@@ -4,11 +4,13 @@ The review half (questions and projection) is shared with jev_gate.
 """
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question, ScoreQuestion
 from jev_judge_mcp.limits import REVIEW
 from jev_judge_mcp.policy import DEFAULT_AUTO_ACCEPT, DEFAULT_COMPOSITE_FLOOR, REVIEW_WEIGHTS, Action, PolicyThresholds
+from jev_judge_mcp.responses import SCORE_SCALE, nearest_level
+from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
 from jev_judge_mcp.tools.observed import (
     fail_closed,
@@ -19,6 +21,7 @@ from jev_judge_mcp.tools.observed import (
     review_composite,
     validate_noul,
     validate_score,
+    worst_action,
 )
 from jev_judge_mcp.validation.caps import CapLedger
 
@@ -48,12 +51,33 @@ DEFINITION = define(
                 "description": "What the user asked for; this frames the review, it is not proof of anything.",
             },
             "diff": {
-                "type": "string",
-                "minLength": 1,
-                "description": f"Proposed patch, file excerpt, or change summary. Truncated at {REVIEW.doc_units} "
-                "chars.",
+                "description": (
+                    "Proposed patch, file excerpt, change summary, or a file list. "
+                    f"A string is truncated at {REVIEW.doc_units} chars."
+                ),
+                "anyOf": [
+                    {"type": "string", "minLength": 1},
+                    {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string", "minLength": 1},
+                                "patch": {"type": "string", "minLength": 1},
+                            },
+                            "required": ["path", "patch"],
+                            "additionalProperties": False,
+                        },
+                    },
+                ],
             },
             "tests": {"type": "string", "description": "Reported test output, if any. Truncated at the same cap."},
+            "tests_format": {"type": "string", "description": "text, junit, or tap. Omitted text is self-reported."},
+            "tests_sha256": {
+                "type": "string",
+                "description": "Hash of a tests log the caller read. Unhashed text is self-reported.",
+            },
             "auto_accept": {
                 "type": "number",
                 "minimum": 0,
@@ -170,9 +194,13 @@ def project_review(answers: dict[str, object], settings: ReviewSettings, truncat
     for rubric in RUBRICS:
         parsed = validate_score(answers.get(rubric))
         if parsed is None:
-            scores[rubric] = {"score": None, "confidence": None, "status": "invalid_response"}
+            scores[rubric] = {"score": None, "confidence": None, "status": "invalid_response", "level": None}
         else:
-            scores[rubric] = {"score": parsed.score, "confidence": parsed.confidence}
+            scores[rubric] = {
+                "score": parsed.score,
+                "confidence": parsed.confidence,
+                "level": nearest_level(parsed.score),
+            }
             valid[rubric] = (parsed.score, parsed.confidence)
     safe_to_apply = validate_noul(answers.get("safe_to_apply"))
     thresholds = settings.thresholds
@@ -180,6 +208,7 @@ def project_review(answers: dict[str, object], settings: ReviewSettings, truncat
         "safe_to_apply": safe_to_apply,
         "scores": scores,
         "weights": dict(REVIEW_WEIGHTS),
+        "score_scale": list(SCORE_SCALE),
         "thresholds": {
             "auto_accept": thresholds.auto_accept,
             "review_at": thresholds.review_at,
@@ -207,6 +236,8 @@ def project_review(answers: dict[str, object], settings: ReviewSettings, truncat
 
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     settings = review_settings(args)
+    if isinstance(args.get("diff"), list):
+        return await _handle_file_list(args, runtime, settings)
     ledger = CapLedger()
     docs = review_docs(args, ledger, REVIEW.doc_units)
     truncated = ledger.context_cut
@@ -219,6 +250,8 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     }
     evaluation = await runtime.ask(state, review_questions())
     review = project_review(evaluation.answers, settings, truncated)
+    if docs.tests and not args.get("tests_sha256"):
+        review.payload["tests_weight"] = "self_reported"
     return ToolResult(
         frame(
             "jev_review",
@@ -231,6 +264,65 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         action=review.action,
         truncated=ledger.scopes,
     )
+
+
+def _file_patches(diff: object) -> list[dict[str, str]]:
+    if not isinstance(diff, list):
+        raise ToolError("diff file list was not a list")
+    files: list[dict[str, str]] = []
+    for raw in cast(list[object], diff):
+        if not isinstance(raw, dict):
+            raise ToolError("diff file list item was not an object")
+        record = cast(dict[str, object], raw)
+        files.append({"path": str(record["path"]), "patch": str(record["patch"])})
+    return files
+
+
+async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: ReviewSettings) -> ToolResult:
+    """Review each file under the document cap. Unreviewed files block auto (ADR-0066)."""
+    files = _file_patches(args["diff"])
+    total = sum(length(item["patch"]) for item in files)
+    if total > 200_000:
+        raise ToolError("diff exceeds the 200,000-character aggregate budget")
+    unreviewed: list[str] = []
+    halves: list[ReviewHalf] = []
+    for item in files:
+        patch = str(item["patch"])
+        path = str(item["path"])
+        if length(patch) > REVIEW.doc_units:
+            unreviewed.append(path)
+            continue
+        file_args = {**args, "diff": patch}
+        ledger = CapLedger()
+        docs = review_docs(file_args, ledger, REVIEW.doc_units)
+        evaluation = await runtime.ask(
+            {
+                "purpose": "Review the proposed diff against the request; tests is reported test output.",
+                "request": docs.request,
+                "diff": docs.diff,
+                "tests": docs.tests,
+            },
+            review_questions(),
+        )
+        half = project_review(evaluation.answers, settings, ledger.context_cut)
+        halves.append(half)
+    if not halves:
+        action = "review"
+        payload: dict[str, object] = {
+            "action": action,
+            "partial": True,
+            "unreviewed_files": unreviewed,
+            "score_scale": list(SCORE_SCALE),
+        }
+        return ToolResult(frame("jev_review", None, payload, model=runtime.model), action=action)
+    action = worst_action([half.action for half in halves])
+    if unreviewed and action == "auto":
+        action = "review"
+    payload = dict(halves[0].payload)
+    payload["action"] = action
+    payload["partial"] = bool(unreviewed)
+    payload["unreviewed_files"] = unreviewed
+    return ToolResult(frame("jev_review", None, payload, model=runtime.model), action=action)
 
 
 TOOL = JevTool(DEFINITION, handle)

@@ -6,7 +6,7 @@
   "classes": [
     "contradicted"
   ],
-  "divergences": [],
+  "divergences": ["ADR-0062"],
   "note": "A contradicted claim below auto_accept is review, not escalate (lib.ts claimAction).",
   "calls": [
     {

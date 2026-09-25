@@ -8,7 +8,7 @@
   ],
   "divergences": [
     "ADR-0007"
-  ],
+  , "ADR-0062"],
   "note": "Python keeps the slot but reports vercel as unsupported (ADR-0007).",
   "calls": [
     {

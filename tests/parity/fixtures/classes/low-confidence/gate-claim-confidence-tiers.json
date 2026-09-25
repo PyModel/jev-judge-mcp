@@ -6,7 +6,7 @@
   "classes": [
     "low-confidence"
   ],
-  "divergences": [],
+  "divergences": ["ADR-0062"],
   "note": "claim_0 below review_at escalates (claim_confidence_low); claim_1 between thresholds is below_auto_accept.",
   "calls": [
     {

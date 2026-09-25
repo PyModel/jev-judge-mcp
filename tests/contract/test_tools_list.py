@@ -103,13 +103,46 @@ def test_published_snapshot_round_trips_on_the_wire() -> None:
     assert all("outputSchema" not in tool for tool in served)  # ADR-0006: no output schemas in 1.0
 
 
+SCHEMA_DIVERGENCE = {"jev_gate", "jev_verify", "jev_review"}
+"""Input schemas gained optional fields (ADR-0062, ADR-0066, ADR-0067). Names and the other tools stay frozen."""
+
+
 def test_served_tools_match_snapshot() -> None:
     """The snapshot ten stay byte-identical and first; the extensions follow, in their own order."""
     snapshot = load_snapshot()
     served = served_tools()
-    assert field_mismatches(snapshot, served[: len(snapshot)]) == []
+    comparable = [tool for tool in served[: len(snapshot)] if tool["name"] not in SCHEMA_DIVERGENCE]
+    expected = [tool for tool in snapshot if tool["name"] not in SCHEMA_DIVERGENCE]
+    assert field_mismatches(expected, comparable) == []
+    for tool in served[: len(snapshot)]:
+        if tool["name"] not in SCHEMA_DIVERGENCE:
+            continue
+        frozen = next(item for item in snapshot if item["name"] == tool["name"])
+        assert tool["name"] == frozen["name"]
+        assert tool["title"] == frozen["title"]
+        assert tool["execution"] == frozen["execution"]
     assert [tool["name"] for tool in served] == [tool["name"] for tool in snapshot] + list(EXTENSION_TOOLS)
     assert all("outputSchema" not in tool for tool in served)  # ADR-0006
+
+
+def test_initialize_names_each_tool_and_the_gate_rule() -> None:
+    """ADR-0061: deferred clients load this string, not a tools/list."""
+    from jev_judge_mcp.tools import TOOLS
+
+    with StdioServer() as server:
+        reply = server.initialize()
+        server.close_stdin()
+        server.wait()
+    instructions = reply["result"]["instructions"]
+    inventory = instructions.split(". ", 1)[0]
+    for tool in TOOLS:
+        assert inventory.count(tool.name) == 1
+    assert "call jev_gate" in instructions.lower() or "Call jev_gate" in instructions
+    assert "before claiming done" in instructions
+    assert "Honor action" in instructions
+    assert "mcp__" not in instructions
+    assert "0.8" not in instructions
+    assert "0.5" not in instructions
 
 
 def test_served_tool_set_is_complete() -> None:

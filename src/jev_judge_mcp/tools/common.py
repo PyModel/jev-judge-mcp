@@ -14,6 +14,16 @@ EVIDENCE_SCHEMA: dict[str, Any] = {
             "properties": {
                 "id": {"type": "string", "description": "Short identifier for this evidence item."},
                 "text": {"type": "string", "description": "The evidence text."},
+                "kind": {
+                    "type": "string",
+                    "description": "raw (default), diff, tool_output, or caller_note.",
+                },
+                "role": {
+                    "type": "string",
+                    "description": (
+                        "before, after, or current (default). A claim is about current unless it says otherwise."
+                    ),
+                },
             },
             "required": ["text"],
             "additionalProperties": False,
@@ -29,6 +39,14 @@ EVIDENCE_SCHEMA: dict[str, Any] = {
                         "description": "Short identifier for this evidence item (e.g. 'site-html', 'rfc-4.1.3').",
                     },
                     "text": {"type": "string", "description": "The evidence text."},
+                    "kind": {
+                        "type": "string",
+                        "description": "raw (default), diff, tool_output, or caller_note.",
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "before, after, or current (default).",
+                    },
                 },
                 "required": ["text"],
                 "additionalProperties": False,

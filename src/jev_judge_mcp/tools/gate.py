@@ -1,14 +1,17 @@
 """jev_gate: review a patch and verify completion claims in one call (`index.ts:1342-1495`)."""
 
-from typing import Any
+from typing import Any, cast
 
 from jev_judge_mcp.domain import ChoiceQuestion
+from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.policy import Action, ClaimJudgment, ClaimVerdict
+from jev_judge_mcp.policy.claims import note_blocks_auto
+from jev_judge_mcp.responses import claim_extras, next_checks_for, summary_extras
 from jev_judge_mcp.serialize import js_number_to_locale_string_en_us
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.arguments import Refinement
-from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, define, frame
+from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
 from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, has_non_empty_evidence, normalize_evidence
 from jev_judge_mcp.tools.observed import (
     claim_action,
@@ -25,6 +28,7 @@ from jev_judge_mcp.tools.review import (
     review_questions,
     review_settings,
 )
+from jev_judge_mcp.tools.verify import NO_SOURCE, VERIFY_SUFFIX
 from jev_judge_mcp.validation.caps import CapLedger, exceeds, gate_evidence_aggregate_error, gate_evidence_items_error
 
 CLAIM_CRITERIA = {
@@ -60,9 +64,26 @@ DEFINITION = define(
                 "description": "What the user asked for; this is not evidence of completion.",
             },
             "diff": {
-                "type": "string",
-                "minLength": 1,
-                "description": f"Proposed patch, file excerpt, or change summary. Truncated at {GATE.doc_units} chars.",
+                "description": (
+                    "Proposed patch, or a file list of path and patch. "
+                    f"A string is truncated at {GATE.doc_units} chars."
+                ),
+                "anyOf": [
+                    {"type": "string", "minLength": 1},
+                    {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string", "minLength": 1},
+                                "patch": {"type": "string", "minLength": 1},
+                            },
+                            "required": ["path", "patch"],
+                            "additionalProperties": False,
+                        },
+                    },
+                ],
             },
             "claims": {
                 "type": "array",
@@ -76,6 +97,11 @@ DEFINITION = define(
             "tests": {
                 "type": "string",
                 "description": "Reported test output for the patch review. Truncated at the same cap.",
+            },
+            "tests_format": {"type": "string", "description": "text, junit, or tap. Omitted text is self-reported."},
+            "tests_sha256": {
+                "type": "string",
+                "description": "Hash of a tests log a reader hashed. The server does not hash caller text.",
             },
             "auto_accept": {
                 "type": "number",
@@ -109,22 +135,72 @@ EVIDENCE_NOT_EMPTY = Refinement(
 """The `.refine` on gate's evidence (`index.ts:1370-1372`): checked with the arguments, before any request."""
 
 
+CLAIM_SUPPORT = (
+    "request and claims are assertions, not evidence. The evidence items include the proposed diff and the "
+    "reported tests when those were supplied. A truncated diff or test log is not support for the missing part."
+)
+"""Replaces the sentence that forbade using diff and tests (ADR-0063)."""
+
+
 def claim_question(index: int) -> ChoiceQuestion:
     return ChoiceQuestion(
         f"Does the evidence support claims[{index}]? Judge only from the provided evidence, not world knowledge. "
-        "Use only the evidence field as factual support; request and claims are assertions, not evidence; diff "
-        "and tests belong to the separate patch review. If a claim needs a diff or test log as support, it must be "
-        "supplied in evidence." + ANTI_INJECTION,
+        + CLAIM_SUPPORT
+        + ANTI_INJECTION,
         CLAIM_CRITERIA,
     )
+
+
+def gate_source_question(index: int, evidence_ids: list[str]) -> ChoiceQuestion:
+    criteria: dict[str, str | None] = {item_id: None for item_id in evidence_ids}
+    criteria["none"] = NO_SOURCE
+    return ChoiceQuestion(f"Which evidence item does claims[{index}] rest on?" + VERIFY_SUFFIX, criteria)
 
 
 def _refused(error: str) -> ToolResult:
     return ToolResult({"tool": "jev_gate", "error": error}, is_error=True)
 
 
+def _sent_evidence_item(item: dict[str, object], ledger: CapLedger) -> dict[str, object]:
+    sent: dict[str, object] = {
+        "id": item["id"],
+        "text": ledger.text(str(item["text"]), GATE.doc_units, "context"),
+    }
+    if item.get("kind"):
+        sent["kind"] = item["kind"]
+    if item.get("role"):
+        sent["role"] = item["role"]
+    return sent
+
+
+def _file_patches(diff: object) -> list[dict[str, str]]:
+    if not isinstance(diff, list):
+        raise ToolError("diff file list was not a list")
+    files: list[dict[str, str]] = []
+    for raw in cast(list[object], diff):
+        if not isinstance(raw, dict):
+            raise ToolError("diff file list item was not an object")
+        record = cast(dict[str, object], raw)
+        files.append({"path": str(record["path"]), "patch": str(record["patch"])})
+    return files
+
+
+def _implicit_evidence(diff: str | None, tests: str | None) -> list[dict[str, object]]:
+    items: list[dict[str, object]] = []
+    if diff:
+        items.append({"id": "diff", "text": diff, "kind": "diff", "role": "after"})
+    if tests:
+        items.append({"id": "tests", "text": tests, "kind": "tool_output", "role": "current"})
+    return items
+
+
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     settings = review_settings(args)
+    if isinstance(args.get("diff"), list):
+        joined = "\n".join(str(item["patch"]) for item in args["diff"])
+        if length(joined) <= GATE.doc_units:
+            return await handle({**args, "diff": joined}, runtime)
+        return await _handle_split_diff(args, runtime, settings)
     thresholds = settings.thresholds
     evidence = normalize_evidence(args["evidence"])
     # Bound the request before any model call: item count, then aggregate size.
@@ -137,9 +213,9 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     docs = review_docs(args, ledger, GATE.doc_units)
     claims: list[str] = args["claims"]
     sent_claims = [ledger.text(claim, GATE.claim_units, "context") for claim in claims]
-    sent_evidence = [
-        {"id": item["id"], "text": ledger.text(str(item["text"]), GATE.doc_units, "context")} for item in evidence
-    ]
+    sent_evidence = [_sent_evidence_item(item, ledger) for item in evidence]
+    implicit = _implicit_evidence(docs.diff, docs.tests)
+    asked_evidence = ensure_unique_ids([*sent_evidence, *implicit], "evidence").items
     truncated = ledger.context_cut
 
     state = {
@@ -149,16 +225,21 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         "diff": docs.diff,
         "tests": docs.tests,
         "claims": sent_claims,
-        "evidence": sent_evidence,
+        "evidence": asked_evidence,
     }
     # Review questions carry extra framing so claims cannot read as proof; claims use evidence only.
     questions = review_questions(REVIEW_FRAMING)
+    evidence_ids = [str(item["id"]) for item in asked_evidence]
     for index in range(len(claims)):
         questions[f"claim_{index}"] = claim_question(index)
+        if len(asked_evidence) > 1:
+            questions[f"source_{index}"] = gate_source_question(index, evidence_ids)
     evaluation = await runtime.ask(state, questions)
     answers = evaluation.answers
 
     review = project_review(answers, settings, truncated)
+    if docs.tests and not args.get("tests_sha256"):
+        review.payload["tests_weight"] = "self_reported"
 
     results: list[dict[str, object]] = []
     judgments: list[ClaimJudgment | None] = []
@@ -170,32 +251,36 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             assert closed != "status"
             judgments.append(None)
             claim_actions.append(closed)
-            results.append(
-                {
-                    "claim": claim,
-                    "verdict": None,
-                    "confidence": None,
-                    "probabilities": None,
-                    "action": closed,
-                    "status": "invalid_response",
-                }
-            )
+            closed_row: dict[str, object] = {
+                "claim": claim,
+                "verdict": None,
+                "confidence": None,
+                "probabilities": None,
+                "action": closed,
+                "status": "invalid_response",
+            }
+            closed_row.update(claim_extras(closed_row, asked_evidence, claim_id=f"claim{index}", supporting=None))
+            results.append(closed_row)
             continue
         verdict = CLAIM_VERDICTS[answer.choice]
         judgments.append(ClaimJudgment(verdict, answer.confidence))
+        source = validate_choice(answers.get(f"source_{index}"), [*evidence_ids, "none"])
+        support = source.choice if source is not None and source.choice != "none" else None
         action = require_complete_context(
             claim_action(verdict, answer.confidence, thresholds.auto_accept, thresholds.review_at), truncated
         )
+        if note_blocks_auto(action, support, asked_evidence):
+            action = "review"
         claim_actions.append(action)
-        results.append(
-            {
-                "claim": claim,
-                "verdict": verdict,
-                "confidence": answer.confidence,
-                "probabilities": answer.probabilities,
-                "action": action,
-            }
-        )
+        row: dict[str, object] = {
+            "claim": claim,
+            "verdict": verdict,
+            "confidence": answer.confidence,
+            "probabilities": answer.probabilities,
+            "action": action,
+        }
+        row.update(claim_extras(row, asked_evidence, claim_id=f"claim{index}", supporting=support))
+        results.append(row)
 
     verification_action = worst_action(claim_actions)
     verification = {
@@ -206,6 +291,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             "unsupported": sum(1 for r in results if r["verdict"] == "unsupported"),
             "needs_review": sum(1 for r in results if r["action"] != "auto"),
             "invalid_response": sum(1 for r in results if r.get("status") == "invalid_response"),
+            **summary_extras(results),
         },
         "thresholds": {"auto_accept": thresholds.auto_accept, "review_at": thresholds.review_at},
         "results": results,
@@ -218,6 +304,10 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         claims=judgments,
         action=action,
         thresholds=thresholds,
+        caller_note=any(
+            row.get("supporting_evidence") and note_blocks_auto("auto", row.get("supporting_evidence"), asked_evidence)
+            for row in results
+        ),
     )
     return ToolResult(
         frame(
@@ -227,6 +317,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
                 "truncated": truncated,
                 "action": action,
                 "reason_codes": reason_codes,
+                "next_checks": next_checks_for(reason_codes),
                 "review": review.payload,
                 "verification": verification,
             },
@@ -234,6 +325,39 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         action=action,
         truncated=ledger.scopes,
     )
+
+
+async def _handle_split_diff(args: dict[str, Any], runtime: Runtime, settings: object) -> ToolResult:
+    """Per-file review when the joined diff exceeds the document cap (ADR-0066).
+
+    A file over the cap is unreviewed. The call never returns auto while any file is unreviewed.
+    """
+    del settings
+    files = _file_patches(args["diff"])
+    total = sum(length(item["patch"]) for item in files)
+    if exceeds(total, GATE.aggregate_evidence_units):
+        return _refused(gate_evidence_aggregate_error(GATE.aggregate_evidence_units))
+    fitting = [item for item in files if length(str(item["patch"])) <= GATE.doc_units]
+    unreviewed = [str(item["path"]) for item in files if length(str(item["patch"])) > GATE.doc_units]
+    if not fitting:
+        return ToolResult(
+            {
+                "tool": "jev_gate",
+                "action": "review",
+                "partial": True,
+                "unreviewed_files": unreviewed,
+                "reason_codes": ["incomplete_context"],
+                "next_checks": next_checks_for(["incomplete_context"]),
+            }
+        )
+    # Review and check claims against the files that fit. Mark the call partial so auto is impossible.
+    reviewed = await handle({**args, "diff": "\n".join(str(item["patch"]) for item in fitting)}, runtime)
+    payload = dict(reviewed.payload)
+    payload["partial"] = True
+    payload["unreviewed_files"] = unreviewed
+    if payload.get("action") == "auto":
+        payload["action"] = "review"
+    return ToolResult(payload, action="review" if payload.get("action") == "review" else reviewed.action)
 
 
 TOOL = JevTool(DEFINITION, handle, {"evidence": EVIDENCE_NOT_EMPTY})

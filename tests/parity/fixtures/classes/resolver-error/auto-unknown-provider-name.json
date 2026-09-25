@@ -6,7 +6,7 @@
   "classes": [
     "resolver-error"
   ],
-  "divergences": [],
+  "divergences": ["ADR-0062"],
   "note": "An unknown JEV_PROVIDER falls through to auto resolution.",
   "calls": [
     {

@@ -233,6 +233,7 @@ def _codes(
     claims: list[ClaimJudgment | None] | None = None,
     action: Action = "auto",
     thresholds: PolicyThresholds = DEFAULT,
+    caller_note: bool = False,
 ) -> list[str]:
     return gate_reason_codes(
         truncated=truncated,
@@ -241,6 +242,7 @@ def _codes(
         claims=claims if claims is not None else [ClaimJudgment("verified", 0.9)],
         action=action,
         thresholds=thresholds,
+        caller_note=caller_note,
     )
 
 
@@ -292,6 +294,18 @@ def test_gate_confidence_boundaries() -> None:
     assert _codes(claims=at_auto) == ["accepted"]
 
 
+def test_a_caller_note_blocks_auto_and_other_kinds_do_not() -> None:
+    from jev_judge_mcp.policy.claims import note_blocks_auto
+
+    note = [{"id": "note", "kind": "caller_note", "text": "the agent says so"}]
+    log = [{"id": "log", "kind": "tool_output", "text": "1 passed"}]
+    assert note_blocks_auto("auto", "note", note)
+    assert not note_blocks_auto("review", "note", note)
+    assert not note_blocks_auto("auto", "log", log)
+    assert not note_blocks_auto("auto", None, note)
+    assert _codes(caller_note=True, action="review") == ["caller_note_only"]
+
+
 def test_gate_reason_code_vocabulary_is_frozen() -> None:
     assert GATE_REASON_CODES == (
         "incomplete_context",
@@ -302,6 +316,7 @@ def test_gate_reason_code_vocabulary_is_frozen() -> None:
         "claims_unsupported",
         "claim_confidence_low",
         "claim_confidence_below_auto_accept",
+        "caller_note_only",
         "accepted",
     )
 
