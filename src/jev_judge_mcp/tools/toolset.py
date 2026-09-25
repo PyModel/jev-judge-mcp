@@ -15,7 +15,7 @@ from mcp.types import CallToolResult, TextContent, Tool
 
 from jev_judge_mcp.providers import ProviderError
 from jev_judge_mcp.responses import error_code
-from jev_judge_mcp.serialize import stringify
+from jev_judge_mcp.serialize import stringify, stringify_compact
 from jev_judge_mcp.telemetry import ACTIONS, CAP_SCOPES, Span
 from jev_judge_mcp.tools.arguments import INVALID_PARAMS, ArgumentParser, ArgumentsError, compile_argument_schema
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError
@@ -76,10 +76,12 @@ class Toolset:
         for action in ACTIONS:
             span.attributes[f"item_actions.{action}"] = result.item_actions.count(action)
         text = stringify(result.payload)
+        if result.is_error:
+            return _error(text)
         return CallToolResult(
             content=[TextContent(type="text", text=text)],
-            structured_content={"code": error_code(text)} if result.is_error else None,
-            is_error=result.is_error,
+            structured_content=None,
+            is_error=False,
         )
 
     async def aclose(self) -> None:
@@ -106,8 +108,13 @@ def _text(result: CallToolResult) -> str:
 
 
 def _error(text: str) -> CallToolResult:
+    """Error text stays byte-equal in the first block. The second block carries the code (ADR-0062)."""
+    code = error_code(text)
     return CallToolResult(
-        content=[TextContent(type="text", text=text)],
-        structured_content={"code": error_code(text)},
+        content=[
+            TextContent(type="text", text=text),
+            TextContent(type="text", text=stringify_compact({"code": code})),
+        ],
+        structured_content={"code": code},
         is_error=True,
     )

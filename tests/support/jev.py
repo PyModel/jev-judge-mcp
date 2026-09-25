@@ -20,9 +20,10 @@ class FakeProvider(JevProvider):
     name: ClassVar[ProviderName] = "compatible"
     label: ClassVar[str] = "Fake"
 
-    def __init__(self, answers: Mapping[str, Any]) -> None:
+    def __init__(self, answers: Mapping[str, Any], *, request_id: str | None = None) -> None:
         super().__init__(Redactor(()))
         self.answers = dict(answers)
+        self.request_id = request_id
         self.requests: list[tuple[JsonValue, dict[str, JsonValue]]] = []
 
     @override
@@ -30,7 +31,7 @@ class FakeProvider(JevProvider):
         self, state: JsonValue, questions: dict[str, JsonValue], model: str, timeout: float | None
     ) -> Evaluation:
         self.requests.append((state, questions))
-        return Evaluation(self.answers, Usage(1, 1), self.name, model)
+        return Evaluation(self.answers, Usage(1, 1), self.name, model, request_id=self.request_id)
 
     @override
     async def aclose(self) -> None:
@@ -45,8 +46,10 @@ class Outcome:
     requests: list[tuple[JsonValue, dict[str, JsonValue]]] = field(default_factory=list[Any])
 
 
-async def call_tool(name: str, arguments: Mapping[str, Any], answers: Mapping[str, Any]) -> Outcome:
-    provider = FakeProvider(answers)
+async def call_tool(
+    name: str, arguments: Mapping[str, Any], answers: Mapping[str, Any], *, request_id: str | None = None
+) -> Outcome:
+    provider = FakeProvider(answers, request_id=request_id)
     toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: provider), TOOLS)
     try:
         result = await toolset.call(name, arguments)

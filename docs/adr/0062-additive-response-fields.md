@@ -14,9 +14,10 @@ Gate and verify summaries counted verdicts and actions in overlapping buckets. C
 - Review gains `score_scale` of `[0, 2]` and `level`, the nearest rubric index 0, 1, or 2.
 - Gate gains `next_checks`, a static map from reason codes. Not model prose.
 - Error text stays byte-equal in `content[0]`. The code (`auth`, `quota`, `timeout`, `input_too_large`, `invalid_arguments`, `provider`) is `structuredContent.code`.
+- An error result also appends a second `content` text block, `JSON.stringify({"code": "<code>"})` with no extra space. The first block stays byte-equal. Success results stay one block. This is divergence `error-code-content-block`: Claude Code 2.1.283 does not pass `structuredContent` into the tool result, so a client that reads only `content` never saw the code.
 - Parity fixtures that change are a registered divergence. The expectation adds these fields to the recording. It does not hand-edit the corpus.
 
 ## Consequences
 
 - A grep for `verified` can still hit a row whose action is `escalate`. `stands` is the boolean that grep should have been.
-- Clients that read only `content[0].text` do not see the error code. Clients that read `structuredContent` do.
+- A client that reads only `content[0].text` still does not see the code. A client that reads later content blocks, or `structuredContent`, does.

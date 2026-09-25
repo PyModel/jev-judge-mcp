@@ -53,3 +53,12 @@ def test_each_harness_page_keeps_the_hook_contract() -> None:
 def test_readme_links_harness_docs() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert readme.count("docs/harness/") == 1
+
+
+def test_shipped_hook_fragments_do_not_change_directory() -> None:
+    """``uv run --directory`` would make gate judge the checkout, not the caller's repo."""
+    for name in ("gate.hooks.json", "completion.hooks.json"):
+        payload = json.loads((HARNESS / name).read_text(encoding="utf-8"))
+        for group in payload["hooks"]["PreToolUse"]:
+            for hook in group["hooks"]:
+                assert "--directory" not in hook["command"].split(), name

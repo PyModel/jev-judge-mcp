@@ -6,9 +6,10 @@ The review half (questions and projection) is shared with jev_gate.
 from dataclasses import dataclass
 from typing import Any, cast
 
-from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question, ScoreQuestion
+from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question, ScoreQuestion, Usage
 from jev_judge_mcp.limits import GATE, REVIEW
 from jev_judge_mcp.policy import DEFAULT_AUTO_ACCEPT, DEFAULT_COMPOSITE_FLOOR, REVIEW_WEIGHTS, Action, PolicyThresholds
+from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.responses import SCORE_SCALE, nearest_level
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
@@ -286,7 +287,9 @@ async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: Re
         raise ToolError(f"diff exceeds the {GATE.aggregate_evidence_units:,}-character aggregate budget")
     unreviewed: list[str] = []
     halves: list[ReviewHalf] = []
+    evaluations: list[Evaluation] = []
     reviewed_paths: list[str] = []
+    unhashed_tests = False
     for item in files:
         patch = str(item["patch"])
         path = str(item["path"])
@@ -307,7 +310,10 @@ async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: Re
         )
         half = project_review(evaluation.answers, settings, ledger.context_cut)
         halves.append(half)
+        evaluations.append(evaluation)
         reviewed_paths.append(path)
+        if docs.tests and not args.get("tests_sha256"):
+            unhashed_tests = True
     if not halves:
         action = "review"
         payload: dict[str, object] = {
@@ -326,7 +332,25 @@ async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: Re
     payload["reviewed_files"] = reviewed_paths
     payload["partial"] = bool(unreviewed)
     payload["unreviewed_files"] = unreviewed
-    return ToolResult(frame("jev_review", None, payload, model=runtime.model), action=action)
+    if unhashed_tests:
+        payload["tests_weight"] = "self_reported"
+    return ToolResult(frame("jev_review", _combined(evaluations), payload), action=action)
+
+
+def _combined(evaluations: list[Evaluation]) -> Evaluation:
+    """One frame for a per-file review: usage summed, request id kept when a file sent one."""
+    first = evaluations[0]
+    request_id = next((item.request_id for item in evaluations if item.request_id), None)
+    return Evaluation(
+        {},
+        Usage(
+            sum(item.usage.input_tokens for item in evaluations),
+            sum(item.usage.output_tokens for item in evaluations),
+        ),
+        first.provider,
+        first.model,
+        request_id=request_id,
+    )
 
 
 TOOL = JevTool(DEFINITION, handle)

@@ -1,6 +1,7 @@
 """Handler failures reach stderr with a traceback, then come back as `isError`."""
 
 import asyncio
+import json
 import logging
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -51,6 +52,13 @@ def _stderr(secrets: list[str]) -> Generator[None]:
 
 def _text(result: CallToolResult) -> str:
     return cast(TextContent, result.content[0]).text
+
+
+def _code_block(result: CallToolResult) -> str:
+    assert len(result.content) == 2
+    block = result.content[1]
+    assert isinstance(block, TextContent)
+    return block.text
 
 
 async def test_handler_keyerror_reaches_stderr_and_is_an_error(capsys: pytest.CaptureFixture[str]) -> None:
@@ -120,6 +128,41 @@ async def test_rejected_arguments_are_logged_then_returned(capsys: pytest.Captur
     assert "Traceback (most recent call last):" in err
     assert "tool boom raised" in err
     assert _NOTE not in err
+
+
+async def test_error_results_keep_the_text_and_append_the_code() -> None:
+    """Clients that read only content still see the typed code. The first block stays the error text."""
+
+    async def handler(_parsed: dict[str, Any], _runtime: Runtime) -> ToolResult:
+        raise ToolError("No Jev provider credentials found. Set TYPESAFE_API_KEY.")
+
+    toolset = _toolset(handler)
+    try:
+        failed = await toolset.call("boom", {"note": _NOTE})
+        missing = await toolset.call("nope", {})
+
+        async def ok(_parsed: dict[str, Any], _runtime: Runtime) -> ToolResult:
+            return ToolResult({"ok": True})
+
+        success_set = _toolset(ok)
+        try:
+            success = await success_set.call("boom", {"note": _NOTE})
+        finally:
+            await success_set.aclose()
+    finally:
+        await toolset.aclose()
+
+    assert failed.is_error
+    assert _text(failed) == "No Jev provider credentials found. Set TYPESAFE_API_KEY."
+    assert json.loads(_code_block(failed)) == {"code": "auth"}
+    assert failed.structured_content == {"code": "auth"}
+    assert missing.is_error
+    assert _text(missing).startswith("MCP error -32602")
+    assert json.loads(_code_block(missing)) == {"code": "invalid_arguments"}
+    assert missing.structured_content == {"code": "invalid_arguments"}
+    assert not success.is_error
+    assert len(success.content) == 1
+    assert success.structured_content is None
 
 
 async def test_cancelled_error_is_not_caught(capsys: pytest.CaptureFixture[str]) -> None:

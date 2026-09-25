@@ -7,6 +7,8 @@ raw body goes through the uniform envelope rules (ADR-0003) and answers stay raw
 validate.
 """
 
+from collections.abc import Mapping
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, override
 
 from pydantic import RootModel
@@ -23,6 +25,7 @@ from jev_judge_mcp.providers.base import (
     origin_of,
     parse_envelope,
     refuse_credentials_in_url,
+    request_id_of,
 )
 from jev_judge_mcp.providers.retry import RetryPolicy
 from jev_judge_mcp.serialize import stringify_compact
@@ -30,6 +33,14 @@ from jev_judge_mcp.serialize import stringify_compact
 if TYPE_CHECKING:
     import httpx2
     from typesafe_sdk import AsyncTypeSafeClient
+
+
+_response_headers: ContextVar[Mapping[str, str] | None] = ContextVar("typesafe_response_headers", default=None)
+
+
+async def _remember_headers(response: "httpx2.Response") -> None:
+    """The SDK returns the body only. Keep this response's headers for ``request_id_of``."""
+    _response_headers.set(response.headers)
 
 
 class _RawBody(RootModel[object]):
@@ -101,7 +112,7 @@ class TypeSafeProvider(JevProvider):
             self._wrapper = httpx2.AsyncClient(
                 timeout=None,
                 transport=self._transport,
-                event_hooks={"request": [self._reject_cross_origin]},
+                event_hooks={"request": [self._reject_cross_origin], "response": [_remember_headers]},
             )
             self._client = AsyncTypeSafeClient(
                 api_key=self._api_key,
@@ -121,37 +132,49 @@ class TypeSafeProvider(JevProvider):
         import httpx2
         from typesafe_sdk import TypeSafeAPIConnectionError, TypeSafeAPIError
 
+        token = _response_headers.set(None)
         try:
-            # The SDK's recursive JSON alias is partly unknown to pyright and narrower than JsonValue;
-            # the wire is the same.
-            response = await client.system_one(  # pyright: ignore[reportUnknownMemberType]
-                cast(Any, state),
-                cast(Any, questions),
-                model=model,
-                # `timeout` is this attempt's deadline from `evaluate` (ADR-0057). `None` must wait, as
-                # fetch does, for a direct `_send` caller: the SDK reads a bare `None` as its 10 s default.
-                timeout=httpx2.Timeout(None) if timeout is None else timeout,
-                response_model=_RawBody,
-            )
-        except TypeSafeAPIError as error:
-            # Only the 429 subclass carries `retry_after_ms`; other statuses have no hint.
-            retry_after_ms = cast("float | None", getattr(error, "retry_after_ms", None))
-            raise self._status_error(
-                error.status,
-                _body_text(error.body),
-                retry_after=None if retry_after_ms is None else retry_after_ms / 1000,
-            ) from None
-        except TypeSafeAPIConnectionError as error:
-            # The SDK writes `Connection error: {cause}`; a reset's cause has an empty message.
-            cause = error.__cause__
-            if isinstance(error, TimeoutError) or cause is None or str(cause):
-                raise
-            # A reset is a transient connection failure even without a message (ADR-0057): the
-            # subclass keeps today's text and marks the error retryable.
-            raise ProviderConnectionError(f"{self.label} request failed: {error}{type(cause).__name__}") from None
+            try:
+                # The SDK's recursive JSON alias is partly unknown to pyright and narrower than JsonValue;
+                # the wire is the same.
+                response = await client.system_one(  # pyright: ignore[reportUnknownMemberType]
+                    cast(Any, state),
+                    cast(Any, questions),
+                    model=model,
+                    # `timeout` is this attempt's deadline from `evaluate` (ADR-0057). `None` must wait, as
+                    # fetch does, for a direct `_send` caller: the SDK reads a bare `None` as its 10 s default.
+                    timeout=httpx2.Timeout(None) if timeout is None else timeout,
+                    response_model=_RawBody,
+                )
+            except TypeSafeAPIError as error:
+                # Only the 429 subclass carries `retry_after_ms`; other statuses have no hint.
+                retry_after_ms = cast("float | None", getattr(error, "retry_after_ms", None))
+                raise self._status_error(
+                    error.status,
+                    _body_text(error.body),
+                    retry_after=None if retry_after_ms is None else retry_after_ms / 1000,
+                ) from None
+            except TypeSafeAPIConnectionError as error:
+                # The SDK writes `Connection error: {cause}`; a reset's cause has an empty message.
+                cause = error.__cause__
+                if isinstance(error, TimeoutError) or cause is None or str(cause):
+                    raise
+                # A reset is a transient connection failure even without a message (ADR-0057): the
+                # subclass keeps today's text and marks the error retryable.
+                raise ProviderConnectionError(f"{self.label} request failed: {error}{type(cause).__name__}") from None
+            headers = _response_headers.get()
+        finally:
+            _response_headers.reset(token)
         envelope = parse_envelope(response.root, self.label)
         # The reference reports the requested model, never one from the body (`provider.ts:122`).
-        return Evaluation(envelope.answers, envelope.usage, self.name, model, request_id=envelope.request_id)
+        # A header-only id is kept, matching the compatible provider (ADR-0068).
+        return Evaluation(
+            envelope.answers,
+            envelope.usage,
+            self.name,
+            model,
+            request_id=envelope.request_id or request_id_of({}, headers),
+        )
 
     @override
     async def aclose(self) -> None:

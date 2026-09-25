@@ -175,6 +175,32 @@ async def test_typesafe_sdk_retries_are_disabled(fast_retries: list[float]) -> N
     assert fast_retries == [0.5, 1.0]
 
 
+@pytest.mark.parametrize(
+    ("body", "headers", "expected"),
+    [
+        ({"answers": {}, "request_id": "from-body"}, {"x-request-id": "from-header"}, "from-body"),
+        ({"answers": {}}, {"x-request-id": "from-header"}, "from-header"),
+        ({"answers": {}}, {}, None),
+    ],
+)
+@pytest.mark.anyio
+async def test_typesafe_request_id_comes_from_the_body_or_the_header(
+    body: dict[str, Any], headers: dict[str, str], expected: str | None
+) -> None:
+    """Body id wins. A header-only id is kept. Neither stays absent (ADR-0068)."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        del request
+        return httpx2.Response(200, json=body, headers=headers)
+
+    provider = typesafe(handler, NO_RETRIES)
+    try:
+        evaluation = await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
+    finally:
+        await provider.aclose()
+    assert evaluation.request_id == expected
+
+
 @pytest.mark.anyio
 async def test_typesafe_error_body_as_text() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:

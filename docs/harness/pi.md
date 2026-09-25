@@ -12,7 +12,7 @@ The command hook is not the `jev_gate` MCP tool, which stays the completion gate
 
 The hook is opt-in. It can deny or ask, and it can never allow. Empty stdout means the hook abstained. Any other stdout is one JSON object whose `permissionDecision` is `deny` or `ask`.
 
-`jev-judge-mcp install` does not merge [`gate.hooks.json`](gate.hooks.json) and does not enable it. That fragment is the sample for a harness that runs a PreToolUse command hook. pi has no extension in this repo that turns the hook on. The sample command is `/absolute/path/to/jev-judge-mcp hook gate`. Real settings need the absolute path of the `jev-judge-mcp` executable. The matcher is `Bash|Write|Edit` and the timeout is 30 seconds.
+`jev-judge-mcp install` does not merge [`gate.hooks.json`](gate.hooks.json) and does not enable it. That fragment is the sample for a harness that runs a PreToolUse command hook. pi has no extension in this repo that turns the hook on. The sample command is `/absolute/path/to/jev-judge-mcp hook gate`. Real settings need the absolute path of the `jev-judge-mcp` executable. Do not use `uv run --directory`: that flag changes the working directory, so the hook judges the checkout instead of the caller's repo. `uv run --project <repo>` keeps the caller's cwd. The matcher is `Bash|Write|Edit` and the timeout is 30 seconds.
 
 The completion-hook protocol for pi is unverified. Do not treat [`completion.hooks.json`](completion.hooks.json) as a pi hook. The CLI `jev-judge-mcp gate` is the path that does not need a hook. `JEV_MCP_MODEL` pins the model.
 

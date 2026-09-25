@@ -19,6 +19,7 @@ from typing import Any
 import anyio
 
 from jev_judge_mcp.domain.json import decode_json, is_json_object
+from jev_judge_mcp.hook import fail_open_or_ask, hook_required
 from jev_judge_mcp.identity import reported_version
 from jev_judge_mcp.keyfile import stored_key_path
 from jev_judge_mcp.policy.thresholds import POLICY_VERSION
@@ -367,6 +368,29 @@ def command_from_hook_event(event: Mapping[str, object]) -> str:
     return ""
 
 
+_REACHED_PROVIDER = frozenset({"timeout", "quota", "provider"})
+
+
+def _gate_failure(required: bool, rendered: str) -> int:
+    """A non-zero gate. Ask only when the flag is set and the provider was never called."""
+    message = "error.code=provider\n"
+    code_name = "provider"
+    parsed = False
+    try:
+        envelope = json.loads(rendered)
+    except ValueError:
+        envelope = None
+    if isinstance(envelope, dict) and isinstance(envelope.get("error"), dict):
+        parsed = True
+        raw = envelope["error"].get("code", "provider")
+        code_name = raw if isinstance(raw, str) and raw else "provider"
+        message = f"error.code={code_name}\n"
+    if required and not (parsed and code_name in _REACHED_PROVIDER):
+        return fail_open_or_ask(True, message, code_name)
+    sys.stderr.write(message)
+    return 0
+
+
 def completion_hook_main(
     argv: Sequence[str], *, text: str | None = None, environ: Mapping[str, str] | None = None
 ) -> int:
@@ -374,25 +398,29 @@ def completion_hook_main(
 
     A missing credential or a missing local path fails open: exit 0, stderr carries
     ``error.code``, stdout stays empty so it cannot be read as a pass.
+    ``JEV_HOOK_REQUIRED=1`` asks instead for bad stdin, missing credentials, and a gate
+    error that never reached the provider (ADR-0065). A provider timeout, quota, or
+    provider error stays fail-open.
     """
     if list(argv):
         sys.stderr.write("jev-judge-mcp completion-hook: usage: jev-judge-mcp completion-hook\n")
         return 2
     body = sys.stdin.read() if text is None else text
     env = os.environ if environ is None else environ
+    required = hook_required(env)
     try:
         parsed = decode_json(body)
     except ValueError:
-        sys.stderr.write("error.code=invalid_arguments\n")
-        return 0
-    if not is_json_object(parsed) or not completion_matches(command_from_hook_event(parsed)):
+        return fail_open_or_ask(required, "error.code=invalid_arguments\n", "stdin was not hook-event JSON")
+    if not is_json_object(parsed):
+        return fail_open_or_ask(required, "", "stdin was not hook-event JSON")
+    if not completion_matches(command_from_hook_event(parsed)):
         return 0
     diff = env.get("JEV_COMPLETION_DIFF", "HEAD")
     claims = env.get("JEV_COMPLETION_CLAIMS")
     tests = env.get("JEV_COMPLETION_TESTS")
     if not claims or not tests:
-        sys.stderr.write("error.code=invalid_arguments\n")
-        return 0
+        return fail_open_or_ask(required, "error.code=invalid_arguments\n", "invalid_arguments")
     saved_out = sys.stdout
     saved_err = sys.stderr
     out, err = io.StringIO(), io.StringIO()
@@ -406,24 +434,14 @@ def completion_hook_main(
     finally:
         sys.stdout, sys.stderr = saved_out, saved_err
     if failed:
-        sys.stderr.write("error.code=provider\n")
-        return 0
+        return fail_open_or_ask(required, "error.code=provider\n", "provider")
     rendered = out.getvalue()
     if code != 0:
-        message = "error.code=provider\n"
-        try:
-            envelope = json.loads(rendered)
-            if isinstance(envelope, dict) and isinstance(envelope.get("error"), dict):
-                message = f"error.code={envelope['error'].get('code', 'provider')}\n"
-        except ValueError:
-            pass
-        sys.stderr.write(message)
-        return 0
+        return _gate_failure(required, rendered)
     try:
         envelope = json.loads(rendered)
     except ValueError:
-        sys.stderr.write("error.code=provider\n")
-        return 0
+        return fail_open_or_ask(required, "error.code=provider\n", "provider")
     action = envelope.get("action") if isinstance(envelope, dict) else None
     if action == "auto":
         return 0

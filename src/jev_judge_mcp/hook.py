@@ -56,6 +56,24 @@ class _Outcome:
     reason: str = ""
 
 
+def hook_required(env: Mapping[str, str]) -> bool:
+    """The opt-in enforcer flag. Both hooks read it here so the value cannot drift (ADR-0065)."""
+    return env.get("JEV_HOOK_REQUIRED") == "1"
+
+
+def fail_open_or_ask(required: bool, silent: str, reason: str) -> int:
+    """ADR-0035 default is silence. ``JEV_HOOK_REQUIRED=1`` asks instead (ADR-0065).
+
+    ``hook gate`` and ``completion-hook`` both call this. The ask text cannot drift.
+    """
+    if not required:
+        if silent:
+            sys.stderr.write(silent)
+        return 0
+    sys.stdout.write(render_decision("ask", f"Jev hook: not sure this is safe ({reason}).") + "\n")
+    return 0
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -69,16 +87,15 @@ def main(
         return 2
     body = sys.stdin.read() if text is None else text
     env = os.environ if environ is None else environ
-    required = env.get("JEV_HOOK_REQUIRED") == "1"
+    required = hook_required(env)
     try:
         parsed = decode_json(body)
     except ValueError:
-        return _precall_fail(required, _FAIL_OPEN_STDIN, "stdin was not hook-event JSON")
+        return fail_open_or_ask(required, _FAIL_OPEN_STDIN, "stdin was not hook-event JSON")
     if not is_json_object(parsed):
-        return _precall_fail(required, _FAIL_OPEN_STDIN, "stdin was not hook-event JSON")
+        return fail_open_or_ask(required, _FAIL_OPEN_STDIN, "stdin was not hook-event JSON")
     if required and length(body) > HOOK_INPUT_UNITS:
-        sys.stdout.write(render_decision("ask", "Jev hook: not sure this is safe (input_too_large).") + "\n")
-        return 0
+        return fail_open_or_ask(True, "", "input_too_large")
 
     settings = load_settings()
     model = resolve_model(settings)
@@ -87,7 +104,7 @@ def main(
         try:
             chosen = resolve_provider(settings)
         except ProviderConfigError as error:
-            return _precall_fail(required, f"jev-judge-mcp hook: fail-open ({error})\n", "auth")
+            return fail_open_or_ask(required, f"jev-judge-mcp hook: fail-open ({error})\n", "auth")
 
     outcome = _run(chosen, _state(parsed, env.get("JEV_GATE_STATE")), model)
     if outcome.kind == "allow":
@@ -176,15 +193,6 @@ def _text(value: object, default: str) -> str:
 
 def _ask_reason(word: _ReasonWord) -> str:
     return f"Jev hook: not sure this is safe ({word})."
-
-
-def _precall_fail(required: bool, silent: str, reason: str) -> int:
-    """ADR-0035 default is silence. ``JEV_HOOK_REQUIRED=1`` asks instead (ADR-0065)."""
-    if not required:
-        sys.stderr.write(silent)
-        return 0
-    sys.stdout.write(render_decision("ask", f"Jev hook: not sure this is safe ({reason}).") + "\n")
-    return 0
 
 
 def _decision(outcome: _Outcome) -> str:

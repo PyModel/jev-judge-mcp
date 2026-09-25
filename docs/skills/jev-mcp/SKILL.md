@@ -62,6 +62,6 @@ Any MCP client uses the published tools (the reference ten plus `jev_score`). pi
 
 ## Command hook
 
-`jev-judge-mcp hook gate` is the place for whether a shell command is safe to run. It stays off unless an operator turns it on. `install` does not enable it. Its contract is deny or ask. Silence means it abstained. With no configuration it steps aside. On a provider error it asks. `JEV_HOOK_REQUIRED=1` makes a missing credential or bad stdin ask instead of staying silent. The default is silence. `jev_gate` stays the completion check. The decision is `docs/adr/0035-command-hook-is-not-jev-gate.md`.
+`jev-judge-mcp hook gate` is the place for whether a shell command is safe to run. It stays off unless an operator turns it on. `install` does not enable it. Its contract is deny or ask. Silence means it abstained. With no configuration it steps aside. On a provider error it asks. `JEV_HOOK_REQUIRED=1` makes a missing credential or bad stdin ask instead of staying silent, on this hook and on `completion-hook`. The default is silence. `jev_gate` stays the completion check. The decision is `docs/adr/0035-command-hook-is-not-jev-gate.md`.
 
 `jev-judge-mcp judge <tool>` reads one JSON object on stdin and writes a DecisionResult. `jev-judge-mcp gate` reads a git range, a claims file, and a test log from the repo. Neither is a harness. `JEV_MCP_MODEL` pins the model. Honor `action`. `next_checks` is a static hint, not a new verdict.

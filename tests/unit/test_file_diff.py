@@ -58,6 +58,54 @@ async def test_two_files_under_the_cap_are_reviewed_even_if_the_join_is_not() ->
     assert outcome.payload["reviewed_files"] == ["src/a.py", "src/b.py"]
 
 
+_REVIEW_ANSWERS = {
+    "correctness": {"score": 2, "confidence": 0.95},
+    "spec_match": {"score": 2, "confidence": 0.95},
+    "test_gap": {"score": 0, "confidence": 0.95},
+    "blast_radius": {"score": 0, "confidence": 0.95},
+    "safe_to_apply": {"noul": 0.95},
+}
+
+
+async def test_file_list_review_keeps_provider_usage_and_unhashed_tests() -> None:
+    """A two-file review frames the evaluation. Unhashed text tests are self-reported."""
+    from tests.support.jev import call_tool as call
+
+    outcome = await call(
+        "jev_review",
+        {
+            "request": "fix the parser",
+            "diff": [
+                {"path": "mathutil.py", "patch": "+ add"},
+                {"path": "limits.py", "patch": "+ cap"},
+            ],
+            "tests": "1 passed",
+        },
+        _REVIEW_ANSWERS,
+        request_id="req-file",
+    )
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["provider"] == "compatible"
+    assert outcome.payload["usage"] == {"input_tokens": 2, "output_tokens": 2}
+    assert outcome.payload["request_id"] == "req-file"
+    assert outcome.payload["tests_weight"] == "self_reported"
+    hashed = await call(
+        "jev_review",
+        {
+            "request": "fix the parser",
+            "diff": [
+                {"path": "mathutil.py", "patch": "+ add"},
+                {"path": "limits.py", "patch": "+ cap"},
+            ],
+            "tests": "1 passed",
+            "tests_sha256": "abc",
+        },
+        _REVIEW_ANSWERS,
+    )
+    assert "tests_weight" not in hashed.payload
+    assert hashed.payload["provider"] == "compatible"
+
+
 async def test_gate_reviews_a_file_list_per_file() -> None:
     outcome = await call_tool(
         "jev_gate",

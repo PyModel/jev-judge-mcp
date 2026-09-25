@@ -576,6 +576,20 @@
       "fixtures": [],
       "reference_behavior": "diff is a string. Evidence items are id and text only. tests is a string.",
       "python_behavior": "jev_gate and jev_review also accept a file list. Evidence items may carry kind and role. tests_format and tests_sha256 are optional. ADR-0067."
+    },
+    {
+      "id": "error-code-content-block",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0062-additive-response-fields.md",
+      "tests": [
+        "tests/unit/test_toolset.py",
+        "tests/support/replay.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "An isError result has one content text block, the error text. There is no second block and no structuredContent, so a client that reads only content does not see a typed code.",
+      "python_behavior": "content[0].text stays byte-equal to that error text. A second content text block is the compact JSON object {\"code\": \"<code>\"}. structuredContent.code stays. Success results stay one block."
     }
   ]
 }
