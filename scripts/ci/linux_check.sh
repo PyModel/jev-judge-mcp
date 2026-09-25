@@ -150,7 +150,7 @@ fi
 # with the source bind-mounted read-only and copied inside, exactly as the job does.
 echo "[pre-push] linux:security-one-cpu ($LABEL)"
 onecpu_start=$(date +%s)
-ONECPU_IMAGE=$(grep -o 'ghcr.io/astral-sh/uv@sha256:[a-f0-9]*' "$DOCKERFILE" | head -1)
+ONECPU_IMAGE=$(grep -m1 -o 'ghcr.io/astral-sh/uv@sha256:[a-f0-9]*' "$DOCKERFILE")
 if [ -z "$ONECPU_IMAGE" ]; then
 	echo "pre-push: check 'linux:security-one-cpu' failed for $LABEL: the workflow's uv image digest is not pinned in $DOCKERFILE; rerun with: make ci-linux"
 	exit 1
