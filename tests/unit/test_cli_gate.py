@@ -59,7 +59,7 @@ def test_gate_refuses_a_path_outside_the_repo(tmp_path: Path, capsys: pytest.Cap
 def test_completion_hook_abstains_unless_the_command_is_push_or_pr(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The hook does not match Bash generally. A matching command with no local files fails open."""
+    """A non-matching Bash command gets no decision. git push reaches the gate path."""
     idle = completion_hook_main([], text=json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status"}}))
     idle_out = capsys.readouterr()
     assert idle == 0

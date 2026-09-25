@@ -20,8 +20,7 @@ def test_gate_hooks_sample_parses() -> None:
     assert command["command"] == "/absolute/path/to/jev-judge-mcp hook gate"
     completion = json.loads((HARNESS / "completion.hooks.json").read_text(encoding="utf-8"))
     completion_matcher = completion["hooks"]["PreToolUse"][0]["matcher"]
-    assert completion_matcher == "git push|gh pr create|gh pr merge"
-    assert "Bash" not in completion_matcher
+    assert completion_matcher == "Bash"
 
 
 def test_harness_tree_has_no_home_path_or_key_marker() -> None:

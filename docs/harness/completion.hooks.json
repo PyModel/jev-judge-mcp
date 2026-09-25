@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "git push|gh pr create|gh pr merge",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",

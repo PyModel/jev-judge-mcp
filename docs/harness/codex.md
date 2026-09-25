@@ -20,4 +20,4 @@ Stdin that is not a JSON object, or a missing provider credential, exits 0 with 
 
 ## Completion hook
 
-Codex's PreToolUse `permissionDecision` shape is verified. The completion fragment is [`completion.hooks.json`](completion.hooks.json). It is not [`gate.hooks.json`](gate.hooks.json). `install` does not enable it. A missing credential fails open and is not a pass.
+Codex hook matching is unverified against https://developers.openai.com/codex/hooks. Do not treat [`completion.hooks.json`](completion.hooks.json) as a Codex hook; its matcher is the Claude Code tool name `Bash`. It is not [`gate.hooks.json`](gate.hooks.json). `install` does not enable it. A missing credential fails open and is not a pass. Use `jev-judge-mcp gate` until the Codex matcher is verified.
