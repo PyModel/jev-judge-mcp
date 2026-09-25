@@ -133,6 +133,9 @@ def test_the_agent_never_sees_the_real_home_or_the_repo(tmp_path: Path) -> None:
         assert str(REPO) not in value, f"{name} points at the repo checkout"
     assert env["HOME"] != str(real_home)
     assert env["TMPDIR"] != str(tmp_path / "outer-tmp")
+    assert env["CLAUDE_CONFIG_DIR"]
+    assert str(real_home) not in env["CLAUDE_CONFIG_DIR"]
+    assert env["CLAUDE_CONFIG_DIR"] not in (env["HOME"], env["TMPDIR"])
 
 
 def test_config_is_private_argv_carries_its_path_and_the_run_succeeds(tmp_path: Path) -> None:

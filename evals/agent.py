@@ -310,7 +310,12 @@ def _isolated_env(base_env: Mapping[str, str], sandbox: Path) -> dict[str, str]:
                 target = agent_dir / name
                 target.write_bytes(source.read_bytes())
                 os.chmod(target, 0o600)
-    return {"HOME": str(home), "PI_CODING_AGENT_DIR": str(agent_dir), "TMPDIR": str(tmp)}
+    return {
+        "HOME": str(home),
+        "PI_CODING_AGENT_DIR": str(agent_dir),
+        "TMPDIR": str(tmp),
+        "CLAUDE_CONFIG_DIR": str(sandbox),
+    }
 
 
 @contextmanager
