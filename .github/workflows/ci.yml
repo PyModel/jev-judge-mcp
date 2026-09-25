@@ -77,6 +77,27 @@ jobs:
       - run: uv sync --locked --all-extras
       - run: make security
 
+  # ADR-0058: the ReDoS storm contract on a one-CPU budget. Spare runner cores hide a pool that
+  # starves benign calls under quota (worker startup inside a deadline loses the CPU race to the
+  # storm's own starts and spins), so the whole security stage reruns as a non-root runner in a
+  # `--cpus 1` container — the exact command is proven locally in the same image.
+  security-one-cpu:
+    needs: [ruff, pyright, unit, property]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: security stage under a one-CPU quota, non-root
+        run: |
+          # ghcr.io/astral-sh/uv:python3.12-bookworm-slim, pinned by digest (multi-arch index).
+          docker run --rm --cpus 1 --entrypoint sh -v "$PWD":/src:ro \
+            ghcr.io/astral-sh/uv@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58 -c '
+            set -eux
+            apt-get update -qq && apt-get install -y -qq make git procps >/dev/null
+            useradd -m runner
+            cp -r /src /home/runner/app && chown -R runner:runner /home/runner/app
+            su runner -c "cd ~/app && uv sync --locked --all-extras && make security"
+          '
+
   build:
     needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
