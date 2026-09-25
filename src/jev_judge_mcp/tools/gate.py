@@ -350,14 +350,23 @@ async def _handle_split_diff(args: dict[str, Any], runtime: Runtime, settings: o
                 "next_checks": next_checks_for(["incomplete_context"]),
             }
         )
-    # Review and check claims against the files that fit. Mark the call partial so auto is impossible.
-    reviewed = await handle({**args, "diff": "\n".join(str(item["patch"]) for item in fitting)}, runtime)
-    payload = dict(reviewed.payload)
-    payload["partial"] = True
+    # Each fitting file is under the cap. Do not join them back into a string that would be cut.
+    actions: list[Action] = []
+    payload: dict[str, object] = {}
+    for item in fitting:
+        reviewed = await handle({**args, "diff": item["patch"]}, runtime)
+        payload = dict(reviewed.payload)
+        action = payload.get("action")
+        if action in ("auto", "review", "escalate"):
+            actions.append(action)
+    if actions:
+        payload["action"] = worst_action(actions)
+    payload["partial"] = bool(unreviewed)
     payload["unreviewed_files"] = unreviewed
-    if payload.get("action") == "auto":
+    if unreviewed and payload.get("action") == "auto":
         payload["action"] = "review"
-    return ToolResult(payload, action="review" if payload.get("action") == "review" else reviewed.action)
+    headline = payload.get("action")
+    return ToolResult(payload, action=headline if headline in ("auto", "review", "escalate") else "review")
 
 
 TOOL = JevTool(DEFINITION, handle, {"evidence": EVIDENCE_NOT_EMPTY})

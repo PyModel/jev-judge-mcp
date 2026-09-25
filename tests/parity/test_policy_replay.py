@@ -5,6 +5,7 @@ A drift in claim_action or verify_action fails this target. Additive fields are 
 
 import json
 
+from jev_judge_mcp.policy.actions import require_complete_context
 from jev_judge_mcp.policy.claims import claim_action
 from jev_judge_mcp.policy.thresholds import DEFAULT_AUTO_ACCEPT, DEFAULT_REVIEW_AT_CAP
 from tests.support.fixtures import iter_calls
@@ -26,9 +27,9 @@ def test_recorded_claim_actions_match_policy() -> None:
         for index, row in enumerate(results):
             if row.get("status") == "invalid_response" or row.get("verdict") is None:
                 continue
-            expected = claim_action(row["verdict"], row.get("confidence"), auto_accept, review_at)
-            if truncated and expected == "auto":
-                expected = "review"
+            expected = require_complete_context(
+                claim_action(row["verdict"], row.get("confidence"), auto_accept, review_at), truncated
+            )
             if row.get("action") != expected:
                 mismatches.append(f"{call.id}#{index}: recorded {row.get('action')} policy {expected}")
     assert mismatches == []
