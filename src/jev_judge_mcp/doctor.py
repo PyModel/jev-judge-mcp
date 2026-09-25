@@ -30,6 +30,7 @@ from jev_judge_mcp.policy.thresholds import (
     DEFAULT_SCREEN_REVIEW_AT,
     EXISTS_ABSENT_BELOW,
     EXISTS_FOUND_AT,
+    POLICY_VERSION,
     SCREEN_RELEVANCE_SKIP_BELOW,
     SCREEN_SUBSTANCE_SKIP_BELOW,
 )
@@ -97,6 +98,7 @@ def _report(settings: Settings, home: Path, cwd: Path, name: str | None, failure
     if failure is not None:
         lines.append(_line("error", failure))
     lines.append(_line("policy", " ".join(f"{label}={value}" for label, value in _POLICY)))
+    lines.append(_line("version", POLICY_VERSION))
     lines.append(_line("allow", " ".join(ALLOW_RULES)))
     lines.append(_line("checked", ", ".join(str(path) for path in paths)))
     lines.append(_line("claude", _claude_line(paths, covered)))

@@ -179,9 +179,13 @@ def test_policy_line_uses_threshold_constants(
 ) -> None:
     monkeypatch.setenv("TYPESAFE_API_KEY", MARKER)
     main([])
-    policy = _field(capsys.readouterr().out, "policy")
+    out = capsys.readouterr().out
+    policy = _field(out, "policy")
     for name, value in _POLICY:
         assert f"{name}={value}" in policy
+    from jev_judge_mcp.policy.thresholds import POLICY_VERSION
+
+    assert _field(out, "version") == POLICY_VERSION
 
 
 def test_allow_names_are_the_published_tools(

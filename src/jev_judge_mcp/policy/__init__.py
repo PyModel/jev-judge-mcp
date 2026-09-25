@@ -17,6 +17,7 @@ from jev_judge_mcp.policy.claims import (
     claim_action,
     contradicts_recommendation,
     gate_reason_codes,
+    note_blocks_auto,
 )
 from jev_judge_mcp.policy.extract import (
     EXTRACT_REASON_CODES,
@@ -40,6 +41,7 @@ from jev_judge_mcp.policy.thresholds import (
     DEFAULT_SCREEN_REVIEW_AT,
     EXISTS_ABSENT_BELOW,
     EXISTS_FOUND_AT,
+    POLICY_VERSION,
     SCREEN_RELEVANCE_SKIP_BELOW,
     SCREEN_SUBSTANCE_SKIP_BELOW,
     THRESHOLD_INVARIANT_MESSAGE,
@@ -61,6 +63,7 @@ __all__ = [
     "EXISTS_FOUND_AT",
     "EXTRACT_REASON_CODES",
     "GATE_REASON_CODES",
+    "POLICY_VERSION",
     "REVIEW_WEIGHTS",
     "SCREEN_RELEVANCE_SKIP_BELOW",
     "SCREEN_SUBSTANCE_SKIP_BELOW",
@@ -88,6 +91,7 @@ __all__ = [
     "fail_closed",
     "gate_reason_codes",
     "min_confidence",
+    "note_blocks_auto",
     "rank_candidates",
     "require_complete_context",
     "rerank_by_score",

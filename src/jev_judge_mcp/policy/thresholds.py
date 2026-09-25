@@ -6,6 +6,9 @@ Every threshold a tool compares against lives here (ADR-0002); a tool that hardc
 import math
 from dataclasses import dataclass
 
+POLICY_VERSION = "1"
+"""Bumped when a default in this module or a frozen reason-code tuple changes."""
+
 DEFAULT_AUTO_ACCEPT = 0.8
 """jev_verify, jev_review, jev_gate (`index.ts:1304`, `index.ts:1378`)."""
 
