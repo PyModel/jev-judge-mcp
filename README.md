@@ -163,7 +163,7 @@ For example, "use jev_verify to check your summary against the changelog" return
 }
 ```
 
-Jev sees only what the agent passes in the call, so the agent has to include the evidence. [`docs/skills/jev-mcp/SKILL.md`](docs/skills/jev-mcp/SKILL.md) is a skill you can give your agent: it covers which tool fits which step and what to do with each action. Allow rules for Claude Code are printed by `doctor`, and opt-in setups for Claude Code, Codex, and Pi are in [the harness samples](docs/harness/).
+Jev sees only what the agent passes in the call, so the agent has to include the evidence. [`docs/skills/jev-mcp/SKILL.md`](docs/skills/jev-mcp/SKILL.md) is a skill you can give your agent: it covers which tool fits which step and what to do with each action. Honor `action`, not a grep of `verdict`. `jev-judge-mcp judge` and `jev-judge-mcp gate` are the path for a client that does not speak MCP. `JEV_MCP_MODEL` pins the model. Allow rules for Claude Code are printed by `doctor`, and opt-in setups for Claude Code, Codex, and Pi are in [the harness samples](docs/harness/). Hook protocols for OpenCode, Grok, Gemini, Kimi, and Cursor are unverified; the CLI does not branch on them.
 
 ## Configuration
 

@@ -42,4 +42,8 @@ The hook is opt-in. It can deny or ask, and it can never allow. Empty stdout mea
 
 `JEV_GATE_STATE` is the environment variable `src/jev_judge_mcp/hook.py` reads when it builds judged state. Unset, or whitespace only, it is omitted. Otherwise the stripped value is the next line after the event's cwd and permission mode, before the proposed action. `redact_action` runs on the action description and input. It does not run on `JEV_GATE_STATE`. That text is sent to the provider, so it is not a place to put a key. Provider URL, model, and credentials stay the process configuration in ADR-0008. The hook loads those the same way the server does. It reads no further hook variable, and the 0.5 / 0.4 thresholds are constants in `src/jev_judge_mcp/hook.py`, not environment variables.
 
-Stdin that is not a JSON object, or a missing provider credential, exits 0 with a stderr line and no decision. A provider failure asks, with reason `unreachable`.
+Stdin that is not a JSON object, or a missing provider credential, exits 0 with a stderr line and no decision. A provider failure asks, with reason `unreachable`. Set `JEV_HOOK_REQUIRED=1` only when this hook is the enforcer: those pre-call failures then ask instead of staying silent (ADR-0065). The default is unchanged.
+
+## Completion hook
+
+`jev-judge-mcp completion-hook` is not `hook gate`. It matches `git push`, `gh pr create`, and `gh pr merge`, and it does not match Bash generally. `install` does not enable [`completion.hooks.json`](completion.hooks.json). A missing credential fails open: empty stdout, `error.code` on stderr, never an allow. Claude Code's hook contract for this JSON shape is verified. The command reads `JEV_COMPLETION_DIFF`, `JEV_COMPLETION_CLAIMS`, and `JEV_COMPLETION_TESTS`.

@@ -39,7 +39,7 @@ Questions in one request cannot see each other's answers. Send the batch in one 
 | Where on an ordered scale | `jev_score` | Your rubric of 2-10 levels, low to high. A fractional level index plus the per-level probabilities. Threshold it; do not interpolate a magnitude. |
 | A value sitting in a document | `jev_extract` | Your regex proposes the matches. Jev picks. The value is one of those matches, or null. |
 | Is this patch acceptable | `jev_review` | Pull-request triage. The diff against the request. |
-| Did the work finish | `jev_gate` | The patch, the completion claims, and the test logs. This is the ship check. |
+| Did the work finish | `jev_gate` | The patch, the completion claims, and the test logs. Call it before claiming done on a diff and before opening or merging a pull request. Diff and tests are evidence. This is the ship check. |
 | Is this shell command safe to run | `jev-judge-mcp hook gate` | Opt-in process. Separate from the published tools. See below. |
 | New text, code, or options you cannot list | you | You write it. |
 
@@ -49,9 +49,9 @@ A typed in-set choice is what `jev_decide` and `jev_classify` already return: on
 
 | Action | What you do |
 | --- | --- |
-| `auto` | The row stands on its own. Proceed. |
+| `auto` | The row stands (`stands` is true). Proceed. |
 | `review` | You still own this. Confirm it with a stronger check. |
-| `escalate` | You still own this. Stop on this row. |
+| `escalate` | You still own this. Stop on this row. Do not grep `verified`. |
 | `invalid_response` | The row is unjudged. Leave it without a verdict. |
 
 Unknown confidence never meets a threshold, so the action stays off `auto`. A document cut for length before it reached Jev (truncated context) stays off `auto`.
@@ -62,4 +62,6 @@ Any MCP client uses the published tools (the reference ten plus `jev_score`). pi
 
 ## Command hook
 
-`jev-judge-mcp hook gate` is the place for whether a shell command is safe to run. It stays off unless an operator turns it on. `install` does not enable it. Its contract is deny or ask. Silence means it abstained. With no configuration it steps aside. On a provider error it asks. `jev_gate` stays the completion check. The decision is `docs/adr/0035-command-hook-is-not-jev-gate.md`.
+`jev-judge-mcp hook gate` is the place for whether a shell command is safe to run. It stays off unless an operator turns it on. `install` does not enable it. Its contract is deny or ask. Silence means it abstained. With no configuration it steps aside. On a provider error it asks. `JEV_HOOK_REQUIRED=1` makes a missing credential or bad stdin ask instead of staying silent. The default is silence. `jev_gate` stays the completion check. The decision is `docs/adr/0035-command-hook-is-not-jev-gate.md`.
+
+`jev-judge-mcp judge <tool>` reads one JSON object on stdin and writes a DecisionResult. `jev-judge-mcp gate` reads a git range, a claims file, and a test log from the repo. Neither is a harness. `JEV_MCP_MODEL` pins the model. Honor `action`. `next_checks` is a static hint, not a new verdict.

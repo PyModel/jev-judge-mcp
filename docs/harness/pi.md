@@ -14,4 +14,6 @@ The hook is opt-in. It can deny or ask, and it can never allow. Empty stdout mea
 
 `jev-judge-mcp install` does not merge [`gate.hooks.json`](gate.hooks.json) and does not enable it. That fragment is the sample for a harness that runs a PreToolUse command hook. pi has no extension in this repo that turns the hook on. The sample command is `/absolute/path/to/jev-judge-mcp hook gate`. Real settings need the absolute path of the `jev-judge-mcp` executable. The matcher is `Bash|Write|Edit` and the timeout is 30 seconds.
 
+The completion-hook protocol for pi is unverified. Do not treat [`completion.hooks.json`](completion.hooks.json) as a pi hook. The CLI `jev-judge-mcp gate` is the path that does not need a hook. `JEV_MCP_MODEL` pins the model.
+
 `JEV_GATE_STATE` is the environment variable `src/jev_judge_mcp/hook.py` reads when it builds judged state. Unset, or whitespace only, it is omitted. Otherwise the stripped value is the next line after the event's cwd and permission mode, before the proposed action. `redact_action` runs on the action description and input. It does not run on `JEV_GATE_STATE`. That text is sent to the provider, so it is not a place to put a key. The hook reads no further hook variable. The 0.5 / 0.4 thresholds are constants in `src/jev_judge_mcp/hook.py`, not environment variables.

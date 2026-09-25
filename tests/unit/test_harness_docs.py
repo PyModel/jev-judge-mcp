@@ -22,7 +22,13 @@ def test_gate_hooks_sample_parses() -> None:
 
 def test_harness_tree_has_no_home_path_or_key_marker() -> None:
     files = sorted(path for path in HARNESS.rglob("*") if path.is_file())
-    assert {path.name for path in files} == {"claude.md", "codex.md", "pi.md", "gate.hooks.json"}
+    assert {path.name for path in files} == {
+        "claude.md",
+        "codex.md",
+        "pi.md",
+        "gate.hooks.json",
+        "completion.hooks.json",
+    }
     for path in files:
         text = path.read_text(encoding="utf-8")
         for marker in FORBIDDEN:

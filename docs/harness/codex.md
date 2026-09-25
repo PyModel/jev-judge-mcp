@@ -16,4 +16,8 @@ The hook is opt-in. It can deny or ask, and it can never allow. Empty stdout mea
 
 `JEV_GATE_STATE` is the environment variable `src/jev_judge_mcp/hook.py` reads when it builds judged state. Unset, or whitespace only, it is omitted. Otherwise the stripped value is the next line after the event's cwd and permission mode, before the proposed action. `redact_action` runs on the action description and input. It does not run on `JEV_GATE_STATE`. That text is sent to the provider, so it is not a place to put a key. The hook reads no further hook variable. The 0.5 / 0.4 thresholds are constants in `src/jev_judge_mcp/hook.py`, not environment variables.
 
-Stdin that is not a JSON object, or a missing provider credential, exits 0 with a stderr line and no decision. A provider failure asks, with reason `unreachable`.
+Stdin that is not a JSON object, or a missing provider credential, exits 0 with a stderr line and no decision. A provider failure asks, with reason `unreachable`. `JEV_HOOK_REQUIRED=1` is the opt-in that asks instead of staying silent (ADR-0065).
+
+## Completion hook
+
+Codex's PreToolUse `permissionDecision` shape is verified. The completion fragment is [`completion.hooks.json`](completion.hooks.json). It is not [`gate.hooks.json`](gate.hooks.json). `install` does not enable it. A missing credential fails open and is not a pass.
