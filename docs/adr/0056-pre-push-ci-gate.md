@@ -48,9 +48,15 @@ red run after the fact. This ADR puts the whole workflow in front of every push.
   exactly as GitHub runs the pushed commit's workflow — including the Linux leg itself: a
   pushed commit that carries `scripts/ci/linux_check.sh` gets its own stage list and its own
   Dockerfile run against it, and only a commit that predates the gate falls back to the
-  checkout's copy, with a printed notice. That is what lets the gate be validated against
-  older commits: it ran dded642 (failing on Linux, as GitHub did) and 3281a99 (passing) from
-  a later checkout.
+  checkout's copy, with a printed notice.
+- **Validated against older commits, honestly.** The gate ran dded642 (failing on Linux, as
+  GitHub did) from a later checkout — that is what the pushed-commit rule buys. The original
+  passing-case evidence, 3281a99, turned out to be a coin: its own tree carries the pre-fix
+  `verify.py` race (the drain-vs-suffix flake this branch fixes), and the container hit it 8
+  runs out of 10. GitHub passed 3281a99 by luck, not because the commit was good, so a lucky
+  green proves nothing and a red proves only the known race. The passing-case evidence is
+  therefore taken at this branch's own head — the exact commit that lands on main, which
+  carries the fix and runs its own Linux leg through the pushed-commit rule.
 - **Natively and on Linux.** The gate runs `make ci` natively (macOS or Linux, whatever the
   developer pushes from) and then the whole workflow again inside Linux: `scripts/ci/
   linux_check.sh` copies the source into a throwaway container from the digest-pinned image
