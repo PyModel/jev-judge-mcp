@@ -367,6 +367,8 @@ def main() -> None:
         from jev_judge_mcp.setup import main as setup_main
 
         sys.exit(setup_main(sys.argv[2:]))
+    if judge_requested(sys.argv) or gate_cli_requested(sys.argv) or completion_hook_requested(sys.argv):
+        ensure_secrets_redactable(load_settings())
     if judge_requested(sys.argv):
         from jev_judge_mcp.cli import judge_main
 

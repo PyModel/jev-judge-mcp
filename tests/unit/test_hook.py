@@ -467,6 +467,17 @@ def test_posix_guard_covers_the_hook(monkeypatch: pytest.MonkeyPatch) -> None:
     assert caught.value.code == _POSIX_MESSAGE
 
 
+def test_required_flag_asks_when_stdin_exceeds_the_utf16_cap(capsys: pytest.CaptureFixture[str]) -> None:
+    from jev_judge_mcp.hook import HOOK_INPUT_UNITS
+
+    body = json.dumps({"tool_name": "Bash", "tool_input": "\U0001f600" * HOOK_INPUT_UNITS})
+    code = main(["gate"], text=body, environ={"JEV_HOOK_REQUIRED": "1"})
+    captured = capsys.readouterr()
+    assert code == 0
+    assert json.loads(captured.out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+    assert "allow" not in captured.out
+
+
 def test_required_flag_asks_on_bad_stdin_instead_of_silence(capsys: pytest.CaptureFixture[str]) -> None:
     code = main(["gate"], text="not-json", environ={"JEV_HOOK_REQUIRED": "1"})
     captured = capsys.readouterr()

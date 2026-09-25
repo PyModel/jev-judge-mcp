@@ -28,7 +28,7 @@ from jev_judge_mcp.tools.review import (
     review_questions,
     review_settings,
 )
-from jev_judge_mcp.tools.verify import NO_SOURCE, VERIFY_SUFFIX
+from jev_judge_mcp.tools.verify import NO_SOURCE, ROLE_RULE, VERIFY_SUFFIX
 from jev_judge_mcp.validation.caps import CapLedger, exceeds, gate_evidence_aggregate_error, gate_evidence_items_error
 
 CLAIM_CRITERIA = {
@@ -146,6 +146,7 @@ def claim_question(index: int) -> ChoiceQuestion:
     return ChoiceQuestion(
         f"Does the evidence support claims[{index}]? Judge only from the provided evidence, not world knowledge. "
         + CLAIM_SUPPORT
+        + ROLE_RULE
         + ANTI_INJECTION,
         CLAIM_CRITERIA,
     )
@@ -197,9 +198,6 @@ def _implicit_evidence(diff: str | None, tests: str | None) -> list[dict[str, ob
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     settings = review_settings(args)
     if isinstance(args.get("diff"), list):
-        joined = "\n".join(str(item["patch"]) for item in args["diff"])
-        if length(joined) <= GATE.doc_units:
-            return await handle({**args, "diff": joined}, runtime)
         return await _handle_split_diff(args, runtime, settings)
     thresholds = settings.thresholds
     evidence = normalize_evidence(args["evidence"])

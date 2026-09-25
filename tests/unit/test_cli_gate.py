@@ -8,6 +8,38 @@ import pytest
 from jev_judge_mcp.cli import completion_hook_main, gate_main, judge_main
 
 
+def test_gate_refuses_an_undecodable_tests_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(Path.cwd())
+    claims = Path("README.md")
+    tests = tmp_path / "tests.log"
+    # A path outside the repo is already refused. An inside-repo file that is not UTF-8 must
+    # still return an envelope, not a traceback.
+    inside = Path("tests.log.bad")
+    inside.write_bytes(b"\xff\xfe not utf-8")
+    try:
+        code = gate_main(["--diff", "HEAD", "--claims", str(claims), "--tests", str(inside)])
+    finally:
+        inside.unlink(missing_ok=True)
+    captured = capsys.readouterr()
+    assert code == 2
+    assert json.loads(captured.out)["error"]["code"] == "invalid_arguments"
+    del tests
+
+
+def test_judge_refuses_a_secret_too_short_to_redact(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    from jev_judge_mcp.server import main
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "x" * 2)
+    monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "judge", "jev_verify"])
+    with pytest.raises(SystemExit) as caught:
+        main()
+    assert "shorter than" in str(caught.value)
+
+
 def test_judge_usage_is_exit_2(capsys: pytest.CaptureFixture[str]) -> None:
     assert judge_main([]) == 2
     assert capsys.readouterr().out == ""

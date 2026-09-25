@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question, ScoreQuestion
-from jev_judge_mcp.limits import REVIEW
+from jev_judge_mcp.limits import GATE, REVIEW
 from jev_judge_mcp.policy import DEFAULT_AUTO_ACCEPT, DEFAULT_COMPOSITE_FLOOR, REVIEW_WEIGHTS, Action, PolicyThresholds
 from jev_judge_mcp.responses import SCORE_SCALE, nearest_level
 from jev_judge_mcp.text import length
@@ -282,10 +282,11 @@ async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: Re
     """Review each file under the document cap. Unreviewed files block auto (ADR-0066)."""
     files = _file_patches(args["diff"])
     total = sum(length(item["patch"]) for item in files)
-    if total > 200_000:
-        raise ToolError("diff exceeds the 200,000-character aggregate budget")
+    if total > GATE.aggregate_evidence_units:
+        raise ToolError(f"diff exceeds the {GATE.aggregate_evidence_units:,}-character aggregate budget")
     unreviewed: list[str] = []
     halves: list[ReviewHalf] = []
+    reviewed_paths: list[str] = []
     for item in files:
         patch = str(item["patch"])
         path = str(item["path"])
@@ -306,6 +307,7 @@ async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: Re
         )
         half = project_review(evaluation.answers, settings, ledger.context_cut)
         halves.append(half)
+        reviewed_paths.append(path)
     if not halves:
         action = "review"
         payload: dict[str, object] = {
@@ -320,6 +322,8 @@ async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: Re
         action = "review"
     payload = dict(halves[0].payload)
     payload["action"] = action
+    payload["score_file"] = reviewed_paths[0]
+    payload["reviewed_files"] = reviewed_paths
     payload["partial"] = bool(unreviewed)
     payload["unreviewed_files"] = unreviewed
     return ToolResult(frame("jev_review", None, payload, model=runtime.model), action=action)

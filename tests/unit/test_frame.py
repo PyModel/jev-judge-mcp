@@ -29,6 +29,18 @@ def test_frame_puts_the_evaluation_head_first_and_usage_last() -> None:
     assert payload["usage"] == evaluation.usage.to_wire()
 
 
+def test_frame_returns_request_id_only_when_the_provider_sent_one() -> None:
+    from jev_judge_mcp.providers.base import request_id_of
+
+    bare = Evaluation({}, Usage(1, 1), "compatible", "jev-latest")
+    assert "request_id" not in frame("jev_verify", bare, {"results": []})
+    sent = Evaluation({}, Usage(1, 1), "compatible", "jev-latest", request_id="req-9")
+    assert frame("jev_verify", sent, {"results": []})["request_id"] == "req-9"
+    assert request_id_of({"answers": {}}) is None
+    assert request_id_of({"request_id": "from-body"}) == "from-body"
+    assert request_id_of({}, {"X-Request-Id": "from-header"}) == "from-header"
+
+
 def test_frame_without_an_ask_reports_no_provider_and_null_usage() -> None:
     payload = frame("jev_extract", None, {"summary": {}}, model="jev-1.13.0")
     assert payload == {"tool": "jev_extract", "model": "jev-1.13.0", "provider": "none", "summary": {}, "usage": None}

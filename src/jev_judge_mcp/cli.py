@@ -92,7 +92,11 @@ def _gate_arguments(options: Mapping[str, str]) -> dict[str, object]:
     key = stored_key_path(load_settings()).resolve()
     claims_path = _inside_repo(Path(options["claims"]), repo, key)
     tests_path = _inside_repo(Path(options["tests"]), repo, key)
-    claims_text = claims_path.read_text(encoding="utf-8")
+    try:
+        claims_text = claims_path.read_text(encoding="utf-8")
+        tests_text = tests_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise CliError("invalid_arguments", "could not read a local file", exit_code=2) from error
     request, claims = _claims(claims_text, options.get("request"))
     diff = _git_diff(repo, options["diff"])
     files = _split_unified(diff)
@@ -101,7 +105,7 @@ def _gate_arguments(options: Mapping[str, str]) -> dict[str, object]:
         "diff": files if files is not None else diff,
         "claims": claims,
         "evidence": [{"id": "cli", "text": "Read by jev-judge-mcp gate from the local repo."}],
-        "tests": tests_path.read_text(encoding="utf-8"),
+        "tests": tests_text,
     }
 
 
@@ -119,10 +123,7 @@ def _repo_root() -> Path:
 
 def _inside_repo(path: Path, repo: Path, key: Path) -> Path:
     candidate = path if path.is_absolute() else repo / path
-    if candidate.is_symlink() or any(parent.is_symlink() for parent in candidate.parents):
-        resolved = candidate.resolve()
-    else:
-        resolved = candidate.resolve()
+    resolved = candidate.resolve()
     if not _is_relative_to(resolved, repo):
         raise CliError("invalid_arguments", f"refusing path outside the repo: {path}", exit_code=2)
     if resolved == key:
@@ -396,10 +397,17 @@ def completion_hook_main(
     saved_err = sys.stderr
     out, err = io.StringIO(), io.StringIO()
     sys.stdout, sys.stderr = out, err
+    failed = False
     try:
         code = gate_main(["--diff", diff, "--claims", claims, "--tests", tests])
+    except Exception:
+        failed = True
+        code = 1
     finally:
         sys.stdout, sys.stderr = saved_out, saved_err
+    if failed:
+        sys.stderr.write("error.code=provider\n")
+        return 0
     rendered = out.getvalue()
     if code != 0:
         message = "error.code=provider\n"

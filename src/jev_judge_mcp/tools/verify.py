@@ -23,10 +23,11 @@ RELATION_CRITERIA = {
 }
 NO_SOURCE = "No single evidence item contains the content the claim depends on"
 
-VERIFY_SUFFIX = (
+ROLE_RULE = (
     " A claim is about the current state unless it says otherwise. Use after or current items for that claim,"
-    " not before." + ANTI_INJECTION
+    " not before."
 )
+VERIFY_SUFFIX = ROLE_RULE + ANTI_INJECTION
 """Role rule plus the anti-injection sentence (ADR-0067, ADR-0068)."""
 
 DEFINITION = define(

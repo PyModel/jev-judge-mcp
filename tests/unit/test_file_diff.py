@@ -54,6 +54,39 @@ async def test_two_files_under_the_cap_are_reviewed_even_if_the_join_is_not() ->
     assert outcome.payload["partial"] is False
     assert len(outcome.requests) == 2
     assert outcome.payload["action"] == "auto"
+    assert outcome.payload["score_file"] == "src/a.py"
+    assert outcome.payload["reviewed_files"] == ["src/a.py", "src/b.py"]
+
+
+async def test_gate_reviews_a_file_list_per_file() -> None:
+    outcome = await call_tool(
+        "jev_gate",
+        {
+            "request": "fix the parser",
+            "diff": [
+                {"path": "src/a.py", "patch": "+ a"},
+                {"path": "src/b.py", "patch": "+ b"},
+            ],
+            "claims": ["both files changed"],
+            "evidence": [{"id": "log", "text": "2 passed"}],
+        },
+        {
+            "correctness": {"score": 2, "confidence": 0.95},
+            "spec_match": {"score": 2, "confidence": 0.95},
+            "test_gap": {"score": 0, "confidence": 0.95},
+            "blast_radius": {"score": 0, "confidence": 0.95},
+            "safe_to_apply": {"noul": 0.95},
+            "claim_0": {
+                "choice": "verified",
+                "confidence": 0.95,
+                "probabilities": {"verified": 0.95, "contradicted": 0.03, "unsupported": 0.02},
+            },
+        },
+    )
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["partial"] is False
+    assert outcome.payload["unreviewed_files"] == []
+    assert len(outcome.requests) == 2
 
 
 async def test_gate_summary_partitions_and_a_row_stands_only_when_auto() -> None:

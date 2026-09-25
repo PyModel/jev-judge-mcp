@@ -562,6 +562,20 @@
       "fixtures": [],
       "reference_behavior": "The reference initialize response was never captured, and this server previously sent no instructions.",
       "python_behavior": "initialize.instructions names each published tool once and says when to call jev_gate and to honor action. No threshold numbers, secrets, or harness names."
+    },
+    {
+      "id": "file-list-and-evidence-metadata",
+      "surface": "tool_schema",
+      "tier": "tier_a",
+      "status": "sanctioned",
+      "adr": "docs/adr/0066-multi-file-diff.md",
+      "tests": [
+        "tests/contract/test_tools_list.py",
+        "tests/unit/test_file_diff.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "diff is a string. Evidence items are id and text only. tests is a string.",
+      "python_behavior": "jev_gate and jev_review also accept a file list. Evidence items may carry kind and role. tests_format and tests_sha256 are optional. ADR-0067."
     }
   ]
 }

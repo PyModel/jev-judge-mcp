@@ -22,6 +22,7 @@ from jev_judge_mcp.providers import JevProvider, ProviderConfigError, ProviderEr
 from jev_judge_mcp.redact_action import redact_action
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.settings import load_settings
+from jev_judge_mcp.text import length
 from jev_judge_mcp.validation.choice import margin, validate_choice
 
 REPORTED_CONFIDENCE_THRESHOLD = 0.5
@@ -31,11 +32,11 @@ ESTIMATED_CONFIDENCE_THRESHOLD = 0.4
 """Escalate a margin estimate below this. Hook-only; not a tool threshold."""
 
 PROVIDER_TIMEOUT_SECONDS = 30.0
+"""Bound on this process's provider call. Retries run inside it (ADR-0057); whatever survives the
+budget is still ``unreachable``."""
 
 HOOK_INPUT_UNITS = 100_000
 """Stdin over this, when ``JEV_HOOK_REQUIRED=1``, asks instead of being judged or staying silent."""
-"""Bound on this process's provider call. Retries run inside it (ADR-0057); whatever survives the
-budget is still ``unreachable``."""
 
 _QUESTION_ID = "gate"
 _QUESTION = "Should the agent be allowed to run this proposed action right now?"
@@ -75,7 +76,7 @@ def main(
         return _precall_fail(required, _FAIL_OPEN_STDIN, "stdin was not hook-event JSON")
     if not is_json_object(parsed):
         return _precall_fail(required, _FAIL_OPEN_STDIN, "stdin was not hook-event JSON")
-    if required and len(body) > HOOK_INPUT_UNITS:
+    if required and length(body) > HOOK_INPUT_UNITS:
         sys.stdout.write(render_decision("ask", "Jev hook: not sure this is safe (input_too_large).") + "\n")
         return 0
 

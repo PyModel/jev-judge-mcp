@@ -13,7 +13,7 @@ from jev_judge_mcp.responses import SCORE_SCALE, claim_extras, nearest_level, ne
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.tools.gate import CLAIM_SUPPORT, gate_source_question
 from jev_judge_mcp.tools.review import ANTI_INJECTION
-from jev_judge_mcp.tools.verify import VERIFY_SUFFIX
+from jev_judge_mcp.tools.verify import ROLE_RULE, VERIFY_SUFFIX
 
 _OLD_CLAIM = (
     "Use only the evidence field as factual support; request and claims are assertions, not evidence; diff "
@@ -53,6 +53,8 @@ def _rewrite_body(body: Any) -> Any:
         instructions = str(question["instructions"])
         if name.startswith("claim_"):
             instructions = instructions.replace(_OLD_CLAIM, CLAIM_SUPPORT)
+            if ROLE_RULE not in instructions and ANTI_INJECTION in instructions:
+                instructions = instructions.replace(ANTI_INJECTION, ROLE_RULE + ANTI_INJECTION, 1)
         elif name.startswith("relation_") or name.startswith("source_"):
             if ANTI_INJECTION not in instructions:
                 instructions += VERIFY_SUFFIX
