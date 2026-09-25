@@ -144,3 +144,19 @@ if [ "$STATUS" -ne 0 ]; then
 	fi
 	exit "$STATUS"
 fi
+
+# ci.yml's security-one-cpu job: the whole security stage again under a one-CPU quota as the
+# non-root runner, in the same digest-pinned image the workflow pins (ADR-0056).
+echo "[pre-push] linux:security-one-cpu ($LABEL)"
+onecpu_start=$(date +%s)
+CID=$(docker create --init --cpus 1 "${CACHE_VOLUMES[@]}" --entrypoint bash -e CI=true "$IMAGE" -c 'chmod 755 /run_stages.sh 2>/dev/null; chown -R runner:runner /src && export HOME=/home/runner && runuser -u runner -- bash -c "cd /src && timeout 1800 make security"')
+docker cp "$SRC" "$CID:/src"
+set +e
+docker start -a "$CID" 2>&1 | tail -40
+STATUS=${PIPESTATUS[0]}
+set -e
+if [ "$STATUS" -ne 0 ]; then
+	echo "pre-push: check 'linux:security-one-cpu' failed for $LABEL; rerun with: make ci-linux"
+	exit 1
+fi
+echo "[pre-push] linux:security-one-cpu ok in $(( $(date +%s) - onecpu_start ))s"

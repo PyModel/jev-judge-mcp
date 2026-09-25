@@ -108,6 +108,7 @@ def _parse_steps() -> list[Step]:
     steps: list[Step] = []
     in_jobs = False
     in_with = False
+    block: list[str] | None = None
 
     def unknown(lineno: int, line: str, reason: str) -> None:
         pytest.fail(f"ci.yml:{lineno}: unrecognized {reason}: {line!r}")
@@ -115,10 +116,17 @@ def _parse_steps() -> list[Step]:
     for lineno, raw in enumerate(WORKFLOW.read_text(encoding="utf-8").splitlines(), 1):
         line = raw.rstrip()
         if not line.strip() or line.strip().startswith("#"):
+            if block is not None and len(line) - len(line.lstrip(" ")) >= 10:
+                block.append("")
             continue
         indent = len(line) - len(line.lstrip(" "))
         content = line.strip()
-
+        if block is not None:
+            if indent >= 10:
+                block.append(content)
+                continue
+            steps[-1].run = "\n".join(block)
+            block = None
         if indent == 0:
             in_jobs = content == "jobs:"
             continue
@@ -138,13 +146,32 @@ def _parse_steps() -> list[Step]:
                 steps.append(Step(action=item[len("uses:") :].strip()))
                 in_with = False
                 continue
+            if item.startswith("name:"):
+                continue
             if item.startswith("run:"):
-                steps.append(Step(run=item[len("run:") :].strip()))
+                scalar = item[len("run:") :].strip()
+                if scalar in ("|", ">", ">-", "|-"):
+                    steps.append(Step(run=""))
+                    block = []
+                    in_with = False
+                    continue
+                steps.append(Step(run=scalar))
                 in_with = False
                 continue
             unknown(lineno, line, "step")
-        if indent == 8 and content == "with:":
-            in_with = True
+        if indent == 8 and (content == "with:" or content.startswith("run:")):
+            if content == "with:":
+                in_with = True
+                continue
+            # A block-scalar run under `- name:`: the step key sits at this indent.
+            scalar = content[len("run:"):].strip()
+            if scalar in ("|", ">", ">-", "|-"):
+                steps.append(Step(run=""))
+                block = []
+                in_with = False
+                continue
+            steps.append(Step(run=scalar))
+            in_with = False
             continue
         if in_with and indent == 10:
             key, sep, value = content.partition(":")
@@ -153,11 +180,13 @@ def _parse_steps() -> list[Step]:
             steps[-1].with_values[key.strip()] = value.strip()
             continue
         unknown(lineno, line, "line")
+    if block is not None and steps:
+        steps[-1].run = "\n".join(block)
     return steps
 
 
 def _ci_make_targets(steps: list[Step]) -> set[str]:
-    """The make targets ci.yml runs; anything but `make <targets>` is classified elsewhere."""
+    """The make targets ci.yml runs, including inside docker-run block scalars."""
     targets: set[str] = set()
     for step in steps:
         if step.run is None:
@@ -165,7 +194,11 @@ def _ci_make_targets(steps: list[Step]) -> set[str]:
         if step.run in ALLOWED_RUN:
             continue
         if not step.run.startswith("make "):
-            pytest.fail(f"ci.yml runs a command the gate cannot classify: {step.run!r}")
+            # Inside a docker-run block only a chained or line-initial `make` is an
+            # invocation; `apt-get install make git` is a package list, not a target.
+            for target in re.findall(r"(?:^|&&)\s*make (\S+)", step.run, re.MULTILINE):
+                targets.add(target.rstrip("\"'),;"))
+            continue
         targets.update(step.run[len("make ") :].split())
     return targets
 
@@ -220,6 +253,7 @@ def test_every_workflow_step_is_emulated() -> None:
 
 def test_every_workflow_command_runs_in_a_gate_leg() -> None:
     steps = _parse_steps()
+    linux = LINUX_CHECK.read_text(encoding="utf-8")
     ci_targets = _ci_make_targets(steps)
     assert ci_targets == _linux_stage_targets(), (
         "ci.yml's make targets and the gate's Linux stages differ; teach scripts/ci/linux_check.sh in the same commit"
@@ -231,6 +265,12 @@ def test_every_workflow_command_runs_in_a_gate_leg() -> None:
     for step in steps:
         run = step.run
         if run is None or run.startswith("make "):
+            continue
+        if "docker run" in run:
+            # A docker-run job must name its mirror in the leg: today that is the one-CPU
+            # security stage, non-root, in the same digest-pinned image the workflow pins.
+            assert "security-one-cpu" in linux, "a docker-run job must have its mirror stage in the leg"
+            assert "--cpus 1" in linux, "the one-CPU mirror must carry the job's --cpus 1 quota"
             continue
         needle = ALLOWED_RUN.get(run or "")
         assert needle is not None, f"ci.yml runs {run!r}, which no gate leg is known to run"
