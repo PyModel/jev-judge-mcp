@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "git push|gh pr create|gh pr merge",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/jev-judge-mcp completion-hook",
+            "timeout": 90
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -29,6 +29,7 @@ from jev_judge_mcp import keyfile
 from jev_judge_mcp.errors import RedactingFilter, Redactor
 from jev_judge_mcp.http_auth import BearerTokenMiddleware, ensure_http_access_control
 from jev_judge_mcp.identity import reported_version
+from jev_judge_mcp.instructions import server_instructions
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import LogLevel, Settings, load_settings
 from jev_judge_mcp.stdio import stdio_streams
@@ -65,7 +66,12 @@ class JevMCPServer(MCPServer):
     """
 
     def __init__(self, *, toolset: Toolset, log_level: LogLevel) -> None:
-        super().__init__(name=SERVER_NAME, version=reported_version(), log_level=log_level)
+        super().__init__(
+            name=SERVER_NAME,
+            version=reported_version(),
+            instructions=server_instructions(toolset.names()),
+            log_level=log_level,
+        )
         self.toolset = toolset
         # The SDK acts on both before any handler runs (the dispatcher cancels the request, the
         # runner marks the session initialized); without a handler it logs each as unhandled.
@@ -312,6 +318,18 @@ def setup_requested(argv: list[str]) -> bool:
     return len(argv) > 1 and argv[1] == "setup"
 
 
+def judge_requested(argv: list[str]) -> bool:
+    return len(argv) > 1 and argv[1] == "judge"
+
+
+def gate_cli_requested(argv: list[str]) -> bool:
+    return len(argv) > 1 and argv[1] == "gate"
+
+
+def completion_hook_requested(argv: list[str]) -> bool:
+    return len(argv) > 1 and argv[1] == "completion-hook"
+
+
 def version_requested(argv: list[str]) -> bool:
     """True only for `--version`. It prints the build identity and does not start the server (ADR-0054)."""
     return len(argv) > 1 and argv[1] == "--version"
@@ -349,6 +367,18 @@ def main() -> None:
         from jev_judge_mcp.setup import main as setup_main
 
         sys.exit(setup_main(sys.argv[2:]))
+    if judge_requested(sys.argv):
+        from jev_judge_mcp.cli import judge_main
+
+        sys.exit(judge_main(sys.argv[2:]))
+    if gate_cli_requested(sys.argv):
+        from jev_judge_mcp.cli import gate_main
+
+        sys.exit(gate_main(sys.argv[2:]))
+    if completion_hook_requested(sys.argv):
+        from jev_judge_mcp.cli import completion_hook_main
+
+        sys.exit(completion_hook_main(sys.argv[2:]))
     settings = load_settings()
     # The gates run before logging and before anything binds, so a misconfiguration is one clear
     # line on stderr and a non-zero exit, never a live unauthenticated server (ADR-0050).
