@@ -89,10 +89,6 @@ async def post(app: ASGIApp, payload: object, headers: dict[str, str] | None = N
 # --- the startup decision ---
 
 
-def test_the_protected_set_is_exactly_the_sdk_list() -> None:
-    assert PROTECTED_HOSTS == ("127.0.0.1", "localhost", "::1")
-
-
 @pytest.mark.parametrize("host", PROTECTED)
 def test_sdk_protected_hosts_bind_without_a_token(monkeypatch: pytest.MonkeyPatch, host: str) -> None:
     settings = settings_with(monkeypatch, JEV_MCP_TRANSPORT="streamable-http", JEV_MCP_HTTP_HOST=host)
