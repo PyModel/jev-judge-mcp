@@ -3,12 +3,12 @@
 <img src="./docs/readme/banner.svg" alt="jev-judge-mcp, with a scales-of-justice emblem: typed judgment tools for MCP agents. Model judges, policy decides: auto, review, or escalate. Check, find, decide, ship." width="100%" />
 
 <p>
-  <a href="https://github.com/PyModel/jev-judge-mcp/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/PyModel/jev-judge-mcp/ci.yml?branch=main&style=for-the-badge&label=CI&logo=githubactions&logoColor=white&labelColor=0a0a0f"></a>
-  <a href="./pyproject.toml"><img alt="Version" src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FPyModel%2Fjev-judge-mcp%2Fmain%2Fpyproject.toml&query=%24.project.version&prefix=v&label=version&style=for-the-badge&labelColor=0a0a0f&color=ffc94d"></a>
-  <a href="https://pepy.tech/projects/jev-judge-mcp?timeRange=threeMonths&amp;category=version&amp;includeCIDownloads=true&amp;granularity=weekly&amp;viewType=line&amp;versions=Total%2C0.*"><img alt="Downloads" src="https://img.shields.io/pepy/dt/jev-judge-mcp?style=for-the-badge&amp;label=downloads&amp;logo=pypi&amp;logoColor=white&amp;labelColor=0a0a0f"></a>
-  <a href="https://www.python.org/"><img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-ff7b2e?style=for-the-badge&logo=python&logoColor=white&labelColor=0a0a0f"></a>
-  <a href="https://modelcontextprotocol.io/"><img alt="MCP over stdio" src="https://img.shields.io/badge/MCP-stdio-b9e769?style=for-the-badge&logo=modelcontextprotocol&logoColor=white&labelColor=0a0a0f"></a>
-  <a href="./LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-4fd8c4?style=for-the-badge&logo=opensourceinitiative&logoColor=white&labelColor=0a0a0f"></a>
+  <a href="https://github.com/PyModel/jev-judge-mcp/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/PyModel/jev-judge-mcp/ci.yml?branch=main&style=flat&label=CI&logo=githubactions&logoColor=white&labelColor=0a0a0f"></a>
+  <a href="./pyproject.toml"><img alt="Version" src="https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2FPyModel%2Fjev-judge-mcp%2Fmain%2Fpyproject.toml&query=%24.project.version&prefix=v&label=version&style=flat&labelColor=0a0a0f&color=ffc94d"></a>
+  <a href="https://pepy.tech/projects/jev-judge-mcp?timeRange=threeMonths&amp;category=version&amp;includeCIDownloads=true&amp;granularity=weekly&amp;viewType=line&amp;versions=Total%2C0.*"><img alt="Downloads" src="https://img.shields.io/pepy/dt/jev-judge-mcp?style=flat&amp;label=downloads&amp;logo=pypi&amp;logoColor=white&amp;labelColor=0a0a0f"></a>
+  <a href="https://www.python.org/"><img alt="Python 3.12+" src="https://img.shields.io/badge/python-3.12%2B-ff7b2e?style=flat&logo=python&logoColor=white&labelColor=0a0a0f"></a>
+  <a href="https://modelcontextprotocol.io/"><img alt="MCP over stdio" src="https://img.shields.io/badge/MCP-stdio-b9e769?style=flat&logo=modelcontextprotocol&logoColor=white&labelColor=0a0a0f"></a>
+  <a href="./LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-4fd8c4?style=flat&logo=opensourceinitiative&logoColor=white&labelColor=0a0a0f"></a>
 </p>
 
 </div>
