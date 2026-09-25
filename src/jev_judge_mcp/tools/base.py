@@ -5,6 +5,7 @@ questions, asks Jev once at most, validates each answer, applies policy, and ret
 is serialized as `JSON.stringify(payload, null, 2)` (ADR-0006).
 """
 
+import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -24,6 +25,8 @@ from jev_judge_mcp.tools.observed import worst_action
 from jev_judge_mcp.validation.caps import CapScope
 
 type Payload = Mapping[str, object]
+
+logger = logging.getLogger("jev_judge_mcp.tools.base")
 
 
 class ToolError(Exception):
@@ -102,6 +105,19 @@ class Runtime:
     def regex_executor(self) -> RegexExecutor:
         """Where jev_extract's patterns run: worker processes unless the server was built with another."""
         return self._regex_executor
+
+    async def awarm(self) -> None:
+        """Start the regex pool before the server takes calls (ADR-0058): a served pool never pays
+        worker startup inside a call's deadline when a warm slot could have served it, and warming
+        here overlaps no demand, so live workers never exceed the pool's size. Best effort: a pool
+        that cannot start workers now tries again on demand, so the server still comes up for the
+        tools that need no pool."""
+        if not isinstance(self._regex_executor, ProcessRegexExecutor):
+            return
+        try:
+            await self._regex_executor.warm()
+        except Exception:
+            logger.warning("regex pool did not warm; workers will start on demand", exc_info=True)
 
     async def ask(self, state: Payload, questions: Mapping[str, Question]) -> Evaluation:
         """Ask Jev `questions` about `state`. Raises `ProviderError` with redacted text.

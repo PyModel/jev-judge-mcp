@@ -96,6 +96,14 @@ class ProcessRegexExecutor:
     The caller's deadline is a whole-request budget (ADR-0016): admission, worker start, IPC, and
     matching all spend it. `queue_bound` caps how many patterns may wait for a slot. Each job carries
     the candidate caps from `caps` (`limits.EXTRACT`), so the worker holds no copy of them.
+
+    The served pool starts warm (ADR-0058): the server's startup path fills every slot through
+    `Runtime.awarm` before any transport runs, because worker startup inside a caller's deadline is
+    the burst failure — under a saturated CPU budget, the storm's own starts and spins starve a
+    benign call's start past its deadline, the one stall a killable-worker pool must not produce
+    (ADR-0004, ADR-0018). A slot killed by a deadline or a cancel is replaced on the next demand
+    (ADR-0016); its replacement still starts inside that caller's deadline, which a warmed pool
+    never makes a benign call pay during a storm it has headroom for.
     """
 
     def __init__(self, size: int | None = None, queue_bound: int | None = None, caps: ExtractCaps = EXTRACT) -> None:
@@ -224,8 +232,9 @@ class ProcessRegexExecutor:
         return process
 
     async def warm(self) -> None:
-        """Start one worker ahead of demand."""
-        if not self._idle:
+        """Fill the pool's slots ahead of demand (ADR-0058). Fails fast on the first worker that
+        will not start; slots already started stay in the idle pool for `aclose` to reap."""
+        while len(self._idle) < self.size:
             self._idle.append(await self._start())
 
     async def aclose(self) -> None:

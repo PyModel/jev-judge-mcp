@@ -200,6 +200,11 @@ def test_cancelled_extract_reaps_worker_and_keeps_server_responsive() -> None:
     orphans_before = orphan_worker_pids()
     with StdioServer() as server:
         server.initialize()
+        # The served pool starts warm (ADR-0058): initialize only replies after serve has filled
+        # it, and the slow call reuses a slot that already exists, so there is no spawn to wait
+        # for - the census below is the warm pool, the cancelled call's worker among them. The
+        # cancel frame follows the call frame on the same wire, so by the time it is read the
+        # slow call is inside find() holding that slot.
         server.send(call(10, "jev_extract", SLOW))
         deadline = time.monotonic() + 5
         workers = worker_pids(server.process.pid)
@@ -217,9 +222,12 @@ def test_cancelled_extract_reaps_worker_and_keeps_server_responsive() -> None:
             }
         )
         deadline = time.monotonic() + 0.75
-        while any(alive(pid) for pid in workers) and time.monotonic() < deadline:
+        while all(alive(pid) for pid in workers) and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert not any(alive(pid) for pid in workers), f"cancel left a worker alive; ps:\n{ps_snapshot()}"
+        survivors = {pid for pid in workers if alive(pid)}
+        assert len(survivors) == len(workers) - 1, (
+            f"cancel did not reap exactly the cancelled call's worker; ps:\n{ps_snapshot()}"
+        )
 
         quick = server.request(call(11, "jev_extract", NO_MATCH))
         quick_payload = json.loads(quick["result"]["content"][0]["text"])

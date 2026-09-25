@@ -82,6 +82,10 @@ class Toolset:
         logger.debug("metrics %s", self.runtime.telemetry.metrics.snapshot())
         await self.runtime.aclose()
 
+    async def awarm(self) -> None:
+        """The server's startup warm (ADR-0058): the pool is filled before any transport runs."""
+        await self.runtime.awarm()
+
 
 def _outcome(error: Exception) -> str:
     if isinstance(error, ArgumentsError):

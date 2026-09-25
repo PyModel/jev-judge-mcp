@@ -228,6 +228,9 @@ async def _stop_on_signal(stop: Callable[[], None]) -> None:
 
 async def serve(server: JevMCPServer, settings: Settings) -> None:
     try:
+        # The served pool starts warm (ADR-0058): filled before any transport runs, so a burst
+        # arrival never pays worker startup inside a call's deadline.
+        await server.toolset.awarm()
         await _serve(server, settings)
     finally:
         with anyio.CancelScope(shield=True):

@@ -62,8 +62,10 @@ def extract(pattern: str, document: str) -> dict[str, Any]:
 async def test_corpus_times_out_inside_the_deadline_while_other_calls_are_served() -> None:
     # One slot per catastrophic pattern plus room for benign calls; the default follows the CPU count.
     executor = ProcessRegexExecutor(size=len(CATASTROPHIC) + 2)
-    await executor.warm()
     toolset = Toolset(Runtime(Settings(), lambda _: FakeProvider(ANSWERS), executor), TOOLS)
+    # The production startup path (serve -> Toolset.awarm), not a hand-warmed pool: this is the
+    # warm the served pool actually gets (ADR-0058).
+    await toolset.awarm()
     slow: dict[str, tuple[float, str]] = {}
     served: list[float] = []
     started = time.monotonic()
