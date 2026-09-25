@@ -112,9 +112,10 @@ class _StdoutCapExceeded(OSError):
 
 
 class _IncompleteTranscript(RuntimeError):
-    """An output reader stayed alive past its join, so closing the pipes discarded whatever
-    the kernel still buffered: the captured transcript is incomplete. Carries what was read,
-    so the run's evidence can be persisted before the raise."""
+    """An output reader stayed alive past its join, or never stopped at all: closing the
+    pipes discards whatever the kernel still buffered, so the captured transcript is
+    incomplete. Carries what was read, so the run's evidence can be persisted before the
+    raise — a silently partial transcript is never returned."""
 
     captured_stdout: str
     captured_stderr: str
@@ -271,9 +272,9 @@ def _capture(
             stdout_pipe.close()
         if not stderr_pipe.closed:
             stderr_pipe.close()
-    if out_thread.is_alive() or err_thread.is_alive():
-        raise RuntimeError("agent output readers did not stop after the process group was killed")
     stdout, stderr = _text(b"".join(out_chunks)), _text(b"".join(err_chunks))
+    if out_thread.is_alive() or err_thread.is_alive():
+        raise _IncompleteTranscript(stdout, stderr)
     if incomplete:
         raise _IncompleteTranscript(stdout, stderr)
     if err_truncated.is_set():
