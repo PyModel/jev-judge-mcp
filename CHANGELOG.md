@@ -3,9 +3,33 @@
 ## [0.2.1](https://github.com/PyModel/jev-judge-mcp/compare/v0.2.0...v0.2.1) (2026-09-25)
 
 
+### Bug Fixes
+
+* **evals:** carry the partial evidence on the readers-never-stopped path too ([825c8fb](https://github.com/PyModel/jev-judge-mcp/commit/825c8fbc83f0f18f5c2af1060ef8b32b95fbcbc0))
+* **evals:** never return a silently partial agent transcript ([b72c53a](https://github.com/PyModel/jev-judge-mcp/commit/b72c53afeb6f01062cf3d2b36d17ba6dd3019407))
+* **install:** build the verify error tail after the drain has finished ([637c996](https://github.com/PyModel/jev-judge-mcp/commit/637c996b7fd2b59cfefa8e4105c0fe25d01118b0))
+* **server:** the served regex pool starts warm (ADR-0058) ([99ac61e](https://github.com/PyModel/jev-judge-mcp/commit/99ac61e6e121e35206a520d462729d6899256591))
+
+
 ### Documentation
 
 * add a PyPI download count badge to the README ([39b1544](https://github.com/PyModel/jev-judge-mcp/commit/39b1544b334adfadb6fa45e117b4a4fe39837a4e))
+* the passing-case evidence moves to the branch head ([fee5188](https://github.com/PyModel/jev-judge-mcp/commit/fee51887aa657027209502c481d6f88d75febe0d))
+* the pre-push gate in contributing and ADR-0056 ([0ba2cfb](https://github.com/PyModel/jev-judge-mcp/commit/0ba2cfb9a5affeff5d412661b7cdc3ee2a000113))
+
+
+### Continuous Integration
+
+* base the linux leg on the slim uv image with a checksum-verified node ([fe32b0d](https://github.com/PyModel/jev-judge-mcp/commit/fe32b0d83b47290f576177bc6c0ecf7d2c3016db))
+* block pushes on the full ci workflow, native and linux (ADR-0056) ([060880e](https://github.com/PyModel/jev-judge-mcp/commit/060880eb886eaa7b69a2a3f164c58513d9a9d8d0))
+* emulate security-one-cpu with the job's own docker run contract ([9b73bd0](https://github.com/PyModel/jev-judge-mcp/commit/9b73bd081ad39d1d00d35126dad1c1dee8a11c82))
+* guard the watchdog's pkill against the not-yet-started race ([0de3ee7](https://github.com/PyModel/jev-judge-mcp/commit/0de3ee781c1ee6bf744fd15c060118ed1796ef9c))
+* make the gate hermetic, bounded, checkout-agnostic, and pushed-commit-faithful ([2e19b66](https://github.com/PyModel/jev-judge-mcp/commit/2e19b66604e7df14cdba07508cbd0fcde11267f4))
+* mirror ci.yml's security-one-cpu job in the linux leg ([71a17b0](https://github.com/PyModel/jev-judge-mcp/commit/71a17b04c19d8ac8951e4ecf1f667eca4c50a8a3))
+* reap orphans in the linux leg with --init ([53cb5e7](https://github.com/PyModel/jev-judge-mcp/commit/53cb5e764ba5fe7831d08dcf1426c65774df38c2))
+* run the linux leg as a non-root runner with the tools the tests shell out to ([b842154](https://github.com/PyModel/jev-judge-mcp/commit/b8421546257c464203627970a4d98c6229709cf4))
+* run the ReDoS storm contract on a one-CPU quota ([81e8022](https://github.com/PyModel/jev-judge-mcp/commit/81e802262e01fb680f52cae48e69c327a0b8a2cb))
+* stop the one-cpu image lookup dying on a flaky sigpipe ([eb41999](https://github.com/PyModel/jev-judge-mcp/commit/eb419997061eee530698811383cbc34b9ed926af))
 
 ## [0.2.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.1.1...v0.2.0) (2026-09-24)
 
