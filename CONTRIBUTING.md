@@ -116,13 +116,10 @@ with `republish_tag` set to its tag.
   released version from then on. A release pull request needs a `feat` or `fix` commit in
   the scanned history.
 - The release pull request is opened or updated with the workflow token, so its `pull_request`
-  event does not trigger `ci`. After release-please updates it, `release.yml` dispatches
-  `ci.yml` with `workflow_dispatch` on the release branch. GitHub documents that this
-  token-triggered event is allowed and that selecting a ref runs on that branch ([event docs](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_dispatch),
-  [manual dispatch docs](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow));
-  the resulting checks attach to its head commit and report on the pull request ([run fields](https://docs.github.com/en/rest/actions/workflow-runs#get-a-workflow-run),
-  [check runs](https://docs.github.com/en/rest/checks/runs)). If that dispatch or CI run is unavailable,
-  use `env -u TYPESAFE_API_KEY make ci` on the release branch as a fallback.
+  event does not trigger `ci`. Release-PR CI is maintainer-approved instead (ADR-0060): a
+  maintainer approves the pending `ci` run on the release PR, and those checks report on the
+  pull request like any other branch's. If that run is unavailable, use
+  `env -u TYPESAFE_API_KEY make ci` on the release branch as a fallback.
 - The version gate is `scripts/check_release_version.py`, tested offline in
   `tests/unit/test_release_version.py`.
 
