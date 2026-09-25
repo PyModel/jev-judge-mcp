@@ -3,13 +3,13 @@
 import json
 import signal
 import socket
-import subprocess
 import time
 
 import httpx
 import pytest
 
 from tests.support.stdio import INITIALIZE, PROTOCOL_VERSION, StdioServer
+from tests.support.workers import alive, orphan_worker_pids, ps_snapshot, worker_pids
 
 
 def free_port() -> int:
@@ -53,16 +53,6 @@ def test_http_initialize_and_clean_shutdown(signum: signal.Signals) -> None:
     assert stdout == b""
 
 
-def _worker_pids() -> set[str]:
-    result = subprocess.run(["ps", "-ax", "-o", "pid=,command="], capture_output=True, text=True, check=False)
-    found: set[str] = set()
-    for line in result.stdout.splitlines():
-        pid, _, command = line.strip().partition(" ")
-        if "jev_judge_mcp.extract.worker" in command:
-            found.add(pid)
-    return found
-
-
 def _port_is_free(port: int) -> bool:
     sock = socket.socket()
     try:
@@ -81,9 +71,16 @@ def test_a_taken_port_exits_with_one_line_and_leaves_nothing() -> None:
     holder.bind(("127.0.0.1", 0))
     holder.listen(1)
     port: int = holder.getsockname()[1]
-    before = _worker_pids()
+    orphans_before = orphan_worker_pids()
+    seen: set[int] = set()
     try:
         with StdioServer(env={"JEV_MCP_TRANSPORT": "streamable-http", "JEV_MCP_HTTP_PORT": str(port)}) as server:
+            root = server.process.pid
+            deadline = time.monotonic() + 15
+            while server.process.poll() is None and time.monotonic() < deadline:
+                seen |= worker_pids(root)
+                time.sleep(0.05)
+            seen |= worker_pids(root)
             returncode, stderr = server.wait()
             stdout = b"".join(server.stdout_lines)
     finally:
@@ -94,7 +91,8 @@ def test_a_taken_port_exits_with_one_line_and_leaves_nothing() -> None:
     assert "Traceback" not in stderr
     assert "Started server process" not in stderr
     assert _port_is_free(port)
-    assert _worker_pids() == before
+    left = {pid for pid in seen if alive(pid)} | (orphan_worker_pids() - orphans_before)
+    assert not left, f"refused server left a worker; ps:\n{ps_snapshot()}"
 
 
 def test_http_lone_surrogate_escape_is_refused_with_a_reply() -> None:
