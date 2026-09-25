@@ -164,7 +164,7 @@ def _parse_steps() -> list[Step]:
                 in_with = True
                 continue
             # A block-scalar run under `- name:`: the step key sits at this indent.
-            scalar = content[len("run:"):].strip()
+            scalar = content[len("run:") :].strip()
             if scalar in ("|", ">", ">-", "|-"):
                 steps.append(Step(run=""))
                 block = []
