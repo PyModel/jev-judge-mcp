@@ -39,6 +39,7 @@ def test_frame_returns_request_id_only_when_the_provider_sent_one() -> None:
     assert request_id_of({"answers": {}}) is None
     assert request_id_of({"request_id": "from-body"}) == "from-body"
     assert request_id_of({}, {"X-Request-Id": "from-header"}) == "from-header"
+    assert request_id_of({}, {"X-Typesafe-Request-Id": "live-header"}) == "live-header"
 
 
 def test_frame_without_an_ask_reports_no_provider_and_null_usage() -> None:

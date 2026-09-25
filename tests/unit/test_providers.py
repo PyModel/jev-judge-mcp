@@ -5,12 +5,13 @@ import json
 import logging
 import subprocess
 import sys
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import httpx2
 import pytest
 import respx
+from mcp.types import TextContent
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Usage
 from jev_judge_mcp.errors import REDACTED, RedactingFilter, Redactor
@@ -22,7 +23,9 @@ from jev_judge_mcp.providers.openrouter import openrouter_slug
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.server import configure_logging
+from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.text import head
+from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from tests.support.retries import fast_retries as fast_retries
 
 QUESTIONS = {"q": NoulQuestion("Is it?", NoulCriteria("yes", "no"))}
@@ -181,13 +184,16 @@ async def test_typesafe_sdk_retries_are_disabled(fast_retries: list[float]) -> N
         ({"answers": {}, "request_id": "from-body"}, {"x-request-id": "from-header"}, "from-body"),
         ({"answers": {}}, {"x-request-id": "from-header"}, "from-header"),
         ({"answers": {}}, {}, None),
+        ({"answers": {}}, {"x-typesafe-request-id": "live-id"}, "live-id"),
+        ({"answers": {}, "request_id": "from-body"}, {"x-typesafe-request-id": "live-id"}, "from-body"),
     ],
 )
 @pytest.mark.anyio
 async def test_typesafe_request_id_comes_from_the_body_or_the_header(
     body: dict[str, Any], headers: dict[str, str], expected: str | None
 ) -> None:
-    """Body id wins. A header-only id is kept. Neither stays absent (ADR-0068)."""
+    """Body id wins over any header. A header-only id is kept, under the live
+    `x-typesafe-request-id` name as under the generic ones. Neither stays absent (ADR-0068)."""
 
     def handler(request: httpx2.Request) -> httpx2.Response:
         del request
@@ -199,6 +205,52 @@ async def test_typesafe_request_id_comes_from_the_body_or_the_header(
     finally:
         await provider.aclose()
     assert evaluation.request_id == expected
+
+
+_REVIEW_ANSWERS = {
+    "correctness": {"score": 2, "confidence": 0.95},
+    "spec_match": {"score": 2, "confidence": 0.95},
+    "test_gap": {"score": 0, "confidence": 0.95},
+    "blast_radius": {"score": 0, "confidence": 0.95},
+    "safe_to_apply": {"noul": 0.95},
+}
+
+
+@pytest.mark.anyio
+async def test_a_file_list_review_frame_keeps_the_live_typesafe_request_id() -> None:
+    """The Claude dogfood failure: live TypeSafe sends the id only as `x-typesafe-request-id`,
+    so a two-file review frame dropped it while carrying provider and summed usage (ADR-0068)."""
+    calls = 0
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        nonlocal calls
+        calls += 1
+        del request
+        return httpx2.Response(
+            200, json={"answers": dict(_REVIEW_ANSWERS)}, headers={"x-typesafe-request-id": "req-live"}
+        )
+
+    provider = typesafe(handler, NO_RETRIES)
+    toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: provider), TOOLS)
+    try:
+        result = await toolset.call(
+            "jev_review",
+            {
+                "request": "fix the parser",
+                "diff": [
+                    {"path": "mathutil.py", "patch": "+ add"},
+                    {"path": "limits.py", "patch": "+ cap"},
+                ],
+            },
+        )
+    finally:
+        await toolset.aclose()
+
+    assert calls == 2  # one ask per file; the frame sums their usage (ADR-0066)
+    payload = json.loads(cast(TextContent, result.content[0]).text)
+    assert payload["provider"] == "typesafe"
+    assert payload["reviewed_files"] == ["mathutil.py", "limits.py"]
+    assert payload["request_id"] == "req-live"
 
 
 @pytest.mark.anyio

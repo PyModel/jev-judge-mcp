@@ -150,7 +150,7 @@ def request_id_of(body: Mapping[str, object], headers: Mapping[str, str] | None 
         return value
     if headers is None:
         return None
-    for name in ("x-request-id", "request-id"):
+    for name in ("x-request-id", "request-id", "x-typesafe-request-id"):
         for key, header in headers.items():
             if key.lower() == name and header:
                 return header

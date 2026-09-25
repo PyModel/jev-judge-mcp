@@ -8,7 +8,7 @@ Gate and review already tell the model that state is evidence, not instructions.
 ## Decision
 
 - Verify's relation question, and its source question, end with the same anti-injection sentence gate uses. That is a question-text change. It is measured by verify's own eval fixture, not by assuming the score is unchanged.
-- `request_id` is returned only when the provider response carries one (`request_id` in the envelope, or a `request-id` / `x-request-id` header). The server does not invent an id.
+- `request_id` is returned only when the provider response carries one (`request_id` in the envelope, or a `request-id` / `x-request-id` / `x-typesafe-request-id` header — the last is the name live TypeSafe sends). The server does not invent an id.
 - `JEV_MCP_MODEL` is the model pin. The tool argument `model` stays stripped. There is no deterministic mode.
 
 ## Consequences
