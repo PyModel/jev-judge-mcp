@@ -36,12 +36,12 @@ run_bounded() {
 	# sleep must not hold the caller's stdout pipe open after the stage ends.
 	(
 		sleep "$seconds"
-		pkill -TERM -P "$pid" 2>/dev/null
+		pkill -TERM -P "$pid" 2>/dev/null || true
 		kill -TERM "$pid" 2>/dev/null
 	) >/dev/null 2>&1 &
 	watchdog=$!
 	wait "$pid" || status=$?
-	pkill -TERM -P "$watchdog" 2>/dev/null
+	pkill -TERM -P "$watchdog" 2>/dev/null || true
 	kill "$watchdog" 2>/dev/null
 	wait "$watchdog" 2>/dev/null || true
 	return "$status"
