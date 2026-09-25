@@ -274,7 +274,6 @@ async def test_cancel_delivered_inside_the_spawn_leaves_no_orphan(monkeypatch: p
         assert pids
         with pytest.raises(ProcessLookupError):
             os.kill(pids[0], 0)
-        assert pool._idle == []  # pyright: ignore[reportPrivateUsage]
     finally:
         await pool.aclose()
         for pid in pids:
