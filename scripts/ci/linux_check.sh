@@ -145,17 +145,47 @@ if [ "$STATUS" -ne 0 ]; then
 	exit "$STATUS"
 fi
 
-# ci.yml's security-one-cpu job: the whole security stage again under a one-CPU quota as the
-# non-root runner, in the same digest-pinned image the workflow pins (ADR-0056).
+# ci.yml's security-one-cpu job, emulated faithfully: the whole security stage again under
+# a one-CPU quota as a non-root runner in the same digest-pinned uv image the job pins,
+# with the source bind-mounted read-only and copied inside, exactly as the job does.
 echo "[pre-push] linux:security-one-cpu ($LABEL)"
 onecpu_start=$(date +%s)
-CID=$(docker create --init --cpus 1 "${CACHE_VOLUMES[@]}" --entrypoint bash -e CI=true "$IMAGE" -c 'chmod 755 /run_stages.sh 2>/dev/null; chown -R runner:runner /src && export HOME=/home/runner && runuser -u runner -- bash -c "cd /src && timeout 1800 make security"')
-docker cp "$SRC" "$CID:/src"
-set +e
-docker start -a "$CID" 2>&1 | tail -40
-STATUS=${PIPESTATUS[0]}
-set -e
-if [ "$STATUS" -ne 0 ]; then
+ONECPU_IMAGE=$(grep -o 'ghcr.io/astral-sh/uv@sha256:[a-f0-9]*' "$DOCKERFILE" | head -1)
+if [ -z "$ONECPU_IMAGE" ]; then
+	echo "pre-push: check 'linux:security-one-cpu' failed for $LABEL: the workflow's uv image digest is not pinned in $DOCKERFILE; rerun with: make ci-linux"
+	exit 1
+fi
+cat >"$RUNNER.onecpu" <<'ONECPU_EOF'
+#!/usr/bin/env bash
+set -eux
+apt-get update -qq && apt-get install -y -qq make git procps >/dev/null
+useradd -m runner
+cp -r /src /home/runner/app && chown -R runner:runner /home/runner/app
+su runner -c "cd ~/app && uv sync --locked --all-extras && CI=true make security"
+ONECPU_EOF
+chmod 755 "$RUNNER.onecpu"
+# Portable watchdog, same contract as the native leg's.
+run_bounded() {
+	local seconds=$1 pid watchdog status=0
+	shift
+	"$@" &
+	pid=$!
+	(
+		sleep "$seconds"
+		pkill -TERM -P "$pid" 2>/dev/null
+		kill -TERM "$pid" 2>/dev/null
+	) >/dev/null 2>&1 &
+	watchdog=$!
+	wait "$pid" || status=$?
+	pkill -TERM -P "$watchdog" 2>/dev/null
+	kill "$watchdog" 2>/dev/null
+	wait "$watchdog" 2>/dev/null || true
+	return "$status"
+}
+run_bounded 1800 docker run --rm --cpus 1 --name "jev-onecpu-$$" \
+	--entrypoint sh -e CI=true -v "$SRC":/src:ro -v "$RUNNER.onecpu":/onecpu.sh:ro \
+	"$ONECPU_IMAGE" /onecpu.sh
+if [ $? -ne 0 ]; then
 	echo "pre-push: check 'linux:security-one-cpu' failed for $LABEL; rerun with: make ci-linux"
 	exit 1
 fi
