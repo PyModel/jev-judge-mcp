@@ -111,6 +111,23 @@ class _StdoutCapExceeded(OSError):
         self.captured_stderr = stderr
 
 
+class _IncompleteTranscript(RuntimeError):
+    """An output reader stayed alive past its join, so closing the pipes discarded whatever
+    the kernel still buffered: the captured transcript is incomplete. Carries what was read,
+    so the run's evidence can be persisted before the raise."""
+
+    captured_stdout: str
+    captured_stderr: str
+
+    def __init__(self, stdout: str, stderr: str) -> None:
+        super().__init__(
+            "agent output readers did not stop in time: buffered output was discarded and "
+            "the captured transcript is incomplete"
+        )
+        self.captured_stdout = stdout
+        self.captured_stderr = stderr
+
+
 def _kill_group(proc: subprocess.Popen[bytes]) -> None:
     """SIGKILL the agent's process group. The agent is started with `start_new_session`, so this group
     is not the study's. `Popen.kill` signals only that pid and would leave the relay and its server child."""
@@ -219,6 +236,7 @@ def _capture(
     out_thread.start()
     err_thread.start()
     timed_out = False
+    incomplete = False
     deadline = time.monotonic() + timeout_s
     try:
         while proc.poll() is None and not exceeded.is_set():
@@ -234,6 +252,10 @@ def _capture(
         out_thread.join(timeout=5)
         err_thread.join(timeout=5)
         if out_thread.is_alive() or err_thread.is_alive():
+            # The reader is still draining: the pipes hold bytes nobody has read. Closing the
+            # read end discards them, so the transcript would come back silently partial.
+            # Mark the capture incomplete (the raise happens after cleanup) instead.
+            incomplete = True
             stdout_pipe.close()
             stderr_pipe.close()
             out_thread.join(timeout=5)
@@ -252,6 +274,8 @@ def _capture(
     if out_thread.is_alive() or err_thread.is_alive():
         raise RuntimeError("agent output readers did not stop after the process group was killed")
     stdout, stderr = _text(b"".join(out_chunks)), _text(b"".join(err_chunks))
+    if incomplete:
+        raise _IncompleteTranscript(stdout, stderr)
     if err_truncated.is_set():
         stderr = _with_stderr_marker(stderr)
     if exceeded.is_set():
@@ -331,6 +355,12 @@ def run_agent(
             # Persist before the raise so the finally scrub still sees the secret on this path.
             shutil.rmtree(secret_dir, ignore_errors=True)
             _write_logs(run_dir, exceeded.captured_stdout, exceeded.captured_stderr)
+            raise
+        except _IncompleteTranscript as incomplete:
+            # Same contract: persist what was read, then fail loudly. A silently partial
+            # transcript would book an agent verdict on missing evidence.
+            shutil.rmtree(secret_dir, ignore_errors=True)
+            _write_logs(run_dir, incomplete.captured_stdout, incomplete.captured_stderr)
             raise
         wall = time.perf_counter() - started
         shutil.rmtree(secret_dir, ignore_errors=True)

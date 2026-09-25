@@ -211,6 +211,50 @@ def _wait_group_gone(pgid: int) -> None:
     assert _group_gone(pgid), f"process group {pgid} still exists"
 
 
+def test_run_agent_never_returns_a_silently_partial_transcript(tmp_path: Path) -> None:
+    """An orphan that escapes the killed group keeps the agent's stderr open: its reader
+    stays alive past the join, and closing the pipes under it would discard whatever the
+    kernel still buffered. The run must fail loudly with the partial evidence persisted,
+    never return a transcript that quietly misses its tail.
+
+    The orphan holds stderr forever, so the reader's liveness at the join is deterministic;
+    the pidfile lets the test reap it (it sits in its own session, outside the killed group)."""
+    pidfile = tmp_path / "orphan.pid"
+    orphan = (
+        "import os, sys, time\n"
+        "if os.fork() == 0:\n"
+        "    os.setsid()\n"
+        "    sys.stderr.write('orphan holds stderr open\\n')\n"
+        "    sys.stderr.flush()\n"
+        "    open('" + str(pidfile) + "', 'w').write(str(os.getpid()))\n"
+        "    time.sleep(10 ** 6)\n"
+        "sys.exit(0)\n"
+    )
+    command = AgentCommand(
+        argv=lambda _config: [sys.executable, "-c", orphan],
+        timeout_s=2,
+        env={"STUB_SECRET": KEY},
+    )
+    run_dir = tmp_path / "run"
+    try:
+        with pytest.raises(RuntimeError):
+            with run_agent(
+                command,
+                mcp_config={},
+                base_env={},
+                secret=KEY,
+                run_dir=run_dir,
+            ) as agent:
+                raise AssertionError(f"an incomplete transcript must not yield, got status {agent.status}")
+        assert (run_dir / "claude.stderr").exists(), "the partial evidence must be persisted before the raise"
+    finally:
+        if pidfile.exists():
+            try:
+                os.kill(int(pidfile.read_text()), signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
+
+
 def test_timeout_kills_the_agent_group_and_leaves_the_study_alive(tmp_path: Path) -> None:
     study, study_pgid = os.getpid(), os.getpgid(0)
     command = AgentCommand(argv=lambda _config: [sys.executable, "-c", GROUP], timeout_s=2, env={"STUB_SECRET": KEY})
