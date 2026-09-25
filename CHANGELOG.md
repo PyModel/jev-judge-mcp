@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2](https://github.com/PyModel/jev-judge-mcp/compare/v0.2.1...v0.2.2) (2026-09-25)
+
+
+### Documentation
+
+* **changelog:** list the fixes that shipped in 0.2.1 ([5490f1c](https://github.com/PyModel/jev-judge-mcp/commit/5490f1c6fe3d7b63e98ff65c3bcab0a972248443))
+* use compact rounded README badges ([7037cf5](https://github.com/PyModel/jev-judge-mcp/commit/7037cf5723bff11d663b838574c5f0e59aa39a49))
+
 ## [0.2.1](https://github.com/PyModel/jev-judge-mcp/compare/v0.2.0...v0.2.1) (2026-09-25)
 
 
