@@ -335,6 +335,19 @@ def _temp_gate_repo(tmp_path: Path, with_docker: bool = False) -> TempRepo:
         GIT_CONFIG_NOSYSTEM="1",
     )
     subprocess.run(("git", "init", "-q", str(repo)), capture_output=True, check=True, env=env)
+    # The tests commit; the container and a fresh runner have no global identity.
+    subprocess.run(
+        ("git", "-C", str(repo), "config", "user.email", "gate@example.invalid"),
+        capture_output=True,
+        check=True,
+        env=env,
+    )
+    subprocess.run(
+        ("git", "-C", str(repo), "config", "user.name", "gate test"),
+        capture_output=True,
+        check=True,
+        env=env,
+    )
     subprocess.run(("bash", "scripts/ci/install_hooks.sh"), cwd=repo, env=env, capture_output=True, check=True)
     hooks_dir = (
         subprocess.run(("git", "-C", str(repo), "config", "core.hooksPath"), env=env, capture_output=True, check=True)
