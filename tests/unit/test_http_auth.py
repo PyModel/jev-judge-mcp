@@ -21,7 +21,7 @@ from jev_judge_mcp.http_auth import (
     BearerTokenMiddleware,
     ensure_http_access_control,
 )
-from jev_judge_mcp.server import MIN_SECRET_LENGTH, build_server, ensure_secrets_redactable, http_asgi_app
+from jev_judge_mcp.server import build_server, ensure_secrets_redactable, http_asgi_app
 from jev_judge_mcp.settings import Settings, load_settings
 from tests.support.stdio import INITIALIZE, server_env
 
@@ -162,9 +162,12 @@ def test_an_http_token_under_the_redaction_floor_is_refused_too(monkeypatch: pyt
 
 
 def test_secrets_at_the_floor_pass(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert MIN_SECRET_LENGTH == 8
-    settings = settings_with(monkeypatch, TYPESAFE_API_KEY="e" * 8)
-    ensure_secrets_redactable(settings)
+    """ADR-0046's floor is behavioral: seven characters is refused, eight is at the floor and passes."""
+    below = settings_with(monkeypatch, TYPESAFE_API_KEY="e" * 7)
+    with pytest.raises(SystemExit, match="TYPESAFE_API_KEY") as exc:
+        ensure_secrets_redactable(below)
+    assert "eeeeeee" not in str(exc.value)
+    ensure_secrets_redactable(settings_with(monkeypatch, TYPESAFE_API_KEY="e" * 8))
 
 
 def test_an_empty_secret_stays_unset(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -227,7 +230,7 @@ async def test_loopback_default_keeps_host_and_origin_validation(monkeypatch: py
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("host", PROTECTED)
+@pytest.mark.parametrize("host", PROTECTED_HOSTS)
 async def test_each_exempt_host_is_actually_protected_by_the_sdk(monkeypatch: pytest.MonkeyPatch, host: str) -> None:
     """Pins the SDK's auto-enabled Host/Origin list: every host exempt from the token must answer a
     forged Host with 421, in process and without binding. If the SDK's list changes, the exemption
