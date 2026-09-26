@@ -23,6 +23,7 @@ for what is certified so far.
 import argparse
 import json
 import sys
+from typing import cast
 
 REVERSIBLE_BAR = 0.8
 """For a reversible step, the tool's own bar stands: its `auto` is enough."""
@@ -30,31 +31,42 @@ REVERSIBLE_BAR = 0.8
 IRREVERSIBLE_BAR = 0.95
 """Before a destructive or irreversible step, every confidence must clear this too."""
 
+_DESCRIPTION = "Risk-proportional thresholds: the caller raises the bar, not the tool."
 
-def confidences(envelope: dict) -> list[float]:
-    """Every confidence the decision result asserts: the envelope's, safe_to_apply, and each row's.
+CONFIDENCE_KEYS = ("confidence", "safe_to_apply")
+"""Fields that assert a probability or concentration. The binding constraint is the minimum, so
+a low-confidence ancillary row (a test_gap score on jev_review, one weak claim on jev_gate's
+verification) can hold back a destructive step on its own."""
 
-    The binding constraint is the minimum, so a low-confidence ancillary row (a test_gap score on
-    jev_review, one weak claim on jev_gate) can hold back a destructive step on its own.
+
+def _collect(node: object, found: list[float]) -> None:
+    """Walk the payload recursively: every numeric `confidence` and `safe_to_apply` counts.
+
+    The real payloads differ per tool — jev_verify's flat `results[]`, jev_review's
+    `scores{rubric}` plus top-level `safe_to_apply`, jev_gate's nested `review.scores` and
+    `verification.results[]` — so the walk follows the shape instead of naming paths. A boolean
+    is not a confidence even though Python's bool subclasses int.
     """
+    if isinstance(node, dict):
+        for key, value in cast(dict[str, object], node).items():
+            if key in CONFIDENCE_KEYS and isinstance(value, (int, float)) and not isinstance(value, bool):
+                found.append(float(value))
+            else:
+                _collect(value, found)
+    elif isinstance(node, list):
+        for item in cast(list[object], node):
+            _collect(item, found)
+
+
+def confidences(envelope: dict[str, object]) -> list[float]:
+    """Every confidence the decision result asserts, anywhere in it: the envelope's own, rubric
+    scores, safe_to_apply, verification rows, per-item rows."""
     found: list[float] = []
-    top = envelope.get("confidence")
-    if isinstance(top, (int, float)):
-        found.append(float(top))
-    payload = envelope.get("payload")
-    if isinstance(payload, dict):
-        safe = payload.get("safe_to_apply")
-        if isinstance(safe, (int, float)):
-            found.append(float(safe))
-        rows = payload.get("results")
-        if isinstance(rows, list):
-            for row in rows:
-                if isinstance(row, dict) and isinstance(row.get("confidence"), (int, float)):
-                    found.append(float(row["confidence"]))
+    _collect(envelope, found)
     return found
 
 
-def gate(envelope: dict, stakes: str) -> tuple[int, str]:
+def gate(envelope: dict[str, object], stakes: str) -> tuple[int, str]:
     """One decision result, one next step: proceed, confirm, or stop."""
     if envelope.get("unresolved") or envelope.get("error") is not None:
         return 1, "stop: the decision is unresolved; treat it as unjudged"
@@ -76,7 +88,7 @@ def gate(envelope: dict, stakes: str) -> tuple[int, str]:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=_DESCRIPTION)
     parser.add_argument("decision", help="a DecisionResult JSON file from `jev-judge-mcp judge <tool>`")
     parser.add_argument(
         "--stakes",
@@ -86,11 +98,11 @@ def main(argv: list[str]) -> int:
     )
     args = parser.parse_args(argv)
     with open(args.decision, encoding="utf-8") as handle:
-        envelope = json.load(handle)
-    if not isinstance(envelope, dict):
+        loaded: object = json.load(handle)
+    if not isinstance(loaded, dict):
         print("stop: the decision file is not one JSON object", file=sys.stderr)
         return 1
-    code, message = gate(envelope, args.stakes)
+    code, message = gate(cast(dict[str, object], loaded), args.stakes)
     print(message)
     return code
 
