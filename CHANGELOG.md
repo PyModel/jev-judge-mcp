@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/PyModel/jev-judge-mcp/compare/v0.4.0...v0.4.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* score rubric window, caller-input error codes, config log, --help ([4697a02](https://github.com/PyModel/jev-judge-mcp/commit/4697a02627b01a1aeb0e78f11795e5a37e8cb3d9))
+
 ## [0.4.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.3.0...v0.4.0) (2026-09-26)
 
 
