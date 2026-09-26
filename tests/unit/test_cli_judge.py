@@ -439,3 +439,49 @@ def test_every_registered_tool_has_a_decision_mapping() -> None:
     from jev_judge_mcp.tools import TOOLS
 
     assert set(cli.TOOL_DECISIONS) == {tool.name for tool in TOOLS}
+
+
+_NO_CREDENTIALS = (
+    "No Jev provider credentials found. Set TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token + "
+    "CLOUDFLARE_ACCOUNT_ID, AI_GATEWAY_API_KEY, or JEV_API_KEY + JEV_API_BASE_URL; set JEV_PROVIDER to choose "
+    "explicitly."
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "code"),
+    [
+        pytest.param(_NO_CREDENTIALS, "auth", id="auth"),
+        pytest.param("MCP error -32602: Tool jev_verify not found", "invalid_arguments", id="unknown-tool"),
+        pytest.param("diff exceeds the 200,000-character aggregate budget", "input_too_large", id="aggregate-budget"),
+        pytest.param("TypeSafe request timed out.", "timeout", id="timeout"),
+        pytest.param("OpenRouter 429: rate limit exceeded", "quota", id="quota"),
+        pytest.param(
+            "evidence exceeds 16 items; split the gate or trim the evidence.",
+            "provider",
+            id="items-refusal",
+        ),
+    ],
+)
+def test_an_iserror_envelope_codes_the_text_like_the_wire_block(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    text: str,
+    code: str,
+) -> None:
+    """The envelope's `error.code` is the same code the isError block carries, never a second mapping.
+
+    `evidence exceeds 16 items` is the drift pin: a looser "exceeds" mapping codes it
+    `input_too_large`, while the one parity mapping (`responses.error_code`, what the toolset's
+    code block emits for this text) says `provider`.
+    """
+    async def fake_call(_name: str, _arguments: dict[str, Any]) -> CallToolResult:
+        return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
+
+    monkeypatch.setattr(cli, "_call", fake_call)
+    exit_code = judge_main(["jev_verify"], text="{}")
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    envelope = json.loads(captured.out)
+    assert envelope["error"] == {"code": code, "message": text}
+    assert envelope["unresolved"] is True

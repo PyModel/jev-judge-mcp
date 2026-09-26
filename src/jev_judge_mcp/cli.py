@@ -24,6 +24,7 @@ from jev_judge_mcp.identity import reported_version
 from jev_judge_mcp.keyfile import stored_key_path
 from jev_judge_mcp.policy import POLICY_VERSION, worst_action
 from jev_judge_mcp.policy.actions import Action
+from jev_judge_mcp.responses import error_code
 from jev_judge_mcp.serialize import stringify, stringify_compact
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
@@ -219,7 +220,9 @@ def _run_tool(name: str, arguments: Mapping[str, object]) -> int:
         return _fail(_code_for(error), str(error), tool=name)
     text = result.content[0].text if result.content else ""
     if result.is_error:
-        code = _code_for_text(text)
+        # One mapping with the wire (ADR-0062): the envelope's code is `error_code`'s, the same
+        # code the toolset's isError block carries for this text.
+        code = error_code(text)
         return _fail(code, text, tool=name, payload_text=text)
     try:
         payload = json.loads(text)
@@ -450,20 +453,6 @@ def _code_for(error: BaseException) -> str:
         return "quota"
     if name == "ArgumentsError":
         return "invalid_arguments"
-    return "provider"
-
-
-def _code_for_text(text: str) -> str:
-    if text.startswith("No Jev provider credentials") or "credentials" in text[:80]:
-        return "auth"
-    if text.startswith("MCP error -32602"):
-        return "invalid_arguments"
-    if "aggregate budget" in text or "exceeds" in text:
-        return "input_too_large"
-    if "timed out" in text or "timeout" in text.lower():
-        return "timeout"
-    if "429" in text or "rate" in text.lower():
-        return "quota"
     return "provider"
 
 
