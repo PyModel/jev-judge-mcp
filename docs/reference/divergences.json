@@ -392,6 +392,7 @@
         "boundary/verify-confidence-at-auto-accept#0",
         "contradicted/gate-contradicted-below-auto-accept#0",
         "contradicted/verify-contradicted-auto#0",
+        "duplicate-id/find-ids-sanitized-and-suffixed#0",
         "duplicate-id/verify-duplicate-evidence-ids-suffixed#0",
         "low-confidence/gate-claim-confidence-tiers#0",
         "low-confidence/review-min-confidence-below-review-at#0",
@@ -400,6 +401,7 @@
         "malformed/envelope-body-not-json#0",
         "malformed/gate-rubric-confidence-out-of-range#0",
         "malformed/verify-claim-choice-inherited-key#0",
+        "normal/find-ranked-top-k#0",
         "normal/gate-accepted#0",
         "normal/review-auto-env-model#0",
         "normal/verify-multi-evidence-model-override#0",
@@ -547,8 +549,8 @@
         "ADR-0007",
         "ADR-0062"
       ],
-      "reference_behavior": "Gate, verify, and review return the reference payload. Claim questions tell the model not to use diff and tests. Verify questions have no anti-injection sentence.",
-      "python_behavior": "Additive fields are appended. Gate sends diff and tests as implicit evidence and drops the ignore-them sentence. Verify questions gain the role sentence and the anti-injection sentence. Old keys stay. See also ADR-0063, ADR-0067, and ADR-0068."
+      "reference_behavior": "Gate, verify, review, and find return the reference payload. Claim questions tell the model not to use diff and tests. Verify questions have no anti-injection sentence. A sanitized or de-duplicated id is not mapped back to the id the caller sent.",
+      "python_behavior": "Additive fields are appended. Gate sends diff and tests as implicit evidence and drops the ignore-them sentence. Verify questions gain the role sentence and the anti-injection sentence. Find, verify, and gate append renamed_ids (sent id -> returned id) when id sanitization or de-duplication changed a caller id. Old keys stay. See also ADR-0063, ADR-0067, and ADR-0068."
     },
     {
       "id": "initialize-instructions",

@@ -233,6 +233,7 @@ export default [
   {
     id: "duplicate-id/find-ids-sanitized-and-suffixed",
     class: "duplicate-id",
+    divergences: ["ADR-0062"],
     note: "Ids are sanitized to [A-Za-z0-9_.-], duplicates get _1, an id that sanitizes to empty falls back to candidate{i}.",
     tool: "jev_find",
     arguments: {

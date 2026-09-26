@@ -17,7 +17,20 @@ Gate and verify summaries counted verdicts and actions in overlapping buckets. C
 - An error result also appends a second `content` text block, `JSON.stringify({"code": "<code>"})` with no extra space. The first block stays byte-equal. Success results stay one block. This is divergence `error-code-content-block`: Claude Code 2.1.283 does not pass `structuredContent` into the tool result, so a client that reads only `content` never saw the code.
 - Parity fixtures that change are a registered divergence. The expectation adds these fields to the recording. It does not hand-edit the corpus.
 
+## Amendment (2026-09-25)
+
+`jev_find`, `jev_verify`, and `jev_gate` sanitize and de-duplicate caller ids through
+`ensure_unique_ids`, and their schemas invite file paths as ids, but no response said which sent
+id became which returned id, so a caller could not map `providers_base.py` back to
+`providers/base.py`. These three tools append one more additive field, `renamed_ids`: an object
+of sent id → returned id, present only when at least one id changed, appended after the body's
+last key exactly like the fields above. The sanitization itself is untouched, so id-level parity
+with the reference holds; the field is part of divergence `program-response-fields`. A caller id
+that collides with gate's implicit `diff` or `tests` evidence does not enter the map: the caller's
+id is unchanged and the implicit item is the one suffixed.
+
 ## Consequences
 
 - A grep for `verified` can still hit a row whose action is `escalate`. `stands` is the boolean that grep should have been.
 - A client that reads only `content[0].text` still does not see the code. A client that reads later content blocks, or `structuredContent`, does.
+- A client that ignores `renamed_ids` keeps the old behavior: the returned ids are unchanged. A client that sent path-shaped or duplicate ids reads the map to match results back to its own ids. A guard test fails any tool module that calls `ensure_unique_ids` without surfacing the renames.

@@ -7,12 +7,18 @@ from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.policy import Action, ClaimJudgment, ClaimVerdict
 from jev_judge_mcp.policy.claims import note_blocks_auto
-from jev_judge_mcp.responses import claim_extras, next_checks_for, summary_extras
+from jev_judge_mcp.responses import (
+    caller_renames,
+    claim_extras,
+    next_checks_for,
+    renamed_ids_field,
+    summary_extras,
+)
 from jev_judge_mcp.serialize import js_number_to_locale_string_en_us
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.arguments import Refinement
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
-from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, has_non_empty_evidence, normalize_evidence
+from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items, has_non_empty_evidence, normalize_evidence
 from jev_judge_mcp.tools.observed import (
     claim_action,
     fail_closed,
@@ -200,7 +206,8 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     if isinstance(args.get("diff"), list):
         return await _handle_split_diff(args, runtime, settings)
     thresholds = settings.thresholds
-    evidence = normalize_evidence(args["evidence"])
+    raw_evidence = evidence_items(args["evidence"])
+    evidence = ensure_unique_ids(raw_evidence, "evidence").items
     # Bound the request before any model call: item count, then aggregate size.
     if exceeds(len(evidence), GATE.evidence_items):
         return _refused(gate_evidence_items_error(GATE.evidence_items))
@@ -214,6 +221,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     sent_evidence = [_sent_evidence_item(item, ledger) for item in evidence]
     implicit = _implicit_evidence(docs.diff, docs.tests)
     asked_evidence = ensure_unique_ids([*sent_evidence, *implicit], "evidence").items
+    renamed = caller_renames(raw_evidence, asked_evidence)
     truncated = ledger.context_cut
 
     state = {
@@ -318,6 +326,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
                 "next_checks": next_checks_for(reason_codes),
                 "review": review.payload,
                 "verification": verification,
+                **renamed_ids_field(renamed),
             },
         ),
         action=action,

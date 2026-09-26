@@ -6,11 +6,21 @@ the server now sends, using the same builders, so a drift in an old key still fa
 """
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from jev_judge_mcp.ids import ensure_unique_ids
-from jev_judge_mcp.responses import SCORE_SCALE, claim_extras, nearest_level, next_checks_for, summary_extras
+from jev_judge_mcp.responses import (
+    SCORE_SCALE,
+    caller_renames,
+    claim_extras,
+    nearest_level,
+    next_checks_for,
+    renamed_ids_field,
+    summary_extras,
+)
 from jev_judge_mcp.serialize import stringify
+from jev_judge_mcp.tools.common import evidence_items
 from jev_judge_mcp.tools.gate import CLAIM_SUPPORT, gate_source_question
 from jev_judge_mcp.tools.review import ANTI_INJECTION
 from jev_judge_mcp.tools.verify import ROLE_RULE, VERIFY_SUFFIX
@@ -22,13 +32,15 @@ _OLD_CLAIM = (
 )
 
 
-def expect_program(bodies: list[Any], text: str, is_error: bool) -> tuple[list[Any], str, bool]:
+def expect_program(
+    bodies: list[Any], text: str, is_error: bool, arguments: Mapping[str, Any]
+) -> tuple[list[Any], str, bool]:
     rewritten = [_rewrite_body(body) for body in bodies]
     if is_error or not text.startswith("{"):
         return rewritten, text, is_error
     payload = json.loads(text)
     tool = payload.get("tool")
-    if tool not in ("jev_gate", "jev_verify", "jev_review"):
+    if tool not in ("jev_find", "jev_gate", "jev_verify", "jev_review"):
         return bodies, text, is_error
     rewritten_bodies = [_rewrite_body(body) for body in bodies]
     evidence = _asked_evidence(rewritten_bodies)
@@ -36,7 +48,8 @@ def expect_program(bodies: list[Any], text: str, is_error: bool) -> tuple[list[A
         isinstance(body, dict) and isinstance(body.get("state"), dict) and body["state"].get("tests")
         for body in rewritten_bodies
     )
-    return rewritten_bodies, stringify(_rewrite_payload(payload, tool, evidence, had_tests)), is_error
+    payload = _rewrite_payload(payload, tool, evidence, had_tests, rewritten_bodies, arguments)
+    return rewritten_bodies, stringify(payload), is_error
 
 
 def _rewrite_body(body: Any) -> Any:
@@ -90,6 +103,15 @@ def _asked_evidence(bodies: list[Any]) -> list[dict[str, object]]:
     return []
 
 
+def _asked_candidates(bodies: list[Any]) -> list[dict[str, object]]:
+    for body in bodies:
+        if isinstance(body, dict) and isinstance(body.get("state"), dict):
+            candidates = body["state"].get("candidates")
+            if isinstance(candidates, list):
+                return candidates
+    return []
+
+
 def _insert_after(obj: dict[str, Any], after: str, key: str, value: object) -> None:
     if key in obj:
         return
@@ -107,7 +129,12 @@ def _insert_after(obj: dict[str, Any], after: str, key: str, value: object) -> N
 
 
 def _rewrite_payload(
-    payload: dict[str, Any], tool: object, evidence: list[dict[str, object]], had_tests: bool
+    payload: dict[str, Any],
+    tool: object,
+    evidence: list[dict[str, object]],
+    had_tests: bool,
+    bodies: list[Any],
+    arguments: Mapping[str, Any],
 ) -> dict[str, Any]:
     if tool == "jev_review" or "review" in payload:
         review = payload if tool == "jev_review" else payload.get("review")
@@ -126,7 +153,29 @@ def _rewrite_payload(
             summary.update(summary_extras(payload["results"]))
     if tool == "jev_gate" and isinstance(payload.get("reason_codes"), list):
         _insert_after(payload, "reason_codes", "next_checks", next_checks_for(payload["reason_codes"]))
+    _insert_renamed_ids(payload, tool, bodies, arguments)
     return payload
+
+
+def _insert_renamed_ids(payload: dict[str, Any], tool: object, bodies: list[Any], arguments: Mapping[str, Any]) -> None:
+    """ADR-0062 amendment: find, verify, and gate append `renamed_ids` when a caller id changed.
+
+    The map is computed from the recorded arguments and the asked items on the wire, with the
+    production builders, so the expectation cannot drift from the tool.
+    """
+    if tool == "jev_find":
+        sent, asked = list(arguments.get("candidates") or []), _asked_candidates(bodies)
+    elif tool in ("jev_verify", "jev_gate"):
+        sent, asked = evidence_items(arguments.get("evidence")), _asked_evidence(bodies)
+    else:
+        return
+    field = renamed_ids_field(caller_renames(sent, asked))
+    if not field:
+        return
+    # Additive fields append after the body's last key, before the frame's usage and request_id.
+    tail = {key: payload.pop(key) for key in ("usage", "request_id") if key in payload}
+    payload.update(field)
+    payload.update(tail)
 
 
 def _annotate_claims(rows: list[Any], evidence: list[dict[str, object]]) -> None:

@@ -477,7 +477,9 @@
       "classes": [
         "duplicate-id"
       ],
-      "divergences": [],
+      "divergences": [
+        "ADR-0062"
+      ],
       "tools": [
         "jev_find"
       ],
@@ -970,7 +972,9 @@
       "classes": [
         "normal"
       ],
-      "divergences": [],
+      "divergences": [
+        "ADR-0062"
+      ],
       "tools": [
         "jev_find"
       ],

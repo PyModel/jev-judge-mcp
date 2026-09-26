@@ -61,7 +61,9 @@ async def replay_call(call: FixtureCall, monkeypatch: pytest.MonkeyPatch) -> Non
     expected_error = bool(call.payload["result"].get("isError"))
     if divergences(call):
         expectation: Expectation = DIVERGENT[call.id]
-        expected_bodies, expected_text, expected_error = expectation(expected_bodies, expected_text, expected_error)
+        expected_bodies, expected_text, expected_error = expectation(
+            expected_bodies, expected_text, expected_error, call.payload["arguments"]
+        )
 
     sent: list[dict[str, Any]] = []
 

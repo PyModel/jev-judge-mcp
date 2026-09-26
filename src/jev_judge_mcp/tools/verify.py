@@ -7,7 +7,7 @@ from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import VERIFY
 from jev_judge_mcp.policy import DEFAULT_AUTO_ACCEPT
 from jev_judge_mcp.policy.claims import note_blocks_auto
-from jev_judge_mcp.responses import claim_extras, summary_extras
+from jev_judge_mcp.responses import caller_renames, claim_extras, renamed_ids_field, summary_extras
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, caller_actions, define, frame, headline
 from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items
 from jev_judge_mcp.tools.observed import fail_closed, validate_choice, verify_action
@@ -63,8 +63,11 @@ DEFINITION = define(
 
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     auto_accept: float = args.get("auto_accept", DEFAULT_AUTO_ACCEPT)
-    evidence = ensure_unique_ids(evidence_items(args["evidence"]), "evidence").items
+    raw_evidence = evidence_items(args["evidence"])
+    evidence = ensure_unique_ids(raw_evidence, "evidence").items
     claims = ensure_unique_ids([{"text": text} for text in args["claims"]], "claim").items
+    # Claims are strings without caller ids, so only evidence ids can rename today.
+    renamed = caller_renames(raw_evidence, evidence)
 
     questions: dict[str, Question] = {}
     for claim in claims:
@@ -144,6 +147,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
                     **summary_extras(results),
                 },
                 "results": results,
+                **renamed_ids_field(renamed),
             },
         ),
         action=headline(item_actions),

@@ -30,6 +30,25 @@ SCORE_SCALE = [0, 2]
 _LEVELS = (0, 1, 2)
 
 
+def renamed_ids_field(renamed: Mapping[str, str]) -> dict[str, dict[str, str]]:
+    """`renamed_ids`: sent id → returned id, present only when at least one id changed."""
+    return {"renamed_ids": dict(renamed)} if renamed else {}
+
+
+def caller_renames(sent: Sequence[Mapping[str, object]], asked: Sequence[Mapping[str, object]]) -> dict[str, str]:
+    """Sent id → returned id across every `ensure_unique_ids` pass a tool ran over its caller items.
+
+    `asked` may append tool-generated items (gate's implicit diff and tests evidence); only the
+    leading caller items are mapped, so an implicit id suffixed past a caller id never appears.
+    """
+    renamed: dict[str, str] = {}
+    for raw, final in zip(sent, asked[: len(sent)], strict=True):
+        raw_id = raw.get("id")
+        if isinstance(raw_id, str) and raw_id and raw_id != final["id"]:
+            renamed[raw_id] = str(final["id"])
+    return renamed
+
+
 def stands(action: object) -> bool:
     return action == "auto"
 
