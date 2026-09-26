@@ -13,6 +13,7 @@ neither lives here.
 | `make eval-live` | **live, paid** | `tests/evals/test_live_typesafe.py` (marker `live`): runs the `live-*` manifests through TypeSafe and scores the result. Fails, not skips, without `TYPESAFE_API_KEY` |
 | `python -m evals.runners.score MANIFEST OUTPUTS [--split S] [--report PATH]` | none | Scores recorded tool outputs against a dataset's gold labels |
 | `JEV_EVAL_LIVE=1 python -m evals.runners.live MANIFEST OUT [--repeats N]` | **live, paid** | Calls the tools through the configured provider and records outputs |
+| `JEV_EVAL_LIVE=1 python -m evals.calibration.order` | **live, paid** | Order-sensitivity probe (A2): one jev_verify batch sent forward and reversed, per-claim verdict stability reported; exactly 2 requests |
 | `JEV_AB_LIVE=1 make ab AGENT=claude\|pi` | **live, paid** | L4 agent outcome study (below); writes `reports/agent-outcomes.md`. `python -m evals.ab.run --report-only` re-renders it offline |
 | `JEV_BENCH_LIVE=1 python -m evals.bench.run` | **live, paid** | The 150-question before/after bench (below). Not wired to any make target; refuses while any item label is not `frozen` |
 
@@ -30,7 +31,7 @@ Live bounds:
   `NO_RETRIES` (the server's default stays the bounded ADR-0057 policy), so a failed call is a recorded
   `error` row, never an unbudgeted retry.
 - **Datasets:** `datasets/synthetic/live-classify.jsonl` and `live-verify.jsonl`, 3 cases each, so
-  `make eval-live` sends 6 requests.
+  `make eval-live` sends 6 requests, plus the order-sensitivity probe's 2 (`test_live_order.py`).
 - Neither `make eval` nor `make ci` calls the network; both stay green with the key unset.
 
 ## Layout
