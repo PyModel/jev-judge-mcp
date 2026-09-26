@@ -372,3 +372,18 @@ def test_tools_import_traced_callables_only_from_observed() -> None:
 
 def test_cap_scope_labels_are_the_ledger_scopes() -> None:
     assert CAP_SCOPES == get_args(CapScope.__value__)
+
+
+def test_the_metrics_snapshot_is_logged_at_info_periodically(caplog: pytest.LogCaptureFixture) -> None:
+    """A long-lived server surfaces its counters at INFO before shutdown, not only at DEBUG in aclose."""
+    telemetry = Telemetry(metrics_interval=2)
+    with caplog.at_level(logging.INFO, logger="jev_judge_mcp.telemetry"):
+        for _ in range(2):
+            with telemetry.span("mcp.tool", tool="jev_verify"):
+                pass
+        with telemetry.span("jev.evaluate", questions=1):  # not a tool span: does not advance the count
+            pass
+    snapshots = [record for record in caplog.records if record.message.startswith("metrics ")]
+    assert len(snapshots) == 1
+    assert snapshots[0].levelname == "INFO"
+    assert 'calls{tool="jev_verify"}' in snapshots[0].message

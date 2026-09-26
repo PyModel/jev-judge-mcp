@@ -66,6 +66,8 @@ def describe(span: Span) -> str:
 DURATION_BUCKETS_MS: Final = (0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 50.0, 100.0, 250.0, 1000.0, 5000.0, math.inf)
 ACTIONS: Final = ("auto", "review", "escalate")
 CAP_SCOPES: Final = ("context", "item")
+METRICS_INTERVAL_SPANS: Final = 100
+"""Finished `mcp.tool` spans between periodic INFO metrics snapshots (ROADMAP P9)."""
 
 
 class Metrics:
@@ -163,12 +165,15 @@ _active: ContextVar[tuple["Telemetry", Span] | None] = ContextVar("jev_judge_mcp
 class Telemetry:
     """A server's recorder: opens spans and hands each finished one to the span log and metrics."""
 
-    def __init__(self, *, payloads: bool = False, capacity: int = 1024) -> None:
+    def __init__(self, *, payloads: bool = False, capacity: int = 1024, metrics_interval: int = METRICS_INTERVAL_SPANS) -> None:
         self.payloads = payloads
         """The debug flag: whether spans may record payload text."""
+        self.metrics_interval = metrics_interval
+        """Finished `mcp.tool` spans between INFO metrics snapshots; 0 disables the periodic log."""
         self.spans = SpanLog(capacity)
         self.metrics = Metrics()
         self._sinks: tuple[SpanSink, ...] = (self.spans, self.metrics)
+        self._since_metrics = 0
 
     def span(self, name: SpanName, **attributes: Attribute) -> "_Scope":
         """Time a `with` block as a child of the active span. An escaping exception is named, never quoted."""
@@ -177,6 +182,11 @@ class Telemetry:
     def record(self, span: Span) -> None:
         for sink in self._sinks:
             sink.record(span)
+        if span.name == "mcp.tool" and self.metrics_interval > 0:
+            self._since_metrics += 1
+            if self._since_metrics >= self.metrics_interval:
+                self._since_metrics = 0
+                logger.info("metrics %s", self.metrics.snapshot())
 
     def payload(self, span: Span, key: str, text: Callable[[], str]) -> None:
         """Record payload text on `span` only under the debug flag; `text` is not called otherwise."""
