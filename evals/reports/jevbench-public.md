@@ -129,8 +129,10 @@ JevBench publishes per-task outcomes for public items in its own repository:
 `results/v1.2/jevbench-v1.2-per-task.json` at commit `1bcc55eb`, under
 `systems['jev-1.13.0'].public_tasks` — the same system key as the v1.2 leaderboard row, display
 name "Jev 1.13.0 (TypeSafe AI)"; the file's own note says per-task outcomes are published for
-public items only. Read for the same 92 ids, that record scores 89/92: 89 `c` (correct) and 3 `w`
-(wrong) — outcome codes, not raw predictions.
+public items only. The join: this run's ids are the JevBench item ids prefixed with the tier
+(`{tier}-{item.id}`, built by `evals/external/jevbench.py`), so strip the leading
+`easy-`/`original-`/`hard-` to read them under `public_tasks`. Read for the same 92 ids, that
+record scores 89/92: 89 `c` (correct) and 3 `w` (wrong) — outcome codes, not raw predictions.
 
 Caveats: it is a v1.2-era measurement of the same items under JevBench's own caller framing, not
 this run's prompts, thresholds, or policy, and only the accuracy count is like-for-like — the

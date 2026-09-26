@@ -430,8 +430,8 @@ def test_setup_prompt_names_only_real_cli_surface() -> None:
     assert 0 <= dry_run < confirmation < install, (
         "the prompt must dry-run, wait for the user's chat confirmation, and only then install"
     )
-    assert "-y" in prompt[install : install + 200], (
-        "the real install step needs -y: an agent shell is not a TTY, so the CLI prompt cannot fire"
+    assert "install -a <your agent> -y" in prompt, (
+        "the real install command must carry -y: an agent shell is not a TTY, so the CLI prompt cannot fire"
     )
     assert "pi install npm:pi-mcp-adapter" in prompt, "the prompt omits the Pi MCP adapter prerequisite"
     for marker in ("TYPESAFE_API_KEY", "restart", "CLAUDE.md", "AGENTS.md", "docs/agent-rules.md"):
