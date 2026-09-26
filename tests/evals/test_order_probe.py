@@ -39,14 +39,14 @@ def test_pairs_each_claims_verdict_across_the_two_orderings() -> None:
 def test_a_missing_or_invalid_verdict_is_never_stable() -> None:
     forward = [None] + ["verified"] * 19
     reversed_rows = ["verified"] * 20
-    rows = order.claim_stability(forward, reversed_rows)  # two-run shape: control defaults to forward
+    rows = order.claim_stability(forward, reversed_rows, control=forward)  # the historic two-run shape: no control run
     assert rows[0].order_stable is False and rows[0].control_stable is False
     assert all(row.control_stable for row in rows[1:])
 
 
 def test_mismatched_run_lengths_are_an_error_not_a_rate() -> None:
     with pytest.raises(ValueError, match="both runs must answer every claim"):
-        order.claim_stability(["verified"], ["verified", "contradicted"])
+        order.claim_stability(["verified"], ["verified", "contradicted"], ["verified"])
     with pytest.raises(ValueError, match="the control run must answer every claim"):
         order.claim_stability(["verified", "verified"], ["verified", "verified"], ["verified"])
 

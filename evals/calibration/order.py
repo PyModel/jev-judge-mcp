@@ -128,25 +128,20 @@ class ClaimStability:
 
 
 def claim_stability(
-    forward: Sequence[str | None], reversed_rows: Sequence[str | None], control: Sequence[str | None] | None = None
+    forward: Sequence[str | None], reversed_rows: Sequence[str | None], control: Sequence[str | None]
 ) -> list[ClaimStability]:
-    """Pair each claim's verdict across runs. Row `i` of the reversed run answers claim `N-1-i`.
-
-    `control` defaults to `forward`: a two-run probe has no control, and every claim then counts
-    as control-stable only against itself (the historic two-call shape; the probe always sends one).
-    """
+    """Pair each claim's verdict across runs. Row `i` of the reversed run answers claim `N-1-i`."""
     if len(forward) != len(reversed_rows):
         raise ValueError(f"both runs must answer every claim: {len(forward)} vs {len(reversed_rows)} rows")
-    control_rows = forward if control is None else control
-    if len(control_rows) != len(forward):
-        raise ValueError(f"the control run must answer every claim: {len(control_rows)} vs {len(forward)} rows")
+    if len(control) != len(forward):
+        raise ValueError(f"the control run must answer every claim: {len(control)} vs {len(forward)} rows")
     count = len(forward)
     return [
         ClaimStability(
             CLAIMS[i],
             forward[i],
             reversed_rows[count - 1 - i],
-            control_rows[i],
+            control[i],
         )
         for i in range(count)
     ]

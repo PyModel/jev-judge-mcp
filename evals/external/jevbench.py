@@ -218,14 +218,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(f"unknown tiers {unknown}; one of {TIERS}")
     try:
         conversion = convert(args.checkout, tiers)
-        dataset, manifest = write(
-            conversion, args.datasets_dir, args.manifests_dir, args.model, source_commit(args.checkout)
-        )
+        commit = source_commit(args.checkout)
+        dataset, manifest = write(conversion, args.datasets_dir, args.manifests_dir, args.model, commit)
     except ConvertError as error:
         sys.stderr.write(f"jevbench: {error}\n")
         return 2
     print(f"{len(conversion.cases)} cases -> {dataset}")
-    print(f"manifest -> {manifest} (model {args.model}, source_commit {source_commit(args.checkout)})")
+    print(f"manifest -> {manifest} (model {args.model}, source_commit {commit})")
     for tier, reasons in conversion.excluded.items():
         for reason, count in reasons.items():
             print(f"excluded {tier}: {count} x {reason}")
