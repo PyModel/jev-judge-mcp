@@ -159,7 +159,7 @@ Candidate caps are the shared `CANDIDATES` table below.
 
 | Cap | Value | Over the bound |
 | --- | --- | --- |
-| `doc_units` | 50000 | truncate each of request, diff, tests (context scope); a multi-file diff over the shared aggregate budget refuses with `input_too_large` |
+| `doc_units` | 50000 | a string `request`/`diff`/`tests` truncates (context scope). A file-list `diff` is reviewed per file under the same cap: a file over it is listed in `unreviewed_files`, the payload is `partial`, and the call never stands `auto`; the joined list over the shared aggregate budget (`GATE.aggregate_evidence_units`) refuses with `input_too_large` (ADR-0066) |
 
 ### jev_gate (`limits.GATE`)
 
@@ -170,7 +170,7 @@ Candidate caps are the shared `CANDIDATES` table below.
 | `claim_units` | 2000 | truncate (context scope) |
 | `evidence_items` | 16 | over → budget error (`input_too_large`) |
 | `aggregate_evidence_units` | 200000 | over → budget error (`input_too_large`), rendered `200,000` |
-| `doc_units` | 50000 | truncate each of request, diff, tests, evidence items (context scope) |
+| `doc_units` | 50000 | a string `request`/`diff`/`tests`/evidence item truncates (context scope). A file-list `diff` is reviewed per file under the same cap: a file over it is `unreviewed_files` with reason `incomplete_context`, and the call never stands `auto`; the joined list over the aggregate budget refuses with `input_too_large` (ADR-0066) |
 
 ### jev_score (`limits.SCORE`, ADR-0048)
 

@@ -148,8 +148,10 @@ severe-defect recall.
 **Weak spots.** Escalate here is uncertainty, not a finding: the lowest rubric confidence below
 `review_at` (default 0.5) escalates, including a low-confidence ancillary score like `test_gap` on
 a patch the other scores accept (README § Operator notes). The rubrics are fixed
-(correctness, spec_match, test_gap, blast_radius); callers cannot add one. Request, diff, and tests
-are each truncated at the cap, and judgment over cut context never stands `auto`.
+(correctness, spec_match, test_gap, blast_radius); callers cannot add one. A string `diff` over
+the cap is truncated and judgment over cut context never stands `auto`; a file-list `diff` is
+reviewed per file instead — one oversized or unreviewable file lists in `unreviewed_files`, marks
+the call `partial`, and keeps it off `auto` (ADR-0066).
 
 **Not for** producing a rewritten patch, style review, or replacing the test run — it reads what
 you pass (ADR-0063: diff and tests count as evidence when you do not pass them explicitly).
@@ -166,8 +168,10 @@ target needs roughly 600 error-free held-out rows per run, and that corpus is no
 
 **Weak spots.** Same escalate-is-uncertainty rule as jev_review, plus the claim rules: a
 contradicted claim escalates, and cut context (diff, tests, docs, evidence over their caps) keeps
-the gate off `auto`. Evidence is capped at 16 items and 200,000 aggregate UTF-16 units; over either
-is an `input_too_large` error telling you to split the gate.
+the gate off `auto`. A file-list `diff` is reviewed per file with the claims verified once; a file
+over the cap lands in `unreviewed_files` with reason `incomplete_context` and the whole gate
+turns on the worst file (ADR-0066). Evidence is capped at 16 items and 200,000 aggregate UTF-16
+units; over either is an `input_too_large` error telling you to split the gate.
 
 **Not for** a substitute for CI or tests — it judges the claims you pass against the evidence you
 pass, and never runs anything itself.
