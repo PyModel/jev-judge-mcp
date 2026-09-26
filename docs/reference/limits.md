@@ -36,7 +36,7 @@ block (ADR-0062). `src/jev_judge_mcp/responses.py` `error_code` is the mapping.
 | Code | Produced by |
 | --- | --- |
 | `invalid_arguments` | a schema reject (every row marked reject below); an unknown tool; duplicate caller ids; a decide candidate id colliding with an escape hatch; a diff that is not the file-list shape; a broken `auto_accept`/`review_at` pair (the frozen text `Thresholds must satisfy 0 <= review_at <= auto_accept <= 1.`) |
-| `input_too_large` | the aggregate budget errors marked error below |
+| `input_too_large` | every frozen budget refusal marked error below: the aggregate character budgets, jev_gate's item-count budget, and the file-list diff budget. `tests/contract/test_limits.py` pins each frozen budget text to this code |
 | `auth` | no provider credentials; the hook's fail-open text |
 | `timeout` | a provider timeout |
 | `quota` | HTTP 429 / rate limit |
