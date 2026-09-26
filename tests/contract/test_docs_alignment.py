@@ -13,7 +13,9 @@ import json
 import re
 from dataclasses import fields
 from pathlib import Path
+from typing import cast
 
+from evals.calibration.targets import error_budget
 from jev_judge_mcp import limits
 from jev_judge_mcp.install.verify import EXPECTED_TOOLS
 from jev_judge_mcp.policy import thresholds as policy_thresholds
@@ -165,6 +167,8 @@ def _assert_rows(section: str, expected: dict[str, str], where: str) -> None:
     assert not missing, f"{where}: {section} is missing rows for {missing}"
     wrong = {name: (expected[name], rows[name]) for name in expected if rows[name] != expected[name]}
     assert not wrong, f"{where}: values drifted from the code (expected, stated): {wrong}"
+    extra = sorted(set(rows) - set(expected))
+    assert not extra, f"{where}: {section} states rows the code no longer has: {extra}"
 
 
 def test_limits_page_states_every_frozen_cap() -> None:
@@ -188,3 +192,83 @@ def test_limits_page_states_every_frozen_threshold() -> None:
     }
     assert expected, "policy_thresholds lost its numeric constants; update the limits page owner"
     _assert_rows(_THRESHOLDS_SECTION, expected, "limits page")
+
+
+_TOOL_CARDS = ROOT / "docs" / "tools.md"
+_EXAMPLE = ROOT / "examples" / "risk_proportional_thresholds.py"
+_LIVE_REPORTS = ROOT / "docs" / "evals" / "live"
+
+
+def _stated_numbers(text: str, pattern: str) -> tuple[float, ...]:
+    """The numbers one prose mention states (one match, every capture group), as floats."""
+    matches = re.findall(pattern, text)
+    assert len(matches) == 1, f"{pattern!r}: expected exactly one mention, found {len(matches)}"
+    captured = matches[0]
+    if isinstance(captured, tuple):
+        digits = tuple(cast(tuple[str, ...], captured))
+    else:
+        digits = (str(captured),)
+    return tuple(float(digit.replace(",", "")) for digit in digits)
+
+
+def test_tool_cards_state_the_frozen_numbers() -> None:
+    """`docs/tools.md` restates frozen caps, defaults, and targets while explaining behavior. Each
+    restated number is pinned to its owner in `limits.py` / `policy.thresholds`, so a re-freeze
+    that skips the card fails here — the same shape as the count-claim guard above."""
+    text = _TOOL_CARDS.read_text(encoding="utf-8")
+    for pattern, expected in [
+        (r"clears `auto_accept` \((\d+\.\d+)\)", (policy_thresholds.DEFAULT_CLASSIFY_AUTO_ACCEPT,)),
+        (r"clears `minimum_margin` \((\d+\.\d+)\)", (policy_thresholds.DEFAULT_MINIMUM_MARGIN,)),
+        (r"hardcoded at (\d+\.\d+)", (policy_thresholds.SCREEN_SUBSTANCE_SKIP_BELOW,)),
+        (r"`review_at` \(default (\d+\.\d+)\)", (policy_thresholds.DEFAULT_REVIEW_AT_CAP,)),
+        (
+            r"answered at ≥ (\d+\.\d+), absent below (\d+\.\d+)",
+            (policy_thresholds.EXISTS_FOUND_AT, policy_thresholds.EXISTS_ABSENT_BELOW),
+        ),
+        (
+            r"certifying the (\d+(?:\.\d+)?)%\s+target",
+            (error_budget("jev_gate") * 100,),
+        ),
+        (r"between (\d+) and (\d+) options", (limits.DECIDE.candidates_min, limits.DECIDE.candidates_max)),
+        (
+            r"capped at (\d+), each up to (\d+) UTF-16",
+            (limits.DECIDE.requirements_max, limits.DECIDE.requirement_max),
+        ),
+        (r"`top_k` defaults to (\d+)", (limits.FIND.top_k_default,)),
+        (r"over ([\d,]+)\s+UTF-16 units refuses", (limits.RERANK.aggregate_candidate_units,)),
+        (r"per aspect \(up to (\d+)\)", (limits.COMPARE.aspects_max,)),
+        (r"above ([\d,]+) UTF-16 units each", (limits.COMPARE.passage_max,)),
+        (
+            r"capped at (\d+) items and ([\d,]+) aggregate",
+            (limits.GATE.evidence_items, limits.GATE.aggregate_evidence_units),
+        ),
+        (r"scale of (\d+) to (\d+) levels", (limits.SCORE.levels_min, limits.SCORE.levels_max)),
+    ]:
+        assert _stated_numbers(text, pattern) == expected, pattern
+    # The screen card's single "hardcoded at" number states both skip thresholds at once.
+    assert policy_thresholds.SCREEN_SUBSTANCE_SKIP_BELOW == policy_thresholds.SCREEN_RELEVANCE_SKIP_BELOW
+
+
+def test_tool_cards_state_the_recorded_results() -> None:
+    """The two Measured paragraphs quote the recorded L3 run; each n and primary-metric value is
+    pinned to the recorded report JSON under `docs/evals/live/`, the machine-readable source."""
+    text = _TOOL_CARDS.read_text(encoding="utf-8")
+    reports = sorted(_LIVE_REPORTS.glob("*.report.json"))
+    assert reports, "docs/evals/live lost its recorded reports; the tool cards quote them"
+    for path in reports:
+        report = json.loads(path.read_text(encoding="utf-8"))
+        primary = str(report["primary"])
+        pattern = rf"n=(\d+) (?:claims|items), {re.escape(primary)} (\d+\.\d+)"
+        assert _stated_numbers(text, pattern) == (
+            float(report["n"]),
+            float(report["metrics"][primary]),
+        ), path.name
+
+
+def test_example_docstring_states_the_frozen_defaults() -> None:
+    """The worked example names the server's default bars in its docstring; pinned like the cards."""
+    text = _EXAMPLE.read_text(encoding="utf-8")
+    assert _stated_numbers(text, r"default (\d+\.\d+) for\s+jev_verify") == (policy_thresholds.DEFAULT_AUTO_ACCEPT,)
+    assert _stated_numbers(text, r"; (\d+\.\d+) for\s+jev_classify") == (
+        policy_thresholds.DEFAULT_CLASSIFY_AUTO_ACCEPT,
+    )

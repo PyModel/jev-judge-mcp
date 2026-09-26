@@ -4,6 +4,11 @@ Per release: the certified operating points and any regression, taken from the l
 eval run. A user deciding whether to upgrade reads quality deltas here, not only the commit list
 in [`CHANGELOG.md`](CHANGELOG.md).
 
+This page is a curated digest: [`docs/evals/README.md`](evals/README.md) and the recorded reports
+under it are the source of truth, and where this page and a recorded file disagree, the recorded
+file wins. No number here is machine-checked against them; the machine-checked pages are the
+caps and defaults in [`docs/reference/limits.md`](reference/limits.md).
+
 Entries are filled from recorded results only — [`docs/evals/README.md`](evals/README.md) and the
 reports under `evals/reports/` — dated, with the pinned model. Nothing on this page is estimated,
 remembered, or projected. "Not measured" is a valid entry and often the right one. No paid run is

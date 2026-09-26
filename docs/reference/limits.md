@@ -4,8 +4,8 @@ Every cap and default this server enforces, the error code each refusal produces
 live, and how to re-check all of it. Nothing on this page is tunable at runtime: the caps are
 frozen (ADR-0014), transcribed in `src/jev_judge_mcp/limits.py` from the parity manifest
 (`docs/reference/parity-manifest.json`), and the thresholds are frozen defaults in
-`src/jev_judge_mcp/policy/thresholds.py`. The tables below are machine-checked:
-`tests/contract/test_docs_alignment.py` fails if a value here drifts from the code, and
+`src/jev_judge_mcp/policy/thresholds.py`. The cap and threshold tables below are machine-checked:
+`tests/contract/test_docs_alignment.py` fails if a value in them drifts from the code, and
 `tests/contract/test_limits.py` fails if the code drifts from the manifest. A re-freeze updates
 all three in one change.
 

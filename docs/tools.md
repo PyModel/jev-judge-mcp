@@ -102,7 +102,7 @@ order; an embeddings baseline is an open gap, not implemented (`evals/README.md`
 
 **Weak spots.** A flat band of low `relevance` values means the candidates were not
 distinguishable; treat the order as weak (README § Operator notes). `ranked[].relevance` is the
-probability, to four decimals; there is no spread field. Aggregate candidate text over 100,000
+probability at a fixed precision; there is no spread field. Aggregate candidate text over 100,000
 UTF-16 units refuses with an `input_too_large` error.
 
 **Not for** deciding whether anything is relevant at all — that is `jev_find`'s exists question.

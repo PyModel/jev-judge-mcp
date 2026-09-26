@@ -186,8 +186,8 @@ The server reads environment variables only. It does not load a `.env` file.
 
 ## Operator notes
 
-Every input cap, default, threshold location, and error code is tabulated in
-[`docs/reference/limits.md`](docs/reference/limits.md), machine-checked against the code. Two
+Every input cap and default is tabulated in [`docs/reference/limits.md`](docs/reference/limits.md),
+machine-checked against the code; the page also states the error code each refusal produces. Two
 parity-sanctioned facts — the reference server behaves the same way — that show up as cost
 or latency:
 
