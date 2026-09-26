@@ -2,16 +2,21 @@
 
 The divergence registry's integrity gate (ADR-0020) guards registry → code. This guards the
 directions that rotted in practice: ADR ids (unique, and every `ADR-NNNN` citation resolves),
-numeric tool-count claims in prose, the installer's hand-copied tool order, and divergence ids
-named by source. A failure here means a doc or a copy drifted — fix the doc or the copy, never
-the assertion.
+numeric tool-count claims in prose, the installer's hand-copied tool order, divergence ids
+named by source, and the caps/threshold tables on `docs/reference/limits.md` (a value there
+that drifts from `limits.py` or `policy/thresholds.py` is a reader-facing lie, so the page and
+the code move in one change). A failure here means a doc or a copy drifted — fix the doc or the
+copy, never the assertion.
 """
 
 import json
 import re
+from dataclasses import fields
 from pathlib import Path
 
+from jev_judge_mcp import limits
 from jev_judge_mcp.install.verify import EXPECTED_TOOLS
+from jev_judge_mcp.policy import thresholds as policy_thresholds
 from jev_judge_mcp.tools import TOOLS
 
 ROOT = Path(__file__).parents[2]
@@ -105,3 +110,81 @@ def test_divergence_ids_named_by_source_are_registered() -> None:
     for path in (ROOT / "src").rglob("*.py"):
         named |= set(_NAMED_DIVERGENCE.findall(path.read_text(encoding="utf-8")))
     assert named <= registered
+
+
+_LIMITS_PAGE = ROOT / "docs" / "reference" / "limits.md"
+
+_TOOL_CAPS = {
+    "jev_verify": limits.VERIFY,
+    "jev_screen": limits.SCREEN,
+    "jev_find": limits.FIND,
+    "jev_classify": limits.CLASSIFY,
+    "jev_decide": limits.DECIDE,
+    "jev_rerank": limits.RERANK,
+    "jev_compare": limits.COMPARE,
+    "jev_extract": limits.EXTRACT,
+    "jev_review": limits.REVIEW,
+    "jev_gate": limits.GATE,
+    "jev_score": limits.SCORE,
+}
+_THRESHOLDS_SECTION = "Defaults and thresholds"
+_SHARED_SECTION = "shared"
+_TABLE_ROW = re.compile(r"^\|\s*`([A-Za-z_]+)`\s*\|([^|]*)\|")
+_HEADING_3 = re.compile(r"^### (\w+)")
+_HEADING_2 = re.compile(r"^## ([^#].*)")
+
+
+def _render(value: object) -> str:
+    """The page's canonical cell for a cap or default: plain digits, `no cap` for null."""
+    if value is None:
+        return "no cap"
+    if isinstance(value, float):
+        return repr(value)
+    return str(value)
+
+
+def _page_sections() -> dict[str, dict[str, str]]:
+    """Every table row of the limits page, bucketed under its nearest ### (or ##) heading."""
+    sections: dict[str, dict[str, str]] = {}
+    section, subsection = None, None
+    for line in _LIMITS_PAGE.read_text(encoding="utf-8").splitlines():
+        if match := _HEADING_3.match(line):
+            subsection = match.group(1)
+            continue
+        if match := _HEADING_2.match(line):
+            section, subsection = match.group(1).strip(), None
+            continue
+        if (row := _TABLE_ROW.match(line)) and (bucket := subsection or section):
+            sections.setdefault(bucket, {})[row.group(1)] = row.group(2).strip()
+    return sections
+
+
+def _assert_rows(section: str, expected: dict[str, str], where: str) -> None:
+    rows = _page_sections().get(section, {})
+    missing = sorted(set(expected) - set(rows))
+    assert not missing, f"{where}: {section} is missing rows for {missing}"
+    wrong = {name: (expected[name], rows[name]) for name in expected if rows[name] != expected[name]}
+    assert not wrong, f"{where}: values drifted from the code (expected, stated): {wrong}"
+
+
+def test_limits_page_states_every_frozen_cap() -> None:
+    """`docs/reference/limits.md` carries every `limits.py` cap, exactly (ADR-0014: the page is
+    the caller-facing copy of the freeze, so a re-freeze that skips it fails here)."""
+    for tool, caps in _TOOL_CAPS.items():
+        expected = {field.name: _render(getattr(caps, field.name)) for field in fields(caps)}
+        _assert_rows(tool, expected, "limits page")
+    shared = {field.name: _render(getattr(limits.CANDIDATES, field.name)) for field in fields(limits.CANDIDATES)}
+    shared["SANITIZE_ID_UNITS"] = _render(limits.SANITIZE_ID_UNITS)
+    _assert_rows(_SHARED_SECTION, shared, "limits page")
+
+
+def test_limits_page_states_every_frozen_threshold() -> None:
+    """The page's threshold table matches `policy/thresholds.py` constant for constant, so a
+    changed default without its doc row (and `policy_version` bump) fails here."""
+    expected = {
+        name: _render(value)
+        for name, value in vars(policy_thresholds).items()
+        if name.isupper() and isinstance(value, (int, float)) and not isinstance(value, bool)
+    }
+    assert expected, "policy_thresholds lost its numeric constants; update the limits page owner"
+    _assert_rows(_THRESHOLDS_SECTION, expected, "limits page")

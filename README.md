@@ -186,7 +186,9 @@ The server reads environment variables only. It does not load a `.env` file.
 
 ## Operator notes
 
-Two parity-sanctioned facts — the reference server behaves the same way — that show up as cost
+Every input cap, default, threshold location, and error code is tabulated in
+[`docs/reference/limits.md`](docs/reference/limits.md), machine-checked against the code. Two
+parity-sanctioned facts — the reference server behaves the same way — that show up as cost
 or latency:
 
 - `jev_verify` and `jev_screen` put no length bound on their input. The claims, evidence, or page
