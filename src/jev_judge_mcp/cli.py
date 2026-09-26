@@ -12,9 +12,9 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import anyio
 
@@ -22,7 +22,8 @@ from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.hook import fail_open_or_ask, hook_required
 from jev_judge_mcp.identity import reported_version
 from jev_judge_mcp.keyfile import stored_key_path
-from jev_judge_mcp.policy.thresholds import POLICY_VERSION
+from jev_judge_mcp.policy import POLICY_VERSION, worst_action
+from jev_judge_mcp.policy.actions import Action
 from jev_judge_mcp.serialize import stringify, stringify_compact
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
@@ -224,17 +225,17 @@ def _run_tool(name: str, arguments: Mapping[str, object]) -> int:
         payload = json.loads(text)
     except ValueError:
         payload = {"text": text}
-    action = payload.get("action") if isinstance(payload, dict) else None
+    action, unresolved = _decision(name, payload)
     codes = payload.get("reason_codes") if isinstance(payload, dict) else None
     _write_envelope(
         tool=name,
-        action=action if isinstance(action, str) else None,
+        action=action,
         reason_codes=list(codes) if isinstance(codes, list) else [],
         confidence=_confidence(payload),
         error=None,
         usage=payload.get("usage") if isinstance(payload, dict) else None,
         payload=payload,
-        unresolved=action not in ("auto", "pass"),
+        unresolved=unresolved,
     )
     return 0
 
@@ -245,6 +246,122 @@ async def _call(name: str, arguments: dict[str, Any]) -> Any:
         return await toolset.call(name, arguments)
     finally:
         await toolset.aclose()
+
+
+_ACTIONS: tuple[Action, ...] = ("auto", "review", "escalate")
+"""The Action vocabulary the envelope reports (ADR-0064 amendment)."""
+
+
+def _top_action(payload: object) -> tuple[str | None, bool]:
+    """jev_gate and jev_review: the payload's own top-level `action`."""
+    action = payload.get("action") if isinstance(payload, dict) else None
+    if not isinstance(action, str):
+        return None, True
+    return action, action != "auto"
+
+
+def _screen_action(payload: object) -> tuple[str | None, bool]:
+    """jev_screen: `recommendation.action`; only `pass` is the green light."""
+    recommendation = payload.get("recommendation") if isinstance(payload, dict) else None
+    action = recommendation.get("action") if isinstance(recommendation, dict) else None
+    if not isinstance(action, str):
+        return None, True
+    return action, action != "pass"
+
+
+def _row_action(key: str) -> Callable[[object], tuple[str | None, bool]]:
+    """jev_verify and jev_classify: the worst per-row `action`/`decision`."""
+
+    def decide(payload: object) -> tuple[str | None, bool]:
+        rows = payload.get("results") if isinstance(payload, dict) else None
+        values = [row.get(key) for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+        actions: list[Action] = []
+        for value in values:
+            if value in _ACTIONS:
+                actions.append(value)
+        if not actions:
+            return None, True
+        action = worst_action(actions)
+        return action, action != "auto"
+
+    return decide
+
+
+def _extract_action(payload: object) -> tuple[str | None, bool]:
+    """jev_extract: per-field `status`; a broken or unjudged field counts as review, `not_found` is neutral."""
+    rows = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return None, True
+    actions: list[Action] = []
+    for row in rows:
+        status = row.get("status") if isinstance(row, dict) else None
+        if status == "auto" or status == "review":
+            actions.append(cast(Action, status))
+        elif status in ("invalid_pattern", "invalid_response"):
+            actions.append("review")
+        elif status != "not_found":
+            return None, True
+    if not actions:
+        return "auto", False  # every field not_found: the call settled
+    action = worst_action(actions)
+    return action, action != "auto"
+
+
+def _compare_action(payload: object) -> tuple[str | None, bool]:
+    """jev_compare: `overall.decision`; per-aspect decisions are not the headline (ADR-0013)."""
+    overall = payload.get("overall") if isinstance(payload, dict) else None
+    decision = overall.get("decision") if isinstance(overall, dict) else None
+    if decision not in ("auto", "review"):
+        return None, True
+    return decision, decision != "auto"
+
+
+def _status_clean(payload: object) -> tuple[str | None, bool]:
+    """jev_find and jev_rerank: no action vocabulary; only `invalid_response` is unresolved."""
+    status = payload.get("status") if isinstance(payload, dict) else None
+    return None, status == "invalid_response"
+
+
+def _score_clean(payload: object) -> tuple[str | None, bool]:
+    """jev_score: no action vocabulary; resolved only on `ok`."""
+    status = payload.get("status") if isinstance(payload, dict) else None
+    return None, status != "ok"
+
+
+def _decide_clean(payload: object) -> tuple[str | None, bool]:
+    """jev_decide: no action vocabulary; unresolved when no candidate was selected or an escape hatch won."""
+    recommendation = payload.get("recommendation") if isinstance(payload, dict) else None
+    if not isinstance(recommendation, dict):
+        return None, True
+    return None, recommendation.get("selected") is None or recommendation.get("escaped") is True
+
+
+TOOL_DECISIONS: Mapping[str, Callable[[object], tuple[str | None, bool]]] = {
+    "jev_verify": _row_action("action"),
+    "jev_screen": _screen_action,
+    "jev_find": _status_clean,
+    "jev_classify": _row_action("decision"),
+    "jev_decide": _decide_clean,
+    "jev_rerank": _status_clean,
+    "jev_compare": _compare_action,
+    "jev_extract": _extract_action,
+    "jev_review": _top_action,
+    "jev_gate": _top_action,
+    "jev_score": _score_clean,
+}
+"""Every tool's own decision field → the envelope's (`action`, `unresolved`), in registry order.
+
+The guard in `tests/unit/test_cli_judge.py` fails when a tool registers without a mapping
+(ADR-0064 amendment): only the mapped green lights — `auto`, screen's `pass`, a selected
+jev_decide candidate, find/rerank without `invalid_response`, score's `ok` — resolve."""
+
+
+def _decision(name: str, payload: object) -> tuple[str | None, bool]:
+    """The envelope's `action` and `unresolved` from `name`'s own decision field."""
+    resolve = TOOL_DECISIONS.get(name)
+    if resolve is None:
+        return None, True
+    return resolve(payload)
 
 
 def _confidence(payload: object) -> float | None:

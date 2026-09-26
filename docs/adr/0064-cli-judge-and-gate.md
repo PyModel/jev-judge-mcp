@@ -17,3 +17,25 @@ MCP stays the product surface for clients that speak it. A client that cannot is
 
 - A paid call happens only when an operator turns the completion hook on, or runs `gate`.
 - The core package has no harness name in its branch.
+
+## Amendment (2026-09-25): the envelope reads each tool's own decision field
+
+`judge` first read only a top-level `action`, which only `jev_gate` and `jev_review` set, so
+every other tool's envelope carried `action: null` and `unresolved: true` even on a clean call
+(a passing screen, an all-auto verify). The envelope now maps each tool's own decision field,
+in one registry (`cli._DECISIONS`, guarded by `tests/unit/test_cli_judge.py`):
+
+- `jev_gate`, `jev_review`: their top-level `action` — unchanged behavior.
+- `jev_screen`: `recommendation.action`; resolved only on `pass`.
+- `jev_verify`, `jev_classify`, `jev_extract`: the worst per-row `action` / `decision` / `status`
+  (an invalid or broken row counts as `review`; extract's `not_found` is neutral); resolved only
+  on `auto`.
+- `jev_compare`: `overall.decision` (aspects are not the headline); resolved only on `auto`.
+- `jev_decide`: `recommendation`; unresolved when no candidate was selected or an escape hatch
+  won; the envelope `action` stays null.
+- `jev_find`, `jev_rerank`, `jev_score`: no action vocabulary; `action` stays null, unresolved
+  on `invalid_response` (jev_score: anything but `ok`).
+
+`unresolved` still means "not a green light", never "failed": a `block` or `skip` screen, an
+escaped decide, and a `review` row are decided answers that need the caller's attention, and a
+failed call still writes `error` with exit non-zero, as before. Exit codes are unchanged.
