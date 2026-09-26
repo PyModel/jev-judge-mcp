@@ -23,6 +23,12 @@ State is all Jev sees. Put the evidence, the candidates, the diff, and the task 
 
 Questions in one request cannot see each other's answers. Send the batch in one call.
 
+How you write the state and the questions moves the probabilities you get back: named fields over
+positional arrays, cutting text only at a boundary you can defend, option descriptions that
+separate lookalikes, rules kept out of the question, one judgment per question, and thresholds
+that rise with the risk of the next step. That guide, with the measurements behind it, is in
+`docs/guidance.md`.
+
 ## Which tool
 
 | The step | Tool | What to pass, and what you get |
@@ -53,6 +59,9 @@ A typed in-set choice is what `jev_decide` and `jev_classify` already return: on
 | `review` | You still own this. Confirm it with a stronger check. |
 | `escalate` | You still own this. Stop on this row. Do not grep `verified`. |
 | `invalid_response` | The row is unjudged. Leave it without a verdict. |
+
+The bar behind `auto` is uniform: it does not rise because the next step is destructive. That bar
+is yours to raise (`docs/guidance.md`).
 
 Unknown confidence never meets a threshold, so the action stays off `auto`. A document cut for length before it reached Jev (truncated context) stays off `auto`.
 
