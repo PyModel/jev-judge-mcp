@@ -1,8 +1,10 @@
 """The one bounded retry loop, driven through real providers over mock transports (ADR-0057).
 
 `tests/contract/test_providers.py` pins single-attempt behavior with `NO_RETRIES`; here the default
-policy runs. Sleep, jitter and the clock are injected (offline, deterministic, fast); the per-attempt
-timeout cases use real (short) `anyio` deadlines.
+policy runs. Sleep, jitter and the clock are injected, so every retry decision reads a controlled
+timeline (ADR-0057: offline, deterministic, runner-independent); only the caller-deadline cut and
+the cancellation case still use real (short) `anyio` waits, where a real timer or sleep is the
+behavior under test and its margin is structural, not a few tens of milliseconds.
 """
 
 import json
@@ -21,6 +23,8 @@ from jev_judge_mcp.providers import NO_RETRIES, JevProvider, ProviderError, Prov
 from jev_judge_mcp.providers import retry as retry_timing
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+from tests.support.retries import ControlledClock
+from tests.support.retries import controlled_clock as controlled_clock
 from tests.support.retries import fast_retries as fast_retries
 
 pytestmark = pytest.mark.anyio
@@ -66,6 +70,38 @@ async def failure(provider: JevProvider, timeout: float | None = 5) -> str:
     with pytest.raises(ProviderError) as caught:
         await evaluate(provider, timeout)
     return str(caught.value)
+
+
+def spying_fail_after(monkeypatch: pytest.MonkeyPatch) -> list[float | None]:
+    """Record every `anyio.fail_after` delay the retry loop arms, in order: the whole-call scope
+    first, then each attempt's cap. The real deadlines still run (they simply never fire — the
+    timeline the loop reads is the injected clock's, not the runner's)."""
+    recorded: list[float | None] = []
+    real_fail_after = anyio.fail_after
+
+    def spy(delay: float | None) -> Any:
+        recorded.append(delay)
+        return real_fail_after(delay)
+
+    monkeypatch.setattr(anyio, "fail_after", spy)
+    return recorded
+
+
+def full_length_stall(
+    clock: ControlledClock, sent: list[httpx.Request], caps: list[float | None]
+) -> Callable[[httpx.Request], Any]:
+    """An attempt that runs its full length and times out: it consumes exactly the cap the loop
+    armed it with (the recorded one — the worst case the budget must bound), then fails as a
+    transport timeout. The injected clock carries that time; no real waiting happens."""
+
+    async def stall(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        cap = caps[-1]  # this attempt runs inside the scope the loop just armed
+        assert cap is not None
+        clock.advance(cap)
+        raise httpx.ReadTimeout("stalled")
+
+    return stall
 
 
 # --- Success after transient failures ---
@@ -278,75 +314,66 @@ async def test_a_first_failure_stopped_by_the_budget_keeps_todays_text(
     assert fast_retries == []
 
 
-async def test_the_overall_budget_bounds_even_full_length_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_the_overall_budget_bounds_even_full_length_attempts(
+    monkeypatch: pytest.MonkeyPatch, controlled_clock: ControlledClock
+) -> None:
     """R3: with no caller deadline, every attempt is capped at the budget time left, so the whole
     call never runs past `budget` — the last attempt is shorter than its per-attempt timeout.
 
-    Real time, scaled with wide margins: three 200 ms hangs, 10 ms backoff, a 500 ms budget. The
-    third attempt starts with roughly 80 ms of budget left, so timer lateness cannot promote it to
-    a full per-attempt timeout, and the caps anyio enforces are recorded.
+    Deterministic timeline: three full-length attempts (each consumes exactly the cap the loop
+    armed it with — the worst case the budget must bound), 10 ms backoffs, a 500 ms budget. The
+    injected clock carries the timeline, so no assertion depends on runner speed (ADR-0057).
     """
     policy = RetryPolicy(
         per_attempt_timeout=0.2, budget=0.5, backoff_initial=0.01, backoff_max=0.01, backoff_jitter=0.0
     )
     sent: list[httpx.Request] = []
-
-    async def stall(request: httpx.Request) -> httpx.Response:
-        sent.append(request)
-        await anyio.sleep(1)
-        return httpx.Response(200, content=OK)  # pragma: no cover - every attempt is cut first
-
-    recorded: list[float | None] = []
-    real_fail_after = anyio.fail_after
-
-    def spying_fail_after(delay: float | None) -> Any:
-        recorded.append(delay)
-        return real_fail_after(delay)
-
-    monkeypatch.setattr(anyio, "fail_after", spying_fail_after)
+    caps = spying_fail_after(monkeypatch)
 
     with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
-        router.post(URL).mock(side_effect=stall)
+        router.post(URL).mock(side_effect=full_length_stall(controlled_clock, sent, caps))
         with pytest.raises(ProviderTimeoutError) as caught:
             await evaluate(provider(policy), timeout=None)
 
     assert str(caught.value) == (
         "Jev-compatible endpoint request failed after 3 attempts: last failure: the attempt timed out"
     )
-    assert recorded[0] is None  # no caller deadline: the whole-call scope is unbounded
-    attempt_caps: list[float] = [cap for cap in recorded[1:] if cap is not None]
+    assert len(sent) == 3
+    assert caps[0] is None  # no caller deadline: the whole-call scope is unbounded
+    attempt_caps: list[float] = [cap for cap in caps[1:] if cap is not None]
     assert len(attempt_caps) == 3
     assert attempt_caps[0] == 0.2 and attempt_caps[1] == 0.2
     assert attempt_caps[2] < 0.2  # the budget, not the per-attempt timeout, cut the last attempt
     assert sum(attempt_caps) <= 0.5  # the whole call stays inside the budget
+    assert controlled_clock.now == pytest.approx(0.5)  # the budget is consumed exactly, never exceeded
+    assert controlled_clock.delays == [0.01, 0.01]
 
 
-async def test_a_budget_bound_timeout_is_not_reported_as_the_callers(fast_retries: list[float]) -> None:
+async def test_a_budget_bound_timeout_is_not_reported_as_the_callers(
+    monkeypatch: pytest.MonkeyPatch, controlled_clock: ControlledClock
+) -> None:
     """R5: a caller deadline larger than the policy budget does not turn the budget-bound timeout of
     the last attempt into the caller's. The budget ends the call; the exhausted-retry text reports it.
 
-    Real time, scaled with wide margins: three 200 ms hangs, 10 ms backoff, a 500 ms budget, and a
-    caller deadline of 1 s — twice the budget, so the budget binds and the caller's deadline never
-    fires. The third attempt starts with roughly 80 ms of budget left, so lateness cannot change
-    the attempt count.
+    Same deterministic timeline as R3's test — three full-length attempts, 10 ms backoffs, a 500 ms
+    budget — plus a caller deadline of 1 s, twice the budget: every attempt cap comes from the
+    budget, and the caller's deadline never binds, whatever the runner's speed.
     """
     policy = RetryPolicy(
         per_attempt_timeout=0.2, budget=0.5, backoff_initial=0.01, backoff_max=0.01, backoff_jitter=0.0
     )
     sent: list[httpx.Request] = []
+    caps = spying_fail_after(monkeypatch)
 
-    async def stall(request: httpx.Request) -> httpx.Response:
-        sent.append(request)
-        await anyio.sleep(1)
-        return httpx.Response(200, content=OK)  # pragma: no cover - every attempt is cut first
-
-    started = anyio.current_time()
     with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
-        router.post(URL).mock(side_effect=stall)
+        router.post(URL).mock(side_effect=full_length_stall(controlled_clock, sent, caps))
         with pytest.raises(ProviderTimeoutError) as caught:
             await evaluate(provider(policy), timeout=1.0)
 
-    assert anyio.current_time() - started <= 0.6  # ended by the budget, well inside the caller's 1 s
+    assert caps[0] == 1.0  # the caller's deadline armed the whole-call scope …
+    attempt_caps: list[float] = [cap for cap in caps[1:] if cap is not None]
+    assert attempt_caps == [0.2, 0.2, pytest.approx(0.08)]  # … but the budget capped every attempt
+    assert controlled_clock.now == pytest.approx(0.5)  # the budget, not the caller's 1 s, ended the call
     assert str(caught.value) == (
         "Jev-compatible endpoint request failed after 3 attempts: last failure: the attempt timed out"
     )
