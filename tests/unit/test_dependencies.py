@@ -35,3 +35,19 @@ def test_src_does_not_import_regex() -> None:
             if any(name.split(".")[0] == "regex" for name in names):
                 offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}")
     assert offenders == []
+
+
+def test_roadmap_mcp_row_quotes_the_pyproject_pin() -> None:
+    """The ROADMAP dependency row states the pin pyproject enforces; the mcp row once said `<3`.
+
+    pyproject caps `mcp` at the tested minor for the server's private-internals use, so a ROADMAP
+    row promising the whole `<3` range invites an upgrade the pin refuses.
+    """
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    pin = next(requirement for requirement in project["dependencies"] if requirement_name(requirement) == "mcp")
+    row = next(
+        line
+        for line in (ROOT / "docs/ROADMAP.md").read_text(encoding="utf-8").splitlines()
+        if line.startswith("| MCP |")
+    )
+    assert f"`{pin}`" in row

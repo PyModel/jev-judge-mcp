@@ -1,12 +1,14 @@
 """jev_gate: review a patch and verify completion claims in one call (`index.ts:1342-1495`)."""
 
-from typing import Any, cast
+from dataclasses import dataclass
+from typing import Any
 
 from jev_judge_mcp.domain import ChoiceQuestion
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.policy import Action, ClaimJudgment, ClaimVerdict
 from jev_judge_mcp.policy.claims import note_blocks_auto
+from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.responses import (
     caller_renames,
     claim_extras,
@@ -17,8 +19,9 @@ from jev_judge_mcp.responses import (
 from jev_judge_mcp.serialize import js_number_to_locale_string_en_us
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.arguments import Refinement
-from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
+from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, define, frame
 from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items, has_non_empty_evidence, normalize_evidence
+from jev_judge_mcp.tools.files import combined, file_patches
 from jev_judge_mcp.tools.observed import (
     claim_action,
     fail_closed,
@@ -29,13 +32,20 @@ from jev_judge_mcp.tools.observed import (
 )
 from jev_judge_mcp.tools.review import (
     ANTI_INJECTION,
+    ReviewSettings,
     project_review,
     review_docs,
     review_questions,
     review_settings,
 )
 from jev_judge_mcp.tools.verify import NO_SOURCE, ROLE_RULE, VERIFY_SUFFIX
-from jev_judge_mcp.validation.caps import CapLedger, exceeds, gate_evidence_aggregate_error, gate_evidence_items_error
+from jev_judge_mcp.validation.caps import (
+    CapLedger,
+    CapScope,
+    exceeds,
+    gate_evidence_aggregate_error,
+    gate_evidence_items_error,
+)
 
 CLAIM_CRITERIA = {
     "verified": "The evidence clearly supports the claim",
@@ -180,18 +190,6 @@ def _sent_evidence_item(item: dict[str, object], ledger: CapLedger) -> dict[str,
     return sent
 
 
-def _file_patches(diff: object) -> list[dict[str, str]]:
-    if not isinstance(diff, list):
-        raise ToolError("diff file list was not a list")
-    files: list[dict[str, str]] = []
-    for raw in cast(list[object], diff):
-        if not isinstance(raw, dict):
-            raise ToolError("diff file list item was not an object")
-        record = cast(dict[str, object], raw)
-        files.append({"path": str(record["path"]), "patch": str(record["patch"])})
-    return files
-
-
 def _implicit_evidence(diff: str | None, tests: str | None) -> list[dict[str, object]]:
     items: list[dict[str, object]] = []
     if diff:
@@ -201,19 +199,41 @@ def _implicit_evidence(diff: str | None, tests: str | None) -> list[dict[str, ob
     return items
 
 
+@dataclass(frozen=True, slots=True)
+class GateAsk:
+    """One string-diff gate evaluation: the payload body, the headline action, and the ask itself."""
+
+    body: dict[str, object]
+    action: Action
+    evaluation: Evaluation
+    truncated: frozenset[CapScope]
+
+
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     settings = review_settings(args)
-    if isinstance(args.get("diff"), list):
-        return await _handle_split_diff(args, runtime, settings)
-    thresholds = settings.thresholds
+    # The evidence budgets are evidence-driven and identical for every per-file call, so they are
+    # refused once here, before the split: a file list over budget is an isError like a string is.
     raw_evidence = evidence_items(args["evidence"])
     evidence = ensure_unique_ids(raw_evidence, "evidence").items
-    # Bound the request before any model call: item count, then aggregate size.
     if exceeds(len(evidence), GATE.evidence_items):
         return _refused(gate_evidence_items_error(GATE.evidence_items))
     if exceeds(sum(length(str(item["text"])) for item in evidence), GATE.aggregate_evidence_units):
         return _refused(gate_evidence_aggregate_error(GATE.aggregate_evidence_units))
+    if isinstance(args.get("diff"), list):
+        return await _handle_split_diff(args, runtime, settings, evidence, raw_evidence)
+    ask = await _ask_gate(args, runtime, settings, evidence, raw_evidence)
+    return ToolResult(frame("jev_gate", ask.evaluation, ask.body), action=ask.action, truncated=ask.truncated)
 
+
+async def _ask_gate(
+    args: dict[str, Any],
+    runtime: Runtime,
+    settings: ReviewSettings,
+    evidence: list[dict[str, object]],
+    raw_evidence: list[dict[str, object]],
+) -> GateAsk:
+    """One string-diff gate ask: the review rubric and every claim and source question together."""
+    thresholds = settings.thresholds
     ledger = CapLedger()
     docs = review_docs(args, ledger, GATE.doc_units)
     claims: list[str] = args["claims"]
@@ -315,32 +335,30 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             for row in results
         ),
     )
-    return ToolResult(
-        frame(
-            "jev_gate",
-            evaluation,
-            {
-                "truncated": truncated,
-                "action": action,
-                "reason_codes": reason_codes,
-                "next_checks": next_checks_for(reason_codes),
-                "review": review.payload,
-                "verification": verification,
-                **renamed_ids_field(renamed),
-            },
-        ),
-        action=action,
-        truncated=ledger.scopes,
-    )
+    body: dict[str, object] = {
+        "truncated": truncated,
+        "action": action,
+        "reason_codes": reason_codes,
+        "next_checks": next_checks_for(reason_codes),
+        "review": review.payload,
+        "verification": verification,
+        **renamed_ids_field(renamed),
+    }
+    return GateAsk(body, action, evaluation, ledger.scopes)
 
 
-async def _handle_split_diff(args: dict[str, Any], runtime: Runtime, settings: object) -> ToolResult:
+async def _handle_split_diff(
+    args: dict[str, Any],
+    runtime: Runtime,
+    settings: ReviewSettings,
+    evidence: list[dict[str, object]],
+    raw_evidence: list[dict[str, object]],
+) -> ToolResult:
     """Per-file review when the joined diff exceeds the document cap (ADR-0066).
 
     A file over the cap is unreviewed. The call never returns auto while any file is unreviewed.
     """
-    del settings
-    files = _file_patches(args["diff"])
+    files = file_patches(args["diff"])
     total = sum(length(item["patch"]) for item in files)
     if exceeds(total, GATE.aggregate_evidence_units):
         return _refused(gate_evidence_aggregate_error(GATE.aggregate_evidence_units))
@@ -358,22 +376,24 @@ async def _handle_split_diff(args: dict[str, Any], runtime: Runtime, settings: o
             }
         )
     # Each fitting file is under the cap. Do not join them back into a string that would be cut.
-    actions: list[Action] = []
-    payload: dict[str, object] = {}
-    for item in fitting:
-        reviewed = await handle({**args, "diff": item["patch"]}, runtime)
-        payload = dict(reviewed.payload)
-        action = payload.get("action")
-        if action in ("auto", "review", "escalate"):
-            actions.append(action)
-    if actions:
-        payload["action"] = worst_action(actions)
+    asks = [
+        await _ask_gate({**args, "diff": item["patch"]}, runtime, settings, evidence, raw_evidence) for item in fitting
+    ]
+    payload = dict(asks[-1].body)
+    payload["action"] = worst_action([ask.action for ask in asks])
     payload["partial"] = bool(unreviewed)
     payload["unreviewed_files"] = unreviewed
-    if unreviewed and payload.get("action") == "auto":
+    if unreviewed and payload["action"] == "auto":
         payload["action"] = "review"
-    headline = payload.get("action")
-    return ToolResult(payload, action=headline if headline in ("auto", "review", "escalate") else "review")
+    headline = payload["action"]
+    scopes: frozenset[CapScope] = frozenset()
+    for ask in asks:
+        scopes |= ask.truncated
+    return ToolResult(
+        frame("jev_gate", combined([ask.evaluation for ask in asks]), payload),
+        action=headline if headline in ("auto", "review", "escalate") else "review",
+        truncated=scopes,
+    )
 
 
 TOOL = JevTool(DEFINITION, handle, {"evidence": EVIDENCE_NOT_EMPTY})

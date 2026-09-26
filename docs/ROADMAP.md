@@ -37,7 +37,7 @@ Changes from the pasted plan: `validation/` split from `policy/` (validation rej
 
 | Purpose | Package | Note |
 |---|---|---|
-| MCP | `mcp>=2.2,<3` | `MCPServer`, verified in 2.2.0 wheel |
+| MCP | `mcp>=2.2,<2.3` | `MCPServer` and private internals (`_lowlevel_server`); capped to the tested minor |
 | HTTP | `httpx` | all raw providers |
 | Models/config | `pydantic>=2`, `pydantic-settings` | |
 | TypeSafe | `typesafe-sdk` (optional extra) | **not** `typesafe` — unrelated package |

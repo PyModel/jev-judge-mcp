@@ -4,15 +4,16 @@ The review half (questions and projection) is shared with jev_gate.
 """
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
-from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question, ScoreQuestion, Usage
+from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question, ScoreQuestion
 from jev_judge_mcp.limits import GATE, REVIEW
 from jev_judge_mcp.policy import DEFAULT_AUTO_ACCEPT, DEFAULT_COMPOSITE_FLOOR, REVIEW_WEIGHTS, Action, PolicyThresholds
 from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.responses import SCORE_SCALE, nearest_level
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
+from jev_judge_mcp.tools.files import combined, file_patches
 from jev_judge_mcp.tools.observed import (
     fail_closed,
     min_confidence,
@@ -267,21 +268,9 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     )
 
 
-def _file_patches(diff: object) -> list[dict[str, str]]:
-    if not isinstance(diff, list):
-        raise ToolError("diff file list was not a list")
-    files: list[dict[str, str]] = []
-    for raw in cast(list[object], diff):
-        if not isinstance(raw, dict):
-            raise ToolError("diff file list item was not an object")
-        record = cast(dict[str, object], raw)
-        files.append({"path": str(record["path"]), "patch": str(record["patch"])})
-    return files
-
-
 async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: ReviewSettings) -> ToolResult:
     """Review each file under the document cap. Unreviewed files block auto (ADR-0066)."""
-    files = _file_patches(args["diff"])
+    files = file_patches(args["diff"])
     total = sum(length(item["patch"]) for item in files)
     if total > GATE.aggregate_evidence_units:
         raise ToolError(f"diff exceeds the {GATE.aggregate_evidence_units:,}-character aggregate budget")
@@ -334,23 +323,7 @@ async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: Re
     payload["unreviewed_files"] = unreviewed
     if unhashed_tests:
         payload["tests_weight"] = "self_reported"
-    return ToolResult(frame("jev_review", _combined(evaluations), payload), action=action)
-
-
-def _combined(evaluations: list[Evaluation]) -> Evaluation:
-    """One frame for a per-file review: usage summed, request id kept when a file sent one."""
-    first = evaluations[0]
-    request_id = next((item.request_id for item in evaluations if item.request_id), None)
-    return Evaluation(
-        {},
-        Usage(
-            sum(item.usage.input_tokens for item in evaluations),
-            sum(item.usage.output_tokens for item in evaluations),
-        ),
-        first.provider,
-        first.model,
-        request_id=request_id,
-    )
+    return ToolResult(frame("jev_review", combined(evaluations), payload), action=action)
 
 
 TOOL = JevTool(DEFINITION, handle)
