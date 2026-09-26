@@ -102,6 +102,13 @@ that tag, uploads the wheel, sdist, and `SHA256SUMS.txt`, installs the downloade
 wheel into a fresh venv, and publishes the release only if the installed version
 matches the tag. A failed check leaves the release a draft.
 
+Before merging the release pull request, fill that release's entry in
+[`docs/EVIDENCE.md`](docs/EVIDENCE.md): the certified operating points and any
+regression from the latest recorded eval run, or an explicit line that no new
+run was recorded since the previous entry. Recorded results only (`docs/evals/`,
+`evals/reports/`), dated, with the pinned model; the page defines the format and
+never requires a paid run.
+
 PyPI upload is held: the `pypi` job runs only when the repository variable
 `PYPI_PUBLISH` is `true`, so until then a merged release pull request publishes
 the GitHub Release only. Once the variable is set, the verified wheel and sdist

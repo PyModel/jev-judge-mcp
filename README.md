@@ -214,7 +214,8 @@ failure.
   under `review` on `jev_gate` — whose `confidence` is below `thresholds.review_at`. Compare
   `safe_to_apply` to the same threshold. The response does not name the driver; those two fields do.
 - Per-tool weak spots and what recorded evidence exists for each tool are in
-  [`docs/tools.md`](docs/tools.md).
+  [`docs/tools.md`](docs/tools.md); per-release evidence, including certified operating points, is
+  recorded in [`docs/EVIDENCE.md`](docs/EVIDENCE.md).
 
 ### Running over HTTP (experimental)
 
@@ -253,7 +254,8 @@ One diagram covers the whole server: the tool-call loop from `tools/call` to the
 
 ## Measured results
 
-Two paid studies, both descriptive, with small samples and no significance test.
+Release-by-release evidence — certified operating points and regressions — is recorded in
+[`docs/EVIDENCE.md`](docs/EVIDENCE.md). Two paid studies, both descriptive, with small samples and no significance test.
 
 On 150 questions with Pi (`opencode-go/deepseek-v4.1-flash`), forcing a Jev call added 10.4 s median wall time per task. Letting the agent choose left Jev uncalled on all 150. Jev itself answered in 465 ms median over 157 calls. Accuracy was not measured. Details: [`evals/reports/bench150.md`](evals/reports/bench150.md).
 
