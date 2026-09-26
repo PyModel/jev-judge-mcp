@@ -15,8 +15,8 @@ from dataclasses import fields
 from pathlib import Path
 from typing import cast
 
-from evals.calibration.targets import error_budget
 from jev_judge_mcp import limits
+from jev_judge_mcp.calibration.targets import error_budget
 from jev_judge_mcp.install.verify import EXPECTED_TOOLS
 from jev_judge_mcp.policy import thresholds as policy_thresholds
 from jev_judge_mcp.tools import TOOLS
