@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     # Optional provider response cache (ADR-0047): off unless JEV_MCP_CACHE is truthy.
     jev_judge_mcp_cache: bool = Field(default=False, validation_alias="JEV_MCP_CACHE")
     cache_dir: Path | None = Field(default=None, validation_alias="JEV_MCP_CACHE_DIR")
+    # Cache bounds (ADR-0047 amendment), read only when the cache is on: a TTL so a stale answer
+    # is not replayed forever, and an entry cap with oldest-first eviction. 0 disables either.
+    cache_max_entries: int = Field(default=4096, ge=0, validation_alias="JEV_MCP_CACHE_MAX_ENTRIES")
+    cache_ttl_seconds: float = Field(default=604800.0, ge=0.0, validation_alias="JEV_MCP_CACHE_TTL_SECONDS")
     # The key file `jev-judge-mcp setup` writes (ADR-0046); env wins over the file at resolution.
     key_file: Path | None = Field(default=None, validation_alias="JEV_MCP_KEY_FILE")
 

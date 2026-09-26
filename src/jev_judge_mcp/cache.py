@@ -5,6 +5,11 @@ An identical request — same provider, model, state, and questions — replays 
 zero API cost. Replay is verbatim, so every tool payload built from it is byte-identical to the
 first answer's; the cache never edits a response. Keep it off when decisions must stay fresh.
 
+Entries expire after `JEV_MCP_CACHE_TTL_SECONDS` and the directory holds at most
+`JEV_MCP_CACHE_MAX_ENTRIES` entries (oldest evicted first); with the cache off, nothing reads or
+writes the directory. The key serialization and the file IO run in a worker thread, so a large
+state cannot stall the event loop (ADR-0047 amendment).
+
 The key is the SHA-256 of the exact request body (`JSON.stringify` semantics, key order included),
 so any difference — model slug, one character of state, a reordered question map — is a different
 entry. Entries are mode 0600 inside a 0700 directory (`fsutil`): they hold the judged State. Writes
@@ -14,9 +19,12 @@ are atomic; a cache that cannot be read or written is a miss, never an error.
 import hashlib
 import json
 import logging
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
+
+import anyio
 
 from jev_judge_mcp import fsutil
 from jev_judge_mcp.domain import JsonValue, Question, Usage, questions_to_wire
@@ -58,6 +66,45 @@ def _key(provider: ProviderName, model: str, state: JsonValue, questions: Mappin
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+def _stale(path: Path, ttl_seconds: float, *, now: float) -> bool:
+    """True when the entry is older than the TTL (ADR-0047 amendment). `0` never expires."""
+    if ttl_seconds <= 0:
+        return False
+    try:
+        return now - path.stat().st_mtime > ttl_seconds
+    except OSError:
+        return False
+
+
+def _evict(directory: Path, cap: int) -> None:
+    """Keep at most `cap` entries, oldest mtime first (ADR-0047 amendment). `0` never evicts.
+
+    Only this cache's `.json` entries are counted and removed; a directory that cannot be listed
+    or an entry that cannot be deleted is ignored, never an error.
+    """
+    if cap <= 0:
+        return
+    try:
+        entries = [entry for entry in directory.iterdir() if entry.suffix == ".json"]
+    except OSError:
+        return
+    excess = len(entries) - cap
+    if excess <= 0:
+        return
+
+    def stamp(entry: Path) -> tuple[float, str]:
+        try:
+            return (entry.stat().st_mtime, entry.name)
+        except OSError:
+            return (0.0, entry.name)
+
+    for entry in sorted(entries, key=stamp)[:excess]:
+        try:
+            entry.unlink()
+        except OSError:
+            pass
+
+
 def lookup(
     settings: Settings, provider: ProviderName, model: str, state: JsonValue, questions: Mapping[str, Question]
 ) -> Evaluation | None:
@@ -65,6 +112,12 @@ def lookup(
     if not _enabled(settings):
         return None
     path = cache_dir(settings) / f"{_key(provider, model, state, questions)}.json"
+    if _stale(path, settings.cache_ttl_seconds, now=time.time()):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return None
     try:
         parsed: object = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -118,3 +171,24 @@ def store(
         fsutil.write_private_atomic(directory / f"{digest}.json", text)
     except (OSError, TypeError, ValueError):
         return
+    _evict(directory, settings.cache_max_entries)
+
+
+async def alookup(
+    settings: Settings, provider: ProviderName, model: str, state: JsonValue, questions: Mapping[str, Question]
+) -> Evaluation | None:
+    """`lookup` off the event loop: the key serializes the whole state, so neither the hash nor
+    the file read stalls concurrent calls while the cache is on (ADR-0047 amendment)."""
+    return await anyio.to_thread.run_sync(lambda: lookup(settings, provider, model, state, questions))
+
+
+async def astore(
+    settings: Settings,
+    provider: ProviderName,
+    model: str,
+    state: JsonValue,
+    questions: Mapping[str, Question],
+    evaluation: Evaluation,
+) -> None:
+    """`store` off the event loop, for the same reason as `alookup` (ADR-0047 amendment)."""
+    await anyio.to_thread.run_sync(lambda: store(settings, provider, model, state, questions, evaluation))

@@ -3,10 +3,13 @@
 import json
 import os
 import stat
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
+from jev_judge_mcp import cache
 from jev_judge_mcp.domain import Question, Usage
 from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.settings import load_settings
@@ -177,3 +180,77 @@ async def test_a_hit_spends_no_tokens_in_telemetry(cache_env: Path) -> None:
     assert "input_tokens" not in evaluates[1].attributes
     assert "output_tokens" not in evaluates[1].attributes
     assert evaluates[0].attributes["input_tokens"] == 1
+
+
+async def test_an_entry_past_the_ttl_is_a_miss(cache_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stale answer must not replay forever: past the TTL the entry is deleted and re-asked."""
+    monkeypatch.setenv("JEV_MCP_CACHE_TTL_SECONDS", "60")
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    await runtime.ask({"subject": "x"}, _question())
+    stale = time.time() - 61
+    os.utime(next(iter(cache_env.iterdir())), (stale, stale))
+    settings = load_settings()
+    assert cache.lookup(settings, "compatible", "jev-latest", {"subject": "x"}, _question()) is None
+    assert not list(cache_env.iterdir())  # the stale entry was removed, not just skipped
+    await runtime.ask({"subject": "x"}, _question())
+    assert len(provider.requests) == 2
+
+
+async def test_a_zero_ttl_replays_aged_entries(cache_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JEV_MCP_CACHE_TTL_SECONDS", "0")
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    await runtime.ask({"subject": "x"}, _question())
+    aged = time.time() - 999_999
+    os.utime(next(iter(cache_env.iterdir())), (aged, aged))
+    await runtime.ask({"subject": "x"}, _question())
+    assert len(provider.requests) == 1
+
+
+async def test_the_entry_cap_evicts_the_oldest_first(cache_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JEV_MCP_CACHE_MAX_ENTRIES", "2")
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    await runtime.ask({"subject": "a"}, _question())
+    aged = time.time() - 300
+    for entry in cache_env.iterdir():
+        os.utime(entry, (aged, aged))
+    await runtime.ask({"subject": "b"}, _question())  # fresh mtime
+    await runtime.ask({"subject": "c"}, _question())  # a third entry evicts "a", the oldest
+    assert len(list(cache_env.iterdir())) == 2
+    await runtime.ask({"subject": "b"}, _question())  # kept: replays
+    assert len(provider.requests) == 3
+    await runtime.ask({"subject": "a"}, _question())  # evicted: asks again
+    assert len(provider.requests) == 4
+
+
+async def test_a_zero_cap_never_evicts(cache_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JEV_MCP_CACHE_MAX_ENTRIES", "0")
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    for subject in ("a", "b", "c"):
+        await runtime.ask({"subject": subject}, _question())
+    assert len(list(cache_env.iterdir())) == 3
+
+
+async def test_cache_key_and_file_io_run_off_the_event_loop(cache_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole-state key serialization and the file read/write never block the loop."""
+
+    from jev_judge_mcp import cache as cache_module
+
+    real_lookup, real_store = cache_module.lookup, cache_module.store
+    threads: list[int] = []
+
+    def record(call: object, *args: object, **kwargs: object) -> object:
+        threads.append(threading.get_ident())
+        return call(*args, **kwargs)  # type: ignore[reportCallIssue] -- delegates to the real function
+
+    monkeypatch.setattr(cache_module, "lookup", lambda *a, **k: record(real_lookup, *a, **k))
+    monkeypatch.setattr(cache_module, "store", lambda *a, **k: record(real_store, *a, **k))
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    await runtime.ask({"subject": "x"}, _question())
+    await runtime.ask({"subject": "x"}, _question())
+    assert len(provider.requests) == 1  # still a verbatim hit through the off-loop path
+    assert threads and all(ident != threading.get_ident() for ident in threads)

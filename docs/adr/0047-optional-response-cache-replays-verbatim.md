@@ -53,3 +53,23 @@ cost.
 - The stdio no-provider-deadline property is unaffected: a hit returns before `evaluate`; a miss
   calls it exactly as before with `timeout=None`.
 - Registered divergence: `response-cache` in `docs/reference/divergences.json`.
+
+## Amendment (2026-09-26): bounds and off-loop IO
+
+The cache stays opt-in and replay stays verbatim. Three operational properties change:
+
+- **Off the event loop.** The key serialization (it hashes the whole state) and the file read and
+  write run in a worker thread (`anyio.to_thread.run_sync` via `cache.alookup`/`cache.astore`), so
+  a multi-MB `jev_verify`/`jev_screen` state cannot stall every concurrent call while the cache
+  is on. `Runtime.ask` awaits the wrappers; the sync `lookup`/`store` stay as the thread bodies.
+- **TTL.** `JEV_MCP_CACHE_TTL_SECONDS` (default 604800, seven days; `0` disables) bounds how long
+  an entry replays: past the TTL the entry is a miss and is deleted. Without it, a provider-side
+  model change under the same slug would replay stale answers forever, because the key covers
+  only what the caller sent.
+- **Bounded size.** `JEV_MCP_CACHE_MAX_ENTRIES` (default 4096; `0` disables) caps the entry count;
+  a store past the cap evicts oldest-mtime entries first. "Delete the directory to clear it"
+  still holds; the cap keeps the directory from growing without bound.
+
+Both knobs are read only when `JEV_MCP_CACHE` is on; with the cache off nothing reads or writes
+the directory, exactly as before. Registered divergence: `response-cache-bounds` in
+`docs/reference/divergences.json`.

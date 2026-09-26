@@ -177,6 +177,8 @@ The server reads environment variables only. It does not load a `.env` file.
 | `JEV_MCP_MODEL` | `jev-latest` | Jev model to ask |
 | `JEV_MCP_CACHE` | off | replay identical requests from disk at no API cost; leave it off when answers must be fresh, and delete the directory to clear it |
 | `JEV_MCP_CACHE_DIR` | `~/.cache/jev-mcp` | where the cache lives |
+| `JEV_MCP_CACHE_MAX_ENTRIES` | `4096` | cache entry cap; a store past it evicts the oldest entries first (`0` disables) |
+| `JEV_MCP_CACHE_TTL_SECONDS` | `604800` | cache entry age in seconds before it stops replaying and is deleted (`0` disables) |
 | `JEV_MCP_TRANSPORT` | `stdio` | `streamable-http` is experimental and binds `JEV_MCP_HTTP_HOST:JEV_MCP_HTTP_PORT`, default `127.0.0.1:8088`. Port 8000 is often already taken, so it is not the default |
 | `JEV_MCP_HTTP_TOKEN` | unset | bearer token for the HTTP transport; required on every request, and required for any non-loopback `JEV_MCP_HTTP_HOST` |
 | `JEV_MCP_LOG_LEVEL` | `INFO` | logs go to stderr |

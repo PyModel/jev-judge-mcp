@@ -333,6 +333,19 @@
       "python_behavior": "With JEV_MCP_CACHE on (off by default), a byte-identical request \u2014 provider, model, state, questions \u2014 replays the recorded Evaluation verbatim from the cache directory; tool payloads stay byte-identical to the first answer's, and a corrupt or foreign record is a miss."
     },
     {
+      "id": "response-cache-bounds",
+      "surface": "provider",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0047-optional-response-cache-replays-verbatim.md",
+      "tests": [
+        "tests/unit/test_cache.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "Every tool call sends a provider request; nothing is replayed from disk, so there is no cache to bound or expire.",
+      "python_behavior": "When JEV_MCP_CACHE is on, the cache is bounded and non-blocking (ADR-0047 amendment): the key serialization and the file IO run in a worker thread off the event loop, an entry older than JEV_MCP_CACHE_TTL_SECONDS (default seven days, 0 disables) is a miss and is deleted, and a store past JEV_MCP_CACHE_MAX_ENTRIES (default 4096, 0 disables) evicts oldest-mtime entries first. Replay of a live entry stays verbatim (response-cache)."
+    },
+    {
       "id": "score-tool-extension",
       "surface": "tool_schema",
       "tier": "both",
