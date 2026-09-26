@@ -1,13 +1,15 @@
-"""Live L3 collection: `JEV_EVAL_LIVE=1 python -m evals.runners.live MANIFEST OUT [--repeats N]`.
+"""Live L3 collection: `JEV_EVAL_LIVE=1 python -m evals.runners.live MANIFEST OUT [--repeats N] [--cap N]`.
 
 Calls the real tools through the configured provider, so it costs money and drifts with the model.
 It refuses to start unless `JEV_EVAL_LIVE=1` is passed in its environment, unless `JEV_PROVIDER` is
-`typesafe`, unless the server's resolved model is the manifest's pinned model, and when cases x repeats
-exceeds `LIVE_REQUEST_CAP`. Every tool call makes at most one provider request — the runtime's provider
-runs with retries off (`NO_RETRIES`, ADR-0057), unlike the server's default bounded policy — so the cap
-bounds requests before any is sent, and a transient provider failure is a recorded `error` row, not an
-unbudgeted retry. A result that reports another model aborts the run. Recorded outputs feed
-`evals.runners.score`. The flag is eval-only and stays out of `jev_judge_mcp.settings` (ADR-0008/0017).
+`typesafe`, unless the server's resolved model is the manifest's pinned model, and when cases x
+repeats exceeds the run's request cap (`LIVE_REQUEST_CAP` by default; `--cap` names a
+benchmark-scale ceiling explicitly, still checked before the first request). Every tool call
+makes at most one provider request — the runtime's provider runs with retries off (`NO_RETRIES`,
+ADR-0057), unlike the server's default bounded policy — so the cap bounds requests before any is
+sent, and a transient provider failure is a recorded `error` row, not an unbudgeted retry. A
+result that reports another model aborts the run. Recorded outputs feed `evals.runners.score`.
+The flag is eval-only and stays out of `jev_judge_mcp.settings` (ADR-0008/0017).
 """
 
 import argparse
@@ -29,7 +31,11 @@ if TYPE_CHECKING:
 
 LIVE_FLAG = "JEV_EVAL_LIVE"
 LIVE_REQUEST_CAP = 25
-"""Hard ceiling on tool calls (each at most one provider request) per live run."""
+"""Default hard ceiling on tool calls (each at most one provider request) per live run.
+
+A deliberate benchmark-scale run passes `--cap` to raise its own ceiling explicitly; the refusal
+still fires before the first request, so an accidental large run never starts.
+"""
 
 
 def typesafe_without_retries(settings: "Settings") -> "JevProvider":
@@ -78,12 +84,12 @@ def require_typesafe(provider: str) -> None:
         raise LiveRunRefusedError(f"JEV_PROVIDER={provider!r}; live evals run only against 'typesafe'")
 
 
-def require_within_cap(cases: int, repeats: int) -> None:
-    if cases * repeats > LIVE_REQUEST_CAP:
-        raise LiveRunRefusedError(f"{cases} cases x {repeats} repeats exceeds the {LIVE_REQUEST_CAP}-request cap")
+def require_within_cap(cases: int, repeats: int, cap: int = LIVE_REQUEST_CAP) -> None:
+    if cases * repeats > cap:
+        raise LiveRunRefusedError(f"{cases} cases x {repeats} repeats exceeds the {cap}-request cap")
 
 
-async def collect(manifest: Manifest, out: Path, repeats: int) -> None:
+async def collect(manifest: Manifest, out: Path, repeats: int, cap: int = LIVE_REQUEST_CAP) -> None:
     # Imported here so the flag refusal never loads settings, and no refusal builds a runtime or a provider.
     from jev_judge_mcp.settings import load_settings
     from jev_judge_mcp.tools import TOOLS
@@ -93,7 +99,7 @@ async def collect(manifest: Manifest, out: Path, repeats: int) -> None:
     settings = load_settings()
     require_typesafe(settings.jev_provider)
     cases = load_cases(manifest.dataset)
-    require_within_cap(len(cases), repeats)
+    require_within_cap(len(cases), repeats, cap)
     toolset = Toolset(Runtime(settings, provider_factory=typesafe_without_retries), TOOLS)
     try:
         require_pinned_model(manifest, toolset.runtime.model)
@@ -118,11 +124,19 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
     parser.add_argument("manifest", type=Path)
     parser.add_argument("out", type=Path)
     parser.add_argument("--repeats", type=int, default=1, choices=range(1, MAX_REPEATS + 1))
+    parser.add_argument(
+        "--cap",
+        type=int,
+        default=LIVE_REQUEST_CAP,
+        help="explicit paid-run ceiling for a benchmark-scale run (default: %(default)s)",
+    )
     args = parser.parse_args(argv)
+    if args.cap < 1:
+        parser.error("--cap must be at least 1")
     try:
         require_live_enabled(environ)
         manifest = load_manifest(args.manifest)
-        anyio.run(collect, manifest, args.out, args.repeats)
+        anyio.run(collect, manifest, args.out, args.repeats, args.cap)
     except LiveRunRefusedError as refusal:
         sys.stderr.write(f"refused: {refusal}\n")
         return 2

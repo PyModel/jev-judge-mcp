@@ -245,3 +245,16 @@ def test_the_request_cap_refuses_before_any_request() -> None:
     live.require_within_cap(5, 5)
     with pytest.raises(live.LiveRunRefusedError, match="request cap"):
         live.require_within_cap(live.LIVE_REQUEST_CAP + 1, 1)
+
+
+def test_an_explicit_cap_allows_a_benchmark_scale_run() -> None:
+    """A deliberate large run names its own ceiling; the refusal still names the effective cap."""
+    live.require_within_cap(92, 1, cap=92)
+    with pytest.raises(live.LiveRunRefusedError, match="exceeds the 92-request cap"):
+        live.require_within_cap(93, 1, cap=92)
+
+
+def test_a_cap_below_one_is_a_usage_error() -> None:
+    with pytest.raises(SystemExit) as caught:
+        live.main(["m.json", "o.jsonl", "--cap", "0"])
+    assert caught.value.code == 2

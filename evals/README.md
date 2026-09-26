@@ -14,6 +14,7 @@ neither lives here.
 | `python -m evals.runners.score MANIFEST OUTPUTS [--split S] [--report PATH]` | none | Scores recorded tool outputs against a dataset's gold labels |
 | `JEV_EVAL_LIVE=1 python -m evals.runners.live MANIFEST OUT [--repeats N]` | **live, paid** | Calls the tools through the configured provider and records outputs |
 | `JEV_EVAL_LIVE=1 python -m evals.calibration.order` | **live, paid** | Order-sensitivity probe (A2): one jev_verify batch sent forward and reversed, per-claim verdict stability reported; exactly 2 requests |
+| `python -m evals.external.jevbench <checkout>` | none | A8: reads a JevBench checkout's public items as data (sha256-pinned, never executed) and writes `datasets/jevbench-public.jsonl` + its manifest; see § External benchmark |
 | `JEV_AB_LIVE=1 make ab AGENT=claude\|pi` | **live, paid** | L4 agent outcome study (below); writes `reports/agent-outcomes.md`. `python -m evals.ab.run --report-only` re-renders it offline |
 | `JEV_BENCH_LIVE=1 python -m evals.bench.run` | **live, paid** | The 150-question before/after bench (below). Not wired to any make target; refuses while any item label is not `frozen` |
 
@@ -26,8 +27,9 @@ The flag is eval-only and stays out of `jev_judge_mcp.settings`.
 Live bounds:
 
 - **Pinned model:** `jev-1.13.0` (TypeSafe, `JEV_PROVIDER=typesafe`), in `manifests/live-*.json`.
-- **Request cap:** `LIVE_REQUEST_CAP = 25` tool calls per run (`runners/live.py`); each tool call makes at
-  most one provider request, checked before the first request is sent. The runtime's provider passes
+- **Request cap:** `LIVE_REQUEST_CAP = 25` tool calls per run by default (`runners/live.py`); each tool
+  call makes at most one provider request, checked before the first request is sent. A benchmark-scale
+  run passes `--cap N` to name its own ceiling explicitly — still checked before the first request. The runtime's provider passes
   `NO_RETRIES` (the server's default stays the bounded ADR-0057 policy), so a failed call is a recorded
   `error` row, never an unbudgeted retry.
 - **Datasets:** `datasets/synthetic/live-classify.jsonl` and `live-verify.jsonl`, 3 cases each, so
@@ -83,6 +85,37 @@ but not on `locked_test` fails the gate: the calibration rows chose the point, s
 it. An empty or evidence-free `locked_test` split bounds at 1.0 and fails. The operating point is a
 report. It never edits `jev_judge_mcp.policy.thresholds`: moving a frozen default is a
 Sanctioned Divergence and needs its own ADR.
+
+## External benchmark (A8, prepared — not yet run)
+
+JevBench (`fstandhartinger/jevbench`, MIT) publishes a leaderboard for Jev-class typed decision
+models; its own measured row for Jev 1.13.0 is the external anchor this repo lacks. The adapter
+`evals/external/jevbench.py` reads a JevBench checkout's **public** items as data — the checkout's
+manifest pins a sha256 per file, and a mismatch refuses the conversion; the harness's own code is
+never executed. Each public `choice` item with a string state within the classify item cap becomes
+one `jev_classify` case (state → item text, labels+criteria → class catalog, instructions →
+purpose, expected → gold). Items are excluded and counted, never distorted: noul/score questions
+have no classify mapping yet, structured states cannot become item text, and over-cap states would
+be truncated into a different question. On the 2026-09-26 snapshot that keeps
+**92 of 231 public items** (easy 36/48, original 36/72, hard 20/111).
+
+The paid run is **prepared, not run** — it waits for the spend decision. The exact commands:
+
+```sh
+git clone --depth 1 https://github.com/fstandhartinger/jevbench.git /tmp/jevbench
+python -m evals.external.jevbench /tmp/jevbench                   # offline, sha-pinned
+JEV_EVAL_LIVE=1 JEV_PROVIDER=typesafe JEV_MCP_MODEL=jev-1.13.0   python -m evals.runners.live evals/manifests/jevbench-public.jsonl   evals/reports/jevbench-public-outputs.jsonl --cap 92            # paid
+python -m evals.runners.score evals/manifests/jevbench-public.jsonl   evals/reports/jevbench-public-outputs.jsonl --split all         # offline
+```
+
+Measured cost estimate (JevBench's own published measurement of Jev 1.13.0, `cost-correction
+v1.2.3`: mean 588.05 input tokens/decision, $0.042 per M input tokens, output tokens not billed;
+$0.0247 per 1000 v1.1-tier decisions, $0.0616 per 1000 hard-tier decisions): 72 easy/original-class
+items × $0.0247/1000 + 20 hard-class items × $0.0616/1000 ≈ **$0.003** (~72k input tokens: 72 × 588 +
+20 × ~1470) for the
+92-item run — one tool call per item, at most one provider request each (`NO_RETRIES`), so the cost
+equals raw SDK access; even at twice the measured per-decision cost it stays under one cent. The
+generated dataset and manifest are build artifacts (gitignored), not committed data.
 
 ## Open gaps (not decided by the ROADMAP or an ADR)
 
