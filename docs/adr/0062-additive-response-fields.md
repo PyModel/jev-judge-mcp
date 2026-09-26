@@ -34,3 +34,15 @@ id is unchanged and the implicit item is the one suffixed.
 - A grep for `verified` can still hit a row whose action is `escalate`. `stands` is the boolean that grep should have been.
 - A client that reads only `content[0].text` still does not see the code. A client that reads later content blocks, or `structuredContent`, does.
 - A client that ignores `renamed_ids` keeps the old behavior: the returned ids are unchanged. A client that sent path-shaped or duplicate ids reads the map to match results back to its own ids. A guard test fails any tool module that calls `ensure_unique_ids` without surfacing the renames.
+
+## Amendment (2026-09-25): duplicate sent ids — the first occurrence keeps the sent id
+
+When one id is sent on several items, `ensure_unique_ids` keeps the sent id on the first
+occurrence in caller order and suffixes later occurrences `_1`, `_2`, … — the reference's own
+de-duplication, unchanged. A row's unsuffixed `evidence_ids` entry (or `top[].id`, or a
+returned evidence id) therefore names the **first physical item** sent under that id;
+`renamed_ids` maps the one sent id to the returned id of its last renamed occurrence (two
+duplicates: `{"diff": "diff_1"}` names the second item; three: `{"diff": "diff_2"}` names the
+third, later renames overwriting earlier ones, because the map is keyed by the sent id). The
+field remains additive and the behavior is unchanged; the harness pages state the rule so a
+caller colliding ids can read which physical item a row cites.

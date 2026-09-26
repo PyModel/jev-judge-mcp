@@ -50,6 +50,14 @@ def test_each_harness_page_keeps_the_hook_contract() -> None:
         assert "The command hook is not the `jev_gate` MCP tool, which stays the completion gate (ADR-0035)." in text
 
 
+def test_each_harness_page_states_the_duplicate_id_rule() -> None:
+    """ADR-0062's 2026-09-25 amendment: a caller colliding ids can read which physical item a row cites."""
+    for name in PAGES:
+        text = (HARNESS / name).read_text(encoding="utf-8")
+        assert "first occurrence in caller order keeps the sent id" in text
+        assert "renamed_ids" in text
+
+
 def test_readme_links_harness_docs() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert readme.count("docs/harness/") == 1

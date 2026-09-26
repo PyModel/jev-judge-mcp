@@ -34,6 +34,10 @@ Headless runs need an allow-rule. `acceptEdits` covers file edits. Add the publi
 
 Which tool fits a step is `docs/skills/jev-mcp/SKILL.md`. This repository ships no plugin manifest. A plugin entry is appropriate only when it points at that skill and embeds no machine path and no key.
 
+## Reading deduplicated ids
+
+`jev_find`, `jev_verify`, and `jev_gate` sanitize and de-duplicate caller ids. When the same id is sent on several items, the first occurrence in caller order keeps the sent id and later occurrences get `_1`, `_2`, …; an unsuffixed id in a row therefore names the first physical item sent under that id. The payload's `renamed_ids` maps the sent id to the returned id of its last renamed occurrence (ADR-0062).
+
 ## Command hook
 
 The hook is opt-in. It can deny or ask, and it can never allow. Empty stdout means the hook abstained and Claude Code keeps its own permission flow. Any other stdout is one JSON object whose `permissionDecision` is `deny` or `ask`.

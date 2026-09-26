@@ -8,6 +8,10 @@ This repository ships no native pi extension. The published tools stay the MCP s
 
 The command hook is not the `jev_gate` MCP tool, which stays the completion gate (ADR-0035).
 
+## Reading deduplicated ids
+
+`jev_find`, `jev_verify`, and `jev_gate` sanitize and de-duplicate caller ids. When the same id is sent on several items, the first occurrence in caller order keeps the sent id and later occurrences get `_1`, `_2`, …; an unsuffixed id in a row therefore names the first physical item sent under that id. The payload's `renamed_ids` maps the sent id to the returned id of its last renamed occurrence (ADR-0062).
+
 ## Command hook
 
 The hook is opt-in. It can deny or ask, and it can never allow. Empty stdout means the hook abstained. Any other stdout is one JSON object whose `permissionDecision` is `deny` or `ask`.
