@@ -182,6 +182,7 @@ The server reads environment variables only. It does not load a `.env` file.
 | `JEV_MCP_TRANSPORT` | `stdio` | `streamable-http` is experimental and binds `JEV_MCP_HTTP_HOST:JEV_MCP_HTTP_PORT`, default `127.0.0.1:8088`. Port 8000 is often already taken, so it is not the default |
 | `JEV_MCP_HTTP_TOKEN` | unset | bearer token for the HTTP transport; required on every request, and required for any non-loopback `JEV_MCP_HTTP_HOST` |
 | `JEV_MCP_LOG_LEVEL` | `INFO` | logs go to stderr |
+| `JEV_MCP_MAX_INFLIGHT` | `0` | cap on concurrent provider requests per process; extra calls wait instead of fanning out (`0` = no cap) |
 
 ## Operator notes
 

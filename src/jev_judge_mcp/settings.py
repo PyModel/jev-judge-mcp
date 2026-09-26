@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     log_level: LogLevel = Field(default="INFO", validation_alias="JEV_MCP_LOG_LEVEL")
     # Debug only: let telemetry spans record payload text (arguments, results, patterns). Off by default.
     telemetry_payloads: bool = Field(default=False, validation_alias="JEV_MCP_TELEMETRY_PAYLOADS")
+    # Opt-in cap on concurrent provider requests per process (ADR-0069): 0 (the default) is no cap.
+    max_inflight: int = Field(default=0, ge=0, validation_alias="JEV_MCP_MAX_INFLIGHT")
 
     @classmethod
     def settings_customise_sources(

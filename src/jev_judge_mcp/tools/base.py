@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+import anyio
 from mcp.types import Tool
 
 from jev_judge_mcp import cache
@@ -103,6 +104,8 @@ class Runtime:
         self._provider: JevProvider | None = None
         self._regex_executor = regex_executor or ProcessRegexExecutor()
         self.telemetry = Telemetry(payloads=settings.telemetry_payloads)
+        self._max_inflight = settings.max_inflight
+        self._inflight: anyio.Semaphore | None = None
 
     @property
     def regex_executor(self) -> RegexExecutor:
@@ -143,11 +146,27 @@ class Runtime:
                 # usage stays verbatim); `tokens{direction}` counts what the provider was billed.
                 span.attributes["cache"] = "hit"
                 return cached
-            evaluation = await self._provider.evaluate(wire_state, questions, self.model, None)
+            evaluation = await self._evaluate_capped(self._provider, wire_state, questions)
             await cache.astore(self.settings, self._provider.name, self.model, wire_state, questions, evaluation)
             span.attributes["input_tokens"] = evaluation.usage.input_tokens
             span.attributes["output_tokens"] = evaluation.usage.output_tokens
             return evaluation
+
+    async def _evaluate_capped(
+        self, provider: JevProvider, state: JsonValue, questions: Mapping[str, Question]
+    ) -> Evaluation:
+        """The provider call, behind the opt-in in-flight cap (ADR-0069); the default is no cap.
+
+        The semaphore is created on first use, inside the running loop, so `Runtime` stays
+        constructible outside one. A waiting call holds no provider resource and stays
+        cancellable, like any other wait.
+        """
+        if self._max_inflight <= 0:
+            return await provider.evaluate(state, questions, self.model, None)
+        if self._inflight is None:
+            self._inflight = anyio.Semaphore(self._max_inflight)
+        async with self._inflight:
+            return await provider.evaluate(state, questions, self.model, None)
 
     async def aclose(self) -> None:
         await self._regex_executor.aclose()

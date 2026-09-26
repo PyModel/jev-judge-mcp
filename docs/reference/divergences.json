@@ -346,6 +346,19 @@
       "python_behavior": "When JEV_MCP_CACHE is on, the cache is bounded and non-blocking (ADR-0047 amendment): the key serialization and the file IO run in a worker thread off the event loop, an entry older than JEV_MCP_CACHE_TTL_SECONDS (default seven days, 0 disables) is a miss and is deleted, and a store past JEV_MCP_CACHE_MAX_ENTRIES (default 4096, 0 disables) evicts oldest-mtime entries first. Replay of a live entry stays verbatim (response-cache)."
     },
     {
+      "id": "provider-inflight-cap",
+      "surface": "provider",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0069-optional-inflight-cap-on-provider-requests.md",
+      "tests": [
+        "tests/unit/test_runtime.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "No admission control exists: every concurrent tool call sends its provider request immediately, each with its own bounded retries.",
+      "python_behavior": "With JEV_MCP_MAX_INFLIGHT set to N (default 0, off \u2014 parity), a per-process semaphore in Runtime.ask holds concurrent provider evaluate calls to N; calls beyond the cap wait without holding provider resources and stay cancellable. Cache hits make no provider request and never take the semaphore. The retry policy and the no-whole-call-deadline property are unchanged (ADR-0057, ADR-0011)."
+    },
+    {
       "id": "score-tool-extension",
       "surface": "tool_schema",
       "tier": "both",
