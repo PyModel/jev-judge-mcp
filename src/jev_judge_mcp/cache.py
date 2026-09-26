@@ -79,16 +79,29 @@ def _stale(path: Path, ttl_seconds: float, *, now: float) -> bool:
 def _evict(directory: Path, cap: int) -> None:
     """Keep at most `cap` entries, oldest mtime first (ADR-0047 amendment). `0` never evicts.
 
-    Only this cache's `.json` entries are counted and removed; a directory that cannot be listed
-    or an entry that cannot be deleted is ignored, never an error.
+    A crashed atomic write leaves its mkstemp staging file (`.<name>.<random>`) behind; those are
+    dead on arrival and are unlinked first, before the cap counts live entries. A staging file of
+    a concurrent store can be caught by the same sweep: that store's `os.replace` then fails,
+    which means "not cached", the same silence as an unwritable directory. Only this cache's
+    `.json` entries and its staging files are touched; a directory that cannot be listed or an
+    entry that cannot be deleted is ignored, never an error.
     """
     if cap <= 0:
         return
     try:
-        entries = [entry for entry in directory.iterdir() if entry.suffix == ".json"]
+        entries = list(directory.iterdir())
     except OSError:
         return
-    excess = len(entries) - cap
+    live: list[Path] = []
+    for entry in entries:
+        if entry.suffix == ".json":
+            live.append(entry)
+        elif entry.name.startswith(".") and ".json." in entry.name:
+            try:
+                entry.unlink()
+            except OSError:
+                pass
+    excess = len(live) - cap
     if excess <= 0:
         return
 
@@ -98,7 +111,7 @@ def _evict(directory: Path, cap: int) -> None:
         except OSError:
             return (0.0, entry.name)
 
-    for entry in sorted(entries, key=stamp)[:excess]:
+    for entry in sorted(live, key=stamp)[:excess]:
         try:
             entry.unlink()
         except OSError:
@@ -178,7 +191,13 @@ async def alookup(
     settings: Settings, provider: ProviderName, model: str, state: JsonValue, questions: Mapping[str, Question]
 ) -> Evaluation | None:
     """`lookup` off the event loop: the key serializes the whole state, so neither the hash nor
-    the file read stalls concurrent calls while the cache is on (ADR-0047 amendment)."""
+    the file read stalls concurrent calls while the cache is on (ADR-0047 amendment).
+
+    With the cache off (the default) this returns before the thread hop: the off path schedules
+    nothing, exactly as before the bounds.
+    """
+    if not _enabled(settings):
+        return None
     return await anyio.to_thread.run_sync(lambda: lookup(settings, provider, model, state, questions))
 
 
@@ -191,4 +210,6 @@ async def astore(
     evaluation: Evaluation,
 ) -> None:
     """`store` off the event loop, for the same reason as `alookup` (ADR-0047 amendment)."""
+    if not _enabled(settings):
+        return
     await anyio.to_thread.run_sync(lambda: store(settings, provider, model, state, questions, evaluation))

@@ -425,10 +425,6 @@ def main() -> None:
     if hook_requested(sys.argv):
         from jev_judge_mcp.hook import main as hook_main
 
-        # The redacting handler before any provider call can log (ADR-0008): logging's lastResort
-        # stderr has no filter, and a hook failure reaches stderr.
-        hook_settings = load_settings()
-        configure_logging(hook_settings.log_level, hook_settings.secret_values())
         sys.exit(hook_main(sys.argv[2:]))
     if doctor_requested(sys.argv):
         from jev_judge_mcp.doctor import main as doctor_main

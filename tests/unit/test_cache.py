@@ -260,3 +260,16 @@ async def test_cache_key_and_file_io_run_off_the_event_loop(cache_env: Path, mon
     await runtime.ask({"subject": "x"}, _question())
     assert len(provider.requests) == 1  # still a verbatim hit through the off-loop path
     assert threads and all(ident != threading.get_ident() for ident in threads)
+
+
+async def test_a_crashed_atomic_write_leftover_is_swept_on_the_next_store(cache_env: Path) -> None:
+    """A SIGKILL between mkstemp and os.replace leaves a staging file; the next store unlinks it."""
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    await runtime.ask({"subject": "x"}, _question())
+    entry = next(iter(cache_env.iterdir()))
+    (cache_env / f".{entry.name}.ab12").write_text("partial", encoding="utf-8")
+    await runtime.ask({"subject": "y"}, _question())
+    names = [path.name for path in cache_env.iterdir()]
+    assert len(names) == 2  # two live entries; the staging file is gone
+    assert all(name.endswith(".json") for name in names)

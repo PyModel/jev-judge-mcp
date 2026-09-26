@@ -98,6 +98,13 @@ def main(
         return fail_open_or_ask(True, "", "input_too_large")
 
     settings = load_settings()
+    # The redacting handler before any provider call can log (ADR-0008), and after the usage and
+    # stdin gates: a misconfigured environment still gets their one-line answers, never a
+    # settings traceback. Imported here so the short-lived hook process loads the server module
+    # only once it runs for real.
+    from jev_judge_mcp.server import configure_logging
+
+    configure_logging(settings.log_level, settings.secret_values())
     model = resolve_model(settings)
     chosen = provider
     if chosen is None:

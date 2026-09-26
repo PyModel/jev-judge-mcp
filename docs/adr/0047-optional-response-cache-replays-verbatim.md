@@ -67,8 +67,9 @@ The cache stays opt-in and replay stays verbatim. Three operational properties c
   model change under the same slug would replay stale answers forever, because the key covers
   only what the caller sent.
 - **Bounded size.** `JEV_MCP_CACHE_MAX_ENTRIES` (default 4096; `0` disables) caps the entry count;
-  a store past the cap evicts oldest-mtime entries first. "Delete the directory to clear it"
-  still holds; the cap keeps the directory from growing without bound.
+  a store past the cap evicts oldest-mtime entries first, and a crashed atomic write's mkstemp
+  staging file (`.⟨name⟩.⟨random⟩`) is swept by the next store. "Delete the directory to clear
+  it" still holds; the cap keeps the directory from growing without bound.
 
 Both knobs are read only when `JEV_MCP_CACHE` is on; with the cache off nothing reads or writes
 the directory, exactly as before. Registered divergence: `response-cache-bounds` in

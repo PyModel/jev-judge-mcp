@@ -1,8 +1,8 @@
 """The command hook denies, asks, or writes nothing. It is not an MCP tool."""
 
 import ast
+import io
 import json
-import logging
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -432,42 +432,26 @@ def _refuse_hook(argv: list[str]) -> int:
 
 def test_server_dispatches_hook_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[list[str]] = []
-    settings_loads: list[None] = []
 
     def fake(argv: list[str]) -> int:
         seen.append(list(argv))
         return 0
 
-    def record_settings() -> object:
-        settings_loads.append(None)
-        return load_settings()
-
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook", "gate"])
-    monkeypatch.setattr("jev_judge_mcp.server.load_settings", record_settings)
+    monkeypatch.setattr("jev_judge_mcp.server.load_settings", _refuse_settings)
     monkeypatch.setattr("jev_judge_mcp.server.build_server", _refuse_server)
     monkeypatch.setattr("jev_judge_mcp.hook.main", fake)
-    root = logging.getLogger()
-    saved = (root.handlers[:], root.level)
-    try:
-        with pytest.raises(SystemExit) as caught:
-            server_main()
-    finally:
-        root.handlers[:], root.level = saved
+    with pytest.raises(SystemExit) as caught:
+        server_main()
     assert caught.value.code == 0
     assert seen == [["gate"]]
-    assert len(settings_loads) == 1  # one load, to configure logging; no server is built
 
 
 def test_server_rejects_a_bare_hook(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook"])
-    monkeypatch.setattr("jev_judge_mcp.server.build_server", _refuse_server)
-    root = logging.getLogger()
-    saved = (root.handlers[:], root.level)
-    try:
-        with pytest.raises(SystemExit) as caught:
-            server_main()
-    finally:
-        root.handlers[:], root.level = saved
+    monkeypatch.setattr("jev_judge_mcp.server.load_settings", _refuse_settings)
+    with pytest.raises(SystemExit) as caught:
+        server_main()
     captured = capsys.readouterr()
     assert caught.value.code == 2
     assert captured.out == ""
@@ -523,3 +507,36 @@ def test_hook_is_not_a_published_tool() -> None:
     names = [tool.name for tool in TOOLS]
     assert len(names) == 11  # the reference ten plus jev_score (ADR-0048)
     assert "hook" not in names
+
+
+def test_a_bare_hook_with_an_invalid_env_still_prints_usage(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The usage gate answers before any settings parsing: an invalid numeric env cannot traceback."""
+    monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook"])
+    monkeypatch.setenv("JEV_MCP_MAX_INFLIGHT", "-3")
+    monkeypatch.setattr("jev_judge_mcp.server.load_settings", _refuse_settings)
+    monkeypatch.setattr("jev_judge_mcp.server.build_server", _refuse_server)
+    with pytest.raises(SystemExit) as caught:
+        server_main()
+    captured = capsys.readouterr()
+    assert caught.value.code == 2
+    assert "usage" in captured.err
+    assert "ValidationError" not in captured.err
+
+
+def test_hook_gate_with_bad_stdin_and_an_invalid_env_fails_open(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The bad-stdin fail-open gate also answers before settings: exit 0, one stderr line, no traceback."""
+    monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook", "gate"])
+    monkeypatch.setenv("JEV_MCP_MAX_INFLIGHT", "-3")
+    monkeypatch.setattr("jev_judge_mcp.server.load_settings", _refuse_settings)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("not-json"))
+    with pytest.raises(SystemExit) as caught:
+        server_main()
+    captured = capsys.readouterr()
+    assert caught.value.code == 0
+    assert captured.out == ""
+    assert "stdin was not hook-event JSON" in captured.err
+    assert "ValidationError" not in captured.err

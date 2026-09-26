@@ -239,3 +239,48 @@ def test_a_port_taken_after_the_gate_refuses_with_the_one_line(monkeypatch: pyte
             http_serve_sockets(http_settings(monkeypatch, port))
     finally:
         holder.close()
+
+
+def test_serve_hands_uvicorn_the_prebound_sockets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The wiring J7 claims: uvicorn listens on the sockets this process bound, never its own bind.
+
+    Dropping `sockets=` from the serve call would reopen the probe's TOCTOU gap and pass every
+    other layer, so this records what `serve` was actually handed: the pre-bound sockets for
+    streamable-http, and no serve call at all for stdio.
+    """
+    import anyio
+
+    from jev_judge_mcp import server as server_module
+    from jev_judge_mcp.server import JevMCPServer, build_server
+
+    serve_call = server_module._serve  # pyright: ignore[reportPrivateUsage]
+    uvicorn_server = server_module._UvicornServer  # pyright: ignore[reportPrivateUsage]
+    handed: list[list[socket.socket] | None] = []
+    listened: list[int] = []
+
+    async def fake_serve(self: object, sockets: list[socket.socket] | None = None) -> None:
+        del self
+        handed.append(sockets)
+        for sock in sockets or []:
+            listened.append(sock.getsockname()[1])
+            sock.close()
+
+    async def fake_stdio(self: object) -> None:
+        del self
+        return None
+
+    monkeypatch.setattr(uvicorn_server, "serve", fake_serve)
+    monkeypatch.setattr(JevMCPServer, "run_stdio_async", fake_stdio)
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port: int = probe.getsockname()[1]
+    anyio.run(serve_call, build_server(load_settings()), http_settings(monkeypatch, port))
+    assert handed[-1] is not None
+    assert listened == [port]
+
+    monkeypatch.delenv("JEV_MCP_TRANSPORT", raising=False)
+    stdio_settings = load_settings()
+    assert http_serve_sockets(stdio_settings) is None
+    anyio.run(serve_call, build_server(stdio_settings), stdio_settings)
+    assert len(handed) == 1  # stdio never asks uvicorn to serve

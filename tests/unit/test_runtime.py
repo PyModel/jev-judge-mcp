@@ -135,3 +135,68 @@ async def test_the_inflight_knob_holds_concurrency_at_its_cap(monkeypatch: pytes
     monkeypatch.delenv("JEV_MCP_CACHE", raising=False)
     provider = await _two_concurrent_asks(load_settings())
     assert provider.max_in_flight == 1
+
+
+class _ReleaseProvider(JevProvider):
+    """Holds every evaluate call until `release` is set; counts concurrency like _GatedProvider."""
+
+    name: ClassVar[ProviderName] = "compatible"
+
+    def __init__(self, release: anyio.Event) -> None:
+        super().__init__(Redactor(()))
+        self.release = release
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    @override
+    async def evaluate(
+        self, state: JsonValue, questions: Mapping[str, Question], model: str, timeout: float | None
+    ) -> Evaluation:
+        del state, questions, timeout
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            await self.release.wait()
+            return Evaluation(answers={}, usage=Usage(), provider="compatible", model=model)
+        finally:
+            self.in_flight -= 1
+
+    @override
+    async def _send(
+        self, state: JsonValue, questions: dict[str, JsonValue], model: str, timeout: float | None
+    ) -> Evaluation:
+        raise NotImplementedError  # evaluate is overridden; _send never runs
+
+    @override
+    async def aclose(self) -> None:
+        return None
+
+
+async def test_a_cancelled_inflight_waiter_leaks_no_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller cancelled while queued on the cap holds nothing: the next caller still runs (ADR-0069)."""
+    monkeypatch.setenv("JEV_MCP_MAX_INFLIGHT", "1")
+    monkeypatch.delenv("JEV_MCP_CACHE", raising=False)
+    release = anyio.Event()
+    provider = _ReleaseProvider(release)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    questions: dict[str, Question] = {"q": NoulQuestion("Is this a question?", NoulCriteria("yes", "no"))}
+    done: list[str] = []
+
+    async def ask(subject: str) -> None:
+        await runtime.ask({"state": subject}, questions)
+        done.append(subject)
+
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as outer:
+            outer.start_soon(ask, "a")
+            await anyio.sleep(0.01)  # "a" holds the one slot inside evaluate
+            async with anyio.create_task_group() as cancelled:
+                cancelled.start_soon(ask, "b")  # "b" queues on the semaphore
+                await anyio.sleep(0.01)
+                cancelled.cancel_scope.cancel()  # "b" is cancelled while still waiting
+            outer.start_soon(ask, "c")  # "c" queues behind the cancelled waiter
+            await anyio.sleep(0.01)
+            release.set()
+
+    assert provider.max_in_flight == 1  # the cap held: one evaluate at a time
+    assert done == ["a", "c"]  # the cancelled waiter leaked no slot; "c" completed
