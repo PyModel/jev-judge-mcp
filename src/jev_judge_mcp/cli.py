@@ -72,6 +72,13 @@ def gate_main(argv: Sequence[str]) -> int:
     return _run_tool("jev_gate", arguments)
 
 
+def calibrate_main(argv: Sequence[str]) -> int:
+    """Advisory threshold fitting on the caller's labeled rows (ADR-0069); offline, no provider."""
+    from jev_judge_mcp import calibrate
+
+    return calibrate.main(argv)
+
+
 def _gate_options(argv: Sequence[str]) -> dict[str, str]:
     if not argv or (argv[0].startswith("-") and argv[0] not in ("--diff", "--claims", "--tests", "--request")):
         if argv and argv[0] in ("-h", "--help"):

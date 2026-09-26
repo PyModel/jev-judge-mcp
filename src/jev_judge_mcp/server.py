@@ -353,6 +353,11 @@ def setup_requested(argv: list[str]) -> bool:
     return len(argv) > 1 and argv[1] == "setup"
 
 
+def calibrate_requested(argv: list[str]) -> bool:
+    """True only for the `calibrate` subcommand (ADR-0069). Offline; no provider, no secrets."""
+    return len(argv) > 1 and argv[1] == "calibrate"
+
+
 def judge_requested(argv: list[str]) -> bool:
     return len(argv) > 1 and argv[1] == "judge"
 
@@ -386,6 +391,7 @@ subcommands:
   hook               run the completion gate hook
   doctor             diagnose the local setup
   setup              store the TypeSafe API key
+  calibrate          advisory threshold fitting on your labeled rows (offline)
   judge              call one tool; one JSON object on stdin
   gate               review a git range from local repo files
   completion-hook    opt-in completion gate
@@ -434,6 +440,10 @@ def main() -> None:
         from jev_judge_mcp.setup import main as setup_main
 
         sys.exit(setup_main(sys.argv[2:]))
+    if calibrate_requested(sys.argv):
+        from jev_judge_mcp.cli import calibrate_main
+
+        sys.exit(calibrate_main(sys.argv[2:]))
     if judge_requested(sys.argv) or gate_cli_requested(sys.argv) or completion_hook_requested(sys.argv):
         subcommand_settings = load_settings()
         ensure_secrets_redactable(subcommand_settings)

@@ -40,7 +40,7 @@ Live bounds:
 | `datasets/` | JSONL cases `{"id", "family", "input", "gold"}`; `input` is the tool arguments. Small `synthetic/` sets, plus `bench150/items.jsonl` (the bench's 150 item texts, labels still `draft`) |
 | `manifests/` | One JSON per run: `tool`, `dataset` (relative to `datasets/`), pinned `model`, split `salt`, scorer `params` |
 | `scorers/` | `metrics.py` (generic math), `tools.py` (one scorer per tool), `fields.py` (tolerant JSON readers) |
-| `calibration/` | `split.py` (60/20/20 by family), `rows.py` (rows from `scorers/tools.py` `judgments`), `flips.py`. `bounds.py`, `threshold.py`, `targets.py` moved into `jev_judge_mcp.calibration` so the installed `calibrate` command shares them |
+| `calibration/` | `split.py` (60/20/20 by family), `rows.py` (rows from `scorers/tools.py` `judgments`), `flips.py`. `bounds.py`, `threshold.py`, `targets.py` moved into `jev_judge_mcp.calibration` (ADR-0069) so the installed `calibrate` command shares them |
 | `runners/` | `score.py` (offline), `live.py` (guarded), `manifest.py` (file formats) |
 | `baselines/` | `ranking.py`: original order and BM25. The embeddings baseline raises `NotImplementedError`: it needs a pinned embedding model |
 | `reports/` | Per-run directories and working reports (gitignored). Finished reports — `bench150.*`, `agent-outcomes.md`, `p8-pilot.md` — are committed as records via `.gitignore` exceptions |
