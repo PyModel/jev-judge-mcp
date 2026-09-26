@@ -45,8 +45,8 @@ DEFINITION = define(
                 },
                 "minItems": SCORE.levels_min,
                 "maxItems": SCORE.levels_max,
-                "description": f"The ordered rubric, low to high. {SCORE.levels_min}-{SCORE.levels_max} levels; each "
-                "one line describing that position on the scale.",
+                "description": f"The ordered rubric, low to high: {SCORE.levels_min}-{SCORE.levels_max} levels, "
+                f"each one a plain string — one line describing that position on the scale.",
             },
             "context": {
                 "type": "string",

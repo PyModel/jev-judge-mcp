@@ -80,7 +80,8 @@ DEFINITION = define(
                 },
                 "minItems": EXTRACT.fields_min,
                 "maxItems": EXTRACT.fields_max,
-                "description": f"Fields to extract. Up to {EXTRACT.fields_max} per call, all judged in one request.",
+                "description": f"Fields to extract: each one an object {{id, pattern, description}} with flags "
+                f"optional. Up to {EXTRACT.fields_max} per call, all judged in one request.",
             },
             "purpose": {"type": "string", "description": "What the extraction is for; shared across fields."},
             "auto_accept": {

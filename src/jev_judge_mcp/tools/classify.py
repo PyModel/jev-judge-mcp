@@ -34,8 +34,8 @@ DEFINITION = define(
                 },
                 "minItems": CLASSIFY.items_min,
                 "maxItems": CLASSIFY.items_max,
-                "description": f"Items to classify. Text is truncated at {CLASSIFY.item_units} characters; send "
-                "bounded excerpts, not whole documents.",
+                "description": f"Items to classify: each one an object {{id, text}} with text required. Text is "
+                f"truncated at {CLASSIFY.item_units} characters; send bounded excerpts, not whole documents.",
             },
             "classes": {
                 "type": "array",
@@ -47,7 +47,8 @@ DEFINITION = define(
                 },
                 "minItems": CLASSIFY.classes_min,
                 "maxItems": CLASSIFY.classes_max,
-                "description": "Shared class catalog. Strong descriptions carry the decision: a precise definition, "
+                "description": "Shared class catalog: each class an object {id, description} with description "
+                "required. Strong descriptions carry the decision: a precise definition, "
                 "what belongs, what does not, precedence over overlapping classes, and a short example.",
             },
             "purpose": {"type": "string", "description": "What this classification is for; shared across all items."},

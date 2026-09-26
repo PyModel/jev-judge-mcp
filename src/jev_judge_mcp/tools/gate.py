@@ -71,7 +71,7 @@ DEFINITION = define(
             },
             "diff": {
                 "description": (
-                    "Proposed patch, or a file list of path and patch. "
+                    "Proposed patch, or a file list of {path, patch} objects. "
                     f"A string is truncated at {GATE.doc_units} chars."
                 ),
                 "anyOf": [
@@ -96,7 +96,7 @@ DEFINITION = define(
                 "items": {"type": "string", "minLength": 1},
                 "minItems": GATE.claims_min,
                 "maxItems": GATE.claims_max,
-                "description": "Completion claims to check against evidence, each truncated at "
+                "description": "Completion claims to check against evidence: each one a plain string, truncated at "
                 f"{GATE.claim_units} chars. Up to {GATE.claims_max} per call.",
             },
             "evidence": EVIDENCE_SCHEMA,

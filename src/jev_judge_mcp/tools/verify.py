@@ -44,7 +44,8 @@ DEFINITION = define(
                 "type": "array",
                 "items": {"type": "string"},
                 "minItems": VERIFY.claims_min,
-                "description": "Claims to verify, e.g. individual factual statements from a report.",
+                "description": "Claims to verify: each one a plain string, not an object, e.g. individual factual "
+                "statements from a report.",
             },
             "evidence": EVIDENCE_SCHEMA,
             "auto_accept": {

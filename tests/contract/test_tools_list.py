@@ -103,8 +103,20 @@ def test_published_snapshot_round_trips_on_the_wire() -> None:
     assert all("outputSchema" not in tool for tool in served)  # ADR-0006: no output schemas in 1.0
 
 
-SCHEMA_DIVERGENCE = {"jev_gate", "jev_verify", "jev_review"}
-"""Input schemas gained optional fields (ADR-0062, ADR-0066, ADR-0067). Names and the other tools stay frozen."""
+SCHEMA_DIVERGENCE = {
+    "jev_gate",
+    "jev_verify",
+    "jev_review",
+    "jev_find",
+    "jev_classify",
+    "jev_decide",
+    "jev_rerank",
+    "jev_compare",
+    "jev_extract",
+}
+"""Input schemas gained optional fields (ADR-0062, ADR-0066, ADR-0067) and, for six more tools,
+argument descriptions that state item shapes (divergence `argument-item-shape-descriptions`,
+ADR-0013 amendment). Names, titles, execution, jev_screen, and every constraint stay frozen."""
 
 
 def test_served_tools_match_snapshot() -> None:

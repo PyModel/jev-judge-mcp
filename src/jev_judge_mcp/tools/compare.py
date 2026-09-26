@@ -52,8 +52,8 @@ DEFINITION = define(
                 "type": "array",
                 "items": {"type": "string", "minLength": COMPARE.aspect_min, "maxLength": COMPARE.aspect_max},
                 "maxItems": COMPARE.aspects_max,
-                "description": "Named aspects to judge independently (e.g. 'price', 'launch date'). Each tests one "
-                "property.",
+                "description": "Named aspects to judge independently (e.g. 'price', 'launch date'): each one a plain "
+                "string. Each tests one property.",
             },
             "purpose": {"type": "string", "description": "What this comparison is for; helps disambiguate overlap."},
             "auto_accept": {

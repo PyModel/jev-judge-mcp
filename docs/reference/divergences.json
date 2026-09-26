@@ -580,6 +580,19 @@
       "python_behavior": "jev_gate and jev_review also accept a file list. Evidence items may carry kind and role. tests_format and tests_sha256 are optional. ADR-0067."
     },
     {
+      "id": "argument-item-shape-descriptions",
+      "surface": "tool_schema",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0013-one-registry-one-execution-kernel-ten-tool-definitions.md",
+      "tests": [
+        "tests/contract/test_tools_list.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "Array-typed arguments are described by what they are for; the item shape is only implied by the items schema.",
+      "python_behavior": "The description of every array-typed argument states its item shape plainly: claims, requirements, aspects, and rubric levels are plain strings; evidence items, classify items and classes, decide and find/rerank candidates, extract fields, and review/gate file lists are objects with named keys. A caller that pattern-matches from another jev surface cannot mis-shape its first call. No constraint changes: the items schemas are untouched and jev_screen stays byte-identical (ADR-0013 amendment, 2026-09-25)."
+    },
+    {
       "id": "error-code-content-block",
       "surface": "result",
       "tier": "both",

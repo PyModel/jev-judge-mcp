@@ -34,7 +34,8 @@ DEFINITION = define(
                 "description": "What relevance is measured against, in natural language.",
             },
             "candidates": candidates_schema(
-                f"Candidates to search. Up to {CANDIDATES.max_items} in one call; texts are truncated at "
+                f"Candidates to search: each one an object {{id, text}} with text required. "
+                f"Up to {CANDIDATES.max_items} in one call; texts are truncated at "
                 f"{CANDIDATES.text_units} chars."
             ),
             "top_k": {

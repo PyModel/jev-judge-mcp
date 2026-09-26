@@ -69,3 +69,18 @@ in `tools/list`. The published surface may grow beyond the snapshot when the add
 registered divergence with its own ADR, caps, and pinning tests; the extensions register after the
 snapshot ten, in their own order. First extension: `jev_score` (ADR-0048).
 
+
+## Amendment (2026-09-25): argument descriptions state item shapes
+
+The snapshot ten stay byte-identical in name, title, description, execution, and every schema
+constraint. One text-level divergence is now sanctioned
+(`docs/reference/divergences.json`, `argument-item-shape-descriptions`): the description of
+every array-typed argument states its item shape plainly — claims, requirements, aspects, and
+rubric levels are plain strings; evidence items, classify items and classes, decide and
+find/rerank candidates, extract fields, and review/gate file lists are objects with named keys.
+The 2026-09-25 Claude dogfood mis-shaped four first calls by pattern-matching from other jev
+surfaces; the schemas already rejected them with the typed `invalid_arguments` error, and the
+descriptions now say the shape before that rejection. No constraint changes: the `items`
+schemas are untouched, `jev_screen` stays byte-pinned, and
+`tests/contract/test_tools_list.py` keeps pinning name, title, and execution for the affected
+tools (`SCHEMA_DIVERGENCE`).

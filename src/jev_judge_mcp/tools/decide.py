@@ -76,15 +76,15 @@ DEFINITION = define(
                 },
                 "minItems": DECIDE.candidates_min,
                 "maxItems": DECIDE.candidates_max,
-                "description": "The alternatives. Include 'do nothing' or 'gather more evidence' as candidates when "
-                "useful.",
+                "description": "The alternatives: each one an object {id, description} with both required. "
+                "Include 'do nothing' or 'gather more evidence' as candidates when useful.",
             },
             "requirements": {
                 "type": "array",
                 "items": {"type": "string", "minLength": DECIDE.requirement_min, "maxLength": DECIDE.requirement_max},
                 "maxItems": DECIDE.requirements_max,
-                "description": "Specific requirements to check per candidate. Each must test one property, not "
-                "overall goodness.",
+                "description": "Specific requirements to check per candidate: each one a plain string. "
+                "Each must test one property, not overall goodness.",
             },
             "escape_hatches": {
                 "type": "boolean",

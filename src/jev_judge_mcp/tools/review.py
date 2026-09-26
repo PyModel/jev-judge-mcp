@@ -53,7 +53,7 @@ DEFINITION = define(
             },
             "diff": {
                 "description": (
-                    "Proposed patch, file excerpt, change summary, or a file list. "
+                    "Proposed patch, file excerpt, change summary, or a file list of {path, patch} objects. "
                     f"A string is truncated at {REVIEW.doc_units} chars."
                 ),
                 "anyOf": [

@@ -52,7 +52,8 @@ EVIDENCE_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
             },
             "minItems": VERIFY.evidence_min,
-            "description": "Multiple evidence items; each claim is also matched to the item it rests on.",
+            "description": "Multiple evidence items, each an object {id, text, kind, role} with text "
+            "required; each claim is also matched to the item it rests on.",
         },
     ]
 }
