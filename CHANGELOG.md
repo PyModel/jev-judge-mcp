@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.3.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.2.2...v0.3.0) (2026-09-26)
+
+
+### Features
+
+* **cli:** add judge and gate commands and an opt-in completion hook ([76dd45a](https://github.com/PyModel/jev-judge-mcp/commit/76dd45afd7ff4e91cba123c6a8cc26d9f768a3a5))
+* **doctor:** print policy_version beside the policy defaults ([8cdba50](https://github.com/PyModel/jev-judge-mcp/commit/8cdba50f818765948ea15ed68b472185db024d6d))
+* **hook:** split decision rendering and add JEV_HOOK_REQUIRED ([50febb1](https://github.com/PyModel/jev-judge-mcp/commit/50febb1d33fe5e7242908bc9fa58bcffc1149ace))
+* **mcp:** build initialize instructions from the tool registry ([2d708f1](https://github.com/PyModel/jev-judge-mcp/commit/2d708f1001e132fee6f630afe53b2457543e15a6))
+* **tools:** add response fields, implicit evidence, and file diffs ([a8d6af5](https://github.com/PyModel/jev-judge-mcp/commit/a8d6af5114378ca8a957ba444e04c2fe5cb0b965))
+
+
+### Bug Fixes
+
+* close the Claude dogfood release blockers ([b05d646](https://github.com/PyModel/jev-judge-mcp/commit/b05d646b05576f3f203f10ffd1f77097598f37cd))
+* close the stage-8 findings on the CLI, hook, and file list ([cc70abd](https://github.com/PyModel/jev-judge-mcp/commit/cc70abdab0cf56d6b4ccf2a71119fe81da6b054e))
+* **harness:** match Bash so the completion hook can fire ([b06caec](https://github.com/PyModel/jev-judge-mcp/commit/b06caec35d6700eca448a6f0b1341f4d44161930))
+* keep the live typesafe request id header ([6b52f8f](https://github.com/PyModel/jev-judge-mcp/commit/6b52f8f0cc69e335f2784482799be52fdcde9222))
+* map sanitized ids back to the caller with renamed_ids ([8422a3e](https://github.com/PyModel/jev-judge-mcp/commit/8422a3eec1c0f8f2a33709f05c9c69c3da5bd821))
+
+
+### Documentation
+
+* describe the CLI, completion hook, and response fields ([0a1681e](https://github.com/PyModel/jev-judge-mcp/commit/0a1681ebd33457a9d5c9d562f0ba262bdc6c10ca))
+
 ## [0.2.2](https://github.com/PyModel/jev-judge-mcp/compare/v0.2.1...v0.2.2) (2026-09-25)
 
 
