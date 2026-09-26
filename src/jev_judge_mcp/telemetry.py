@@ -165,7 +165,9 @@ _active: ContextVar[tuple["Telemetry", Span] | None] = ContextVar("jev_judge_mcp
 class Telemetry:
     """A server's recorder: opens spans and hands each finished one to the span log and metrics."""
 
-    def __init__(self, *, payloads: bool = False, capacity: int = 1024, metrics_interval: int = METRICS_INTERVAL_SPANS) -> None:
+    def __init__(
+        self, *, payloads: bool = False, capacity: int = 1024, metrics_interval: int = METRICS_INTERVAL_SPANS
+    ) -> None:
         self.payloads = payloads
         """The debug flag: whether spans may record payload text."""
         self.metrics_interval = metrics_interval

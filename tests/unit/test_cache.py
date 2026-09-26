@@ -5,7 +5,9 @@ import os
 import stat
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
 import pytest
 
@@ -241,13 +243,17 @@ async def test_cache_key_and_file_io_run_off_the_event_loop(cache_env: Path, mon
 
     real_lookup, real_store = cache_module.lookup, cache_module.store
     threads: list[int] = []
+    T = TypeVar("T")
 
-    def record(call: object, *args: object, **kwargs: object) -> object:
-        threads.append(threading.get_ident())
-        return call(*args, **kwargs)  # type: ignore[reportCallIssue] -- delegates to the real function
+    def in_worker(call: Callable[..., T]) -> Callable[..., T]:
+        def wrapped(*args: object, **kwargs: object) -> T:
+            threads.append(threading.get_ident())
+            return call(*args, **kwargs)
 
-    monkeypatch.setattr(cache_module, "lookup", lambda *a, **k: record(real_lookup, *a, **k))
-    monkeypatch.setattr(cache_module, "store", lambda *a, **k: record(real_store, *a, **k))
+        return wrapped
+
+    monkeypatch.setattr(cache_module, "lookup", in_worker(real_lookup))
+    monkeypatch.setattr(cache_module, "store", in_worker(real_store))
     provider = FakeProvider(ANSWERS)
     runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
     await runtime.ask({"subject": "x"}, _question())

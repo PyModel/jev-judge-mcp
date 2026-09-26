@@ -9,10 +9,8 @@ import pytest
 from jev_judge_mcp.server import (
     HTTP_BIND_ATTEMPTS,
     HTTP_BIND_BUDGET_S,
-    _bind_http_sockets,
-    _serve,
-    build_server,
     ensure_http_port_free,
+    http_serve_sockets,
 )
 from jev_judge_mcp.settings import Settings, load_settings
 
@@ -215,32 +213,29 @@ def test_an_exhausted_budget_does_not_keep_retrying(monkeypatch: pytest.MonkeyPa
     assert clock.sleeps == []
 
 
-def test_the_serve_bind_keeps_its_sockets_open() -> None:
+def test_the_serve_bind_keeps_its_sockets_open(monkeypatch: pytest.MonkeyPatch) -> None:
     """`http_serve_sockets` binds and holds: those sockets are the listener uvicorn is handed."""
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port: int = probe.getsockname()[1]
-    sockets = _bind_http_sockets("127.0.0.1", port)
+    bound = http_serve_sockets(http_settings(monkeypatch, port))
+    assert bound is not None  # 127.0.0.1 resolves; a non-resolving host returns None
     try:
-        assert sockets
-        assert all(sock.getsockname()[1] == port for sock in sockets)
+        assert len(bound) >= 1
+        assert all(sock.getsockname()[1] == port for sock in bound)
     finally:
-        for sock in sockets:
+        for sock in bound:
             sock.close()
 
 
 def test_a_port_taken_after_the_gate_refuses_with_the_one_line(monkeypatch: pytest.MonkeyPatch) -> None:
     """The gap between the startup probe and the listen is closed: the serve bind itself refuses."""
-    import anyio
-
     holder = socket.socket()
     holder.bind(("127.0.0.1", 0))
     holder.listen(1)
     port: int = holder.getsockname()[1]
-    settings = http_settings(monkeypatch, port)
-    server = build_server(load_settings())
     try:
         with pytest.raises(SystemExit, match=f"JEV_MCP_HTTP_PORT={port} is already in use"):
-            anyio.run(_serve, server, settings)
+            http_serve_sockets(http_settings(monkeypatch, port))
     finally:
         holder.close()

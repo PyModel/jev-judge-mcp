@@ -15,7 +15,7 @@ import pytest
 from jev_judge_mcp.errors import RedactingFilter
 from jev_judge_mcp.server import main
 
-_SECRET = "subcommand-fixture-secret-1"
+_CONFIGURED = "subcommand-fixture-secret-1"
 
 SUBCOMMAND_MAINS = {
     "judge": ("jev_judge_mcp.cli", "judge_main"),
@@ -35,11 +35,11 @@ def test_a_subcommand_configures_redacting_logging_before_it_runs(
     def fake_main(*_args: object) -> int:
         handlers = logging.getLogger().handlers
         seen["redacting"] = [any(isinstance(f, RedactingFilter) for f in handler.filters) for handler in handlers]
-        logging.getLogger("jev_judge_mcp.subcommand").error("token %s", _SECRET)
+        logging.getLogger("jev_judge_mcp.subcommand").error("token %s", _CONFIGURED)
         return 0
 
     monkeypatch.setattr(f"{module}.{attribute}", fake_main)
-    monkeypatch.setenv("JEV_MCP_HTTP_TOKEN", _SECRET)  # a configured secret for the filter to hold
+    monkeypatch.setenv("JEV_MCP_HTTP_TOKEN", _CONFIGURED)  # a configured secret for the filter to hold
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", subcommand, "rest"])
     root = logging.getLogger()
     saved = (root.handlers[:], root.level)
@@ -53,4 +53,4 @@ def test_a_subcommand_configures_redacting_logging_before_it_runs(
     assert seen["redacting"] == [True]  # one handler, and it redacts
     err = capsys.readouterr().err
     assert "token [redacted]" in err
-    assert _SECRET not in err
+    assert _CONFIGURED not in err
