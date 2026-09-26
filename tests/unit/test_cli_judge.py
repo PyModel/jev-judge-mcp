@@ -475,6 +475,7 @@ def test_an_iserror_envelope_codes_the_text_like_the_wire_block(
     `input_too_large`, while the one parity mapping (`responses.error_code`, what the toolset's
     code block emits for this text) says `provider`.
     """
+
     async def fake_call(_name: str, _arguments: dict[str, Any]) -> CallToolResult:
         return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
 

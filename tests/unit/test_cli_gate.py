@@ -268,7 +268,7 @@ def test_required_flag_stays_open_after_the_provider_was_reached(
         pytest.param("git pushd", False, id="pushd"),
         pytest.param("gh pr checkout", False, id="other-pr-verb"),
         pytest.param("GIT PUSH", False, id="case-sensitive"),
-        pytest.param("git push -m \"unterminated", False, id="untokenizable-abstains"),
+        pytest.param('git push -m "unterminated', False, id="untokenizable-abstains"),
     ],
 )
 def test_completion_matching_reads_tokens_not_a_string_prefix(command: str, matches: bool) -> None:
