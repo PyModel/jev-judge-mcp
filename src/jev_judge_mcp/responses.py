@@ -123,11 +123,32 @@ def next_checks_for(codes: Sequence[object]) -> list[str]:
     return [NEXT_CHECKS[str(code)] for code in codes if str(code) in NEXT_CHECKS]
 
 
+CALLER_INPUT_ERROR_PREFIXES = (
+    "Duplicate ",
+    "diff file list",
+    "Thresholds must satisfy",
+)
+"""Prefixes of a ToolError that refuses the caller's own arguments before anything is asked.
+
+Duplicate caller ids (jev_decide, jev_classify, jev_extract, jev_rerank), a diff that is not the
+file-list shape (jev_review, jev_gate), and a broken auto_accept/review_at pair are argument
+validation, not provider failures. A budget refusal is not here: it keeps its own
+`input_too_large` code below.
+"""
+
+ESCAPE_HATCH_COLLISION = " collides with an escape hatch;"
+"""Infix of jev_decide's refusal of a candidate id that shadows an escape hatch."""
+
+
 def error_code(text: str) -> str:
     """A code for an ``isError`` result. The text itself is not changed."""
     if text.startswith("No Jev provider credentials") or text.startswith("jev-judge-mcp hook: fail-open"):
         return "auth"
-    if text.startswith("MCP error -32602"):
+    if (
+        text.startswith("MCP error -32602")
+        or ESCAPE_HATCH_COLLISION in text
+        or any(text.startswith(prefix) for prefix in CALLER_INPUT_ERROR_PREFIXES)
+    ):
         return "invalid_arguments"
     if "aggregate budget" in text or "exceeds the" in text:
         return "input_too_large"

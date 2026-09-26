@@ -11,7 +11,7 @@ import pytest
 from mcp.types import CallToolResult, TextContent
 
 from jev_judge_mcp.extract.executor import InProcessRegexExecutor
-from jev_judge_mcp.providers import ProviderError
+from jev_judge_mcp.providers import ProviderConfigError, ProviderError
 from jev_judge_mcp.server import configure_logging
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools.base import Handler, JevTool, Runtime, ToolError, ToolResult, define
@@ -163,6 +163,76 @@ async def test_error_results_keep_the_text_and_append_the_code() -> None:
     assert not success.is_error
     assert len(success.content) == 1
     assert success.structured_content is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Duplicate candidate id: a",
+        "Duplicate item id: i",
+        "Duplicate class id: class0",
+        "Duplicate field id: f",
+        'Candidate id "none" collides with an escape hatch; rename it or set escape_hatches: false.',
+        "diff file list was not a list",
+        "diff file list item was not an object",
+        "Thresholds must satisfy 0 <= review_at <= auto_accept <= 1.",
+    ],
+    ids=[
+        "duplicate-candidate",
+        "duplicate-item",
+        "duplicate-class",
+        "duplicate-field",
+        "escape-hatch-collision",
+        "diff-not-a-list",
+        "diff-item-not-an-object",
+        "threshold-invariant",
+    ],
+)
+async def test_caller_input_tool_errors_carry_invalid_arguments(text: str) -> None:
+    """A refusal of the caller's own arguments is argument validation, not a provider failure."""
+
+    async def handler(_parsed: dict[str, Any], _runtime: Runtime) -> ToolResult:
+        raise ToolError(text)
+
+    toolset = _toolset(handler)
+    try:
+        result = await toolset.call("boom", {"note": _NOTE})
+    finally:
+        await toolset.aclose()
+
+    assert result.is_error
+    assert _text(result) == text
+    assert json.loads(_code_block(result)) == {"code": "invalid_arguments"}
+    assert result.structured_content == {"code": "invalid_arguments"}
+
+
+async def test_provider_config_error_logs_one_line_without_a_traceback(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A missing-credentials ProviderConfigError is an ordinary configuration condition (ADR-0007):
+    the error text and its auth code are unchanged, and stderr carries one line, no traceback."""
+    message = "No Jev provider credentials found. Set TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-)."
+
+    async def handler(_parsed: dict[str, Any], _runtime: Runtime) -> ToolResult:
+        raise ProviderConfigError(message)
+
+    toolset = _toolset(handler)
+    try:
+        with _stderr([]):
+            result = await toolset.call("boom", {"note": _NOTE})
+        err = capsys.readouterr().err
+    finally:
+        await toolset.aclose()
+
+    assert result.is_error
+    assert _text(result) == message
+    assert json.loads(_code_block(result)) == {"code": "auth"}
+    assert toolset.runtime.telemetry.spans.spans[-1].attributes["outcome"] == "provider_error"
+    lines = [line for line in err.splitlines() if line.strip()]
+    assert len(lines) == 1
+    assert "tool boom raised ProviderConfigError" in lines[0]
+    assert "Traceback (most recent call last):" not in err
+    assert _NOTE not in err
 
 
 async def test_cancelled_error_is_not_caught(capsys: pytest.CaptureFixture[str]) -> None:

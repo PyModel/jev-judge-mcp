@@ -335,6 +335,35 @@ def version_requested(argv: list[str]) -> bool:
     return len(argv) > 1 and argv[1] == "--version"
 
 
+def help_requested(argv: list[str]) -> bool:
+    """True only for `--help`/`-h`. It prints usage and does not start the server."""
+    return len(argv) > 1 and argv[1] in ("--help", "-h")
+
+
+USAGE = """\
+usage: jev-judge-mcp [<subcommand>]
+
+With no arguments it serves MCP over stdio. JEV_MCP_TRANSPORT=streamable-http serves
+Streamable HTTP instead (JEV_MCP_HTTP_PORT, JEV_MCP_HTTP_TOKEN).
+
+subcommands:
+  install            install the server into a harness config
+  hook               run the completion gate hook
+  doctor             diagnose the local setup
+  setup              store the TypeSafe API key
+  judge              call one tool; one JSON object on stdin
+  gate               review a git range from local repo files
+  completion-hook    opt-in completion gate
+  --version          print the build identity
+  --help, -h         print this usage
+"""
+
+
+def print_usage() -> None:
+    """Every subcommand, on stdout, then exit 0 (the same surface as `--version`)."""
+    print(USAGE, end="")
+
+
 def print_version() -> None:
     """The same identity `initialize` reports, on stdout, then exit 0."""
     try:
@@ -350,6 +379,9 @@ def main() -> None:
     require_posix()
     if version_requested(sys.argv):
         print_version()
+        return
+    if help_requested(sys.argv):
+        print_usage()
         return
     if installer_requested(sys.argv):
         from jev_judge_mcp.install.cli import main as install_main

@@ -4,7 +4,8 @@
 - A handler failure (a thrown `Error` in the reference): its bare message, as an `isError` result.
 - A handler's own error payload (jev_gate's evidence caps): the serialized payload with `isError`.
 
-Owned failures and any other `Exception` are logged with a traceback before that result.
+Owned failures and any other `Exception` are logged with a traceback before that result; a
+`ProviderConfigError` is an ordinary configuration condition and logs one line instead.
 `CancelledError` is not caught.
 """
 
@@ -13,7 +14,7 @@ from collections.abc import Mapping, Sequence
 
 from mcp.types import CallToolResult, TextContent, Tool
 
-from jev_judge_mcp.providers import ProviderError
+from jev_judge_mcp.providers import ProviderConfigError, ProviderError
 from jev_judge_mcp.responses import error_code
 from jev_judge_mcp.serialize import stringify, stringify_compact
 from jev_judge_mcp.telemetry import ACTIONS, CAP_SCOPES, Span
@@ -65,8 +66,13 @@ class Toolset:
             result = await tool.handler(parsed, self.runtime)
         except Exception as error:
             span.attributes["outcome"] = _outcome(error)
-            # Tool name only. The traceback is the diagnostic; argument text stays out of the log.
-            logger.exception("tool %s raised", name)
+            if isinstance(error, ProviderConfigError):
+                # An ordinary configuration condition (ADR-0007), not a defect: one line, no traceback.
+                # Tool name only; argument text stays out of the log.
+                logger.error("tool %s raised %s: %s", name, type(error).__name__, error)
+            else:
+                # Tool name only. The traceback is the diagnostic; argument text stays out of the log.
+                logger.exception("tool %s raised", name)
             return _error(str(error))
         span.attributes["outcome"] = "error_payload" if result.is_error else "ok"
         for scope in CAP_SCOPES:

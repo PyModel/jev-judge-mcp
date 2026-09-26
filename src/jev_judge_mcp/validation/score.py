@@ -25,15 +25,18 @@ def validate_score(answer: RawAnswer) -> ScoreAnswer | None:
 def validate_rubric_answer(answer: RawAnswer, level_count: int) -> RubricAnswer | None:
     """The answer if it is a well-formed Score on a rubric of `level_count` levels, else `None`.
 
-    Well-formed: `validate_score` accepts it, `score` also lands inside the rubric (`0..n-1`; the
-    shared validator's `[0, 2]` window is wider than a short rubric), and `probabilities` has
-    exactly the keys `"0".."n-1"`, each a finite number in [0, 1], summing to 1 within
-    `PROBABILITY_SUM_TOLERANCE` in JS key order. A malformed component rejects the whole answer:
-    the extension tool has no partial-answer shape to project (ADR-0048).
+    Well-formed: `score` is a finite number inside the rubric (`0..n-1`, the bound ADR-0048 owns —
+    not `validate_score`'s `[0, 2]` window, which only covers the fixed three-level rubrics), and
+    `probabilities` has exactly the keys `"0".."n-1"`, each a finite number in [0, 1], summing to 1
+    within `PROBABILITY_SUM_TOLERANCE` in JS key order. A malformed component rejects the whole
+    answer: the extension tool has no partial-answer shape to project (ADR-0048).
     """
-    parsed = validate_score(answer)
-    if parsed is None or not is_json_object(answer) or parsed.score > level_count - 1:
+    if not is_json_object(answer):
         return None
+    score = as_number(answer.get("score"))
+    if score is None or not math.isfinite(score) or score < 0 or score > level_count - 1:
+        return None
+    confidence = confidence_of(answer)
     raw = answer.get("probabilities")
     if not is_json_object(raw):
         return None
@@ -54,4 +57,4 @@ def validate_rubric_answer(answer: RawAnswer, level_count: int) -> RubricAnswer 
         total += probabilities[key]
     if abs(total - 1) > PROBABILITY_SUM_TOLERANCE:
         return None
-    return RubricAnswer(score=parsed.score, probabilities=probabilities, confidence=parsed.confidence)
+    return RubricAnswer(score=score, probabilities=probabilities, confidence=confidence)

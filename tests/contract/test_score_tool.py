@@ -89,6 +89,39 @@ async def test_a_score_inside_the_shared_window_but_outside_the_rubric_is_invali
     assert outcome.payload["status"] == "invalid_response"
 
 
+async def test_a_score_above_two_on_a_five_level_rubric_is_valid() -> None:
+    """The rubric's own 0..n-1 window governs (ADR-0048), not validate_score's [0, 2].
+
+    Regression: the shared [0, 2] bound cut every answer of level 3 or higher on any rubric
+    longer than three levels, so a 4+ level rubric could never return its top half.
+    """
+    probabilities = {"0": 0.05, "1": 0.05, "2": 0.1, "3": 0.6, "4": 0.2}
+    levels = ["none", "low", "medium", "high", "critical"]
+    outcome = await call_tool(
+        "jev_score",
+        {"subject": "SQL built by concatenating a public form field", "levels": levels},
+        {"grade": {"score": 3.05, "probabilities": probabilities, "confidence": 0.86}},
+    )
+    assert not outcome.is_error, outcome.text
+    payload = outcome.payload
+    assert payload["status"] == "ok"
+    assert payload["score"] == 3.05
+    assert payload["nearest_level"] == 3
+    assert payload["probabilities"] == probabilities
+    assert payload["confidence"] == 0.86
+    assert payload["levels"] == levels
+
+
+async def test_a_score_above_the_rubric_top_is_invalid_on_five_levels() -> None:
+    """The wider window is the rubric's, not the tool's: 4.5 is off a 5-level rubric."""
+    outcome = await call_tool(
+        "jev_score",
+        {"subject": "x", "levels": ["a", "b", "c", "d", "e"]},
+        {"grade": {"score": 4.5, "probabilities": {"0": 0.0, "1": 0.0, "2": 0.0, "3": 0.0, "4": 1.0}}},
+    )
+    assert outcome.payload["status"] == "invalid_response"
+
+
 async def test_caps_reject_out_of_scale_inputs() -> None:
     too_few = await call_tool("jev_score", {"subject": "x", "levels": ["only"]}, {"grade": GOOD})
     too_many = await call_tool(

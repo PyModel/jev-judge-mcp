@@ -7,6 +7,8 @@ import zlib
 from importlib.metadata import version
 from pathlib import Path
 
+import pytest
+
 from jev_judge_mcp.identity import DISTRIBUTION, reported_version
 
 INSTALLED = version(DISTRIBUTION)
@@ -161,4 +163,20 @@ def test_version_flag_prints_the_same_identity() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == f"jev-judge-mcp {reported_version()}\n"
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+def test_help_flag_prints_usage_and_exits_zero_without_serving(flag: str) -> None:
+    """`--help`/`-h` print every subcommand and exit 0; the server never starts."""
+    result = subprocess.run(
+        [sys.executable, "-m", "jev_judge_mcp", flag],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "usage: jev-judge-mcp" in result.stdout
+    for subcommand in ("install", "hook", "doctor", "setup", "judge", "gate", "completion-hook"):
+        assert subcommand in result.stdout, subcommand
     assert result.stderr == ""
