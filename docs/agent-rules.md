@@ -1,5 +1,6 @@
 <!-- Source of truth: jev-judge-mcp docs/agent-rules.md. The README copy and every cap below are
-     pinned by tests/contract/test_docs_alignment.py. Depth: docs/skills/jev-mcp/SKILL.md. -->
+     pinned by tests/contract/test_docs_alignment.py. Depth: docs/skills/jev-mcp/SKILL.md
+     (which tool fits which step) and docs/guidance.md (how to shape the call). -->
 
 ### Fast judgment checks — and when to skip them
 
