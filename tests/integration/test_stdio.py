@@ -107,3 +107,26 @@ def test_handler_prints_go_to_stderr() -> None:
     assert "CONTAMINANT" in stderr
     for line in lines:
         assert json.loads(line)["jsonrpc"] == "2.0"
+
+
+def test_a_server_may_log_more_stderr_than_the_pipe_buffer() -> None:
+    """StdioServer drains stderr while the server runs.
+
+    A DEBUG-level server against a chatty peer writes more than the 64 KiB pipe buffer of
+    stderr; an undrained pipe then blocks the server's shutdown writes and `wait()` sees a
+    hang, not an exit — exactly the reflected-credentials deadlock, where the server sat at
+    98% of the buffer on main and one added traceback frame tipped it over.
+    """
+    script = (
+        "import sys\n"
+        "block = b'x' * 8192\n"
+        "for _ in range(48):\n"
+        "    sys.stderr.buffer.write(block)\n"
+        "    sys.stderr.buffer.flush()\n"
+        "sys.stdin.read()\n"
+    )
+    with StdioServer(command=[sys.executable, "-c", script]) as server:
+        server.close_stdin()
+        returncode, stderr = server.wait(timeout=30)
+    assert returncode == 0
+    assert len(stderr) == 48 * 8192

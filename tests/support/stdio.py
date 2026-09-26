@@ -89,6 +89,20 @@ class StdioServer:
         self._lines: queue.Queue[bytes | None] = queue.Queue()
         self._reader = threading.Thread(target=self._read_stdout, daemon=True)
         self._reader.start()
+        # stderr is drained while the server runs: a DEBUG-level server can log more than the
+        # pipe buffer (64 KiB), and an unread stderr pipe blocks the server's writes at shutdown
+        # — the hang looks like a server that never exits, not like a full pipe.
+        self.stderr_chunks: list[bytes] = []
+        self._stderr_reader = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_reader.start()
+
+    def _drain_stderr(self) -> None:
+        assert self.process.stderr is not None
+        while True:
+            chunk = self.process.stderr.read(4096)
+            if not chunk:
+                return
+            self.stderr_chunks.append(chunk)
 
     def _read_stdout(self) -> None:
         assert self.process.stdout is not None
@@ -127,8 +141,7 @@ class StdioServer:
         self.process.stdin.close()
 
     def wait(self, timeout: float = TIMEOUT) -> tuple[int, str]:
-        """Wait for exit; return the exit code and all of stderr."""
-        assert self.process.stderr is not None
+        """Wait for exit; return the exit code and all of stderr (drained as it was written)."""
         try:
             returncode = self.process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -136,7 +149,8 @@ class StdioServer:
             self.process.wait()
             raise
         self._reader.join(timeout=timeout)
-        return returncode, self.process.stderr.read().decode()
+        self._stderr_reader.join(timeout=timeout)
+        return returncode, b"".join(self.stderr_chunks).decode()
 
     def __enter__(self) -> Self:
         return self
