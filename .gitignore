@@ -17,6 +17,7 @@ evals/reports/*
 !evals/reports/bench150-sample.html
 !evals/reports/bench150.html
 !evals/reports/bench150.md
+!evals/reports/jevbench-public.md
 .DS_Store
 .treehouse/
 AGENTS.md

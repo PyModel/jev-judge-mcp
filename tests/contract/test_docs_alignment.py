@@ -5,12 +5,16 @@ directions that rotted in practice: ADR ids (unique, and every `ADR-NNNN` citati
 numeric tool-count claims in prose, the installer's hand-copied tool order, divergence ids
 named by source, and the caps/threshold tables on `docs/reference/limits.md` (a value there
 that drifts from `limits.py` or `policy/thresholds.py` is a reader-facing lie, so the page and
-the code move in one change). A failure here means a doc or a copy drifted — fix the doc or the
-copy, never the assertion.
+the code move in one change). The same rule pins the README's measured-result claims to the
+tracked reports that own them, the agent rule block to the caps in `limits.py`, and the set-up
+prompt to the real CLI surface: README, rule block, and code move in one change. A failure here
+means a doc or a copy drifted — fix the doc or the copy, never the assertion.
 """
 
 import json
 import re
+import subprocess
+import sys
 from dataclasses import fields
 from pathlib import Path
 from typing import cast
@@ -272,3 +276,125 @@ def test_example_docstring_states_the_frozen_defaults() -> None:
     assert _stated_numbers(text, r"; (\d+\.\d+) for\s+jev_classify") == (
         policy_thresholds.DEFAULT_CLASSIFY_AUTO_ACCEPT,
     )
+
+
+# --- Measured results: README ↔ tracked reports -------------------------------------------------
+
+# Headline numbers the README states and the report that owns each. Every claim must appear in
+# both files, so the README and its evidence move in one change: a report rewritten after a new
+# run fails until the README follows, and an edited README number fails until the report agrees.
+_MEASURED_CLAIMS: dict[str, tuple[str, ...]] = {
+    "evals/reports/bench150.md": ("464.6 ms", "1245.3 ms", "1468.8 ms", "0.0060", "157"),
+    "evals/reports/jevbench-public.md": (
+        "89/92",
+        "36/36",
+        "17/20",
+        "86/86",
+        "$0.002281",
+        "54,308",
+        "$0.025 per 1,000 decisions",
+        "jev-1.13.0",
+    ),
+}
+
+
+def test_measured_result_claims_match_their_reports() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for report_name, claims in _MEASURED_CLAIMS.items():
+        report = (ROOT / report_name).read_text(encoding="utf-8")
+        for claim in claims:
+            assert claim in report, f"{report_name} no longer states {claim!r}: rerun moved the report"
+            assert claim in readme, f"README drift: {claim!r} (owned by {report_name}) is missing or changed"
+
+
+# --- Agent rule block and set-up prompt -----------------------------------------------------------
+
+_RULES_FILE = ROOT / "docs" / "agent-rules.md"
+_FENCE = re.compile(r"```(\w*)\n(.*?)\n```", re.DOTALL)
+_JEV_TOOL = re.compile(r"\b(jev_[a-z_]+)\b")
+_PROMPT_FLAG = re.compile(r"(?<![\w-])(--?[A-Za-z][\w-]*)")
+_UVX_FLAGS = {"--from"}
+"""Flags the prompt places on `uvx` itself; every other flag must exist on this repo's CLI."""
+
+
+def _readme_fences(info: str) -> list[str]:
+    return [body for tag, body in _FENCE.findall((ROOT / "README.md").read_text(encoding="utf-8")) if tag == info]
+
+
+def _rules_row(rules: str, tool: str) -> str:
+    prefix = f"| `{tool}` |"
+    return next((line for line in rules.splitlines() if line.startswith(prefix)), "")
+
+
+def test_agent_rule_block_copy_in_the_readme_is_the_tracked_file() -> None:
+    """The README's rule block equals docs/agent-rules.md exactly, so the two never drift."""
+    rules = _RULES_FILE.read_text(encoding="utf-8").strip()
+    assert any(body.strip() == rules for body in _readme_fences("markdown")), (
+        "the README ```markdown block no longer matches docs/agent-rules.md; move both in one change"
+    )
+
+
+def test_agent_docs_name_only_registered_tools() -> None:
+    registered = {tool.name for tool in TOOLS}
+    for path in (ROOT / "README.md", _RULES_FILE):
+        unknown = set(_JEV_TOOL.findall(path.read_text(encoding="utf-8"))) - registered
+        assert not unknown, f"{path.name} names tools that are not registered: {sorted(unknown)}"
+
+
+def test_agent_rule_block_caps_match_limits() -> None:
+    """Every cap the rule block states is derived from limits.py, so a re-freeze moves the block too."""
+    rules = _RULES_FILE.read_text(encoding="utf-8")
+    unbounded = "no length bound"
+    expected: dict[str, list[str]] = {
+        "jev_verify": [unbounded] if limits.VERIFY.claims_max is None else [],
+        "jev_gate": [
+            f"\u2264{limits.GATE.claims_max} claims",
+            f"\u2264{limits.GATE.evidence_items} evidence items",
+            f"{limits.GATE.aggregate_evidence_units:,} units",
+            f"{limits.GATE.doc_units:,} units",
+        ],
+        "jev_review": [f"{limits.REVIEW.doc_units:,} units"],
+        "jev_screen": [unbounded] if limits.SCREEN.text_max is None else [],
+        "jev_compare": [f"{limits.COMPARE.passage_max:,} units", f"\u2264{limits.COMPARE.aspects_max} aspects"],
+        "jev_find": [f"\u2264{limits.CANDIDATES.max_items} candidates", f"{limits.CANDIDATES.text_units:,} units"],
+        "jev_rerank": [f"\u2264{limits.CANDIDATES.max_items} candidates"],
+        "jev_classify": [f"\u2264{limits.CLASSIFY.items_max} items", f"\u2264{limits.CLASSIFY.classes_max} classes"],
+        "jev_decide": [f"{limits.DECIDE.candidates_min}\u2013{limits.DECIDE.candidates_max} options"],
+        "jev_extract": [f"{limits.EXTRACT.document_max:,} units", f"\u2264{limits.EXTRACT.fields_max} fields"],
+        "jev_score": [f"{limits.SCORE.levels_min}\u2013{limits.SCORE.levels_max} levels"],
+    }
+    missing = [
+        f"{tool} row lacks {needle!r}"
+        for tool, needles in expected.items()
+        for needle in needles
+        if needle not in _rules_row(rules, tool)
+    ]
+    assert missing == [], f"docs/agent-rules.md caps drifted from limits.py: {missing}"
+
+
+def test_setup_prompt_names_only_real_cli_surface() -> None:
+    """The copy-paste prompt runs only real subcommands and flags, and lists every terminal
+    install target: a new TARGETS entry fails here until the prompt names it."""
+    from jev_judge_mcp.install.engine import TARGETS
+
+    prompt = next((body for body in _readme_fences("text") if "jev-judge-mcp setup" in body), "")
+    assert prompt, "the set-up prompt block is missing from the README"
+    for marker in ("TYPESAFE_API_KEY", "restart", "CLAUDE.md", "AGENTS.md", "docs/agent-rules.md"):
+        assert marker in prompt, f"the set-up prompt no longer covers {marker}"
+    for agent in TARGETS:
+        if agent != "claude-desktop":
+            assert agent in prompt, f"the set-up prompt does not list install target {agent!r}"
+    help_text = subprocess.run(
+        [sys.executable, "-m", "jev_judge_mcp", "--help"], capture_output=True, text=True, check=False
+    ).stdout
+    install_help = subprocess.run(
+        [sys.executable, "-m", "jev_judge_mcp", "install", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    listed = set(re.findall(r"^  (\S+)", help_text, re.MULTILINE))
+    for subcommand in set(re.findall(r"`[^`]*jev-judge-mcp (\w+)[^`]*`", prompt)):
+        assert subcommand in listed, f"the prompt runs `jev-judge-mcp {subcommand}`, which the CLI usage does not list"
+    for flag in set(_PROMPT_FLAG.findall(prompt)):
+        assert flag in install_help or flag in _UVX_FLAGS, f"the prompt uses flag {flag}, which no CLI here defines"
