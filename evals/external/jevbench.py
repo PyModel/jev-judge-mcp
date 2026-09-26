@@ -14,8 +14,10 @@ the task, and a state over the classify item cap (2000 UTF-16 units) would be tr
 different question. Every exclusion is counted and reported. The checkout's own manifest pins a
 sha256 per public file; a file that does not match its pin refuses the whole conversion.
 
-Not run yet: the paid run waits for its spend decision. The exact command and the measured cost
-estimate live in `evals/README.md` § External benchmark.
+The run is recorded: `evals/reports/jevbench-public.md` (2026-09-26, 92 calls, 89/92 correct, 86/86
+auto-accepted answers correct) holds the method and tables, with the scored summary and the 92
+recorded outputs tracked beside it; the exact commands live in `evals/README.md` § External
+benchmark.
 """
 
 import argparse

@@ -1,0 +1,13 @@
+{
+  "tool": "jev_classify",
+  "model": "jev-1.13.0",
+  "split": "all",
+  "n": 92,
+  "primary": "selective_accuracy_auto",
+  "metrics": {
+    "selective_accuracy_auto": 1.0,
+    "auto_coverage": 0.9347826086956522,
+    "macro_f1": 0.9253731343283582,
+    "micro_f1": 0.9726775956284153
+  }
+}

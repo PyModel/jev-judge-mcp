@@ -18,6 +18,8 @@ evals/reports/*
 !evals/reports/bench150.html
 !evals/reports/bench150.md
 !evals/reports/jevbench-public.md
+!evals/reports/jevbench-public-score.json
+!evals/reports/jevbench-public-outputs.jsonl
 .DS_Store
 .treehouse/
 AGENTS.md

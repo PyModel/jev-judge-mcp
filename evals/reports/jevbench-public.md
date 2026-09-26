@@ -5,9 +5,11 @@ A paid run of the classify-compatible subset of JevBench's public items through 
 left open: when Jev answers a fixed-choice question, how often is it right, what does a decision
 cost, and what does the auto/review policy do with the answers it is unsure about.
 
-Raw per-item outputs are not committed (`evals/reports/` is gitignored except these tracked
-records); the run lane's records — outputs jsonl, score json, manifest, and the reference extract
-— are kept with the run, not in this repo. Every figure below is derived from those records.
+The machine-checkable evidence is tracked beside this report: the scored summary
+[`jevbench-public-score.json`](jevbench-public-score.json) and the 92 recorded outputs
+[`jevbench-public-outputs.jsonl`](jevbench-public-outputs.jsonl). The dataset and manifest are
+build artifacts, regenerated offline from the pinned JevBench checkout by the adapter, and are
+not committed. Every figure below is derived from those records.
 
 History: `bench150.md` measured latency and agent wall time (accuracy unscored); `agent-outcomes.md`
 measured agents with and without the Jev MCP server. Neither measured Jev's decision quality; this
