@@ -163,7 +163,7 @@ For example, "use jev_verify to check your summary against the changelog" return
 }
 ```
 
-Jev sees only what the agent passes in the call, so the agent has to include the evidence. [`docs/skills/jev-mcp/SKILL.md`](docs/skills/jev-mcp/SKILL.md) is a skill you can give your agent: it covers which tool fits which step and what to do with each action. How to write the state and the questions so the probabilities come back usable — named fields over positional arrays, where cutting text costs, option descriptions, rules out of the question, and thresholds that rise with risk — is in the [caller guide](docs/guidance.md). Honor `action`, not a grep of `verdict`. `jev-judge-mcp judge` and `jev-judge-mcp gate` are the path for a client that does not speak MCP. `JEV_MCP_MODEL` pins the model. Allow rules for Claude Code are printed by `doctor`, and opt-in setups for Claude Code, Codex, and Pi are in [the harness samples](docs/harness/). Hook protocols for OpenCode, Grok, Gemini, Kimi, and Cursor are unverified; the CLI does not branch on them.
+Jev sees only what the agent passes in the call, so the agent has to include the evidence. [`docs/skills/jev-mcp/SKILL.md`](docs/skills/jev-mcp/SKILL.md) is a skill you can give your agent: it covers which tool fits which step and what to do with each action. How to write the state and the questions so the probabilities come back usable — named fields over positional arrays, where cutting text costs, option descriptions, rules out of the question, and thresholds that rise with risk — is in the [caller guide](docs/guidance.md), and a [per-tool card](docs/tools.md) states each tool's intended use, what recorded evidence exists, and its weak spots. Honor `action`, not a grep of `verdict`. `jev-judge-mcp judge` and `jev-judge-mcp gate` are the path for a client that does not speak MCP. `JEV_MCP_MODEL` pins the model. Allow rules for Claude Code are printed by `doctor`, and opt-in setups for Claude Code, Codex, and Pi are in [the harness samples](docs/harness/). Hook protocols for OpenCode, Grok, Gemini, Kimi, and Cursor are unverified; the CLI does not branch on them.
 
 ## Configuration
 
@@ -213,6 +213,8 @@ failure.
   uncertainty, not a finding that the patch is wrong. The driving score is the `scores` entry —
   under `review` on `jev_gate` — whose `confidence` is below `thresholds.review_at`. Compare
   `safe_to_apply` to the same threshold. The response does not name the driver; those two fields do.
+- Per-tool weak spots and what recorded evidence exists for each tool are in
+  [`docs/tools.md`](docs/tools.md).
 
 ### Running over HTTP (experimental)
 
