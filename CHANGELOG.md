@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.3.0...v0.4.0) (2026-09-26)
+
+
+### Features
+
+* state item shapes plainly in array argument descriptions ([f91cb5e](https://github.com/PyModel/jev-judge-mcp/commit/f91cb5e055df0e6145b281edeacf501385c38326))
+
+
+### Bug Fixes
+
+* judge envelope reads each tool's own decision field ([27eec8c](https://github.com/PyModel/jev-judge-mcp/commit/27eec8c513225345ccc312749d859129f8f9d0e5))
+
+
+### Documentation
+
+* document renamed_ids duplicate-id semantics ([0ff8cc7](https://github.com/PyModel/jev-judge-mcp/commit/0ff8cc7d16acaee2ad49eda7ccecefbbc6668183))
+
 ## [0.3.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.2.2...v0.3.0) (2026-09-26)
 
 
