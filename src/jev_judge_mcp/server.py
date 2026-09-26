@@ -171,8 +171,9 @@ def ensure_http_port_free(
     raise SystemExit(http_port_in_use_message(port))
 
 
-def _bind_http(host: str, port: int) -> None:
-    """Bind every address `host` resolves to, then close. A taken port raises `EADDRINUSE`.
+def _bind_http_sockets(host: str, port: int) -> list[socket.socket]:
+    """Bind every address `host` resolves to and keep the sockets open. A taken port raises
+    `EADDRINUSE`; a host that does not resolve returns no sockets.
 
     `SO_REUSEADDR` matches the socket uvicorn binds on POSIX. Without it, a restart while the
     previous process's connections sit in `TIME_WAIT` looks taken, and the process exits even
@@ -182,7 +183,8 @@ def _bind_http(host: str, port: int) -> None:
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror:
-        return
+        return []
+    sockets: list[socket.socket] = []
     for family, socktype, proto, _canon, sockaddr in infos:
         sock = socket.socket(family, socktype, proto)
         try:
@@ -190,8 +192,20 @@ def _bind_http(host: str, port: int) -> None:
             if family == socket.AF_INET6:
                 sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
             sock.bind(sockaddr)
-        finally:
+        except BaseException:
             sock.close()
+            for opened in sockets:
+                opened.close()
+            raise
+        sockets.append(sock)
+    return sockets
+
+
+def _bind_http(host: str, port: int) -> None:
+    """The probe form of `_bind_http_sockets`: bind every address, then close. A taken port
+    raises `EADDRINUSE`."""
+    for sock in _bind_http_sockets(host, port):
+        sock.close()
 
 
 def ensure_secrets_redactable(settings: Settings) -> None:
@@ -244,6 +258,7 @@ async def serve(server: JevMCPServer, settings: Settings) -> None:
 
 
 async def _serve(server: JevMCPServer, settings: Settings) -> None:
+    sockets = http_serve_sockets(settings)
     async with anyio.create_task_group() as tg:
         if settings.transport == "stdio":
             tg.start_soon(_stop_on_signal, tg.cancel_scope.cancel)
@@ -258,8 +273,28 @@ async def _serve(server: JevMCPServer, settings: Settings) -> None:
                 http.should_exit = True
 
             tg.start_soon(_stop_on_signal, stop)
-            await http.serve()
+            # The sockets this process bound are the ones uvicorn listens on: nothing can take
+            # the port between the startup gate and the listen (ADR-0055 amendment).
+            await http.serve(sockets=sockets)
         tg.cancel_scope.cancel()
+
+
+def http_serve_sockets(settings: Settings) -> list[socket.socket] | None:
+    """The listening sockets `serve` hands to uvicorn, or `None` when uvicorn binds its own.
+
+    The startup gate (`ensure_http_port_free`) probes and closes; this bind is the listen. A
+    port taken in that gap refuses here with ADR-0055's one line, not with uvicorn's own bind
+    error. Any other bind error fails as itself, and a host that does not resolve is left to
+    the server, exactly as in the gate.
+    """
+    if settings.transport != "streamable-http":
+        return None
+    try:
+        return _bind_http_sockets(settings.http_host, settings.http_port) or None
+    except OSError as exc:
+        if exc.errno == errno.EADDRINUSE:
+            raise SystemExit(http_port_in_use_message(settings.http_port)) from None
+        raise
 
 
 def http_asgi_app(server: JevMCPServer, settings: Settings) -> ASGIApp:

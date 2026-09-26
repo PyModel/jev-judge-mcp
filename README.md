@@ -217,7 +217,7 @@ failure.
 
 The HTTP transport is Tier B experimental: it has no reliability contract and no admission control, and it is not covered by the parity suite. Only `127.0.0.1`, `localhost`, and `::1` are exempt from the token: exactly those hosts get the SDK's automatic Host/Origin validation. Every other host — `127.9.9.9`, `0:0:0:0:0:0:0:1`, `0.0.0.0`, a LAN address, a hostname — refuses to start unless `JEV_MCP_HTTP_TOKEN` is set, because every tool call would otherwise spend your provider key on behalf of anyone who can reach the port.
 
-The default port is 8088, not 8000: 8000 is often already taken by a local model server or another dev server (ADR-0055). If 8088 is taken too, the process retries that same port for a couple of seconds and then exits non-zero with one line naming `JEV_MCP_HTTP_PORT` and the port. It does not pick a different port, and it leaves no listener behind. Set the variable to a free port.
+The default port is 8088, not 8000: 8000 is often already taken by a local model server or another dev server (ADR-0055). If 8088 is taken too, the process retries that same port for a couple of seconds and then exits non-zero with one line naming `JEV_MCP_HTTP_PORT` and the port. It does not pick a different port, and it leaves no listener behind. A port taken between that check and the listen refuses the same way, because the server binds the port itself and hands the sockets to the listener. Set the variable to a free port.
 
 Generate a token:
 

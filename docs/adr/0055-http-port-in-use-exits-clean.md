@@ -47,3 +47,12 @@ by a previous process.
 - A port held for the whole budget still refuses. A port that frees during the budget is used.
 - The README says 8000 is often taken, and that a taken configured port is retried briefly and then
   refused by name.
+
+## Amendment (2026-09-26): the serve bind closes the probe's gap
+
+The probe still runs first and owns the retry budget. The listen is no longer a second bind by
+uvicorn: `serve` binds the port itself, with the same `SO_REUSEADDR` and `IPV6_V6ONLY` options
+as the probe, and hands the open sockets to uvicorn (`serve(sockets=...)`). A process that takes
+the port between the probe and the listen therefore hits this bind, which refuses with the same
+one `JEV_MCP_HTTP_PORT` line instead of uvicorn's own bind error and exit code. A host that does
+not resolve still binds nothing here and stays with the server, exactly as before.
