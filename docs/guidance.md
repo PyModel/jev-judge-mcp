@@ -23,9 +23,10 @@ that, both measured by decider:
   64 in a bare array, accuracy dropped from 0.70 (one record, named by path) to 0.51. Writing the
   indices into the state as text recovered it to 0.62, still below naming the one record outright.
   Prefer an object with named fields, or an array whose items carry explicit `id`s, and point at
-  nested fields with backticked paths like `` `ticket.messages[0].text` ``. Every jev-mcp tool that
-  takes a list of records (evidence items, candidates, classify items, gate claims) lets you give
-  each one an id — use them, and keep ids short and stable.
+  nested fields with backticked paths like `` `ticket.messages[0].text` ``. The jev-mcp tools that
+  take a list of records (evidence items, candidates, classify items) let you give each one an id —
+  use them, and keep ids short and stable. Claims (jev_verify, jev_gate) are positional strings —
+  the schema rejects objects — so keep each claim self-contained and in a stable order.
 - **Send whole documents when the judgment depends on the whole.** Clipping an article decider's
   models read whole at 0.71 accuracy cost 21 points (0.50 when clipped to 5000 characters). jev-mcp
   truncates some inputs at a cap and marks the cut ([`docs/reference/limits.md`](reference/limits.md));
