@@ -53,3 +53,11 @@ returns the framed zero-request shape `jev_review` uses for the same case (`mode
 `provider: "none"`, `usage: null`) instead of a bare dict. The joined-patches refusal names the
 diff (`diff exceeds the 200,000-character aggregate budget`, worded like `jev_review`'s
 overflow), not the evidence, and keeps the `input_too_large` code.
+
+Per-file attribution (2026-09-26): both file lists add `file_actions` beside `score_file` and
+`reviewed_files` — top level in `jev_review`, in the review half in `jev_gate` — mapping each
+reviewed file path to that file's own review action; unreviewed files stay in
+`unreviewed_files` only. The review half still shows the first file's scores, but the worst
+entry in `file_actions` is the file that drove the action, so drift between files can no longer
+hide behind file 0's numbers. A path listed twice keeps its worst action, so the mapping cannot
+soften the headline either.

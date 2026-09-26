@@ -603,7 +603,7 @@
       ],
       "fixtures": [],
       "reference_behavior": "diff is a string. Evidence items are id and text only. tests is a string.",
-      "python_behavior": "jev_gate and jev_review also accept a file list. Evidence items may carry kind and role. tests_format and tests_sha256 are optional. ADR-0067. A gate file list asks one review request per fitting file (no claims or evidence in it) and one verification request that carries the claims, the source questions, and the evidence once, with the fitting files as one implicit diff evidence item per file; the payload's review half carries score_file and reviewed_files, the verification rows are that one request's, and usage sums every call. ADR-0066 amendment, 2026-09-26."
+      "python_behavior": "jev_gate and jev_review also accept a file list. Evidence items may carry kind and role. tests_format and tests_sha256 are optional. ADR-0067. A gate file list asks one review request per fitting file (no claims or evidence in it) and one verification request that carries the claims, the source questions, and the evidence once, with the fitting files as one implicit diff evidence item per file; the payload's review half carries score_file, reviewed_files, and file_actions ({path: that file's review action}; a repeated path keeps its worst; unreviewed files stay in unreviewed_files), the verification rows are that one request's, and usage sums every call. jev_review's file list carries the same file_actions at top level. ADR-0066 amendments, 2026-09-26."
     },
     {
       "id": "argument-item-shape-descriptions",

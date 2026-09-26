@@ -348,15 +348,20 @@ class DriftProvider(FakeProvider):
         return Evaluation(dict(answers), Usage(1, 1), self.name, model)
 
 
-async def _call_gate_drift(arguments: Mapping[str, Any], answer_sets: list[Mapping[str, Any]]) -> Outcome:
+async def _call_drift(tool: str, arguments: Mapping[str, Any], answer_sets: list[Mapping[str, Any]]) -> Outcome:
+    """Call any tool through the real toolset against answers that drift per provider call."""
     provider = DriftProvider(answer_sets)
     toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: provider), TOOLS)
     try:
-        result = await toolset.call("jev_gate", arguments)
+        result = await toolset.call(tool, arguments)
     finally:
         await toolset.aclose()
     text = cast(TextContent, result.content[0]).text
     return Outcome(json.loads(text), bool(result.is_error), text, provider.requests)
+
+
+async def _call_gate_drift(arguments: Mapping[str, Any], answer_sets: list[Mapping[str, Any]]) -> Outcome:
+    return await _call_drift("jev_gate", arguments, answer_sets)
 
 
 async def test_file_list_gate_payload_rows_agree_with_the_action_under_drift() -> None:
@@ -396,6 +401,72 @@ async def test_file_list_gate_payload_rows_agree_with_the_action_under_drift() -
     assert row["action"] == "auto"
     assert row["supporting_evidence"] == "diff_src_a.py"
     assert row["excerpt"] == "+ a"
+
+
+async def test_file_list_review_names_each_files_action_under_drift() -> None:
+    """Per-file attribution: a non-auto headline names the file that drove it.
+
+    The review half shows the first file's scores while `action` is the worst of them, so under
+    drift a caller once saw escalate next to file 0's passing numbers with no field naming the
+    file that escalated. `file_actions` maps every reviewed file to its own action; unreviewed
+    files are not in it (they stay in unreviewed_files).
+    """
+    outcome = await _call_drift(
+        "jev_review",
+        {
+            "request": "fix the parser",
+            "diff": [
+                {"path": "src/a.py", "patch": "+ a"},
+                {"path": "src/b.py", "patch": "+ b"},
+                {"path": "src/big.py", "patch": "x" * (GATE.doc_units + 1)},
+            ],
+        },
+        [_ESCALATE_REVIEW, _REVIEW_ANSWERS],
+    )
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["action"] == "escalate"
+    assert outcome.payload["score_file"] == "src/a.py"
+    assert outcome.payload["file_actions"] == {"src/a.py": "escalate", "src/b.py": "auto"}
+    assert "src/big.py" not in outcome.payload["file_actions"]
+    assert outcome.payload["unreviewed_files"] == ["src/big.py"]
+
+
+async def test_file_list_gate_names_each_files_action_under_drift() -> None:
+    """Per-file attribution in the gate's review half, the same mapping jev_review reports."""
+    outcome = await _call_gate_drift(
+        {
+            "request": "fix the parser",
+            "diff": [
+                {"path": "src/a.py", "patch": "+ a"},
+                {"path": "src/b.py", "patch": "+ b"},
+            ],
+            "claims": ["both files changed"],
+            "evidence": [{"id": "log", "text": "2 passed"}],
+        },
+        [_ESCALATE_REVIEW, _REVIEW_ANSWERS, _GATE_ANSWERS],
+    )
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["action"] == "escalate"
+    assert outcome.payload["verification"]["action"] == "auto"
+    assert outcome.payload["review"]["file_actions"] == {"src/a.py": "escalate", "src/b.py": "auto"}
+
+
+async def test_a_repeated_path_keeps_its_worst_action() -> None:
+    """A duplicated path cannot soften the headline: the mapping keeps the worst of its actions."""
+    outcome = await _call_drift(
+        "jev_review",
+        {
+            "request": "fix the parser",
+            "diff": [
+                {"path": "src/a.py", "patch": "+ first"},
+                {"path": "src/a.py", "patch": "+ second"},
+            ],
+        },
+        [_ESCALATE_REVIEW, _REVIEW_ANSWERS],
+    )
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["action"] == "escalate"
+    assert outcome.payload["file_actions"] == {"src/a.py": "escalate"}
 
 
 async def test_gate_summary_partitions_and_a_row_stands_only_when_auto() -> None:

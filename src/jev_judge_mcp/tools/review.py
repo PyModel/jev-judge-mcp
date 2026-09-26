@@ -13,7 +13,7 @@ from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.responses import SCORE_SCALE, nearest_level
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
-from jev_judge_mcp.tools.files import combined, file_patches
+from jev_judge_mcp.tools.files import combined, file_actions, file_patches
 from jev_judge_mcp.tools.observed import (
     fail_closed,
     min_confidence,
@@ -319,6 +319,7 @@ async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: Re
     payload["action"] = action
     payload["score_file"] = reviewed_paths[0]
     payload["reviewed_files"] = reviewed_paths
+    payload["file_actions"] = file_actions(zip(reviewed_paths, [half.action for half in halves], strict=True))
     payload["partial"] = bool(unreviewed)
     payload["unreviewed_files"] = unreviewed
     if unhashed_tests:

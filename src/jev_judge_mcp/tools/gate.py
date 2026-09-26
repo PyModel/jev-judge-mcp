@@ -21,7 +21,7 @@ from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.arguments import Refinement
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, define, frame
 from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items, has_non_empty_evidence, normalize_evidence
-from jev_judge_mcp.tools.files import combined, file_patches
+from jev_judge_mcp.tools.files import combined, file_actions, file_patches
 from jev_judge_mcp.tools.observed import (
     claim_action,
     fail_closed,
@@ -481,6 +481,7 @@ async def _handle_file_list(
     review_payload["action"] = review_action
     review_payload["score_file"] = reviewed_paths[0]
     review_payload["reviewed_files"] = reviewed_paths
+    review_payload["file_actions"] = file_actions(zip(reviewed_paths, [half.action for half in halves], strict=True))
     if unhashed_tests:
         review_payload["tests_weight"] = "self_reported"
     action = worst_action([review_action, verification.action])

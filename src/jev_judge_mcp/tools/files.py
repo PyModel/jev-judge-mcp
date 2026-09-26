@@ -4,11 +4,14 @@
 per-file provider call, so the shape check and the usage-summing frame live here once.
 """
 
+from collections.abc import Iterable
 from typing import cast
 
 from jev_judge_mcp.domain import Usage
+from jev_judge_mcp.policy import Action
 from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.tools.base import ToolError
+from jev_judge_mcp.tools.observed import worst_action
 
 
 def file_patches(diff: object) -> list[dict[str, str]]:
@@ -22,6 +25,21 @@ def file_patches(diff: object) -> list[dict[str, str]]:
         record = cast(dict[str, object], raw)
         files.append({"path": str(record["path"]), "patch": str(record["patch"])})
     return files
+
+
+def file_actions(reviewed: Iterable[tuple[str, Action]]) -> dict[str, Action]:
+    """Each reviewed file path to that file's review action (ADR-0066 amendment).
+
+    The payload's review half shows one file's scores while `action` is the worst of them;
+    this mapping names the file that drove it. A repeated path keeps its worst action, so the
+    mapping can never soften the headline. Unreviewed files do not appear here; they stay in
+    `unreviewed_files`.
+    """
+    actions: dict[str, Action] = {}
+    for path, action in reviewed:
+        current = actions.get(path)
+        actions[path] = action if current is None else worst_action([current, action])
+    return actions
 
 
 def combined(evaluations: list[Evaluation]) -> Evaluation:
