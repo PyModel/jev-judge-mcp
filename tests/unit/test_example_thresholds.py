@@ -1,24 +1,111 @@
-"""The risk-proportional example's own contract: the weakest row binds, on every payload shape.
+"""The risk-proportional example's contract, pinned to real tool output.
 
-The example reads whatever `jev-judge-mcp judge <tool>` prints, and the three tools it names in
-its docstring shape their payloads differently: jev_verify's rows sit flat in `results[]`,
-jev_review's confidences sit in `scores{rubric}` beside a top-level `safe_to_apply`, and
-jev_gate nests both under `review` and `verification`. This suite runs the script as a caller
-does (a real interpreter over a decision file) and asserts the stricter bar fires on the weakest
-confidence in each shape — the exact failure the critique demonstrated when the example read only
-the flat shape.
+The example reads whatever `jev-judge-mcp judge <tool>` prints, and its docstring names
+jev_verify, jev_review, and jev_gate — three tools whose payloads carry confidences in three
+different shapes: verify's flat `results[]`, review's `scores{rubric}` beside a top-level
+`safe_to_apply`, and gate's both nested under `review` and `verification`. Every envelope here
+is generated, not hand-written: the real Toolset with the parity fake provider produces the
+payload, and the CLI judge's own envelope path wraps it (the `cli._call` replay
+`tests/unit/test_cli_judge.py` uses). A payload-shape change in any of the three tools breaks
+the per-shape pins below instead of silently defeating the stricter bar — the exact failure the
+delta-critique demonstrated when these envelopes were synthetic.
 """
 
 import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
+
+import anyio
+import pytest
+from mcp.types import CallToolResult, TextContent
+
+from jev_judge_mcp import cli
+from jev_judge_mcp.cli import judge_main
+from tests.support.jev import call_tool
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "risk_proportional_thresholds.py"
 
+_VERIFY_ARGS = {
+    "claims": ["The parser rejects malformed input.", "The tests cover the parser."],
+    "evidence": "The parser now returns an error on malformed input, and new tests cover it.",
+}
+_VERIFY_ANSWERS = {
+    "relation_claim0": {
+        "choice": "supports",
+        "confidence": 0.97,
+        "probabilities": {"supports": 0.97, "contradicts": 0.02, "says_nothing": 0.01},
+    },
+    "relation_claim1": {
+        "choice": "supports",
+        "confidence": 0.88,
+        "probabilities": {"supports": 0.88, "contradicts": 0.06, "says_nothing": 0.06},
+    },
+}
 
-def _run(tmp_path: Path, envelope: dict[str, object], stakes: str) -> tuple[int, str]:
+_REVIEW_ANSWERS = {
+    "correctness": {"score": 2, "confidence": 0.97},
+    "spec_match": {"score": 2, "confidence": 0.96},
+    "test_gap": {"score": 0, "confidence": 0.85},
+    "blast_radius": {"score": 0, "confidence": 0.93},
+    "safe_to_apply": {"noul": 0.97},
+}
+_REVIEW_ARGS = {"request": "fix the parser", "diff": "+ return error on malformed input"}
+
+_GATE_ARGS = {
+    "request": "Return 404 for unknown users.",
+    "diff": "+ return res.status(404)",
+    "claims": ["The unknown-user test passes."],
+    "evidence": "PASS returns 404 for an unknown id",
+}
+_GATE_ANSWERS = {
+    "correctness": {"score": 2, "confidence": 0.95},
+    "spec_match": {"score": 2, "confidence": 0.95},
+    "test_gap": {"score": 0, "confidence": 0.95},
+    "blast_radius": {"score": 0, "confidence": 0.95},
+    "safe_to_apply": {"noul": 0.95},
+    "claim_0": {
+        "choice": "verified",
+        "confidence": 0.82,
+        "probabilities": {"verified": 0.82, "contradicted": 0.09, "unsupported": 0.09},
+    },
+}
+
+
+def _decision_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tool: str,
+    arguments: dict[str, Any],
+    answers: dict[str, Any],
+) -> dict[str, Any]:
+    """A DecisionResult exactly as `jev-judge-mcp judge <tool>` writes it.
+
+    The real toolset with the parity fake provider produces the payload text; the CLI's own
+    envelope path (replayed through the `cli._call` seam `test_cli_judge` uses) wraps it, so
+    even the wrapper's `action`/`unresolved`/`confidence` derivation is production code.
+    """
+
+    async def run() -> str:
+        outcome = await call_tool(tool, arguments, answers)
+        return outcome.text
+
+    recorded = anyio.run(run)
+
+    async def fake_call(_name: str, _arguments: dict[str, Any]) -> CallToolResult:
+        return CallToolResult(content=[TextContent(type="text", text=recorded)], is_error=False)
+
+    monkeypatch.setattr(cli, "_call", fake_call)
+    capsys.readouterr()
+    assert judge_main([tool], text=json.dumps(arguments)) == 0
+    envelope = json.loads(capsys.readouterr().out)
+    assert envelope["payload"] == json.loads(recorded)
+    return envelope
+
+
+def _run(tmp_path: Path, envelope: dict[str, Any], stakes: str) -> tuple[int, str]:
     decision = tmp_path / "decision.json"
     decision.write_text(json.dumps(envelope), encoding="utf-8")
     proc = subprocess.run(
@@ -30,81 +117,97 @@ def _run(tmp_path: Path, envelope: dict[str, object], stakes: str) -> tuple[int,
     return proc.returncode, proc.stdout.strip()
 
 
-def _envelope(payload: dict[str, object], *, action: str = "auto") -> dict[str, object]:
-    return {
-        "schema_version": 1,
-        "policy_version": "2",
-        "tool": "x",
-        "action": action,
-        "reason_codes": [],
-        "confidence": None,
-        "error": None,
-        "unresolved": False,
-        "payload": payload,
-    }
-
-
-VERIFY_AUTO = _envelope(
-    {
-        "results": [
-            {"id": "c1", "action": "auto", "confidence": 0.97},
-            {"id": "c2", "action": "auto", "confidence": 0.88},
-        ]
-    }
+@pytest.mark.parametrize(
+    ("tool", "arguments", "answers", "weak_path", "weak_confidence"),
+    [
+        pytest.param("jev_verify", _VERIFY_ARGS, _VERIFY_ANSWERS, ("results", 1, "confidence"), 0.88, id="verify"),
+        pytest.param(
+            "jev_review", _REVIEW_ARGS, _REVIEW_ANSWERS, ("scores", "test_gap", "confidence"), 0.85, id="review"
+        ),
+        pytest.param(
+            "jev_gate", _GATE_ARGS, _GATE_ANSWERS, ("verification", "results", 0, "confidence"), 0.82, id="gate"
+        ),
+    ],
 )
-REVIEW_AUTO = _envelope(
-    {
-        "safe_to_apply": 0.97,
-        "scores": {
-            "correctness": {"level": 4, "confidence": 0.96},
-            "test_gap": {"level": 1, "confidence": 0.85},
+def test_weakest_row_binds_on_every_real_payload_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tool: str,
+    arguments: dict[str, Any],
+    answers: dict[str, Any],
+    weak_path: tuple[Any, ...],
+    weak_confidence: float,
+) -> None:
+    envelope = _decision_envelope(monkeypatch, capsys, tool, arguments, answers)
+    assert envelope["action"] == "auto", envelope
+    assert envelope["unresolved"] is False
+    # The shape pin: the weak confidence sits where this tool's payload puts it, or the suite fails.
+    node: Any = envelope["payload"]
+    for key in weak_path:
+        node = node[key]
+    assert node == weak_confidence
+
+    code, message = _run(tmp_path, envelope, "destructive")
+    assert code == 2, message
+    assert f"{weak_confidence:.4f}" in message
+
+    code, message = _run(tmp_path, envelope, "reversible")
+    assert code == 0, message
+
+
+def test_a_clear_gate_envelope_proceeds_on_destructive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    answers = {
+        **_GATE_ANSWERS,
+        "claim_0": {
+            "choice": "verified",
+            "confidence": 0.99,
+            "probabilities": {"verified": 0.99, "contradicted": 0.005, "unsupported": 0.005},
         },
     }
-)
-GATE_AUTO = _envelope(
-    {
-        "review": {
-            "safe_to_apply": 0.96,
-            "scores": {"correctness": {"level": 4, "confidence": 0.95}},
-        },
-        "verification": {"results": [{"claim": "tests pass", "confidence": 0.91}]},
-    }
-)
-
-
-def test_weakest_row_binds_on_every_payload_shape(tmp_path: Path) -> None:
-    for envelope, weakest in ((VERIFY_AUTO, 0.88), (REVIEW_AUTO, 0.85), (GATE_AUTO, 0.91)):
-        code, message = _run(tmp_path, envelope, "destructive")
-        assert code == 2, message
-        assert f"{weakest:.4f}" in message, (envelope["payload"], message)
-
-
-def test_clear_gate_envelope_proceeds_on_destructive(tmp_path: Path) -> None:
-    envelope = _envelope(
-        {
-            "review": {"safe_to_apply": 0.99, "scores": {"correctness": {"confidence": 0.99}}},
-            "verification": {"results": [{"claim": "tests pass", "confidence": 0.98}]},
-        }
-    )
+    envelope = _decision_envelope(monkeypatch, capsys, "jev_gate", _GATE_ARGS, answers)
     code, message = _run(tmp_path, envelope, "destructive")
     assert code == 0, message
     assert "proceed" in message
 
 
-def test_reversible_step_takes_the_tools_own_bar(tmp_path: Path) -> None:
-    code, message = _run(tmp_path, REVIEW_AUTO, "reversible")
-    assert code == 0, message
-    assert "reversible" in message
-
-
-def test_non_auto_action_stops_before_any_bar(tmp_path: Path) -> None:
-    code, message = _run(tmp_path, _envelope({}, action="review"), "reversible")
+def test_a_reviewed_verdict_stops_before_any_bar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A weak verdict is not the green light: the CLI envelope marks every non-auto decision
+    unresolved, and the example stops there before any bar is consulted."""
+    answers = {
+        "relation_claim0": {
+            "choice": "supports",
+            "confidence": 0.6,
+            "probabilities": {"supports": 0.6, "contradicts": 0.2, "says_nothing": 0.2},
+        }
+    }
+    envelope = _decision_envelope(
+        monkeypatch, capsys, "jev_verify", {"claims": ["It works."], "evidence": "It works."}, answers
+    )
+    assert envelope["action"] == "review"
+    assert envelope["unresolved"] is True
+    code, message = _run(tmp_path, envelope, "reversible")
     assert code == 1, message
-    assert "honor the action 'review'" in message
+    assert "unresolved" in message
 
 
-def test_unresolved_envelope_stops(tmp_path: Path) -> None:
-    envelope = {**REVIEW_AUTO, "unresolved": True, "error": {"code": "provider", "message": "x"}}
+def test_a_contradicted_gate_stays_unresolved_and_stops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    answers = {
+        **_GATE_ANSWERS,
+        "claim_0": {
+            "choice": "contradicted",
+            "confidence": 0.97,
+            "probabilities": {"verified": 0.02, "contradicted": 0.97, "unsupported": 0.01},
+        },
+    }
+    envelope = _decision_envelope(monkeypatch, capsys, "jev_gate", _GATE_ARGS, answers)
+    assert envelope["unresolved"] is True
     code, message = _run(tmp_path, envelope, "destructive")
     assert code == 1, message
     assert "unresolved" in message
