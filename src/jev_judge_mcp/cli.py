@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -456,10 +457,26 @@ def _code_for(error: BaseException) -> str:
     return "provider"
 
 
+_COMPLETION_COMMANDS: tuple[tuple[str, ...], ...] = (
+    ("git", "push"),
+    ("gh", "pr", "create"),
+    ("gh", "pr", "merge"),
+)
+"""The argv prefixes the completion hook judges, tokenized the way the shell reads the command."""
+
+
 def completion_matches(command: str) -> bool:
-    """True only for the completion commands. Not a general shell match."""
-    stripped = command.strip()
-    return stripped.startswith(("git push", "gh pr create", "gh pr merge"))
+    """True only for the completion commands. Not a general shell match.
+
+    `shlex.split` decides the tokens, so `git  push` (extra whitespace) matches and
+    `git pushback` does not. A command that does not tokenize abstains: the shell could not
+    run it either, so there is nothing to gate.
+    """
+    try:
+        argv = tuple(shlex.split(command))
+    except ValueError:
+        return False
+    return any(argv[: len(prefix)] == prefix for prefix in _COMPLETION_COMMANDS)
 
 
 def command_from_hook_event(event: Mapping[str, object]) -> str:

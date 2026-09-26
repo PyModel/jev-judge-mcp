@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from jev_judge_mcp.cli import completion_hook_main, gate_main, judge_main
+from jev_judge_mcp.cli import completion_hook_main, completion_matches, gate_main, judge_main
 
 _PUSH = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push origin main"}})
 _CREDENTIALS = (
@@ -254,3 +254,27 @@ def test_required_flag_stays_open_after_the_provider_was_reached(
     assert captured.out == ""
     assert "error.code=timeout" in captured.err
     assert "allow" not in captured.out
+
+
+@pytest.mark.parametrize(
+    ("command", "matches"),
+    [
+        pytest.param("git  push", True, id="extra-space"),
+        pytest.param("git\tpush", True, id="tab"),
+        pytest.param("git push origin main", True, id="push-with-args"),
+        pytest.param("gh pr create", True, id="pr-create"),
+        pytest.param("gh pr merge --squash", True, id="pr-merge-with-flag"),
+        pytest.param("git pushback", False, id="longer-word"),
+        pytest.param("git pushd", False, id="pushd"),
+        pytest.param("gh pr checkout", False, id="other-pr-verb"),
+        pytest.param("GIT PUSH", False, id="case-sensitive"),
+        pytest.param("git push -m \"unterminated", False, id="untokenizable-abstains"),
+    ],
+)
+def test_completion_matching_reads_tokens_not_a_string_prefix(command: str, matches: bool) -> None:
+    """The command is tokenized the way the shell reads it: `git  push` gates, `git pushback` does not.
+
+    A command that does not tokenize (`git push -m \"unterminated`) abstains: the shell cannot
+    run it either, so there is nothing to gate.
+    """
+    assert completion_matches(command) is matches
