@@ -40,7 +40,7 @@ Live bounds:
 | `datasets/` | JSONL cases `{"id", "family", "input", "gold"}`; `input` is the tool arguments. Small `synthetic/` sets, plus `bench150/items.jsonl` (the bench's 150 item texts, labels still `draft`) |
 | `manifests/` | One JSON per run: `tool`, `dataset` (relative to `datasets/`), pinned `model`, split `salt`, scorer `params` |
 | `scorers/` | `metrics.py` (generic math), `tools.py` (one scorer per tool), `fields.py` (tolerant JSON readers) |
-| `calibration/` | `split.py` (60/20/20 by family), `bounds.py` (Wilson, Clopper-Pearson), `threshold.py`, `targets.py`, `rows.py` (rows from `scorers/tools.py` `judgments`), `flips.py` |
+| `calibration/` | `split.py` (60/20/20 by family), `rows.py` (rows from `scorers/tools.py` `judgments`), `flips.py`. `bounds.py`, `threshold.py`, `targets.py` moved into `jev_judge_mcp.calibration` so the installed `calibrate` command shares them |
 | `runners/` | `score.py` (offline), `live.py` (guarded), `manifest.py` (file formats) |
 | `baselines/` | `ranking.py`: original order and BM25. The embeddings baseline raises `NotImplementedError`: it needs a pinned embedding model |
 | `reports/` | Per-run directories and working reports (gitignored). Finished reports — `bench150.*`, `agent-outcomes.md`, `p8-pilot.md` — are committed as records via `.gitignore` exceptions |
@@ -73,9 +73,9 @@ policy rather than a copy of it. An undefined metric (no positives, no AUTO rows
 
 `score --split calibration` on a tool in `calibration/rows.py` adds a `calibration` block: the threshold
 with the most AUTO rows whose upper error bound (Clopper-Pearson, one-sided 95%) is at most
-`1 - target` from `calibration/targets.py`, or `null` when none qualifies. Rows within ±0.05 of that
+`1 - target` from `jev_judge_mcp.calibration.targets`, or `null` when none qualifies. Rows within ±0.05 of that
 threshold (inclusive) are borderline; with 3–5 recorded repeats their flip rate is reported. The block
-then certifies the selected point on the `locked_test` split (`calibration/threshold.py` `certify`):
+then certifies the selected point on the `locked_test` split (`jev_judge_mcp.calibration.threshold` `certify`):
 that split's own AUTO rows and errors, its one-sided 95% Clopper-Pearson upper bound, and a `gate` of
 `pass` only when that held-out bound is within the budget. A point that fits the budget on calibration
 but not on `locked_test` fails the gate: the calibration rows chose the point, so they cannot certify
@@ -189,7 +189,7 @@ triplets, committed as a sample; it is not a bench result.
 | `bench/gate.py` | Use gate (a C run needs a successful Jev answer from `jev-1.13.0`; a B run that never calls Jev is "did not call Jev", not a failure), proxy-vs-stream cross-check (an `unanswered` row matches a stream error or a missing result) |
 | `bench/proxy.py` | Bench recorder on the relay: seq, epoch timestamps, arguments and result text (or a JSON-RPC error's message); refuses a run's calls past its own `BENCH_REQUEST_CAP` (25, inside `JEV_RUN_BOUND_USD`; not `make eval-live`'s cap), and every id-less or batched `tools/call` |
 | `bench/spans.py` | Server DEBUG spans to per-call S2-S5 timings, by order only; overlapping calls are unattributed |
-| `bench/stats.py`, `bench/analysis.py` | Exact McNemar and sign tests on `calibration/bounds.py`'s binomial; complete pairs, early stops; `per_tool`, each tool's own scorer over the wrapped answers of labeled items (in `summary.json`). Screen's primary metric is structurally null there: agent answers carry no injection probability |
+| `bench/stats.py`, `bench/analysis.py` | Exact McNemar and sign tests on `jev_judge_mcp.calibration.bounds`' binomial; complete pairs, early stops; `per_tool`, each tool's own scorer over the wrapped answers of labeled items (in `summary.json`). Screen's primary metric is structurally null there: agent answers carry no injection probability |
 | `bench/ledger.py`, `bench/run.py` | The bench's own `SpendPolicy`: 450 runs / 25 USD of Jev spend, checked per triplet, spent independently of the pilot's; seeded triplet schedule; one-prompt Pi preflight; a provider connection, auth, or rate-limit error stops the run and is not an arm result; the runner and its refusals |
 | `bench/chart.py` | The results view: one self-contained HTML file, inline SVG bars (accuracy, items/min, total wall time) for A, B, and C |
 

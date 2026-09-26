@@ -7,7 +7,6 @@ from typing import Any, cast
 import httpx2
 import pytest
 
-from evals.calibration.bounds import clopper_pearson_upper
 from evals.runners import live
 from evals.runners.manifest import (
     EVALS_DIR,
@@ -21,6 +20,7 @@ from evals.runners.manifest import (
 )
 from evals.runners.score import calibrate, score
 from evals.scorers.fields import Json
+from jev_judge_mcp.calibration.bounds import clopper_pearson_upper
 
 SYNTHETIC_MANIFEST = EVALS_DIR / "manifests" / "synthetic-classify.json"
 SYNTHETIC_OUTPUTS = EVALS_DIR / "datasets" / "synthetic" / "classify.outputs.jsonl"

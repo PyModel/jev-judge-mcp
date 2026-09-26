@@ -8,7 +8,7 @@ Sanctioned Divergence and needs an ADR).
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from evals.calibration.bounds import Bound, clopper_pearson_upper, upper_error_bound
+from jev_judge_mcp.calibration.bounds import Bound, clopper_pearson_upper, upper_error_bound
 
 
 @dataclass(frozen=True, slots=True)

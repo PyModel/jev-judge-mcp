@@ -1,11 +1,11 @@
-"""Exact paired tests on the binomial in `evals.calibration.bounds`, stdlib only.
+"""Exact paired tests on the binomial in `jev_judge_mcp.calibration.bounds`, stdlib only.
 
 Both tests reduce to a two-sided exact binomial test at p = 1/2 on the untied pairs: McNemar on the
 discordant items (B right and A wrong vs A right and B wrong), the sign test on per-item wall-time
 differences (ties dropped). The two-sided p is twice the smaller tail, capped at 1; no pairs is p = 1.
 """
 
-from evals.calibration.bounds import binomial_cdf
+from jev_judge_mcp.calibration.bounds import binomial_cdf
 
 
 def two_sided_binomial_p(successes: int, failures: int) -> float:

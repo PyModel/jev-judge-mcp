@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from typing import cast
 
 from evals.baselines.ranking import bm25, original_order
-from evals.calibration.bounds import clopper_pearson_upper
 from evals.scorers.fields import Json, as_number, as_object, as_objects, by_id, is_object
 from evals.scorers.metrics import (
     accuracy,
@@ -35,6 +34,7 @@ from evals.scorers.metrics import (
     recall_at_false_positive_rate,
     reciprocal_rank,
 )
+from jev_judge_mcp.calibration.bounds import clopper_pearson_upper
 
 Metric = float | int | None
 

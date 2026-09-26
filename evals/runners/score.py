@@ -16,8 +16,6 @@ from pathlib import Path
 
 from evals.calibration.flips import MIN_REPEATS, flip_rate, is_borderline
 from evals.calibration.rows import CALIBRATED_TOOLS, calibration_rows
-from evals.calibration.targets import error_budget
-from evals.calibration.threshold import certify, select_threshold
 from evals.runners.manifest import (
     Case,
     Manifest,
@@ -30,6 +28,8 @@ from evals.runners.manifest import (
 )
 from evals.scorers.fields import Json
 from evals.scorers.tools import SCORERS
+from jev_judge_mcp.calibration.targets import error_budget
+from jev_judge_mcp.calibration.threshold import certify, select_threshold
 
 
 def calibrate(

@@ -6,11 +6,11 @@ import sys
 
 import pytest
 
-from evals.calibration.bounds import Bound, clopper_pearson_upper, upper_error_bound, wilson_upper
 from evals.calibration.flips import flip_rate, is_borderline
 from evals.calibration.split import split_by_family
-from evals.calibration.targets import PRECISION_TARGETS, error_budget
-from evals.calibration.threshold import certify, select_threshold
+from jev_judge_mcp.calibration.bounds import Bound, clopper_pearson_upper, upper_error_bound, wilson_upper
+from jev_judge_mcp.calibration.targets import PRECISION_TARGETS, error_budget
+from jev_judge_mcp.calibration.threshold import certify, select_threshold
 
 # Upper ends of two-sided 95% intervals (= one-sided 0.975) for k errors in 10.
 PUBLISHED_UPPER = [(0, 0.3085, 0.2775), (1, 0.4450, 0.4042), (5, 0.8129, 0.7634)]
