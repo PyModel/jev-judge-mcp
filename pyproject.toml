@@ -87,7 +87,7 @@ known-first-party = ["evals"]
 "evals/bench/**" = ["S603", "S607", "S311"]
 
 [tool.pyright]
-include = ["src", "tests", "evals", "scripts"]
+include = ["src", "tests", "evals", "scripts", "examples"]
 # The A/B fixture is a throwaway repo the agent under test edits; its imports resolve only inside that copy.
 exclude = ["**/__pycache__", "**/.*", "evals/ab/fixture"]
 pythonVersion = "3.12"
