@@ -282,6 +282,48 @@ async def test_file_list_gate_asks_the_claims_once_not_per_file() -> None:
     assert diff_items == ["diff_mathutil.py", "diff_limits.py"]
 
 
+async def test_an_oversized_file_clamps_auto_to_review_and_names_incomplete_context() -> None:
+    """F1/G1: the unreviewed clamp carries incomplete_context and a next check; truncated stays honest."""
+    outcome = await call_tool(
+        "jev_gate",
+        {
+            "request": "fix the parser",
+            "diff": [
+                {"path": "src/ok.py", "patch": "+ ok"},
+                {"path": "src/big.py", "patch": "x" * (GATE.doc_units + 1)},
+            ],
+            "claims": ["the small file changed"],
+            "evidence": [{"id": "log", "text": "1 passed"}],
+        },
+        _GATE_ANSWERS,
+    )
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["action"] == "review"
+    assert outcome.payload["partial"] is True
+    assert outcome.payload["unreviewed_files"] == ["src/big.py"]
+    assert outcome.payload["reason_codes"] == ["incomplete_context"]
+    assert outcome.payload["next_checks"]
+    assert outcome.payload["truncated"] is False
+    assert len(outcome.requests) == 2
+
+
+async def test_a_file_list_over_the_patch_budget_refuses_naming_the_diff() -> None:
+    """F2/G3: the patch-aggregate refusal names the diff, not the evidence, and keeps its code."""
+    result, provider = await _call_gate_raw(
+        [
+            {"path": "big1.py", "patch": "x" * 150_000},
+            {"path": "big2.py", "patch": "x" * 150_000},
+        ],
+        [{"id": "log", "text": "1 passed"}],
+    )
+    assert result.is_error
+    payload = json.loads(cast(TextContent, result.content[0]).text)
+    assert payload == {"tool": "jev_gate", "error": "diff exceeds the 200,000-character aggregate budget"}
+    assert json.loads(cast(TextContent, result.content[1]).text) == {"code": "input_too_large"}
+    assert result.structured_content == {"code": "input_too_large"}
+    assert provider.requests == []
+
+
 _ESCALATE_REVIEW = {
     "correctness": {"score": 0, "confidence": 0.95},
     "spec_match": {"score": 0, "confidence": 0.95},
@@ -324,8 +366,16 @@ async def test_file_list_gate_payload_rows_agree_with_the_action_under_drift() -
     """J3: the verification rows are canonical and the shown review half explains the headline.
 
     Under per-call drift the split path once kept only the last file's rows, so a call could say
-    `action: escalate` while every row it showed was verified and auto.
+    `action: escalate` while every row it showed was verified and auto. The source answer rests
+    the claim on one file's implicit diff item, pinning the sanitized `diff:<path>` attribution.
     """
+    verification_answers = {
+        **_GATE_ANSWERS,
+        "source_0": {
+            "choice": "diff_src_a.py",
+            "probabilities": {"log": 0.05, "diff_src_a.py": 0.85, "diff_src_b.py": 0.05, "none": 0.05},
+        },
+    }
     outcome = await _call_gate_drift(
         {
             "request": "fix the parser",
@@ -336,7 +386,7 @@ async def test_file_list_gate_payload_rows_agree_with_the_action_under_drift() -
             "claims": ["both files changed"],
             "evidence": [{"id": "log", "text": "2 passed"}],
         },
-        [_ESCALATE_REVIEW, _REVIEW_ANSWERS, _GATE_ANSWERS],
+        [_ESCALATE_REVIEW, _REVIEW_ANSWERS, verification_answers],
     )
     assert not outcome.is_error, outcome.text
     assert outcome.payload["action"] == "escalate"
@@ -347,6 +397,8 @@ async def test_file_list_gate_payload_rows_agree_with_the_action_under_drift() -
     row = outcome.payload["verification"]["results"][0]
     assert row["verdict"] == "verified"
     assert row["action"] == "auto"
+    assert row["supporting_evidence"] == "diff_src_a.py"
+    assert row["excerpt"] == "+ a"
 
 
 async def test_gate_summary_partitions_and_a_row_stands_only_when_auto() -> None:

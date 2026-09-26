@@ -44,3 +44,12 @@ and `usage` is the sum over every provider call with a request id kept, through 
 `combined` helper `jev_review` uses. The evidence budgets are refused once in `handle()`, before
 the split, so a file list over budget is an `isError` exactly like a string diff. A string `diff`
 keeps its one-request shape unchanged.
+
+Three shapes on the same path, settled with the amendment (2026-09-26): an unreviewed file is
+incomplete context even when nothing was cut, so the clamp that keeps an otherwise-auto call at
+`review` carries `incomplete_context` and its next check, while the payload's `truncated` field
+stays false (it reports cuts, not unreviewed files). A file list whose every file is oversized
+returns the framed zero-request shape `jev_review` uses for the same case (`model`,
+`provider: "none"`, `usage: null`) instead of a bare dict. The joined-patches refusal names the
+diff (`diff exceeds the 200,000-character aggregate budget`, worded like `jev_review`'s
+overflow), not the evidence, and keeps the `input_too_large` code.

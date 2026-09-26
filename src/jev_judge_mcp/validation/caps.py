@@ -91,3 +91,8 @@ def gate_evidence_aggregate_error(cap: int) -> str:
         f"evidence exceeds the {js_number_to_locale_string_en_us(cap)}-character aggregate budget; "
         "split the gate or trim the evidence."
     )
+
+
+def gate_diff_aggregate_error(cap: int) -> str:
+    """jev_gate's file-list patch budget: worded like jev_review's overflow, rendered the same way."""
+    return f"diff exceeds the {js_number_to_locale_string_en_us(cap)}-character aggregate budget"

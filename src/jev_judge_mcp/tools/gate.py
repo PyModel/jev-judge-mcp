@@ -44,6 +44,7 @@ from jev_judge_mcp.validation.caps import (
     CapLedger,
     CapScope,
     exceeds,
+    gate_diff_aggregate_error,
     gate_evidence_aggregate_error,
     gate_evidence_items_error,
 )
@@ -390,20 +391,18 @@ async def _handle_file_list(
     files = file_patches(args["diff"])
     total = sum(length(item["patch"]) for item in files)
     if exceeds(total, GATE.aggregate_evidence_units):
-        return _refused(gate_evidence_aggregate_error(GATE.aggregate_evidence_units))
+        return _refused(gate_diff_aggregate_error(GATE.aggregate_evidence_units))
     fitting = [item for item in files if length(str(item["patch"])) <= GATE.doc_units]
     unreviewed = [str(item["path"]) for item in files if length(str(item["patch"])) > GATE.doc_units]
     if not fitting:
-        return ToolResult(
-            {
-                "tool": "jev_gate",
-                "action": "review",
-                "partial": True,
-                "unreviewed_files": unreviewed,
-                "reason_codes": ["incomplete_context"],
-                "next_checks": next_checks_for(["incomplete_context"]),
-            }
-        )
+        unasked: dict[str, object] = {
+            "action": "review",
+            "partial": True,
+            "unreviewed_files": unreviewed,
+            "reason_codes": ["incomplete_context"],
+            "next_checks": next_checks_for(["incomplete_context"]),
+        }
+        return ToolResult(frame("jev_gate", None, unasked, model=runtime.model), action="review")
     # Each fitting file is under the cap. Do not join them back into a string that would be cut.
     halves: list[ReviewHalf] = []
     evaluations: list[Evaluation] = []
@@ -487,8 +486,10 @@ async def _handle_file_list(
     action = worst_action([review_action, verification.action])
     if unreviewed and action == "auto":
         action = "review"
+    # An unreviewed file is incomplete context even when nothing was cut: the clamp to review
+    # must name why. The payload's own `truncated` field below stays cut-honest (false).
     reason_codes = gate_reason_codes(
-        truncated=truncated,
+        truncated=truncated or bool(unreviewed),
         review_action=review_action,
         review_invalid=any(half.invalid for half in halves),
         claims=verification.judgments,
