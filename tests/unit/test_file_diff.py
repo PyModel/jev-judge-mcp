@@ -1,15 +1,18 @@
 """A file list is not silently cut, and an unreviewed file is not auto."""
 
 import json
-from typing import cast
+from collections.abc import Mapping
+from typing import Any, cast, override
 
 import pytest
 from mcp.types import CallToolResult, TextContent
 
+from jev_judge_mcp.domain import JsonValue, Usage
 from jev_judge_mcp.limits import GATE
+from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
-from tests.support.jev import FakeProvider, call_tool
+from tests.support.jev import FakeProvider, Outcome, call_tool
 
 pytestmark = pytest.mark.anyio
 
@@ -142,7 +145,7 @@ async def test_a_file_list_over_the_evidence_budget_refuses_like_a_string_diff()
 
 
 async def test_file_list_gate_sums_provider_usage_and_keeps_the_request_id() -> None:
-    """Two per-file gate asks bill two provider calls; the frame reports the sum, not the last file's."""
+    """Three gate asks (two file reviews, one claims verification) bill three provider calls."""
     outcome = await call_tool(
         "jev_gate",
         {
@@ -158,8 +161,8 @@ async def test_file_list_gate_sums_provider_usage_and_keeps_the_request_id() -> 
         request_id="req-gate",
     )
     assert not outcome.is_error, outcome.text
-    assert len(outcome.requests) == 2
-    assert outcome.payload["usage"] == {"input_tokens": 2, "output_tokens": 2}
+    assert len(outcome.requests) == 3
+    assert outcome.payload["usage"] == {"input_tokens": 3, "output_tokens": 3}
     assert outcome.payload["request_id"] == "req-gate"
 
 
@@ -230,7 +233,120 @@ async def test_gate_reviews_a_file_list_per_file() -> None:
     assert not outcome.is_error, outcome.text
     assert outcome.payload["partial"] is False
     assert outcome.payload["unreviewed_files"] == []
-    assert len(outcome.requests) == 2
+    assert len(outcome.requests) == 3
+
+
+async def test_file_list_gate_asks_the_claims_once_not_per_file() -> None:
+    """J4: each fitting file is asked the review rubric alone; the claims and evidence are sent once.
+
+    The split path once re-asked the full rubric plus every claim and source question per file,
+    billing N requests that each carried the whole evidence and discarding N-1 claim verdicts.
+    """
+
+    def state_of(request: tuple[JsonValue, dict[str, JsonValue]]) -> dict[str, JsonValue]:
+        state = request[0]
+        assert isinstance(state, dict)
+        return state
+
+    outcome = await call_tool(
+        "jev_gate",
+        {
+            "request": "fix the parser",
+            "diff": [
+                {"path": "mathutil.py", "patch": "+ add"},
+                {"path": "limits.py", "patch": "+ cap"},
+            ],
+            "claims": ["both files changed"],
+            "evidence": [{"id": "log", "text": "2 passed"}],
+        },
+        _GATE_ANSWERS,
+    )
+    assert not outcome.is_error, outcome.text
+    assert len(outcome.requests) == 3
+    file_reviews = [request for request in outcome.requests if "claims" not in state_of(request)]
+    assert len(file_reviews) == 2
+    for request in file_reviews:
+        state = state_of(request)
+        assert "diff" in state
+        assert "evidence" not in state
+        assert not any(key.startswith(("claim_", "source_")) for key in request[1])
+    verification_request = next(request for request in outcome.requests if "claims" in state_of(request))
+    state = state_of(verification_request)
+    assert "diff" not in state
+    assert state["claims"] == ["both files changed"]
+    assert "claim_0" in verification_request[1]
+    assert "source_0" in verification_request[1]
+    evidence = state["evidence"]
+    assert isinstance(evidence, list)
+    diff_items = [item["id"] for item in evidence if isinstance(item, dict) and item.get("kind") == "diff"]
+    assert diff_items == ["diff_mathutil.py", "diff_limits.py"]
+
+
+_ESCALATE_REVIEW = {
+    "correctness": {"score": 0, "confidence": 0.95},
+    "spec_match": {"score": 0, "confidence": 0.95},
+    "test_gap": {"score": 2, "confidence": 0.95},
+    "blast_radius": {"score": 2, "confidence": 0.95},
+    "safe_to_apply": {"noul": 0.1},
+}
+
+
+class DriftProvider(FakeProvider):
+    """Answers that drift per call, as a live model can between the requests of one tool call."""
+
+    def __init__(self, answer_sets: list[Mapping[str, Any]]) -> None:
+        super().__init__(answer_sets[0])
+        self._answer_sets = answer_sets
+        self._calls = 0
+
+    @override
+    async def _send(
+        self, state: JsonValue, questions: dict[str, JsonValue], model: str, timeout: float | None
+    ) -> Evaluation:
+        answers = self._answer_sets[min(self._calls, len(self._answer_sets) - 1)]
+        self._calls += 1
+        self.requests.append((state, questions))
+        return Evaluation(dict(answers), Usage(1, 1), self.name, model)
+
+
+async def _call_gate_drift(arguments: Mapping[str, Any], answer_sets: list[Mapping[str, Any]]) -> Outcome:
+    provider = DriftProvider(answer_sets)
+    toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: provider), TOOLS)
+    try:
+        result = await toolset.call("jev_gate", arguments)
+    finally:
+        await toolset.aclose()
+    text = cast(TextContent, result.content[0]).text
+    return Outcome(json.loads(text), bool(result.is_error), text, provider.requests)
+
+
+async def test_file_list_gate_payload_rows_agree_with_the_action_under_drift() -> None:
+    """J3: the verification rows are canonical and the shown review half explains the headline.
+
+    Under per-call drift the split path once kept only the last file's rows, so a call could say
+    `action: escalate` while every row it showed was verified and auto.
+    """
+    outcome = await _call_gate_drift(
+        {
+            "request": "fix the parser",
+            "diff": [
+                {"path": "src/a.py", "patch": "+ a"},
+                {"path": "src/b.py", "patch": "+ b"},
+            ],
+            "claims": ["both files changed"],
+            "evidence": [{"id": "log", "text": "2 passed"}],
+        },
+        [_ESCALATE_REVIEW, _REVIEW_ANSWERS, _GATE_ANSWERS],
+    )
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["action"] == "escalate"
+    assert outcome.payload["review"]["action"] == "escalate"
+    assert outcome.payload["review"]["score_file"] == "src/a.py"
+    assert outcome.payload["review"]["reviewed_files"] == ["src/a.py", "src/b.py"]
+    assert outcome.payload["verification"]["action"] == "auto"
+    row = outcome.payload["verification"]["results"][0]
+    assert row["verdict"] == "verified"
+    assert row["action"] == "auto"
 
 
 async def test_gate_summary_partitions_and_a_row_stands_only_when_auto() -> None:

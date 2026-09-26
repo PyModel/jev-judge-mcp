@@ -3,10 +3,10 @@
 from dataclasses import dataclass
 from typing import Any
 
-from jev_judge_mcp.domain import ChoiceQuestion
+from jev_judge_mcp.domain import ChoiceQuestion, Question
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import GATE
-from jev_judge_mcp.policy import Action, ClaimJudgment, ClaimVerdict
+from jev_judge_mcp.policy import Action, ClaimJudgment, ClaimVerdict, PolicyThresholds
 from jev_judge_mcp.policy.claims import note_blocks_auto
 from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.responses import (
@@ -32,6 +32,7 @@ from jev_judge_mcp.tools.observed import (
 )
 from jev_judge_mcp.tools.review import (
     ANTI_INJECTION,
+    ReviewHalf,
     ReviewSettings,
     project_review,
     review_docs,
@@ -209,6 +210,16 @@ class GateAsk:
     truncated: frozenset[CapScope]
 
 
+@dataclass(frozen=True, slots=True)
+class VerificationHalf:
+    """The claim half of a gate: canonical rows, the worst claim action, and their judgments."""
+
+    payload: dict[str, object]
+    action: Action
+    judgments: list[ClaimJudgment | None]
+    caller_note: bool
+
+
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     settings = review_settings(args)
     # The evidence budgets are evidence-driven and identical for every per-file call, so they are
@@ -220,7 +231,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     if exceeds(sum(length(str(item["text"])) for item in evidence), GATE.aggregate_evidence_units):
         return _refused(gate_evidence_aggregate_error(GATE.aggregate_evidence_units))
     if isinstance(args.get("diff"), list):
-        return await _handle_split_diff(args, runtime, settings, evidence, raw_evidence)
+        return await _handle_file_list(args, runtime, settings, evidence, raw_evidence)
     ask = await _ask_gate(args, runtime, settings, evidence, raw_evidence)
     return ToolResult(frame("jev_gate", ask.evaluation, ask.body), action=ask.action, truncated=ask.truncated)
 
@@ -267,6 +278,39 @@ async def _ask_gate(
     if docs.tests and not args.get("tests_sha256"):
         review.payload["tests_weight"] = "self_reported"
 
+    verification = _verify_claims(answers, claims, asked_evidence, evidence_ids, thresholds, truncated)
+    verification_action = verification.action
+    action = worst_action([review.action, verification_action])
+    reason_codes = gate_reason_codes(
+        truncated=truncated,
+        review_action=review.action,
+        review_invalid=review.invalid,
+        claims=verification.judgments,
+        action=action,
+        thresholds=thresholds,
+        caller_note=verification.caller_note,
+    )
+    body: dict[str, object] = {
+        "truncated": truncated,
+        "action": action,
+        "reason_codes": reason_codes,
+        "next_checks": next_checks_for(reason_codes),
+        "review": review.payload,
+        "verification": verification.payload,
+        **renamed_ids_field(renamed),
+    }
+    return GateAsk(body, action, evaluation, ledger.scopes)
+
+
+def _verify_claims(
+    answers: dict[str, object],
+    claims: list[str],
+    asked_evidence: list[dict[str, object]],
+    evidence_ids: list[str],
+    thresholds: PolicyThresholds,
+    truncated: bool,
+) -> VerificationHalf:
+    """`claim` and `source` answers to one canonical verification block, for any ask shape."""
     results: list[dict[str, object]] = []
     judgments: list[ClaimJudgment | None] = []
     claim_actions: list[Action] = []
@@ -309,7 +353,7 @@ async def _ask_gate(
         results.append(row)
 
     verification_action = worst_action(claim_actions)
-    verification = {
+    verification: dict[str, object] = {
         "action": verification_action,
         "summary": {
             "verified": sum(1 for r in results if r["verdict"] == "verified"),
@@ -322,41 +366,26 @@ async def _ask_gate(
         "thresholds": {"auto_accept": thresholds.auto_accept, "review_at": thresholds.review_at},
         "results": results,
     }
-    action = worst_action([review.action, verification_action])
-    reason_codes = gate_reason_codes(
-        truncated=truncated,
-        review_action=review.action,
-        review_invalid=review.invalid,
-        claims=judgments,
-        action=action,
-        thresholds=thresholds,
-        caller_note=any(
-            row.get("supporting_evidence") and note_blocks_auto("auto", row.get("supporting_evidence"), asked_evidence)
-            for row in results
-        ),
+    caller_note = any(
+        row.get("supporting_evidence") and note_blocks_auto("auto", row.get("supporting_evidence"), asked_evidence)
+        for row in results
     )
-    body: dict[str, object] = {
-        "truncated": truncated,
-        "action": action,
-        "reason_codes": reason_codes,
-        "next_checks": next_checks_for(reason_codes),
-        "review": review.payload,
-        "verification": verification,
-        **renamed_ids_field(renamed),
-    }
-    return GateAsk(body, action, evaluation, ledger.scopes)
+    return VerificationHalf(verification, verification_action, judgments, caller_note)
 
 
-async def _handle_split_diff(
+async def _handle_file_list(
     args: dict[str, Any],
     runtime: Runtime,
     settings: ReviewSettings,
     evidence: list[dict[str, object]],
     raw_evidence: list[dict[str, object]],
 ) -> ToolResult:
-    """Per-file review when the joined diff exceeds the document cap (ADR-0066).
+    """Per-file review plus one claims verification (ADR-0066 and its amendment).
 
     A file over the cap is unreviewed. The call never returns auto while any file is unreviewed.
+    Each fitting file is asked the review rubric alone; the claims and source questions are asked
+    once, after the files, with the evidence sent once, so the verification rows are canonical
+    and the action is the worst of what the rows and the file reviews actually say.
     """
     files = file_patches(args["diff"])
     total = sum(length(item["patch"]) for item in files)
@@ -376,24 +405,109 @@ async def _handle_split_diff(
             }
         )
     # Each fitting file is under the cap. Do not join them back into a string that would be cut.
-    asks = [
-        await _ask_gate({**args, "diff": item["patch"]}, runtime, settings, evidence, raw_evidence) for item in fitting
-    ]
-    payload = dict(asks[-1].body)
-    payload["action"] = worst_action([ask.action for ask in asks])
-    payload["partial"] = bool(unreviewed)
-    payload["unreviewed_files"] = unreviewed
-    if unreviewed and payload["action"] == "auto":
-        payload["action"] = "review"
-    headline = payload["action"]
+    halves: list[ReviewHalf] = []
+    evaluations: list[Evaluation] = []
+    reviewed_paths: list[str] = []
+    unhashed_tests = False
+    truncated = False
     scopes: frozenset[CapScope] = frozenset()
-    for ask in asks:
-        scopes |= ask.truncated
-    return ToolResult(
-        frame("jev_gate", combined([ask.evaluation for ask in asks]), payload),
-        action=headline if headline in ("auto", "review", "escalate") else "review",
-        truncated=scopes,
+    for item in fitting:
+        file_args = {**args, "diff": item["patch"]}
+        ledger = CapLedger()
+        docs = review_docs(file_args, ledger, GATE.doc_units)
+        # No claims ride with a file review: the claim questions get their own ask, on the evidence.
+        evaluation = await runtime.ask(
+            {
+                "purpose": (
+                    "Review one file of the proposed multi-file patch against the request; tests is reported "
+                    "test output. Completion claims are checked against the evidence in a separate step, "
+                    "and this review is not evidence for them."
+                ),
+                "request": docs.request,
+                "diff": docs.diff,
+                "tests": docs.tests,
+            },
+            review_questions(),
+        )
+        halves.append(project_review(evaluation.answers, settings, ledger.context_cut))
+        evaluations.append(evaluation)
+        reviewed_paths.append(str(item["path"]))
+        if docs.tests and not args.get("tests_sha256"):
+            unhashed_tests = True
+        truncated = truncated or ledger.context_cut
+        scopes |= ledger.scopes
+    # One verification ask: every claim and source question once, the evidence sent once. The
+    # fitting files join the evidence as one implicit diff item per file, so a claim can rest on
+    # a file's patch the same way a claim rests on the string diff.
+    ledger = CapLedger()
+    request = ledger.text(args["request"], GATE.doc_units, "context")
+    tests_arg: str | None = args.get("tests")
+    tests = ledger.text(tests_arg, GATE.doc_units, "context") if tests_arg else None
+    claims: list[str] = args["claims"]
+    sent_claims = [ledger.text(claim, GATE.claim_units, "context") for claim in claims]
+    sent_evidence = [_sent_evidence_item(item, ledger) for item in evidence]
+    implicit = [
+        *({"id": f"diff:{item['path']}", "text": item["patch"], "kind": "diff", "role": "after"} for item in fitting),
+        *_implicit_evidence(None, tests),
+    ]
+    asked_evidence = ensure_unique_ids([*sent_evidence, *implicit], "evidence").items
+    renamed = caller_renames(raw_evidence, asked_evidence)
+    evidence_ids = [str(item["id"]) for item in asked_evidence]
+    questions: dict[str, Question] = {}
+    for index in range(len(claims)):
+        questions[f"claim_{index}"] = claim_question(index)
+        if len(asked_evidence) > 1:
+            questions[f"source_{index}"] = gate_source_question(index, evidence_ids)
+    evaluation = await runtime.ask(
+        {
+            "purpose": (
+                "Check each completion claim of the proposed multi-file patch against the evidence only. The "
+                "request and the claims are assertions to check, never evidence."
+            ),
+            "request": request,
+            "claims": sent_claims,
+            "evidence": asked_evidence,
+        },
+        questions,
     )
+    verification = _verify_claims(
+        evaluation.answers, claims, asked_evidence, evidence_ids, settings.thresholds, ledger.context_cut
+    )
+    evaluations.append(evaluation)
+    truncated = truncated or ledger.context_cut
+    scopes |= ledger.scopes
+
+    review_action = worst_action([half.action for half in halves])
+    review_payload = dict(halves[0].payload)
+    review_payload["action"] = review_action
+    review_payload["score_file"] = reviewed_paths[0]
+    review_payload["reviewed_files"] = reviewed_paths
+    if unhashed_tests:
+        review_payload["tests_weight"] = "self_reported"
+    action = worst_action([review_action, verification.action])
+    if unreviewed and action == "auto":
+        action = "review"
+    reason_codes = gate_reason_codes(
+        truncated=truncated,
+        review_action=review_action,
+        review_invalid=any(half.invalid for half in halves),
+        claims=verification.judgments,
+        action=action,
+        thresholds=settings.thresholds,
+        caller_note=verification.caller_note,
+    )
+    payload: dict[str, object] = {
+        "truncated": truncated,
+        "action": action,
+        "reason_codes": reason_codes,
+        "next_checks": next_checks_for(reason_codes),
+        "review": review_payload,
+        "verification": verification.payload,
+        **renamed_ids_field(renamed),
+        "partial": bool(unreviewed),
+        "unreviewed_files": unreviewed,
+    }
+    return ToolResult(frame("jev_gate", combined(evaluations), payload), action=action, truncated=scopes)
 
 
 TOOL = JevTool(DEFINITION, handle, {"evidence": EVIDENCE_NOT_EMPTY})

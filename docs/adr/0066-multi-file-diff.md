@@ -17,3 +17,30 @@ A string `diff` over the document cap is truncated and cannot be `auto`. That in
 
 - Two files under the cap can be `auto` when each review is `auto`, even if joining them would have been truncated.
 - One bad file escalates the whole call.
+
+
+## Amendment (2026-09-26): the gate's file list verifies claims once
+
+`jev_gate`'s file-list path first re-ran the whole string-diff gate per file: every per-file
+request carried the full rubric plus every claim and source question and the entire evidence, so
+N files billed N full requests, N−1 claim verdicts were discarded, and the payload kept only the
+last file's rows — which could contradict the call's worst-action headline.
+
+The split path now asks two kinds of request and frames one reply over all of them:
+
+- One review request per fitting file: state `purpose, request, diff, tests` (no claims, no
+  evidence) and the plain `jev_review` rubric questions. The review half of the payload is the
+  first reviewed file's half with the worst file action, plus `score_file` and `reviewed_files`,
+  exactly as `jev_review`'s file list reports them.
+- One verification request after the files: state `purpose, request, claims, evidence` and only
+  the `claim_i` and `source_i` questions, asked once. The fitting files join the evidence as one
+  implicit `diff` item per file (`id "diff:<path>"`, sanitized like any id), so a claim can rest
+  on a file's patch the way a claim rests on the string diff. The `verification` block is this
+  one request's rows — canonical by construction — and `renamed_ids` covers this request's
+  evidence pass.
+
+The call's action is the worst of the review files' worst action and the verification action,
+and `usage` is the sum over every provider call with a request id kept, through the same
+`combined` helper `jev_review` uses. The evidence budgets are refused once in `handle()`, before
+the split, so a file list over budget is an `isError` exactly like a string diff. A string `diff`
+keeps its one-request shape unchanged.
