@@ -302,6 +302,10 @@ async def test_an_oversized_file_clamps_auto_to_review_and_names_incomplete_cont
     assert outcome.payload["next_checks"]
     assert outcome.payload["truncated"] is False
     assert len(outcome.requests) == 2
+    # The gate differs from jev_review here (G-A): its review half keeps the unclamped worst,
+    # so the mapping always agrees with the half's own action even under a clamped headline.
+    assert outcome.payload["review"]["action"] == "auto"
+    assert outcome.payload["review"]["file_actions"] == {"src/ok.py": "auto"}
 
 
 async def test_a_file_list_over_the_patch_budget_refuses_naming_the_diff() -> None:
@@ -431,6 +435,32 @@ async def test_file_list_review_names_each_files_action_under_drift() -> None:
     assert outcome.payload["unreviewed_files"] == ["src/big.py"]
 
 
+async def test_a_clamped_review_keeps_each_files_own_action() -> None:
+    """G-A/D1: the unreviewed clamp drives the headline, not any reviewed file.
+
+    Every mapping entry says auto while the action is review — the per-file truth, with
+    partial/unreviewed_files naming the cause. Pins that the clamp stays on the headline:
+    a mapping softened to match it would hide which files were fine.
+    """
+    outcome = await call_tool(
+        "jev_review",
+        {
+            "request": "fix the parser",
+            "diff": [
+                {"path": "src/a.py", "patch": "+ a"},
+                {"path": "src/b.py", "patch": "+ b"},
+                {"path": "src/big.py", "patch": "x" * (GATE.doc_units + 1)},
+            ],
+        },
+        _REVIEW_ANSWERS,
+    )
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["action"] == "review"
+    assert outcome.payload["partial"] is True
+    assert outcome.payload["unreviewed_files"] == ["src/big.py"]
+    assert outcome.payload["file_actions"] == {"src/a.py": "auto", "src/b.py": "auto"}
+
+
 async def test_file_list_gate_names_each_files_action_under_drift() -> None:
     """Per-file attribution in the gate's review half, the same mapping jev_review reports."""
     outcome = await _call_gate_drift(
@@ -467,6 +497,26 @@ async def test_a_repeated_path_keeps_its_worst_action() -> None:
     assert not outcome.is_error, outcome.text
     assert outcome.payload["action"] == "escalate"
     assert outcome.payload["file_actions"] == {"src/a.py": "escalate"}
+
+
+async def test_a_repeated_path_keeps_its_worst_action_in_the_gate() -> None:
+    """G-B: the gate's nested mapping merges a repeated path to its worst, like jev_review's."""
+    outcome = await _call_gate_drift(
+        {
+            "request": "fix the parser",
+            "diff": [
+                {"path": "src/a.py", "patch": "+ first"},
+                {"path": "src/a.py", "patch": "+ second"},
+            ],
+            "claims": ["both files changed"],
+            "evidence": [{"id": "log", "text": "2 passed"}],
+        },
+        [_ESCALATE_REVIEW, _REVIEW_ANSWERS, _GATE_ANSWERS],
+    )
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["action"] == "escalate"
+    assert outcome.payload["verification"]["action"] == "auto"
+    assert outcome.payload["review"]["file_actions"] == {"src/a.py": "escalate"}
 
 
 async def test_gate_summary_partitions_and_a_row_stands_only_when_auto() -> None:

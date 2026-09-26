@@ -59,5 +59,9 @@ Per-file attribution (2026-09-26): both file lists add `file_actions` beside `sc
 reviewed file path to that file's own review action; unreviewed files stay in
 `unreviewed_files` only. The review half still shows the first file's scores, but the worst
 entry in `file_actions` is the file that drove the action, so drift between files can no longer
-hide behind file 0's numbers. A path listed twice keeps its worst action, so the mapping cannot
-soften the headline either.
+hide behind file 0's numbers — one exception: when the unreviewed clamp drives `jev_review`'s
+headline, no reviewed file did, and `partial`/`unreviewed_files` name the cause (`jev_gate`'s
+review half keeps the unclamped worst action, so its mapping always agrees with its `action`).
+A path listed twice keeps its worst action, so the mapping cannot soften the headline either.
+The zero-request shapes (every file oversized) omit `file_actions`, as they omit `score_file`
+and `reviewed_files`.
