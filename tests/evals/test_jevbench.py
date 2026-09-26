@@ -92,7 +92,7 @@ async def test_converted_cases_pass_the_real_tool_and_score_against_gold(tmp_pat
     checkout = fixture_checkout(tmp_path)
     conversion = jevbench.convert(checkout)
     dataset, manifest_path = jevbench.write(
-        conversion, tmp_path / "datasets", tmp_path / "manifests", jevbench.PINNED_MODEL
+        conversion, tmp_path / "datasets", tmp_path / "manifests", jevbench.PINNED_MODEL, None
     )
 
     outputs = tmp_path / "outputs.jsonl"
@@ -147,12 +147,16 @@ def test_the_cli_writes_dataset_and_manifest_and_reports_exclusions(
     rows = [json.loads(line) for line in (datasets / jevbench.DATASET_NAME).read_text().splitlines()]
     assert len(rows) == 6
     manifest = cast("dict[str, Any]", json.loads((manifests / jevbench.MANIFEST_NAME).read_text()))
+    import os
+
+    datasets_root = Path(__file__).parents[2] / "evals" / "datasets"
     assert manifest == {
         "tool": "jev_classify",
-        "dataset": jevbench.DATASET_NAME,
+        "dataset": os.path.relpath(datasets / jevbench.DATASET_NAME, datasets_root),
         "model": jevbench.PINNED_MODEL,
         "salt": jevbench.SALT,
         "params": {},
+        "source_commit": None,  # the fixture checkout is not a git repo
     }
 
 
@@ -161,3 +165,35 @@ def test_an_unknown_tier_is_a_usage_error(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as caught:
         jevbench.main([str(checkout), "--tiers", "secret"])
     assert caught.value.code == 2
+
+
+def test_a_git_checkout_records_its_source_commit_in_the_manifest(tmp_path: Path) -> None:
+    """P3-3: the generated manifest names the exact upstream commit it converted."""
+    import subprocess
+
+    checkout = fixture_checkout(tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=checkout, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=checkout, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"], cwd=checkout, check=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=checkout, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    conversion = jevbench.convert(checkout)
+    _, manifest_path = jevbench.write(
+        conversion, tmp_path / "d", tmp_path / "m", jevbench.PINNED_MODEL, jevbench.source_commit(checkout)
+    )
+    manifest = cast("dict[str, Any]", json.loads(manifest_path.read_text()))
+    assert manifest["source_commit"] == head
+
+
+def test_a_case_the_tool_would_reject_refuses_the_conversion_before_any_spend(tmp_path: Path) -> None:
+    """P3-6: pre-validation through jev_classify's real argument schema — a single-label item passes
+    every conversion check but violates the schema's two-class minimum, and is named by case id."""
+    checkout = fixture_checkout(tmp_path)
+    single = item(
+        "one-label", "Where is my package?", CHOICE | {"criteria": {"track_order": "Wants to know where an order is"}}
+    )
+    single["labels"] = ["track_order"]
+    write_tier(checkout, "easy", [single])
+    with pytest.raises(jevbench.ConvertError, match=r"easy-one-label: fails jev_classify argument validation"):
+        jevbench.convert(checkout)

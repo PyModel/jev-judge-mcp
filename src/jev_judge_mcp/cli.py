@@ -73,7 +73,7 @@ def gate_main(argv: Sequence[str]) -> int:
 
 
 def calibrate_main(argv: Sequence[str]) -> int:
-    """Advisory threshold fitting on the caller's labeled rows (ADR-0069); offline, no provider."""
+    """Advisory threshold fitting on the caller's labeled rows (ADR-0070); offline, no provider."""
     from jev_judge_mcp import calibrate
 
     return calibrate.main(argv)

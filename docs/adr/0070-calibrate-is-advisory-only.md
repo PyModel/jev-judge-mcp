@@ -14,7 +14,7 @@ Callers judge with the frozen thresholds and may want a threshold fitted to thei
 - The error budget comes from `--tool` (the ROADMAP P7 per-tool budgets in `jev_judge_mcp.calibration.targets`) or from `--max-error`; one of them must be present.
 - The command never edits a frozen default in `policy/thresholds.py`. Moving a frozen default is a Sanctioned Divergence and needs its own ADR; the help text and the report say so.
 - The shared statistics moved from `evals/calibration/` into `jev_judge_mcp.calibration` (`bounds`, `threshold`, `targets`) so the installed package imports the same modules the eval harness does — never a copy. `split`, `rows`, and `flips` stay evals-only.
-- Exit codes: 0 a report was produced, 1 no threshold met the budget on the selection rows, 2 a bad invocation or bad rows.
+- Exit codes: 0 a report was produced whose held-out certification fits the budget, 1 no threshold met the budget on the selection rows **or the held-out certification exceeded it**, 2 a bad invocation or bad rows.
 
 ## Consequences
 

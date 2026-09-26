@@ -354,7 +354,7 @@ def setup_requested(argv: list[str]) -> bool:
 
 
 def calibrate_requested(argv: list[str]) -> bool:
-    """True only for the `calibrate` subcommand (ADR-0069). Offline; no provider, no secrets."""
+    """True only for the `calibrate` subcommand (ADR-0070). Offline; no provider, no secrets."""
     return len(argv) > 1 and argv[1] == "calibrate"
 
 

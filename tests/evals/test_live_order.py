@@ -1,9 +1,10 @@
 """Live order-sensitivity probe against the real TypeSafe API (marker `live`).
 
 Deselected by default so `make eval` and `make ci` stay offline; when selected, a missing
-TYPESAFE_API_KEY fails instead of skipping. Exactly two provider requests: one jev_verify batch
-sent forward, the same batch reversed (evals/calibration/order.py). The report carries the
-billed tokens of those two calls, so the cost is on record with the result.
+TYPESAFE_API_KEY fails instead of skipping. Exactly three provider requests: one jev_verify batch
+sent forward, the same batch reversed, and a same-order control (evals/calibration/order.py).
+The report carries the billed tokens of those three calls, so the cost is on record with the
+result.
 """
 
 import json
@@ -30,8 +31,10 @@ def test_live_order_probe_reports_per_claim_stability(capsys: pytest.CaptureFixt
 
     report = json.loads(capsys.readouterr().out)
     assert report["model"] == order.PROBE_MODEL
-    assert report["total"] == len(order.CLAIMS)
+    assert report["order"]["total"] == len(order.CLAIMS)
     assert [row["claim"] for row in report["claims"]] == order.CLAIMS
-    # Plumbing, not quality: the rate is whatever the pinned model did, and it must be a number.
-    assert report["rate"] is not None and 0.0 <= report["rate"] <= 1.0
-    assert report["billed_tokens"] > 0, "the two paid calls must report their cost"
+    # Plumbing, not quality: the rates are whatever the pinned model did, and they must be numbers.
+    for block in (report["order"], report["control"]):
+        assert block["rate"] is not None and 0.0 <= block["rate"] <= 1.0
+    assert isinstance(report["deterministic"], bool)
+    assert report["billed_tokens"] > 0, "the three paid calls must report their cost"

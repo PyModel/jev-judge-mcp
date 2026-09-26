@@ -1,4 +1,4 @@
-"""`jev-judge-mcp calibrate`: advisory threshold fitting on the caller's own labeled rows (ADR-0069).
+"""`jev-judge-mcp calibrate`: advisory threshold fitting on the caller's own labeled rows (ADR-0070).
 
 Reads JSONL rows ``{"score", "correct", "family"?, "tool"?}`` — `score` is the scalar the tool
 compares against its `auto_accept` threshold, `correct` is whether that judgment matched gold —
@@ -8,13 +8,13 @@ Clopper-Pearson upper error bound fits the error budget (`select_threshold`), an
 point on the held-out rows (`certify`).
 
 The command only reports. It never edits a frozen default in `jev_judge_mcp.policy.thresholds`:
-moving one is a Sanctioned Divergence and needs an ADR. Exit 0 produced a report, exit 1 means no
-threshold met the budget, exit 2 is a bad invocation or bad rows.
+moving one is a Sanctioned Divergence and needs an ADR. Exit 0 produced a report whose held-out
+certification fits the budget, exit 1 means no threshold met the budget or the held-out bound
+exceeded it, exit 2 is a bad invocation or bad rows.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import sys
@@ -23,9 +23,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from jev_judge_mcp.calibration.families import family_order
 from jev_judge_mcp.calibration.targets import PRECISION_TARGETS, error_budget
 from jev_judge_mcp.calibration.threshold import Certification, OperatingPoint, certify, select_threshold
-from jev_judge_mcp.policy import DEFAULT_REVIEW_AT_CAP
+from jev_judge_mcp.policy import PolicyThresholds, resolve_policy_thresholds
 
 USAGE = "usage: jev-judge-mcp calibrate <rows.jsonl> [--tool TOOL] [--max-error P] [--min-rows N]\n"
 ADVISORY = (
@@ -39,7 +40,8 @@ MIN_HELD_OUT = 8
 HOLDOUT_SHARE = 0.3
 FIELDS = ("score", "correct", "family", "tool")
 REVIEW_AT_TOOLS = ("jev_verify", "jev_review", "jev_gate")
-"""The tools whose policy pairs `auto_accept` with `review_at` (the cap and the threshold, min'd)."""
+"""The tools whose policy pairs `auto_accept` with `review_at`; the pairing itself is policy's own
+`resolve_policy_thresholds`, not a copy of its rule."""
 _SPLIT_SALT = "jev-judge-mcp-calibrate-v1"
 
 
@@ -137,16 +139,21 @@ def split_rows(rows: Sequence[ParsedRow]) -> tuple[list[ParsedRow], list[ParsedR
     target = math.ceil(HOLDOUT_SHARE * len(rows))
     held_out: list[ParsedRow] = []
     selection: list[ParsedRow] = []
-    for family in sorted(families, key=lambda name: hashlib.sha256(f"{_SPLIT_SALT}\0{name}".encode()).hexdigest()):
+    for family in sorted(families, key=lambda name: family_order(name, _SPLIT_SALT)):
         group = families[family]
         if len(held_out) + len(group) <= target:
             held_out.extend(group)
         else:
             selection.extend(group)
     if len(held_out) < MIN_HELD_OUT:
+        fittable = any(len(group) <= target for group in families.values())
+        if fittable:
+            raise CalibrateError(
+                f"the held-out split has {len(held_out)} row(s), need at least {MIN_HELD_OUT}: add rows"
+            )
         raise CalibrateError(
-            f"the held-out split has {len(held_out)} row(s), need at least {MIN_HELD_OUT}:"
-            " add rows, or add family labels so whole families can be held out"
+            f"the held-out split has {len(held_out)} row(s), need at least {MIN_HELD_OUT}: every"
+            f" family is larger than the {HOLDOUT_SHARE:.0%} held-out share, so none can be held out whole"
         )
     return selection, held_out
 
@@ -176,10 +183,9 @@ def _render(
         f" coverage {certified.coverage:.3f}, certified upper error bound {certified.error_upper_bound:.3f}",
     ]
     if tool in REVIEW_AT_TOOLS:
-        lines.append(
-            f"  pair with review_at: {min(DEFAULT_REVIEW_AT_CAP, point.threshold):g}"
-            f" (the {DEFAULT_REVIEW_AT_CAP:g} cap and auto_accept, min'd)"
-        )
+        resolved = resolve_policy_thresholds(point.threshold)
+        assert isinstance(resolved, PolicyThresholds)
+        lines.append(f"  pair with review_at: {resolved.review_at:g} (policy's own pairing of the pair)")
     verdict = (
         "the held-out bound is within the budget"
         if certified.error_upper_bound <= budget
@@ -249,13 +255,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         selection, held_out = split_rows(rows)
         point = select_threshold([(row.score, row.correct) for row in selection], max_error=budget)
         if point is None:
+            zero_error_min = math.ceil(math.log(0.05) / math.log(1 - budget))
             sys.stderr.write(
                 f"no threshold meets the error budget {budget:g} on the {len(selection)} selection rows;"
-                " collect more rows or raise --max-error\n"
+                f" a zero-error selection split needs at least {zero_error_min} rows at this budget"
+                " — collect more rows or raise --max-error\n"
             )
             return 1
         certified = certify(point, [(row.score, row.correct) for row in held_out])
         sys.stdout.write(_render(path.name, tool, budget, rows, selection, held_out, point, certified))
+        if certified.error_upper_bound > budget:
+            sys.stderr.write(
+                f"the held-out certification exceeds the error budget {budget:g}"
+                f" ({certified.error_upper_bound:.3f} on {len(held_out)} rows); collect more rows\n"
+            )
+            return 1
         return 0
     except CalibrateError as error:
         sys.stderr.write(f"jev-judge-mcp calibrate: {error}\n{USAGE}")

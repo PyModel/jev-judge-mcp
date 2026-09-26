@@ -81,6 +81,8 @@ known-first-party = ["evals"]
 "evals/ab/**" = ["S603", "S607", "S311"]
 "evals/agent.py" = ["S603"]
 "evals/relay.py" = ["S603"]
+# The JevBench adapter reads the checkout's own git HEAD to pin the source commit (A8).
+"evals/external/**" = ["S603", "S607"]
 # S311: the bench schedule is a seeded, reproducible shuffle, not a secret.
 "evals/bench/**" = ["S603", "S607", "S311"]
 

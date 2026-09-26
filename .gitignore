@@ -25,5 +25,3 @@ blackbox/
 improvment.md
 improvement-proposals-*.md
 .jevbench-tmp/
-evals/datasets/jevbench-public.jsonl
-evals/manifests/jevbench-public.json

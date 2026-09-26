@@ -7,15 +7,16 @@ family is larger than a split's share the ratios are only approximate, and with 
 families some splits stay empty.
 """
 
-import hashlib
 from collections.abc import Callable, Sequence
+
+from jev_judge_mcp.calibration.families import family_order
 
 SPLITS = ("dev", "calibration", "locked_test")
 RATIOS = (0.6, 0.2, 0.2)
 
 
 def _order(family: str, salt: str) -> str:
-    return hashlib.sha256(f"{salt}\0{family}".encode()).hexdigest()
+    return family_order(family, salt)
 
 
 def split_by_family[T](rows: Sequence[T], family: Callable[[T], str], salt: str = "") -> dict[str, list[T]]:

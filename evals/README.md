@@ -13,7 +13,7 @@ neither lives here.
 | `make eval-live` | **live, paid** | `tests/evals/test_live_typesafe.py` (marker `live`): runs the `live-*` manifests through TypeSafe and scores the result. Fails, not skips, without `TYPESAFE_API_KEY` |
 | `python -m evals.runners.score MANIFEST OUTPUTS [--split S] [--report PATH]` | none | Scores recorded tool outputs against a dataset's gold labels |
 | `JEV_EVAL_LIVE=1 python -m evals.runners.live MANIFEST OUT [--repeats N]` | **live, paid** | Calls the tools through the configured provider and records outputs |
-| `JEV_EVAL_LIVE=1 python -m evals.calibration.order` | **live, paid** | Order-sensitivity probe (A2): one jev_verify batch sent forward and reversed, per-claim verdict stability reported; exactly 2 requests |
+| `JEV_EVAL_LIVE=1 python -m evals.calibration.order` | **live, paid** | Order-sensitivity probe (A2): one 20-claim jev_verify batch sent forward, reversed, and a same-order control; per-claim verdict stability and a determinism reading; exactly 3 requests |
 | `python -m evals.external.jevbench <checkout>` | none | A8: reads a JevBench checkout's public items as data (sha256-pinned, never executed) and writes `datasets/jevbench-public.jsonl` + its manifest; see § External benchmark |
 | `JEV_AB_LIVE=1 make ab AGENT=claude\|pi` | **live, paid** | L4 agent outcome study (below); writes `reports/agent-outcomes.md`. `python -m evals.ab.run --report-only` re-renders it offline |
 | `JEV_BENCH_LIVE=1 python -m evals.bench.run` | **live, paid** | The 150-question before/after bench (below). Not wired to any make target; refuses while any item label is not `frozen` |
@@ -33,7 +33,7 @@ Live bounds:
   `NO_RETRIES` (the server's default stays the bounded ADR-0057 policy), so a failed call is a recorded
   `error` row, never an unbudgeted retry.
 - **Datasets:** `datasets/synthetic/live-classify.jsonl` and `live-verify.jsonl`, 3 cases each, so
-  `make eval-live` sends 6 requests, plus the order-sensitivity probe's 2 (`test_live_order.py`).
+  `make eval-live` sends 6 requests, plus the order-sensitivity probe's 3 (`test_live_order.py`: forward, reversed, control).
 - Neither `make eval` nor `make ci` calls the network; both stay green with the key unset.
 
 ## Layout
@@ -43,7 +43,7 @@ Live bounds:
 | `datasets/` | JSONL cases `{"id", "family", "input", "gold"}`; `input` is the tool arguments. Small `synthetic/` sets, plus `bench150/items.jsonl` (the bench's 150 item texts, labels still `draft`) |
 | `manifests/` | One JSON per run: `tool`, `dataset` (relative to `datasets/`), pinned `model`, split `salt`, scorer `params` |
 | `scorers/` | `metrics.py` (generic math), `tools.py` (one scorer per tool), `fields.py` (tolerant JSON readers) |
-| `calibration/` | `split.py` (60/20/20 by family), `rows.py` (rows from `scorers/tools.py` `judgments`), `flips.py`. `bounds.py`, `threshold.py`, `targets.py` moved into `jev_judge_mcp.calibration` (ADR-0069) so the installed `calibrate` command shares them |
+| `calibration/` | `split.py` (60/20/20 by family), `rows.py` (rows from `scorers/tools.py` `judgments`), `flips.py`. `bounds.py`, `threshold.py`, `targets.py` moved into `jev_judge_mcp.calibration` (ADR-0070) so the installed `calibrate` command shares them |
 | `runners/` | `score.py` (offline), `live.py` (guarded), `manifest.py` (file formats) |
 | `baselines/` | `ranking.py`: original order and BM25. The embeddings baseline raises `NotImplementedError`: it needs a pinned embedding model |
 | `reports/` | Per-run directories and working reports (gitignored). Finished reports — `bench150.*`, `agent-outcomes.md`, `p8-pilot.md` — are committed as records via `.gitignore` exceptions |
@@ -86,36 +86,54 @@ it. An empty or evidence-free `locked_test` split bounds at 1.0 and fails. The o
 report. It never edits `jev_judge_mcp.policy.thresholds`: moving a frozen default is a
 Sanctioned Divergence and needs its own ADR.
 
-## External benchmark (A8, prepared — not yet run)
+## External benchmark (A8)
 
 JevBench (`fstandhartinger/jevbench`, MIT) publishes a leaderboard for Jev-class typed decision
 models; its own measured row for Jev 1.13.0 is the external anchor this repo lacks. The adapter
 `evals/external/jevbench.py` reads a JevBench checkout's **public** items as data — the checkout's
-manifest pins a sha256 per file, and a mismatch refuses the conversion; the harness's own code is
-never executed. Each public `choice` item with a string state within the classify item cap becomes
-one `jev_classify` case (state → item text, labels+criteria → class catalog, instructions →
-purpose, expected → gold). Items are excluded and counted, never distorted: noul/score questions
-have no classify mapping yet, structured states cannot become item text, and over-cap states would
-be truncated into a different question. On the 2026-09-26 snapshot that keeps
-**92 of 231 public items** (easy 36/48, original 36/72, hard 20/111).
+manifest pins a sha256 per file, and a mismatch (or a missing manifest entry) refuses the
+conversion; the harness's own code is never executed. Each public `choice` item with a string state
+within the classify item cap becomes one `jev_classify` case (state → item text, labels+criteria →
+class catalog, instructions → purpose, expected → gold), pre-validated offline against the tool's
+argument schema with the first violating case named. Items are excluded and counted, never
+distorted: noul/score questions have no classify mapping yet, structured states cannot become item
+text, and over-cap states would be truncated into a different question. On the pinned snapshot
+(`1bcc55eb6c8cffde2306b3db03ede39b61c6152a`) that keeps **92 of 231 public items** (easy 36/48,
+original 36/72, hard 20/111); the generated manifest records that source commit.
 
-The paid run is **prepared, not run** — it waits for the spend decision. The exact commands:
+**This is the classify-compatible subset, not JevBench**: 139 of 231 public items (all noul/score
+questions, structured states, over-cap states — and 91 of 111 hard-tier items) are excluded, so any
+accuracy from this run is not comparable to JevBench's published leaderboard rows (231 public items,
+534 decisions, their own prompt packing) and must not be reported as one. Report per-tier and
+per-family counts with any aggregate, and state the exclusions.
+
+The commands (the clone is pinned; `--depth 1` alone drifts with HEAD):
 
 ```sh
-git clone --depth 1 https://github.com/fstandhartinger/jevbench.git /tmp/jevbench
-python -m evals.external.jevbench /tmp/jevbench                   # offline, sha-pinned
-JEV_EVAL_LIVE=1 JEV_PROVIDER=typesafe JEV_MCP_MODEL=jev-1.13.0   python -m evals.runners.live evals/manifests/jevbench-public.jsonl   evals/reports/jevbench-public-outputs.jsonl --cap 92            # paid
-python -m evals.runners.score evals/manifests/jevbench-public.jsonl   evals/reports/jevbench-public-outputs.jsonl --split all         # offline
+git clone https://github.com/fstandhartinger/jevbench.git /tmp/jevbench
+git -C /tmp/jevbench checkout 1bcc55eb6c8cffde2306b3db03ede39b61c6152a
+python -m evals.external.jevbench /tmp/jevbench                   # offline, sha-pinned, writes evals/reports/jevbench/
+JEV_EVAL_LIVE=1 JEV_PROVIDER=typesafe JEV_MCP_MODEL=jev-1.13.0 \
+  python -m evals.runners.live evals/reports/jevbench/jevbench-public.json \
+  evals/reports/jevbench/jevbench-public-outputs.jsonl --cap 92   # paid
+python -m evals.runners.score evals/reports/jevbench/jevbench-public.json \
+  evals/reports/jevbench/jevbench-public-outputs.jsonl --split all  # offline
 ```
 
 Measured cost estimate (JevBench's own published measurement of Jev 1.13.0, `cost-correction
 v1.2.3`: mean 588.05 input tokens/decision, $0.042 per M input tokens, output tokens not billed;
 $0.0247 per 1000 v1.1-tier decisions, $0.0616 per 1000 hard-tier decisions): 72 easy/original-class
-items × $0.0247/1000 + 20 hard-class items × $0.0616/1000 ≈ **$0.003** (~72k input tokens: 72 × 588 +
-20 × ~1470) for the
+items × $0.0247/1000 + 20 hard-class items × $0.0616/1000 ≈ **$0.003** (~72k input tokens) for the
 92-item run — one tool call per item, at most one provider request each (`NO_RETRIES`), so the cost
-equals raw SDK access; even at twice the measured per-decision cost it stays under one cent. The
-generated dataset and manifest are build artifacts (gitignored), not committed data.
+equals raw SDK access. The generated dataset and manifest are build artifacts under the gitignored
+`evals/reports/`, not committed data.
+
+First paid run (2026-09-26, captain-authorized, 92 calls, 0 errors, 54,308 input tokens, $0.0023):
+per-item accuracy **89/92 = 96.7%** — easy 36/36, original 36/36, hard 17/20 (hard/ambiguous 4/6,
+hard/temporal_numeric 0/1, every other family perfect); scorer auto_coverage 86/92,
+selective_accuracy_auto 1.0. Not a leaderboard number (see the caveat above): the like-for-like
+reference is JevBench v1.2's published per-item Jev 1.13.0 outcomes on the *same 92 items*, which
+also score 89/92 — same model, same items, different caller framing and date.
 
 ## Open gaps (not decided by the ROADMAP or an ADR)
 
