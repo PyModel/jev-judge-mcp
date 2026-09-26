@@ -425,6 +425,10 @@ def main() -> None:
     if hook_requested(sys.argv):
         from jev_judge_mcp.hook import main as hook_main
 
+        # The redacting handler before any provider call can log (ADR-0008): logging's lastResort
+        # stderr has no filter, and a hook failure reaches stderr.
+        hook_settings = load_settings()
+        configure_logging(hook_settings.log_level, hook_settings.secret_values())
         sys.exit(hook_main(sys.argv[2:]))
     if doctor_requested(sys.argv):
         from jev_judge_mcp.doctor import main as doctor_main
@@ -435,7 +439,12 @@ def main() -> None:
 
         sys.exit(setup_main(sys.argv[2:]))
     if judge_requested(sys.argv) or gate_cli_requested(sys.argv) or completion_hook_requested(sys.argv):
-        ensure_secrets_redactable(load_settings())
+        subcommand_settings = load_settings()
+        ensure_secrets_redactable(subcommand_settings)
+        # Logging is configured before the subcommand runs, so a toolset failure reaches stderr
+        # through the redacting filter, not through lastResort (ADR-0008). The completion hook
+        # keeps its own stdout/stderr handling around gate_main.
+        configure_logging(subcommand_settings.log_level, subcommand_settings.secret_values())
     if judge_requested(sys.argv):
         from jev_judge_mcp.cli import judge_main
 
