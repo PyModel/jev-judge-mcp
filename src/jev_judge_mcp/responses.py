@@ -139,6 +139,18 @@ validation, not provider failures. A budget refusal is not here: it keeps its ow
 ESCAPE_HATCH_COLLISION = " collides with an escape hatch;"
 """Infix of jev_decide's refusal of a candidate id that shadows an escape hatch."""
 
+BUDGET_REFUSAL_MARKERS = (
+    "Batch too large: ",
+    "diff exceeds the ",
+    "evidence exceeds ",
+)
+"""Markers of the budget refusals `validation/caps.py` freezes (`isError` results).
+
+Every text these scaffolds appear in is a caller-input refusal, whatever number the cap renders.
+They are matched as substrings, wherever the scaffold sits in the isError text: jev_gate's
+refusals are serialized payloads (`{"tool": …, "error": "evidence exceeds 16 items; …"}`),
+which carry none of the older substrings and start with none of these markers."""
+
 
 def error_code(text: str) -> str:
     """A code for an ``isError`` result. The text itself is not changed."""
@@ -150,7 +162,7 @@ def error_code(text: str) -> str:
         or any(text.startswith(prefix) for prefix in CALLER_INPUT_ERROR_PREFIXES)
     ):
         return "invalid_arguments"
-    if "aggregate budget" in text or "exceeds the" in text:
+    if "aggregate budget" in text or "exceeds the" in text or any(marker in text for marker in BUDGET_REFUSAL_MARKERS):
         return "input_too_large"
     lowered = text.lower()
     if "timed out" in lowered or "timeout" in lowered:

@@ -112,12 +112,12 @@ async def test_a_file_list_over_the_evidence_budget_refuses_like_a_string_diff()
     """The evidence budgets are refused before the split, so a file list keeps the isError shape.
 
     The split path once rechecked the budgets per file and rebuilt a success-flagged result from
-    the refusal payload; a client keying on isError saw a gate that decided nothing. The
-    aggregate refusal carries the `input_too_large` code; the item-count refusal keeps whatever
-    code the string path gives it, byte-for-byte.
+    the refusal payload; a client keying on isError saw a gate that decided nothing. Both budget
+    refusals carry the `input_too_large` code, byte-for-byte the same on string and file-list
+    paths.
     """
     for evidence, expected_error, expected_code in (
-        (_OVER_ITEMS, "evidence exceeds 16 items; split the gate or trim the evidence.", None),
+        (_OVER_ITEMS, "evidence exceeds 16 items; split the gate or trim the evidence.", "input_too_large"),
         (
             _OVER_AGGREGATE,
             "evidence exceeds the 200,000-character aggregate budget; split the gate or trim the evidence.",
@@ -137,11 +137,8 @@ async def test_a_file_list_over_the_evidence_budget_refuses_like_a_string_diff()
         assert list_payload == string_payload == {"tool": "jev_gate", "error": expected_error}
         string_code = json.loads(cast(TextContent, string_result.content[1]).text)
         list_code = json.loads(cast(TextContent, list_result.content[1]).text)
-        assert list_code == string_code
-        assert list_result.structured_content == string_result.structured_content
-        if expected_code is not None:
-            assert list_code == {"code": expected_code}
-            assert list_result.structured_content == {"code": expected_code}
+        assert list_code == string_code == {"code": expected_code}
+        assert list_result.structured_content == string_result.structured_content == {"code": expected_code}
 
 
 async def test_file_list_gate_sums_provider_usage_and_keeps_the_request_id() -> None:

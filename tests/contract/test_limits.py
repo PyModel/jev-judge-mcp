@@ -13,6 +13,8 @@ import re
 from pathlib import Path
 from typing import Final, cast
 
+import pytest
+
 from jev_judge_mcp.extract.candidates import REGEX_TIMEOUT_S
 from jev_judge_mcp.limits import (
     CANDIDATES,
@@ -29,6 +31,8 @@ from jev_judge_mcp.limits import (
     VERIFY,
 )
 from jev_judge_mcp.policy import EXTRACT_REASON_CODES
+from jev_judge_mcp.responses import error_code
+from jev_judge_mcp.validation import caps
 
 MANIFEST: Final = Path(__file__).resolve().parents[2] / "docs/reference/parity-manifest.json"
 
@@ -201,3 +205,24 @@ def test_schema_only_caps_stay_owned_by_limits() -> None:
     schema = find.DEFINITION.input_schema
     assert schema["properties"]["query"]["minLength"] == FIND.query_min
     assert ids.MAX_ID_LENGTH == SANITIZE_ID_UNITS
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        pytest.param(caps.candidate_budget_error(500, 200, "Split the batch."), id="candidate-characters"),
+        pytest.param(caps.classify_budget_error(9_000, 5, CLASSIFY.item_class_pairs), id="classify-pairs"),
+        pytest.param(caps.gate_evidence_items_error(GATE.evidence_items), id="gate-evidence-items"),
+        pytest.param(caps.gate_evidence_aggregate_error(GATE.aggregate_evidence_units), id="gate-evidence-aggregate"),
+        pytest.param(caps.gate_diff_aggregate_error(GATE.aggregate_evidence_units), id="gate-diff-aggregate"),
+    ],
+)
+def test_every_frozen_budget_refusal_codes_input_too_large(refusal: str) -> None:
+    """Each budget scaffold `validation/caps.py` produces is a caller-input refusal.
+
+    The item-count text (`evidence exceeds 16 items; …`) shares no older substring marker, so a
+    prefix heuristic alone classified it `provider` on the wire while callers (and the limits
+    page) branch on `input_too_large` to split and retry. The texts are derived from the frozen
+    producers at their real caps, not hand-copied.
+    """
+    assert error_code(refusal) == "input_too_large"

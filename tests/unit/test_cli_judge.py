@@ -458,7 +458,7 @@ _NO_CREDENTIALS = (
         pytest.param("OpenRouter 429: rate limit exceeded", "quota", id="quota"),
         pytest.param(
             "evidence exceeds 16 items; split the gate or trim the evidence.",
-            "provider",
+            "input_too_large",
             id="items-refusal",
         ),
     ],
@@ -471,9 +471,10 @@ def test_an_iserror_envelope_codes_the_text_like_the_wire_block(
 ) -> None:
     """The envelope's `error.code` is the same code the isError block carries, never a second mapping.
 
-    `evidence exceeds 16 items` is the drift pin: a looser "exceeds" mapping codes it
-    `input_too_large`, while the one parity mapping (`responses.error_code`, what the toolset's
-    code block emits for this text) says `provider`.
+    `evidence exceeds 16 items` is the pin: it shares no substring marker with the aggregate
+    budget texts, so a mapping that classifies by those substrings alone codes it `provider`
+    while callers branch on `input_too_large` to split and retry. The one mapping now recognizes
+    the budget-refusal scaffolds themselves (ADR-0062).
     """
 
     async def fake_call(_name: str, _arguments: dict[str, Any]) -> CallToolResult:
