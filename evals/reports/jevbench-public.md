@@ -6,10 +6,8 @@ left open: when Jev answers a fixed-choice question, how often is it right, what
 cost, and what does the auto/review policy do with the answers it is unsure about.
 
 Raw per-item outputs are not committed (`evals/reports/` is gitignored except these tracked
-records). The run lane's records — outputs jsonl, score json, manifest, and JevBench's published
-per-item reference — are kept with the run under
-`firstmate/data/jev-eval-calibrate/jevbench-run-2026-09-26/`. Every figure below is derived from
-those records.
+records); the run lane's records — outputs jsonl, score json, manifest, and the reference extract
+— are kept with the run, not in this repo. Every figure below is derived from those records.
 
 History: `bench150.md` measured latency and agent wall time (accuracy unscored); `agent-outcomes.md`
 measured agents with and without the Jev MCP server. Neither measured Jev's decision quality; this
@@ -25,11 +23,10 @@ run does.
 - **Items:** the 92 of JevBench's 231 public items (`fstandhartinger/jevbench`, snapshot
   `1bcc55eb…`, sha256-pinned per file) that are classify-compatible: a `choice` question whose state
   is string item text within the classify item cap. The adapter `evals/external/jevbench.py`
-  (branch `fm/jev-eval-calibrate`) reads the checkout as data and never executes its code; state
-  becomes item text, labels + criteria become the class catalog, instructions become the purpose,
-  `expected` becomes gold. Items are excluded, never distorted. Per tier: easy 36/48, original
-  36/72, hard 20/111. Exclusions: noul/score questions (no classify mapping), structured states,
-  over-cap states.
+  reads the checkout as data and never executes its code; state becomes item text, labels +
+  criteria become the class catalog, instructions become the purpose, `expected` becomes gold.
+  Items are excluded, never distorted. Per tier: easy 36/48, original 36/72, hard 20/111.
+  Exclusions: noul/score questions (no classify mapping), structured states, over-cap states.
 - **Scorer:** `evals.runners.score`, offline, split `all`. Gold labels come from the converted
   dataset; actions and decisions are read from the recorded tool results, never recomputed.
 
@@ -94,9 +91,10 @@ Review-routed items (confidence as returned):
 | `hard-hard-opus-b-tradeoff-07` | `p0_fix_24h` | 0.31 | correct, held for review |
 | `hard-hard-opus-c-temporal_numeric-04` | invalid response (no classification) | — | miss (no answer) |
 
-All three misses sat below the policy's `auto_accept` bar (0.85 with margin 0.5 on this run), so
-the policy's auto/review split — not raw accuracy — is what a caller consumes: every auto-accepted
-answer was right, and every wrong answer went to a second check instead of through.
+The two answered misses sat below the policy's `auto_accept` bar (0.85 with margin 0.5 on this
+run); the third failed closed with no answer at all. The policy's auto/review split — not raw
+accuracy — is what a caller consumes: every auto-accepted answer was right, and every wrong answer
+went to a second check instead of through.
 
 ### Scorer metrics
 
@@ -117,20 +115,31 @@ answer was right, and every wrong answer went to a second check instead of throu
 | billed input tokens | 54,308 |
 | output tokens | 5,156 |
 | spend | $0.002281 |
-| per 1,000 decisions | ≈ $0.025 per 1,000 decisions |
+| per 1,000 decisions | ≈ $0.025 |
 
 Spend is input tokens only, at $0.042 per M input tokens with output not billed:
-54,308 × $0.042/M = $0.002281. One provider request per call, no retries, so cost equals raw SDK
-access at this packing.
+54,308 × $0.042/M = $0.002281 — about $0.025 per 1,000 decisions at this packing. One provider
+request per call, no retries, so cost equals raw SDK access at this packing.
 
-## Item-aligned published comparison
+## Item-aligned reference comparison
 
-JevBench v1.2's published per-item Jev 1.13.0 outcomes on the same 92 items, scored the same way,
-also give 89/92. Their three misses: `hard-hard-opus-b-ambiguous-03`,
-`hard-hard-opus-b-probability-02`, `hard-hard-opus-c-temporal_numeric-04`; this run's:
-`hard-hard-opus-b-ambiguous-03`, `hard-hard-opus-b-ambiguous-09`,
-`hard-hard-opus-c-temporal_numeric-04`. Same model, same items, different caller framing and date;
-the totals match with a one-item difference in which answers were wrong.
+JevBench publishes per-task outcomes for public items in its own repository:
+`results/v1.2/jevbench-v1.2-per-task.json` at commit `1bcc55eb`, under
+`systems['jev-1.13.0'].public_tasks` — the same system key as the v1.2 leaderboard row, display
+name "Jev 1.13.0 (TypeSafe AI)"; the file's own note says per-task outcomes are published for
+public items only. Read for the same 92 ids, that record scores 89/92: 89 `c` (correct) and 3 `w`
+(wrong) — outcome codes, not raw predictions.
+
+Caveats: it is a v1.2-era measurement of the same items under JevBench's own caller framing, not
+this run's prompts, thresholds, or policy, and only the accuracy count is like-for-like — the
+record carries one confidence per item (0.603–0.779 across these 92), never this server's actions,
+so its confidences are not policy-comparable.
+
+Misses: this run `hard-hard-opus-b-ambiguous-03`, `hard-hard-opus-b-ambiguous-09`,
+`hard-hard-opus-c-temporal_numeric-04`; the reference `hard-hard-opus-b-ambiguous-03`,
+`hard-hard-opus-b-probability-02`, `hard-hard-opus-c-temporal_numeric-04`. Shared: `ambiguous-03`
+and `temporal_numeric-04`; this run alone: `ambiguous-09`; the reference alone: `probability-02`.
+Same total, one item apart.
 
 ## What this run supports
 

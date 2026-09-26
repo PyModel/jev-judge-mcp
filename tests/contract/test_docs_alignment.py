@@ -280,20 +280,48 @@ def test_example_docstring_states_the_frozen_defaults() -> None:
 
 # --- Measured results: README ↔ tracked reports -------------------------------------------------
 
-# Headline numbers the README states and the report that owns each. Every claim must appear in
-# both files, so the README and its evidence move in one change: a report rewritten after a new
-# run fails until the README follows, and an edited README number fails until the report agrees.
-_MEASURED_CLAIMS: dict[str, tuple[str, ...]] = {
-    "evals/reports/bench150.md": ("464.6 ms", "1245.3 ms", "1468.8 ms", "0.0060", "157"),
+# Headline numbers the README states and the report that owns each, as (claim, exact README
+# occurrences[, report's own string when it differs]. The report owns the number (presence); the
+# README count is pinned so a drifted duplicate, a dropped restatement, or a silently softened
+# number fails: README and report move in one change. The unfavorable agent-outcome figures are
+# pinned on the same terms as the favorable ones.
+_MEASURED_CLAIMS: dict[str, tuple[tuple[str, int] | tuple[str, int, str], ...]] = {
+    "evals/reports/bench150.md": (
+        ("464.6 ms", 2),
+        ("1245.3 ms", 1),
+        ("1468.8 ms", 1),
+        ("157", 1),
+        ("10.4 s", 1, "10.43"),
+        ("3.06", 1),
+        ("2.91", 1),
+        ("13.95", 1),
+        ("0.0060", 1),
+        ("$0.0928", 1),
+        ("$0.0955", 1),
+        ("$0.2904", 1),
+    ),
     "evals/reports/jevbench-public.md": (
-        "89/92",
-        "36/36",
-        "17/20",
-        "86/86",
-        "$0.002281",
-        "54,308",
-        "$0.025 per 1,000 decisions",
-        "jev-1.13.0",
+        ("89/92", 2),
+        ("36/36", 2),
+        ("17/20", 1),
+        ("86/86", 1),
+        ("$0.002281", 1),
+        ("54,308", 1),
+        ("$0.025 per 1,000 decisions", 2),
+        ("jev-1.13.0", 2),
+    ),
+    "docs/evals/README.md": (
+        ("| 6/9 / 6/9 |", 1),
+        ("| 6/8 / 6/8 |", 1),
+        ("14.6 s", 1),
+        ("18.3 s", 1),
+        ("49.4 s", 1),
+        ("127.8 s", 1),
+        ("+4.6 s", 1),
+        ("+85.8 s", 1),
+        ("$1.4953", 1),
+        ("$0.0006", 1),
+        ("slower with Jev", 3),
     ),
 }
 
@@ -302,9 +330,14 @@ def test_measured_result_claims_match_their_reports() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     for report_name, claims in _MEASURED_CLAIMS.items():
         report = (ROOT / report_name).read_text(encoding="utf-8")
-        for claim in claims:
-            assert claim in report, f"{report_name} no longer states {claim!r}: rerun moved the report"
-            assert claim in readme, f"README drift: {claim!r} (owned by {report_name}) is missing or changed"
+        for needle, times, *owned in claims:
+            source = owned[0] if owned else needle
+            assert source in report, f"{report_name} no longer states {source!r}: rerun moved the report"
+            found = readme.count(needle)
+            assert found == times, (
+                f"README states {needle!r} {found}x, pinned at {times}x (owned by {report_name}): "
+                "a restatement drifted, a number was softened, or a pin needs updating with the report"
+            )
 
 
 # --- Agent rule block and set-up prompt -----------------------------------------------------------
@@ -341,12 +374,17 @@ def test_agent_docs_name_only_registered_tools() -> None:
         assert not unknown, f"{path.name} names tools that are not registered: {sorted(unknown)}"
 
 
+def _cap_needles(cap: int | None, unit: str) -> list[str]:
+    """The rule block's cell for a cap, whichever way limits.py freezes it: bounded or open."""
+    return [f"\u2264{cap} {unit}"] if cap is not None else ["no length bound"]
+
+
 def test_agent_rule_block_caps_match_limits() -> None:
-    """Every cap the rule block states is derived from limits.py, so a re-freeze moves the block too."""
+    """Every cap the rule block states derives from limits.py, both ways: a re-frozen bound must
+    appear, and stale "no length bound" text must go."""
     rules = _RULES_FILE.read_text(encoding="utf-8")
-    unbounded = "no length bound"
     expected: dict[str, list[str]] = {
-        "jev_verify": [unbounded] if limits.VERIFY.claims_max is None else [],
+        "jev_verify": _cap_needles(limits.VERIFY.claims_max, "claims"),
         "jev_gate": [
             f"\u2264{limits.GATE.claims_max} claims",
             f"\u2264{limits.GATE.evidence_items} evidence items",
@@ -354,7 +392,7 @@ def test_agent_rule_block_caps_match_limits() -> None:
             f"{limits.GATE.doc_units:,} units",
         ],
         "jev_review": [f"{limits.REVIEW.doc_units:,} units"],
-        "jev_screen": [unbounded] if limits.SCREEN.text_max is None else [],
+        "jev_screen": _cap_needles(limits.SCREEN.text_max, "units"),
         "jev_compare": [f"{limits.COMPARE.passage_max:,} units", f"\u2264{limits.COMPARE.aspects_max} aspects"],
         "jev_find": [f"\u2264{limits.CANDIDATES.max_items} candidates", f"{limits.CANDIDATES.text_units:,} units"],
         "jev_rerank": [f"\u2264{limits.CANDIDATES.max_items} candidates"],
@@ -369,7 +407,14 @@ def test_agent_rule_block_caps_match_limits() -> None:
         for needle in needles
         if needle not in _rules_row(rules, tool)
     ]
-    assert missing == [], f"docs/agent-rules.md caps drifted from limits.py: {missing}"
+    stale_unbounded = [
+        f"{tool} row still says 'no length bound' but limits.py bounds it"
+        for tool, needles in expected.items()
+        if "no length bound" not in needles and "no length bound" in _rules_row(rules, tool)
+    ]
+    assert missing == [] and stale_unbounded == [], (
+        f"docs/agent-rules.md caps drifted from limits.py: {missing + stale_unbounded}"
+    )
 
 
 def test_setup_prompt_names_only_real_cli_surface() -> None:
@@ -379,6 +424,16 @@ def test_setup_prompt_names_only_real_cli_surface() -> None:
 
     prompt = next((body for body in _readme_fences("text") if "jev-judge-mcp setup" in body), "")
     assert prompt, "the set-up prompt block is missing from the README"
+    dry_run = prompt.find("--dry-run")
+    confirmation = prompt.find("confirmation")
+    install = prompt.find("install -a")
+    assert 0 <= dry_run < confirmation < install, (
+        "the prompt must dry-run, wait for the user's chat confirmation, and only then install"
+    )
+    assert "-y" in prompt[install : install + 200], (
+        "the real install step needs -y: an agent shell is not a TTY, so the CLI prompt cannot fire"
+    )
+    assert "pi install npm:pi-mcp-adapter" in prompt, "the prompt omits the Pi MCP adapter prerequisite"
     for marker in ("TYPESAFE_API_KEY", "restart", "CLAUDE.md", "AGENTS.md", "docs/agent-rules.md"):
         assert marker in prompt, f"the set-up prompt no longer covers {marker}"
     for agent in TARGETS:

@@ -13,7 +13,7 @@
 
 </div>
 
-An MCP server that gives your coding agent eleven judgment tools backed by TypeSafe's Jev model. The agent hands a tool some evidence and a question it can enumerate: is this claim supported, is this page safe to read, which of these files answers the question, did this patch finish the task. Jev answers with probabilities, usually in under a second (median 464.6 ms round trip in the recorded bench), for about $0.025 per 1,000 decisions — and on the recorded benchmark every answer the policy auto-accepted was correct, with the misses routed to review instead of through. Policy turns the probabilities into one of three actions: `auto` (proceed), `review` (check it another way), or `escalate` (stop). The numbers and their sources: [Measured results](#measured-results).
+An MCP server that gives your coding agent eleven judgment tools backed by TypeSafe's Jev model. The agent hands a tool some evidence and a question it can enumerate: is this claim supported, is this page safe to read, which of these files answers the question, did this patch finish the task. Jev answers with probabilities, usually in under a second (median 464.6 ms round trip in the recorded bench), for about $0.025 per 1,000 decisions on the recorded classify run — and on that benchmark every answer the policy auto-accepted was correct, with the misses routed to review instead of through. Policy turns the probabilities into one of three actions: `auto` (proceed), `review` (check it another way), or `escalate` (stop). The numbers and their sources: [Measured results](#measured-results).
 
 Use it for checks that have a fixed set of answers. When the step needs new text, code, or options you cannot list, the agent should write it itself.
 
@@ -143,11 +143,14 @@ Set up the jev-judge-mcp judgment tools for me, then add their usage rules to yo
    it reads TYPESAFE_API_KEY from the environment or asks at a hidden prompt. Never ask me for the
    key, echo it, or write it into chat, a prompt, or any instruction file.
 2. Run `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install --dry-run` and show me the plan.
-   Then run `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install -a <your agent>`, naming
-   your own agent (claude-code, codex, cursor, opencode, pi, omp, or pythinker), and confirm with me.
+   Wait for my confirmation in chat before anything is written. On Pi, run
+   `pi install npm:pi-mcp-adapter` first. Once I confirm, run
+   `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install -a <your agent> -y`, naming your own
+   agent (claude-code, codex, cursor, opencode, pi, omp, or pythinker); `-y` skips the CLI prompt
+   because the confirmation happened in chat.
 3. Run `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp doctor` and fix anything it reports.
 4. Tell me to restart you. After the restart, confirm the jev tools are in your tool list.
-5. Add the "Fast judgment checks — Jev MCP first" rule block to your main instruction file —
+5. Add the "Fast judgment checks — and when to skip them" rule block to your main instruction file —
    CLAUDE.md for Claude Code, AGENTS.md for Codex and most others. The block follows this prompt
    (it is also tracked at docs/agent-rules.md in the jev-judge-mcp repo; ask me to paste it if you
    do not have it). Read the instruction file first: never duplicate an existing Jev rules block,
@@ -160,13 +163,15 @@ The rule block the prompt adds. One tracked copy lives at [`docs/agent-rules.md`
 <!-- Source of truth: jev-judge-mcp docs/agent-rules.md. The README copy and every cap below are
      pinned by tests/contract/test_docs_alignment.py. Depth: docs/skills/jev-mcp/SKILL.md. -->
 
-### Fast judgment checks — Jev MCP first
+### Fast judgment checks — and when to skip them
 
 Jev (TypeSafe) is a small judgment model served by the jev-judge-mcp MCP server: its tools take
-evidence plus a question with a fixed answer set and return typed probabilities, not text. Reach
-for a `jev_*` tool (`mcp__jev__*` in Claude Code) whenever a step judges material you already
-have — a bounded check, a pick-one, a rank, a match-the-claim — instead of reasoning it inline or
-spending a subagent pass on it.
+evidence plus a question with a fixed answer set and return typed probabilities, not text. Call a
+`jev_*` tool (`mcp__jev__*` in Claude Code) when a step judges material you already have — a
+bounded check, a pick-one, a rank, a match-the-claim — and an independent typed judgment is worth
+an extra tool turn. Skip it on steps you can settle by reading what is already on screen, or that
+your tests already cover: the extra turn costs agent wall time, and the recorded studies measured
+agents slower with Jev, never faster.
 
 | Tool | Use it to | Caps |
 |------|-----------|--------|
@@ -186,6 +191,9 @@ Caps are UTF-16 code units, frozen in the server's `limits.py`.
 
 Rules:
 
+- **Not for open work, not for trivia.** No Jev call for new prose, code, or research whose
+  answers you cannot list — write those yourself. And skip Jev on steps you already know the
+  answer to.
 - **Evidence in, not your verdict.** State holds raw diffs, logs, and excerpts — not your
   conclusion. A conclusion written into state gets agreement, not a judgment.
 - **Act on `action`:** `auto` → proceed · `review` → confirm with tests, source reading, or a
@@ -199,10 +207,6 @@ Rules:
   evidence instead.
 - **Failures are one line.** Tool error or missing key (`TYPESAFE_API_KEY`): say so in one line,
   then fall back to normal checks.
-- **Not for open work, not for trivia.** No Jev call for new prose, code, or research whose
-  answers you cannot list — write those yourself. And skip Jev on steps you already know: the
-  extra tool turn costs agent wall time, and the recorded studies measured agents slower with
-  Jev, never faster.
 ```
 
 Prefer to do it yourself? The three commands in [Install](#install) stay the manual path, and the block above pastes into `CLAUDE.md` or `AGENTS.md` by hand just as well.
@@ -248,15 +252,15 @@ Three paid studies, all descriptive, with small samples and no significance test
 
 **Round trip** — median 464.6 ms, p90 1245.3 ms, p95 1468.8 ms over 157 calls ([`evals/reports/bench150.md`](evals/reports/bench150.md)).
 
-**Decision quality** — on the public JevBench subset (2026-09-26, `jev-1.13.0` through `jev_classify`): 89/92 items correct — easy 36/36, original 36/36, hard 17/20. The policy auto-accepted 86 answers and 86/86 were correct; the 6 answers it routed to review hold all 3 misses, so no wrong answer was auto-accepted. Scorer: `selective_accuracy_auto` 1.0, `auto_coverage` 0.935, `micro_f1` 0.9727. JevBench v1.2's published per-item Jev 1.13.0 outcomes on the same 92 items also score 89/92. This is the classify-compatible subset, not JevBench's 231-item leaderboard. Details: [`evals/reports/jevbench-public.md`](evals/reports/jevbench-public.md).
+**Decision quality** — on the public JevBench subset (2026-09-26, `jev-1.13.0` through `jev_classify`): 89/92 items correct — easy 36/36, original 36/36, hard 17/20. The policy auto-accepted 86 answers and 86/86 were correct; the 6 answers it routed to review hold all 3 misses, so no wrong answer was auto-accepted. Scorer: `selective_accuracy_auto` 1.0, `auto_coverage` 0.935, `micro_f1` 0.9727. JevBench's own v1.2 reference for the same model — `results/v1.2/jevbench-v1.2-per-task.json` at JevBench commit `1bcc55eb` — is also correct on 89/92 of these items; the accuracy count is the like-for-like part, its confidences are not policy-comparable. This is the classify-compatible subset, not JevBench's 231-item leaderboard. Details: [`evals/reports/jevbench-public.md`](evals/reports/jevbench-public.md).
 
-**Cost** — the JevBench-subset run spent $0.002281 on 92 calls (54,308 billed input tokens), about $0.025 per 1,000 decisions; bench150's forced arm spent $0.0060 over 150 calls.
+**Cost** — the JevBench-subset run spent $0.002281 on 92 calls (54,308 billed input tokens), about $0.025 per 1,000 decisions at that packing; bench150's forced arm — a different packing — spent $0.0060 over 150 calls, $0.040 per 1,000.
 
 ### The agent around Jev
 
-A Jev call is an extra tool turn in the agent's loop, and that is where the wall time goes: Jev's own round trip is sub-second (above), while forcing a call added a median 10.4 s of agent wall time per task in bench150, and the agent-outcome study measured both agents slower with Jev at the same solve rates. Neither study measured an accuracy gain.
+A Jev call is an extra tool turn in the agent's loop, and that is where the wall time goes: Jev's own round trip is sub-second (above), while the recorded studies measured both agents slower with Jev at the same solve rates. Neither study measured an accuracy gain.
 
-On 150 questions with Pi (`opencode-go/deepseek-v4.1-flash`), forcing a Jev call added 10.4 s median wall time per task. Letting the agent choose left Jev uncalled on all 150. Jev itself answered in 464.6 ms median over 157 calls. Accuracy was not measured. Details: [`evals/reports/bench150.md`](evals/reports/bench150.md).
+On 150 questions with Pi (`opencode-go/deepseek-v4.1-flash`), forcing a Jev call added 10.4 s median wall time per task. Letting the agent choose left Jev uncalled on all 150. Accuracy was not measured. Details: [`evals/reports/bench150.md`](evals/reports/bench150.md).
 
 | arm | median wall s | p95 | called Jev | agent spend |
 |---|---|---|---|---|

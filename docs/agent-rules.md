@@ -1,13 +1,15 @@
 <!-- Source of truth: jev-judge-mcp docs/agent-rules.md. The README copy and every cap below are
      pinned by tests/contract/test_docs_alignment.py. Depth: docs/skills/jev-mcp/SKILL.md. -->
 
-### Fast judgment checks — Jev MCP first
+### Fast judgment checks — and when to skip them
 
 Jev (TypeSafe) is a small judgment model served by the jev-judge-mcp MCP server: its tools take
-evidence plus a question with a fixed answer set and return typed probabilities, not text. Reach
-for a `jev_*` tool (`mcp__jev__*` in Claude Code) whenever a step judges material you already
-have — a bounded check, a pick-one, a rank, a match-the-claim — instead of reasoning it inline or
-spending a subagent pass on it.
+evidence plus a question with a fixed answer set and return typed probabilities, not text. Call a
+`jev_*` tool (`mcp__jev__*` in Claude Code) when a step judges material you already have — a
+bounded check, a pick-one, a rank, a match-the-claim — and an independent typed judgment is worth
+an extra tool turn. Skip it on steps you can settle by reading what is already on screen, or that
+your tests already cover: the extra turn costs agent wall time, and the recorded studies measured
+agents slower with Jev, never faster.
 
 | Tool | Use it to | Caps |
 |------|-----------|--------|
@@ -27,6 +29,9 @@ Caps are UTF-16 code units, frozen in the server's `limits.py`.
 
 Rules:
 
+- **Not for open work, not for trivia.** No Jev call for new prose, code, or research whose
+  answers you cannot list — write those yourself. And skip Jev on steps you already know the
+  answer to.
 - **Evidence in, not your verdict.** State holds raw diffs, logs, and excerpts — not your
   conclusion. A conclusion written into state gets agreement, not a judgment.
 - **Act on `action`:** `auto` → proceed · `review` → confirm with tests, source reading, or a
@@ -40,7 +45,3 @@ Rules:
   evidence instead.
 - **Failures are one line.** Tool error or missing key (`TYPESAFE_API_KEY`): say so in one line,
   then fall back to normal checks.
-- **Not for open work, not for trivia.** No Jev call for new prose, code, or research whose
-  answers you cannot list — write those yourself. And skip Jev on steps you already know: the
-  extra tool turn costs agent wall time, and the recorded studies measured agents slower with
-  Jev, never faster.
