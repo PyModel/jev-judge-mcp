@@ -262,8 +262,21 @@ async def test_cache_key_and_file_io_run_off_the_event_loop(cache_env: Path, mon
     assert threads and all(ident != threading.get_ident() for ident in threads)
 
 
-async def test_a_crashed_atomic_write_leftover_is_swept_on_the_next_store(cache_env: Path) -> None:
-    """A SIGKILL between mkstemp and os.replace leaves a staging file; the next store unlinks it."""
+@pytest.mark.parametrize(
+    "max_entries",
+    [pytest.param(None, id="default-cap"), pytest.param("0", id="no-evict")],
+)
+async def test_a_crashed_atomic_write_leftover_is_swept_on_the_next_store(
+    cache_env: Path, monkeypatch: pytest.MonkeyPatch, max_entries: str | None
+) -> None:
+    """A SIGKILL between mkstemp and os.replace leaves a staging file; the next store unlinks it.
+
+    Also in no-evict mode (`JEV_MCP_CACHE_MAX_ENTRIES=0`): the sweep is not eviction — dead files
+    go in every mode, while live entries stay (ADR-0047's "swept by the next store" is not
+    qualified by the cap).
+    """
+    if max_entries is not None:
+        monkeypatch.setenv("JEV_MCP_CACHE_MAX_ENTRIES", max_entries)
     provider = FakeProvider(ANSWERS)
     runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
     await runtime.ask({"subject": "x"}, _question())

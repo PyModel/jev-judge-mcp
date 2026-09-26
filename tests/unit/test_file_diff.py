@@ -500,7 +500,11 @@ async def test_a_repeated_path_keeps_its_worst_action() -> None:
 
 
 async def test_a_repeated_path_keeps_its_worst_action_in_the_gate() -> None:
-    """G-B: the gate's nested mapping merges a repeated path to its worst, like jev_review's."""
+    """G-B: the gate's nested mapping merges a repeated path to its worst, like jev_review's.
+
+    The worst ask comes second here (jev_review's twin pins it first), so a first-wins merge
+    fails this test while a last-wins merge fails the twin — both directions covered as a pair.
+    """
     outcome = await _call_gate_drift(
         {
             "request": "fix the parser",
@@ -511,7 +515,7 @@ async def test_a_repeated_path_keeps_its_worst_action_in_the_gate() -> None:
             "claims": ["both files changed"],
             "evidence": [{"id": "log", "text": "2 passed"}],
         },
-        [_ESCALATE_REVIEW, _REVIEW_ANSWERS, _GATE_ANSWERS],
+        [_REVIEW_ANSWERS, _ESCALATE_REVIEW, _GATE_ANSWERS],
     )
     assert not outcome.is_error, outcome.text
     assert outcome.payload["action"] == "escalate"

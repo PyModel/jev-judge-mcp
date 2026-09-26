@@ -207,16 +207,21 @@ def test_schema_only_caps_stay_owned_by_limits() -> None:
     assert ids.MAX_ID_LENGTH == SANITIZE_ID_UNITS
 
 
-@pytest.mark.parametrize(
-    "refusal",
-    [
-        pytest.param(caps.candidate_budget_error(500, 200, "Split the batch."), id="candidate-characters"),
-        pytest.param(caps.classify_budget_error(9_000, 5, CLASSIFY.item_class_pairs), id="classify-pairs"),
-        pytest.param(caps.gate_evidence_items_error(GATE.evidence_items), id="gate-evidence-items"),
-        pytest.param(caps.gate_evidence_aggregate_error(GATE.aggregate_evidence_units), id="gate-evidence-aggregate"),
-        pytest.param(caps.gate_diff_aggregate_error(GATE.aggregate_evidence_units), id="gate-diff-aggregate"),
-    ],
-)
+_BUDGET_REFUSALS = [
+    pytest.param(caps.candidate_budget_error(500, 200, "Split the batch."), id="candidate_budget_error"),
+    pytest.param(caps.classify_budget_error(9_000, 5, CLASSIFY.item_class_pairs), id="classify_budget_error"),
+    pytest.param(caps.gate_evidence_items_error(GATE.evidence_items), id="gate_evidence_items_error"),
+    pytest.param(caps.gate_evidence_aggregate_error(GATE.aggregate_evidence_units), id="gate_evidence_aggregate_error"),
+    pytest.param(caps.gate_diff_aggregate_error(GATE.aggregate_evidence_units), id="gate_diff_aggregate_error"),
+]
+"""One pinned case per budget scaffold `validation/caps.py` freezes; ids are the function names.
+
+`test_every_budget_refusal_scaffold_is_pinned` derives the scaffold inventory from the module's
+own names and holds it to this list, so a sixth scaffold cannot land without a marker and a
+param (the drift `dc06e0e` fixed cannot reopen silently)."""
+
+
+@pytest.mark.parametrize("refusal", _BUDGET_REFUSALS)
 def test_every_frozen_budget_refusal_codes_input_too_large(refusal: str) -> None:
     """Each budget scaffold `validation/caps.py` produces is a caller-input refusal.
 
@@ -226,3 +231,23 @@ def test_every_frozen_budget_refusal_codes_input_too_large(refusal: str) -> None
     producers at their real caps, not hand-copied.
     """
     assert error_code(refusal) == "input_too_large"
+
+
+def test_every_budget_refusal_scaffold_is_pinned() -> None:
+    """A new `*_error` scaffold in `validation/caps.py` cannot land silently.
+
+    The inventory is derived from the module's own names, not hand-copied: a sixth budget
+    scaffold fails here by name until it carries a `BUDGET_REFUSAL_MARKERS` marker and a
+    `_BUDGET_REFUSALS` param, so its refusal cannot code non-`input_too_large` on the wire with
+    every test green. A stale pin (scaffold renamed or removed) fails the same way.
+    """
+    derived = {
+        name
+        for name, scaffold in vars(caps).items()
+        if callable(scaffold) and name.endswith("_error") and getattr(scaffold, "__module__", "") == caps.__name__
+    }
+    pinned = {param.id for param in _BUDGET_REFUSALS if isinstance(param.id, str)}
+    assert derived == pinned, (
+        f"caps.py budget scaffolds {sorted(derived - pinned)} need a BUDGET_REFUSAL_MARKERS entry "
+        f"and a _BUDGET_REFUSALS param; stale pins: {sorted(pinned - derived)}"
+    )

@@ -80,14 +80,13 @@ def _evict(directory: Path, cap: int) -> None:
     """Keep at most `cap` entries, oldest mtime first (ADR-0047 amendment). `0` never evicts.
 
     A crashed atomic write leaves its mkstemp staging file (`.<name>.<random>`) behind; those are
-    dead on arrival and are unlinked first, before the cap counts live entries. A staging file of
-    a concurrent store can be caught by the same sweep: that store's `os.replace` then fails,
-    which means "not cached", the same silence as an unwritable directory. Only this cache's
-    `.json` entries and its staging files are touched; a directory that cannot be listed or an
-    entry that cannot be deleted is ignored, never an error.
+    dead on arrival and are unlinked first, before the cap counts live entries — in every mode,
+    because the sweep is not eviction and a no-evict cache must not keep dead files forever. A
+    staging file of a concurrent store can be caught by the same sweep: that store's
+    `os.replace` then fails, which means "not cached", the same silence as an unwritable
+    directory. Only this cache's `.json` entries and its staging files are touched; a directory
+    that cannot be listed or an entry that cannot be deleted is ignored, never an error.
     """
-    if cap <= 0:
-        return
     try:
         entries = list(directory.iterdir())
     except OSError:
@@ -101,6 +100,8 @@ def _evict(directory: Path, cap: int) -> None:
                 entry.unlink()
             except OSError:
                 pass
+    if cap <= 0:
+        return
     excess = len(live) - cap
     if excess <= 0:
         return
