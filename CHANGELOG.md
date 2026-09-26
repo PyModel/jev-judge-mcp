@@ -1,5 +1,53 @@
 # Changelog
 
+## [0.5.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.4.1...v0.5.0) (2026-09-26)
+
+
+### Features
+
+* adapt public JevBench items to the eval harness (A8 preparation) ([d4a78a2](https://github.com/PyModel/jev-judge-mcp/commit/d4a78a28834cc0ff94f0033213b54fe41417f6af))
+* add advisory calibrate subcommand fitting thresholds on caller-labeled rows ([3f3051b](https://github.com/PyModel/jev-judge-mcp/commit/3f3051b8ae2fa2a35198e4edee872f51ed2c0fbe))
+* add order-sensitivity probe to the eval harness (A2) ([e4276ac](https://github.com/PyModel/jev-judge-mcp/commit/e4276ac143c5e039da62c043e8fe5f10bf0fcb8b))
+* **cache:** off-loop IO, a TTL, and oldest-first eviction (ADR-0047 amendment) ([8e93953](https://github.com/PyModel/jev-judge-mcp/commit/8e93953b8c159bf173076079bb54a93bd4222f99))
+* file lists name each reviewed file's action (file_actions) ([5a02bf1](https://github.com/PyModel/jev-judge-mcp/commit/5a02bf14959f0755088d160b4634e3e518c837c1))
+* gate file list verifies claims once, per file review stays per file ([25016dd](https://github.com/PyModel/jev-judge-mcp/commit/25016dd6970bc2c49947b49978a2519480a23942))
+* **providers:** opt-in JEV_MCP_MAX_INFLIGHT cap on concurrent requests ([fd26573](https://github.com/PyModel/jev-judge-mcp/commit/fd26573c54a77488dff863ac74a0ae5abc4653f5))
+* **telemetry:** log the metrics snapshot at INFO every 100 tool spans ([0c2972b](https://github.com/PyModel/jev-judge-mcp/commit/0c2972beb4b86827e324b5d33ef5851ecce4c2f6))
+
+
+### Bug Fixes
+
+* address every critique finding on fm/jev-eval-calibrate (P2-1..4, P3-1..6, E1..3) ([0f2cdbe](https://github.com/PyModel/jev-judge-mcp/commit/0f2cdbe1494ac192efc022bdf3aa7ccc6358f4df))
+* **cli:** code isError envelopes with the one parity mapping ([422c17f](https://github.com/PyModel/jev-judge-mcp/commit/422c17fdb36cf66e74a14187792fb1cc6ce7dd34))
+* critique follow-ups H1-H4 (hook gates, cache leftovers, serve wiring test, off-path hops) ([14c2569](https://github.com/PyModel/jev-judge-mcp/commit/14c256973026acf3a2ed1d6d7d3a343e6dd49dcc))
+* delta-critique-a follow-ups — sweep before no-evict, scaffold guard, worst-last pin (C1, C2, F1) ([0c35884](https://github.com/PyModel/jev-judge-mcp/commit/0c358842b7301bbf6d80c3c005dcb73343a32130))
+* delta-critique-b nits — one source_commit call, required control (F3, F4) ([831fab4](https://github.com/PyModel/jev-judge-mcp/commit/831fab4cb7ad716ca936f3dd30d1f3db59fc0ca2))
+* example collects every confidence across the real payload shapes ([f2d3c86](https://github.com/PyModel/jev-judge-mcp/commit/f2d3c86710eda8f1bdf5653a92018b5bf7c586d9))
+* gate file list keeps isError, sums usage, shares file plumbing ([0cf8928](https://github.com/PyModel/jev-judge-mcp/commit/0cf89284c6c5a118c6676db7c719138409f0b3c3))
+* **hook:** match completion commands on tokens, not a string prefix ([c6641f7](https://github.com/PyModel/jev-judge-mcp/commit/c6641f7724d7c326046d8ab3f936eea4313f6bb9))
+* qualify file_actions' worst-entry claim and pin the clamp shapes (D1, G-A, G-B) ([38b7b34](https://github.com/PyModel/jev-judge-mcp/commit/38b7b340a4d079b86a315f5bfd030ce43afd94e1))
+* **responses:** code every frozen budget refusal input_too_large ([dc06e0e](https://github.com/PyModel/jev-judge-mcp/commit/dc06e0e1e84cbdbb1644186aaba56c5327f88cb0))
+* review-critique follow-ups on the gate file list (F1-F3, G1-G3) ([d33c98e](https://github.com/PyModel/jev-judge-mcp/commit/d33c98e215caecf12b1e1163944c67140394fad4))
+* **server:** configure redacting logging before the judge/gate/hook subcommands ([6630fc8](https://github.com/PyModel/jev-judge-mcp/commit/6630fc8a3f5753b5282443d2d1c10f90989a018c))
+* **server:** hand the HTTP listen sockets to uvicorn, closing the probe gap ([6862536](https://github.com/PyModel/jev-judge-mcp/commit/6862536f10a62fe72e569f1dad458ee7ef421eeb))
+
+
+### Documentation
+
+* caller guide for writing states and questions ([86bdcfb](https://github.com/PyModel/jev-judge-mcp/commit/86bdcfbb5dad16b3c5054d2b1f4dc8e126be7690))
+* claims are positional strings, not id records ([87b65b6](https://github.com/PyModel/jev-judge-mcp/commit/87b65b60f279b35e4ed0f232912b3025f22dc896))
+* fix every critique finding on fm/jev-readme-bench (P1-A..P3-8) ([fc70ce6](https://github.com/PyModel/jev-judge-mcp/commit/fc70ce6a64a269eefa0a37ddad579e1a7c8a33ca))
+* fold caller-docs' EVIDENCE.md pointer into the reworked Measured results; depth now points at guidance.md ([89c5369](https://github.com/PyModel/jev-judge-mcp/commit/89c5369d9a4d334dd08271a78b0bf8511aed4b92))
+* lead with measured speed, cost, and decision quality; add agent setup rules ([e386694](https://github.com/PyModel/jev-judge-mcp/commit/e386694fff6c858750540764a99813c91a6155ca))
+* limits page for caps, defaults, and error codes ([66cecf3](https://github.com/PyModel/jev-judge-mcp/commit/66cecf30e809bcf2dde01f01b5289c9b58af6433))
+* name the pin behind every budget refusal's error code ([47d5f4e](https://github.com/PyModel/jev-judge-mcp/commit/47d5f4e0bcd61efa6f475f997338fe24063737d4))
+* per-tool cards with measured evidence and weak spots ([0c04ad8](https://github.com/PyModel/jev-judge-mcp/commit/0c04ad8fc46314b194c6dc6b1ee140b1d9701739))
+* pin or source every restated frozen number ([1215d47](https://github.com/PyModel/jev-judge-mcp/commit/1215d471a5950c1d5c9211444f4ecd0bbdac79bb))
+* pin the install command's -y exactly; state the public_tasks id join (F1, F2) ([a95c097](https://github.com/PyModel/jev-judge-mcp/commit/a95c097b2f152f55063e0657c45e6a310e9fb9bf))
+* release evidence page and a release step that fills it ([ee28b62](https://github.com/PyModel/jev-judge-mcp/commit/ee28b62611e9cbdb8978c72233a4a768e778337a))
+* state the per-file diff review rule on the limits page and tool cards ([5d579f0](https://github.com/PyModel/jev-judge-mcp/commit/5d579f0b69a36541cd54d1e1bc01c967d25c012d))
+* track the JevBench run's machine evidence; point the adapter at the recorded run (F1, F2) ([e807384](https://github.com/PyModel/jev-judge-mcp/commit/e80738438b21da46ca69380d103a6a9c64b6ae1c))
+
 ## [0.4.1](https://github.com/PyModel/jev-judge-mcp/compare/v0.4.0...v0.4.1) (2026-09-26)
 
 
