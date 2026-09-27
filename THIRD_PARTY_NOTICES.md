@@ -2,10 +2,14 @@
 
 ## @jkudish/jev-mcp 0.5.0
 
-The descriptions and input schemas of the ten original tools are the text of
-`@jkudish/jev-mcp` 0.5.0. That text is in these tracked files:
+The descriptions and input schemas of the ten original tools, the question
+instructions and criteria those tools send, and the provider configuration
+error messages are the text of `@jkudish/jev-mcp` 0.5.0. That text is in these
+tracked files:
 
+- `src/jev_judge_mcp/providers/resolver.py`
 - `src/jev_judge_mcp/tools/classify.py`
+- `src/jev_judge_mcp/tools/common.py`
 - `src/jev_judge_mcp/tools/compare.py`
 - `src/jev_judge_mcp/tools/decide.py`
 - `src/jev_judge_mcp/tools/extract.py`
@@ -16,7 +20,11 @@ The descriptions and input schemas of the ten original tools are the text of
 - `src/jev_judge_mcp/tools/screen.py`
 - `src/jev_judge_mcp/tools/verify.py`
 - `docs/reference/ts-0.5.0-tools-list.json`
-- every tracked file under `tests/parity/fixtures/`
+- `tests/fixtures/compare/live-humidity-aspect-contradiction.json`
+- `tests/parity/program_expect.py`
+- `tests/unit/test_domain.py`
+- every fixture file under `tests/parity/fixtures/classes/`
+- every fixture file under `tests/parity/fixtures/mock/`
 
 ```
 MIT License
