@@ -406,10 +406,10 @@ curl -H "Authorization: Bearer <token>" \
 
 ## Architecture
 
-One diagram covers the whole server: the tool-call loop from `tools/call` to the returned action text, the fail-closed answer path, and the local CLI commands around it (`install`, `setup`, `hook gate`, `doctor`) with the stored key file and the optional response cache. Open [`docs/architecture.html`](docs/architecture.html) for the interactive version (guided views, dark mode, node search, relationship tracing).
+One diagram covers the whole server: the tool-call loop from `tools/call` to the returned action text, the fail-closed answer path, and the local CLI commands around it (`install`, `setup`, `hook gate`, `doctor`, `judge`, `gate`) with the stored key file and the optional response cache. The packaged skills and the instructions surface are on the diagram too. Open [`docs/architecture.html`](docs/architecture.html) for the interactive version (guided views, dark mode, node search, relationship tracing).
 
 <p align="center">
-  <img src="docs/readme/architecture.svg" alt="jev-judge-mcp architecture: an MCP client calls eleven Jev tools through one Toolset over stdio or streamable-http; the runtime resolves one of four providers, validation rejects malformed answers, pure policy decides auto, review, or escalate, and the result serializes back to the client. The install, setup, hook, and doctor CLIs, the stored key file, and the optional response cache surround the server." width="880">
+  <img src="docs/readme/architecture.svg" alt="jev-judge-mcp architecture: an MCP client calls eleven Jev tools through one Toolset over stdio or streamable-http; the runtime resolves one of four providers, validation rejects malformed answers, pure policy decides auto, review, or escalate, and the result serializes back to the client. The install, setup, hook, doctor, judge, and gate CLIs, the stored key file, the optional response cache, the packaged skills, and the instructions surface surround the server." width="880">
 </p>
 
 ## About this project
