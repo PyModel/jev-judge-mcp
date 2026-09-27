@@ -157,6 +157,9 @@ Set up the jev-judge-mcp judgment tools for me, then add their usage rules to yo
 
 The rule block the prompt adds. One tracked copy lives at [`docs/agent-rules.md`](docs/agent-rules.md); the copy below is pinned to it by a contract test, so paste either:
 
+<details>
+<summary>Show the rule block</summary>
+
 ```markdown
 <!-- Source of truth: jev-judge-mcp docs/agent-rules.md. The README copy and every cap below are
      pinned by tests/contract/test_docs_alignment.py. Depth: docs/skills/jev-mcp/SKILL.md
@@ -225,6 +228,8 @@ Rules:
   (resource `jev-skill://jev/SKILL.md`) is for building an app that calls the Jev API. Do not copy
   that skill's cookbook thresholds onto these tools. The on-demand rule above applies to both.
 ```
+
+</details>
 
 Prefer to do it yourself? The three commands in [Install](#install) stay the manual path, and the block above pastes into `CLAUDE.md` or `AGENTS.md` by hand just as well.
 
