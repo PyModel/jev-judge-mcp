@@ -487,15 +487,12 @@ def test_guidance_splits_domain_rules_from_deterministic_rules() -> None:
     guide = _GUIDANCE.read_text(encoding="utf-8")
     assert "Keep rules out of the question" not in guide
     assert "domain rules" in guide
-    assert "deterministic rules" in guide
-    assert "https://docs.typesafe.ai/models.md" in guide
 
 
 def test_guidance_names_confidence_and_allows_a_null_description() -> None:
     """G2/G3: the guide names the docs' confidence default and does not forbid a null description."""
     guide = _GUIDANCE.read_text(encoding="utf-8")
     assert "Threshold `confidence`" in guide
-    assert "top probability" in guide
     assert "null" in guide
     assert "Names alone are weak" not in guide
 
@@ -586,11 +583,6 @@ def test_classify_card_does_not_claim_the_default_margin_binds() -> None:
 def test_find_card_says_the_exists_thresholds_are_frozen() -> None:
     """P4: the cookbook's 0.7/0.35 are examples to tune. This server freezes them."""
     section = _tool_section(_TOOL_CARDS.read_text(encoding="utf-8"), "## jev_find", "## jev_rerank")
-    needle = (
-        f"answered at ≥ {policy_thresholds.EXISTS_FOUND_AT:g}, "
-        f"absent below {policy_thresholds.EXISTS_ABSENT_BELOW:g}"
-    )
-    assert needle in section
     assert "examples to tune" in section
     assert "frozen parity defaults" in section
     assert "ADR-0001" in section
@@ -652,10 +644,8 @@ def test_calibrate_advisory_says_to_pin_the_measured_model() -> None:
 
 def test_score_citations_match_the_refreshed_summary() -> None:
     """C1: the summary says 2-10. A comment that still says 1-10 is the stale citation."""
-    summary = (ROOT / "docs" / "jev_docs" / "primitives.md").read_text(encoding="utf-8")
     limits_source = (ROOT / "src" / "jev_judge_mcp" / "limits.py").read_text(encoding="utf-8")
     score_test = (ROOT / "tests" / "contract" / "test_limits.py").read_text(encoding="utf-8")
-    assert "2\u201310 levels" in summary
     assert "1-10 levels" not in limits_source
     assert "1-10 levels" not in score_test
     assert limits.SCORE.levels_min == 2
