@@ -107,8 +107,14 @@ def percentile(samples: list[float], fraction: float) -> float:
     return ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
 
 
-async def overheads(client: Client, concurrency: int, calls: int) -> list[float]:
-    """Run `calls` calls with `concurrency` in flight, cycling through every tool; overhead in ms each."""
+async def overheads(
+    client: Client, concurrency: int, calls: int, gate_payloads: list[Any] | None = None
+) -> list[float]:
+    """Run `calls` calls with `concurrency` in flight, cycling through every tool; overhead in ms each.
+
+    `gate_payloads`, when given, collects each jev_gate payload the loop already made, so a caller can
+    read one without a second call.
+    """
     samples: list[float] = []
     issued = 0
 
@@ -121,6 +127,8 @@ async def overheads(client: Client, concurrency: int, calls: int) -> list[float]
             result = await client.call_tool(case.tool, dict(case.arguments))
             elapsed = perf_counter() - start
             assert not result.is_error, (case.tool, result.content)
+            if gate_payloads is not None and case.tool == "jev_gate":
+                gate_payloads.append(json.loads(text_of(result)))
             samples.append((elapsed - PROVIDER_S) * 1000)
 
     async with anyio.create_task_group() as tg:
@@ -167,19 +175,18 @@ async def test_every_tool_call_succeeds_at_low_concurrency() -> None:
     """
     toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: StubProvider()), TOOLS)
     server = JevMCPServer(toolset=toolset, log_level="WARNING")
-    freeze_startup_heap()
     try:
         async with Client(server) as client:
+            gate_payloads: list[Any] = []
             for level in (1, 4):
-                samples = await overheads(client, level, len(CASES))
+                samples = await overheads(client, level, len(CASES), gate_payloads)
                 assert len(samples) == len(CASES)
-            gate = next(case for case in CASES if case.tool == "jev_gate")
-            result = await client.call_tool(gate.tool, dict(gate.arguments))
-            assert not result.is_error, result.content
-            payload = json.loads(text_of(result))
+            assert gate_payloads, "the canary must exercise jev_gate"
+            payload = gate_payloads[-1]
+            caller_id = next(case for case in CASES if case.tool == "jev_gate").arguments["evidence"][0]["id"]
             assert payload["verification"]["summary"]["invalid_response"] == 0
             row = payload["verification"]["results"][0]
-            assert row["supporting_evidence"] == gate.arguments["evidence"][0]["id"], row
+            assert row["supporting_evidence"] == caller_id, row
             metrics = toolset.runtime.telemetry.metrics.snapshot()
             assert [key for key in metrics if key.startswith("fail_closed")] == []
     finally:
