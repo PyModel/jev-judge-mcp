@@ -10,7 +10,7 @@ from shutil import which
 
 from jev_judge_mcp.install.engine import TARGETS, Request, run
 from jev_judge_mcp.install.errors import InstallError
-from jev_judge_mcp.install.launch import checkout_launch, local_install_warning, pypi_launch
+from jev_judge_mcp.install.launch import checkout_launch, local_install_warning, pypi_launch, require_checkout_uvx
 from jev_judge_mcp.install.layout import Layout, layout_from_env
 from jev_judge_mcp.install.verify import verify_command
 
@@ -51,9 +51,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         uvx = which("uvx")
         if uvx is None:
             raise InstallError("uvx is not on PATH. Install uv from https://docs.astral.sh/uv/ and re-run.")
-        launch = (
-            checkout_launch(str(Path(uvx).resolve())) if parsed.from_checkout else pypi_launch(str(Path(uvx).resolve()))
-        )
+        resolved = str(Path(uvx).resolve())
+        if parsed.from_checkout:
+            require_checkout_uvx(resolved)
+        launch = checkout_launch(resolved) if parsed.from_checkout else pypi_launch(resolved)
         layout = layout_from_env(environ, home=Path.home())
         key, secrets = _desktop_key(parsed.desktop_key, environ)
         confirmer = _confirmer(parsed.yes, parsed.dry_run)

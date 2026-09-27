@@ -7,6 +7,7 @@ import sys
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from shutil import which
 
 import pytest
 
@@ -275,10 +276,26 @@ def test_wheel_layout_dry_run_renders_the_pinned_pypi_spec(
     assert list(tmp_path.rglob("*.json")) == []  # dry-run wrote nothing
 
 
+def _uvx_reporting(directory: Path, line: str) -> Path:
+    """A uvx whose `--version` is `line`. The real `which` finds it; nothing else is stubbed."""
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "uvx"
+    script.write_text(f"#!/bin/sh\nprintf '%s\\n' {line!r}\n", encoding="utf-8")
+    script.chmod(0o755)
+    return script
+
+
+def _qualifying_uvx(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Point `which` at a uvx new enough for `--from-checkout`. The path stub never ran before."""
+    script = _uvx_reporting(tmp_path / "bin", "uvx 0.12.19 (bea138450 2026-09-24 aarch64-apple-darwin)")
+    monkeypatch.setattr(install_cli, "which", lambda _name: str(script))
+
+
 def test_checkout_flag_renders_the_checkout_spec(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _fake_home(monkeypatch, tmp_path)
+    _qualifying_uvx(monkeypatch, tmp_path)
     checkout = str(find_package_root())
     code = install_cli.main(["--dry-run", "-a", "claude-code", "--from-checkout"])
     assert code == 0
@@ -331,6 +348,7 @@ def test_from_checkout_prints_no_local_checkout_note(
 ) -> None:
     _fake_home(monkeypatch, tmp_path)
     _installed_like_local_checkout(monkeypatch)
+    _qualifying_uvx(monkeypatch, tmp_path)
     code = install_cli.main(["--dry-run", "-a", "claude-code", "--from-checkout"])
     out = capsys.readouterr().out
     assert code == 0, out
@@ -338,10 +356,34 @@ def test_from_checkout_prints_no_local_checkout_note(
     assert f"{find_package_root()}[typesafe]" in out
 
 
+def test_from_checkout_requires_uvx_that_honors_cache_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """uvx 0.9.24 keeps the first checkout build; 0.10.10 is the first version that does not."""
+    _fake_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(install_cli, "which", which)
+
+    old = _uvx_reporting(tmp_path / "old", "uvx 0.9.24 (0fda1525e 2026-01-09)")
+    monkeypatch.setenv("PATH", f"{old.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    code = install_cli.main(["--from-checkout", "-y", "--dry-run", "-a", "claude-code"])
+    out = capsys.readouterr().out
+    assert code == 1, out
+    assert "0.9.24" in out
+    assert "0.10.10" in out
+
+    new = _uvx_reporting(tmp_path / "new", "uvx 0.10.10 (x)")
+    monkeypatch.setenv("PATH", f"{new.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+    code = install_cli.main(["--from-checkout", "-y", "--dry-run", "-a", "claude-code"])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert f"{find_package_root()}[typesafe]" in out
+
+
 def test_checkout_flag_without_a_checkout_fails_accurately(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _fake_home(monkeypatch, tmp_path)
+    _qualifying_uvx(monkeypatch, tmp_path)
     monkeypatch.setattr(launch_module, "find_package_root", lambda: find_package_root(start=tmp_path))
     code = install_cli.main(["--dry-run", "-a", "claude-code", "--from-checkout"])
     assert code == 1

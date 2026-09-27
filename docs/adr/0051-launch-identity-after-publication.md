@@ -22,7 +22,9 @@ configured agent.
 - **`--from-checkout`.** An explicit flag writes `<absolute checkout>[typesafe]`, found the way
   ADR-0033 found it: walking up from the running package to a `pyproject.toml` that names
   `jev-judge-mcp`. With no checkout it fails with a message that says so. This is the development
-  mode for an unreleased tree, not the default.
+  mode for an unreleased tree, not the default. It refuses when `uvx --version` is older than
+  0.10.10: that uvx caches the first build of a checkout and keeps launching it after edits
+  (astral-sh/uv#18396). The `tool.uv.cache-keys` floor closes the path on 0.10.10 and newer.
 - **Spec shapes.** Validation accepts exactly the two shapes this installer writes — the
   version-pinned PyPI spec and the checkout spec — and refuses anything else (the bare package
   name, another project's name, a relative path) before any config is touched.

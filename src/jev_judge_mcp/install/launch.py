@@ -8,6 +8,7 @@ interpreter it refuses.
 
 import json
 import re
+import subprocess
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -26,6 +27,32 @@ OPENCODE_REFERENCE = "{env:TYPESAFE_API_KEY}"
 EXTRA = "typesafe"
 # pi-mcp-adapter resourceNameToToolName("jev-mcp/SKILL.md") with a get_ prefix.
 PI_SKILL_TOOL = "get_jev_mcp_skill_md"
+# uvx honors tool.uv.cache-keys for its cached environments from uv 0.10.10 (astral-sh/uv#18396).
+# An older uvx keeps launching its first build of a checkout after every edit or pull.
+CHECKOUT_MIN_UV = (0, 10, 10)
+
+
+def require_checkout_uvx(uvx: str) -> None:
+    """Refuse a checkout entry that this uvx would pin to its first, stale build."""
+    try:
+        reported = subprocess.run(  # noqa: S603 - resolved uvx; argv is only --version
+            [uvx, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise InstallError(f"could not read the uvx version from {uvx}: {exc}") from exc
+    match = re.match(r"uvx (\d+)\.(\d+)\.(\d+)", reported)
+    if match is None:
+        raise InstallError(f"unrecognized `uvx --version` output: {reported.strip()!r}")
+    found = tuple(int(part) for part in match.groups())
+    if found < CHECKOUT_MIN_UV:
+        raise InstallError(
+            f"uvx {'.'.join(map(str, found))} keeps serving its first build of a checkout after edits; "
+            "--from-checkout needs uv 0.10.10 or newer (run `uv self update`)"
+        )
 
 
 def pi_direct_tools() -> list[str]:
