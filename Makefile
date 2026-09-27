@@ -57,8 +57,9 @@ security-live:
 	$(PYTEST) tests/security -m live
 
 build:
+	rm -rf dist
 	uv build
-	uv run python scripts/ci/check_sdist_excludes.py
+	uv run python scripts/ci/check_dist.py
 
 # The integration tests, then the slow `uvx --no-cache --from .` smoke test. `--no-cache` makes
 # uvx build this checkout instead of reusing a cached tool environment (see pyproject.toml

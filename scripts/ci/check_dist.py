@@ -4,9 +4,11 @@ Hatchling treats a gitignore hit on the absolute project root as "exclude nothin
 An unanchored `.treehouse/` matches a checkout that merely lives under `~/.treehouse`.
 The pattern must be anchored at the repository root.
 
-The wheel check also enforces two provenance contracts: every packaged file must
-match a `tool.uv` cache-key glob (an unlisted edit would serve a stale build), and
-both artifacts carry THIRD_PARTY_NOTICES.md.
+The same check owns two provenance contracts: both artifacts carry
+THIRD_PARTY_NOTICES.md (the sdist at the archive root, the wheel in
+`.dist-info/licenses/`), and every packaged file matches a `tool.uv` cache-key
+glob, or an edit to it serves a stale build. Exactly one artifact per kind may
+sit in `dist/`, so a stale build can never be the one inspected.
 """
 
 import fnmatch
@@ -20,6 +22,13 @@ from typing import TypeGuard, cast
 ROOT = Path(__file__).resolve().parents[2]
 FORBIDDEN = (".venv/", "__pycache__/", ".pytest_cache/", ".ruff_cache/", ".jevbench-tmp/", "docs/reference/jev-skill/")
 NOTICE = "THIRD_PARTY_NOTICES.md"
+
+
+def _one(pattern: str) -> Path:
+    found = sorted((ROOT / "dist").glob(pattern))
+    if len(found) != 1:
+        raise SystemExit(f"expected exactly one {pattern} in dist/, found {len(found)}; rm -rf dist && uv build")
+    return found[0]
 
 
 def _table(value: object) -> TypeGuard[dict[str, object]]:
@@ -66,11 +75,8 @@ def main() -> int:
     if "/.treehouse/" not in lines:
         print("missing anchored /.treehouse/ gitignore entry", file=sys.stderr)
         return 1
-    sdists = sorted((ROOT / "dist").glob("*.tar.gz"))
-    if not sdists:
-        print("no sdist in dist/; run uv build first", file=sys.stderr)
-        return 1
-    with tarfile.open(sdists[-1]) as archive:
+    sdist = _one("*.tar.gz")
+    with tarfile.open(sdist) as archive:
         names = archive.getnames()
     leaked = [name for name in names if any(part in name for part in FORBIDDEN)]
     if leaked:
@@ -78,19 +84,18 @@ def main() -> int:
         for name in leaked[:20]:
             print(f"  {name}", file=sys.stderr)
         return 1
-    if not any(name.endswith(f"/{NOTICE}") for name in names):
+    top = sdist.name.removesuffix(".tar.gz")
+    if f"{top}/{NOTICE}" not in names:
         print(f"sdist is missing {NOTICE}", file=sys.stderr)
         return 1
-    wheels = sorted((ROOT / "dist").glob("*.whl"))
-    if not wheels:
-        print("no wheel in dist/; run uv build first", file=sys.stderr)
-        return 1
-    with zipfile.ZipFile(wheels[-1]) as archive:
+    wheel = _one("*.whl")
+    dist_info = "-".join(wheel.name.split("-")[:2]) + ".dist-info"
+    with zipfile.ZipFile(wheel) as archive:
         wheel_names = archive.namelist()
-    if not any(name.endswith(f".dist-info/licenses/{NOTICE}") for name in wheel_names):
+    if f"{dist_info}/licenses/{NOTICE}" not in wheel_names:
         print(f"wheel licenses/ is missing {NOTICE}", file=sys.stderr)
         return 1
-    missed = check_wheel_cache_keys(ROOT, wheels[-1])
+    missed = check_wheel_cache_keys(ROOT, wheel)
     if missed:
         print("wheel files no cache-key glob covers; add the path to [tool.uv] cache-keys:", file=sys.stderr)
         for name in missed:
