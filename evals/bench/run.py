@@ -92,6 +92,8 @@ class Setup:
     """The agent's whole environment (`arms.agent_env` of the caller's)."""
     secret: str
     """Scrubbed from every kept artifact."""
+    auth_provider: str = ""
+    """The one auth.json provider entry the agent's model needs; empty copies no auth."""
     timeout_s: float = arms.RUN_TIMEOUT_S
     flags: Callable[[Item, str, Path], Sequence[str]] | None = None
     """Argv after the agent binary. None uses the Claude command; the Pi arm supplies its own."""
@@ -177,6 +179,7 @@ def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) ->
         secret=setup.secret,
         run_dir=run_dir,
         parse=setup.trace,
+        auth_provider=setup.auth_provider or None,
     ) as run:
 
         def build() -> dict[str, Any]:
@@ -574,6 +577,7 @@ def live(
             flags=pi.flags,
             trace=pi.parse,
             cross_check=pi.cross_check,
+            auth_provider=pi.BENCH_MODEL.split("/")[0],
         )
     else:
         setup = Setup(
@@ -595,6 +599,7 @@ def live(
                 mcp_config=arms.mcp_config("A", jev_log=Path("unused"), server_env={}),
                 login_keychain=setup.login_keychain,
                 parse=parse,
+                auth_provider=setup.auth_provider or None,
             )
         except AgentPreflightError as error:
             write_preflight(out, cost_usd=error.cost_usd, model=error.model)

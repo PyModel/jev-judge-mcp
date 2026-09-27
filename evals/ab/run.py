@@ -76,6 +76,8 @@ class Setup:
     """Scrubbed from every kept artifact."""
     python3: str
     """The grader's interpreter."""
+    auth_provider: str = ""
+    """The one auth.json provider entry the agent's model needs; empty copies no auth."""
     timeout_s: float = arms.RUN_TIMEOUT_S
     task_list: Sequence[tasks.Task] = field(default_factory=tasks.load_tasks)
 
@@ -131,6 +133,7 @@ def preflight(setup: Setup, out: Path | None = None) -> AgentRunResult:
             login_keychain=setup.agent == "claude",
             parse=parser_for(setup.agent),
             timeout_s=PREFLIGHT_TIMEOUT_S,
+            auth_provider=setup.auth_provider or None,
         )
     except AgentPreflightError as error:
         if out is not None:
@@ -173,6 +176,7 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
         run_dir=run_dir,
         prepare=lambda workdir: tasks.materialize(task, workdir),
         parse=parser_for(setup.agent),
+        auth_provider=setup.auth_provider or None,
     ) as run:
 
         def failed(error: Exception) -> dict[str, Any]:
@@ -571,6 +575,7 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
         base_env=base_env,
         secret=key,
         python3=python3,
+        auth_provider=(pi.PI_MODEL.split("/")[0] if agent == "pi" else ""),
     )
     # Preflight before pin_meta: a dead login must not pin a setup that has no runs, or the next
     # resume is refused for an agent_version that never recorded anything. A finished study has

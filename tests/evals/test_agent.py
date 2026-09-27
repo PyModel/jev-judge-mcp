@@ -103,7 +103,10 @@ def test_the_agent_never_sees_the_real_home_or_the_repo(tmp_path: Path, login_ke
     real_home = tmp_path / "real-home"
     real_agent = real_home / ".pi" / "agent"
     real_agent.mkdir(parents=True)
-    (real_agent / "auth.json").write_text('{"deepseek": {"type": "api_key", "key": "k"}}', encoding="utf-8")
+    (real_agent / "auth.json").write_text(
+        '{"deepseek": {"type": "api_key", "key": "k"}, "other": {"type": "api_key", "key": "k2"}}',
+        encoding="utf-8",
+    )
     (real_agent / "mcp.json").write_text('{"mcpServers": {"user": {"command": "x"}}}', encoding="utf-8")
     (real_home / ".env").write_text("SOMETHING=x\n", encoding="utf-8")
     real_login = real_home / "Library" / "Keychains" / "login.keychain-db"
@@ -126,6 +129,7 @@ def test_the_agent_never_sees_the_real_home_or_the_repo(tmp_path: Path, login_ke
         "result = {\n"
         '    "env": dict(os.environ),\n'
         '    "agent_dir": sorted(os.listdir(os.environ["PI_CODING_AGENT_DIR"])),\n'
+        '    "scoped_auth": json.load(open(os.path.join(os.environ["PI_CODING_AGENT_DIR"], "auth.json"))),\n'
         '    "home": sorted(os.listdir(home)),\n'
         '    "keychains_is_dir": os.path.isdir(keychains) and not os.path.islink(keychains),\n'
         '    "keychains_names": sorted(os.listdir(keychains)) if os.path.isdir(keychains) else [],\n'
@@ -146,11 +150,19 @@ def test_the_agent_never_sees_the_real_home_or_the_repo(tmp_path: Path, login_ke
         login_keychain=login_keychain,
     )
     run_dir = tmp_path / "records"
-    with run_agent(command, mcp_config={}, base_env=base, secret=KEY, run_dir=run_dir) as agent:
+    with run_agent(
+        command,
+        mcp_config={},
+        base_env=base,
+        secret=KEY,
+        run_dir=run_dir,
+        auth_provider="deepseek",
+    ) as agent:
         seen = json.loads(agent.trace.result_field("result"))
     env = seen["env"]
     # The allowlist crosses; the user's MCP config, env files, and everything else do not.
     assert seen["agent_dir"] == ["auth.json"]
+    assert set(seen["scoped_auth"]) == {"deepseek"}, "the whole auth.json must never cross"
     assert env["PI_CODING_AGENT_DIR"] != str(real_agent)
     for name, value in env.items():
         assert str(real_home) not in value, f"{name} points at the real home"
@@ -170,7 +182,33 @@ def test_the_agent_never_sees_the_real_home_or_the_repo(tmp_path: Path, login_ke
     else:
         assert seen["home"] == []
         assert seen["login_is_link"] is False
-        assert seen["login_marker"] is None
+
+
+def test_no_auth_provider_copies_no_auth_json(tmp_path: Path) -> None:
+    """Without a provider named, auth.json does not cross at all — never the whole file."""
+    real_home = tmp_path / "real-home"
+    real_agent = real_home / ".pi" / "agent"
+    real_agent.mkdir(parents=True)
+    (real_agent / "auth.json").write_text('{"deepseek": {"type": "api_key", "key": "k"}}', encoding="utf-8")
+    probe = (
+        "import json, os\n"
+        'result = {"agent_dir": sorted(os.listdir(os.environ["PI_CODING_AGENT_DIR"]))}\n'
+        'init = json.dumps({"type": "system", "subtype": "init", "model": "stub", "mcp_servers": []})\n'
+        'line = json.dumps({"type": "result", "subtype": "success", "is_error": False,\n'
+        '                  "result": json.dumps(result)})\n'
+        "print(init, flush=True)\n"
+        "print(line)\n"
+    )
+    command = AgentCommand(argv=lambda _config: [sys.executable, "-c", probe], timeout_s=30, env={"STUB_SECRET": KEY})
+    with run_agent(
+        command,
+        mcp_config={},
+        base_env={"HOME": str(real_home), "PATH": "/usr/bin:/bin"},
+        secret=KEY,
+        run_dir=tmp_path / "records",
+    ) as agent:
+        seen = json.loads(agent.trace.result_field("result"))
+    assert seen["agent_dir"] == []
 
 
 def test_config_is_private_argv_carries_its_path_and_the_run_succeeds(tmp_path: Path) -> None:

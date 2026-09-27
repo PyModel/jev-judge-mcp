@@ -36,7 +36,7 @@ from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, cast
 
 from evals.ab import stream
 
@@ -46,6 +46,8 @@ REDACTED = b"[REDACTED]"
 # Credentials and the model catalog are required to reach the provider; every other file a real
 # agent dir carries — mcp.json, mcp-cache.json, settings.json, extensions/, AGENTS.md — must not
 # reach the agent, so the run's own --mcp-config stays the only MCP config it can see.
+# auth.json is scoped, never copied whole: only the one provider entry the arm's model needs
+# crosses (`auth_provider`). With no provider named, auth.json does not cross at all.
 PRIVATE_AGENT_FILES = ("auth.json", "models.json", "models-store.json")
 
 # One agent transcript. Past this, stdout raises inside `run_agent`'s try, so the finally scrub
@@ -311,7 +313,26 @@ def _capture(
     return stdout, stderr, proc.returncode
 
 
-def _isolated_env(base_env: Mapping[str, str], sandbox: Path, login_keychain: bool) -> dict[str, str]:
+def _scoped_auth(source: Path, provider: str) -> bytes | None:
+    """`auth.json` reduced to the one provider entry, or None when there is nothing to copy.
+
+    The real auth.json holds every provider the operator has ever logged in to. A run needs one.
+    An unparsable file copies nothing: a broken credential file is a setup error, not an
+    invitation to hand the agent the whole file.
+    """
+    try:
+        entries: object = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(entries, dict) or provider not in entries:
+        return None
+    entry = cast(dict[str, Any], entries)[provider]
+    return json.dumps({provider: entry}, indent=2).encode() + b"\n"
+
+
+def _isolated_env(
+    base_env: Mapping[str, str], sandbox: Path, login_keychain: bool, auth_provider: str | None = None
+) -> dict[str, str]:
     """A private HOME, pi agent dir, and TMPDIR inside `sandbox`, with the model client's allowlist.
 
     A recorded smoke run had a bench agent wander out of its sandbox: it read `~/.pi/agent/mcp.json`
@@ -339,10 +360,17 @@ def _isolated_env(base_env: Mapping[str, str], sandbox: Path, login_keychain: bo
     if real:
         for name in PRIVATE_AGENT_FILES:
             source = Path(real) / name
-            if source.is_file():
-                target = agent_dir / name
+            if not source.is_file():
+                continue
+            target = agent_dir / name
+            if name == "auth.json":
+                scoped = _scoped_auth(source, auth_provider) if auth_provider else None
+                if scoped is None:
+                    continue
+                target.write_bytes(scoped)
+            else:
                 target.write_bytes(source.read_bytes())
-                os.chmod(target, 0o600)
+            os.chmod(target, 0o600)
     # Resolved from the real HOME before the override below replaces it. The directory stays ours;
     # only the login file is a link, so a refresh writes through to the real file and the link remains.
     if login_keychain and real_home:
@@ -362,18 +390,25 @@ def _isolated_env(base_env: Mapping[str, str], sandbox: Path, login_keychain: bo
 def run_agent(
     command: AgentCommand,
     *,
-    mcp_config: Mapping[str, Any],
+    mcp_config: Mapping[str, Any] | Callable[[Path], Mapping[str, Any]],
     base_env: Mapping[str, str],
     secret: str,
     run_dir: Path,
     prepare: Callable[[Path], None] | None = None,
     parse: Callable[[Iterable[str]], stream.Trace] | None = None,
+    auth_provider: str | None = None,
 ) -> Generator[AgentRunResult]:
     """Run the agent once; yields its result while the workdir exists. Writes `stream.jsonl` and
     `claude.stderr` to `run_dir`. Stdout past the cap raises `OSError` after those files are written
     and before the yield. Stderr past the cap is cut, the pipe is drained, and one truncation line is
     appended; that does not fail the run. A timeout kills the agent's process group and yields
-    `returncode=None`."""
+    `returncode=None`.
+
+    `mcp_config` may be a callable of the run's private sandbox directory, so a study can place
+    sandbox-only paths (the relay log, a scoped key file, copied server entry points) in the config
+    the agent can read. `auth_provider` scopes the copied auth.json to that one provider's entry;
+    None copies no auth.json at all.
+    """
     if not secret:
         raise ValueError("run_agent needs the non-empty secret to scrub")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -382,13 +417,14 @@ def run_agent(
     try:
         if prepare is not None:
             prepare(workdir)
+        resolved_config = mcp_config(secret_dir) if callable(mcp_config) else mcp_config
         config = secret_dir / "mcp.json"
         fd = os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as sink:
-            json.dump(mcp_config, sink)
+            json.dump(resolved_config, sink)
         argv = tuple(command.argv(config))
         try:
-            isolated = _isolated_env(base_env, secret_dir, command.login_keychain)
+            isolated = _isolated_env(base_env, secret_dir, command.login_keychain, auth_provider)
         except OSError as error:
             raise AgentSetupError(f"agent sandbox setup failed: {error}") from error
         started = time.perf_counter()
@@ -468,12 +504,14 @@ def run_preflight(
     login_keychain: bool,
     parse: Callable[[Iterable[str]], stream.Trace] | None = None,
     timeout_s: float = PREFLIGHT_TIMEOUT_S,
+    auth_provider: str | None = None,
 ) -> AgentRunResult:
     """One prompt through `run_agent`'s own env. Raises `AgentPreflightError` when the model was not reached.
 
     The scratch dir is not the study's `out`, and this writes no ledger. `login_keychain` is true only
     for Claude; a Pi or third-party-model preflight passes false and gets no keychain path. The yielded
-    workdir is gone by the time this returns: callers use the trace.
+    workdir is gone by the time this returns: callers use the trace. `auth_provider` scopes the
+    preflight's auth.json exactly like a run's.
     """
     from evals.ab.outcomes import reached_model
 
@@ -487,6 +525,7 @@ def run_preflight(
             secret=secret,
             run_dir=scratch,
             parse=parse,
+            auth_provider=auth_provider,
         ) as run:
             cost = _usd(run.trace.result_field("total_cost_usd"))
             model = run.trace.model
