@@ -22,9 +22,12 @@ Use it for checks that have a fixed set of answers. When the step needs new text
 You need Python 3.12+, [uv](https://docs.astral.sh/uv/), a POSIX system (Linux or macOS), and a TypeSafe API key from [console.typesafe.ai](https://console.typesafe.ai/settings/keys). The published package is on PyPI, and these three commands configure your agents to launch that pinned package (ADR-0051):
 
 ```sh
-uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp setup     # verify your key, then store it
-uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install   # add the server to your agents
-uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp doctor    # check the configuration, offline
+# verify your key, then store it
+uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp setup
+# add the server to your agents
+uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install
+# check the configuration, offline
+uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp doctor
 ```
 
 Every entry the installer writes also requests a Python the package itself declares — `--python '>=3.12'`, taken from the package's `Requires-Python` metadata (ADR-0053). On a machine whose first interpreter is older (Ubuntu 22.04's 3.10, macOS system 3.9), uv picks or downloads one that qualifies instead of refusing to start the server.
@@ -137,24 +140,29 @@ OpenCode (`~/.config/opencode/opencode.json`):
 Paste this into Claude Code, Codex, Cursor, OpenCode, Pi, omp, or any agent, and it configures the server for you: stores the key, installs and verifies the server entry, and adds the usage rules to its own instruction file. The key never passes through the chat — `setup` reads `TYPESAFE_API_KEY` from the environment or asks at a hidden prompt.
 
 ```text
-Set up the jev-judge-mcp judgment tools for me, then add their usage rules to your instructions.
+Set up the jev-judge-mcp judgment tools for me, then add their usage rules
+to your instructions.
 
-1. Run `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp setup`. It verifies my TypeSafe key:
-   it reads TYPESAFE_API_KEY from the environment or asks at a hidden prompt. Never ask me for the
-   key, echo it, or write it into chat, a prompt, or any instruction file.
-2. Run `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install --dry-run` and show me the plan.
-   Wait for my confirmation in chat before anything is written. On Pi, run
-   `pi install npm:pi-mcp-adapter` first. Once I confirm, run
-   `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install -a <your agent> -y`, naming your own
-   agent (claude-code, codex, cursor, opencode, pi, omp, or pythinker); `-y` skips the CLI prompt
-   because the confirmation happened in chat.
-3. Run `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp doctor` and fix anything it reports.
-4. Tell me to restart you. After the restart, confirm the jev tools are in your tool list.
-5. Add the "Fast judgment checks — and when to skip them" rule block to your main instruction file —
-   CLAUDE.md for Claude Code, AGENTS.md for Codex and most others. The block follows this prompt
-   (it is also tracked at docs/agent-rules.md in the jev-judge-mcp repo; ask me to paste it if you
-   do not have it). Read the instruction file first: never duplicate an existing Jev rules block,
-   and replace a stale one.
+1. Run `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp setup`.
+   It verifies my TypeSafe key: it reads TYPESAFE_API_KEY from the
+   environment or asks at a hidden prompt. Never ask me for the key, echo it,
+   or write it into chat, a prompt, or any instruction file.
+2. Run `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install --dry-run`
+   and show me the plan. Wait for my confirmation in chat before anything is
+   written. On Pi, run `pi install npm:pi-mcp-adapter` first. Once I confirm,
+   run `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install -a <your agent> -y`,
+   naming your own agent (claude-code, codex, cursor, opencode, pi, omp, or
+   pythinker); `-y` skips the CLI prompt because the confirmation happened in chat.
+3. Run `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp doctor`
+   and fix anything it reports.
+4. Tell me to restart you. After the restart, confirm the jev tools are in
+   your tool list.
+5. Add the "Fast judgment checks — and when to skip them" rule block to your
+   main instruction file — CLAUDE.md for Claude Code, AGENTS.md for Codex and
+   most others. The block follows this prompt (it is also tracked at
+   docs/agent-rules.md in the jev-judge-mcp repo; ask me to paste it if you
+   do not have it). Read the instruction file first: never duplicate an
+   existing Jev rules block, and replace a stale one.
 ```
 
 The rule block the prompt adds. One tracked copy lives at [`docs/agent-rules.md`](docs/agent-rules.md); the copy below is pinned to it by a contract test, so paste either:
@@ -375,7 +383,10 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 Run the server with it:
 
 ```sh
-JEV_MCP_TRANSPORT=streamable-http JEV_MCP_HTTP_HOST=0.0.0.0 JEV_MCP_HTTP_TOKEN=<token> jev-judge-mcp
+JEV_MCP_TRANSPORT=streamable-http \
+  JEV_MCP_HTTP_HOST=0.0.0.0 \
+  JEV_MCP_HTTP_TOKEN=<token> \
+  jev-judge-mcp
 ```
 
 Every HTTP request must then carry the token; a request without it, or with a wrong one, gets `401` before any tool runs:
