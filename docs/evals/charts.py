@@ -183,8 +183,8 @@ def agent_panel_chart(data: Mapping, path: Path) -> None:
     max_time = max((numbers[arm]["median_time"] or 0) for arm in ARMS) or 1.0
     max_tokens = max((numbers[arm]["tokens_per_solved"] or 0) for arm in ARMS) or 1.0
 
-    width, height = 900, 240
-    doc: list[str] = []
+    width, height = 900, 256
+    doc: list[str] = ['<rect width="100%" height="100%" fill="#ffffff" rx="6"/>']
     pw, gap, x0, y0, ph = 200, 24, 20, 46, 130
     doc += [
         text(
@@ -227,7 +227,7 @@ def agent_panel_chart(data: Mapping, path: Path) -> None:
         [numbers[a]["tokens_per_solved"] / 1000 for a in ARMS],
         [fmt(numbers[a]["tokens_per_solved"] / 1000, 1, " k") for a in ARMS],
         [BAR_A, BAR_B],
-        ymax=max_tokens * 1.25,
+        ymax=max_tokens / 1000 * 1.25,
         sub="thousands, context + output",
     )
     diff = data["wall_diff"]
@@ -243,9 +243,9 @@ def agent_panel_chart(data: Mapping, path: Path) -> None:
         ymax=(diff["median"] or 0) * 1.3 or 1.0,
         sub=f"median, pairs both solved (n={diff['n']})",
     )
-    legend_x = x0 + 4 * (pw + gap)
-    doc += [bar(legend_x, y0 + 8, 12, 12, BAR_A), text(legend_x + 17, y0 + 18, "A " + ARM_LABELS["A"], size=11)]
-    doc += [bar(legend_x, y0 + 28, 12, 12, BAR_B), text(legend_x + 17, y0 + 38, "B " + ARM_LABELS["B"], size=11)]
+    legend_x = width - 148
+    doc += [bar(legend_x, 10, 10, 10, BAR_A), text(legend_x + 14, 19, "A " + ARM_LABELS["A"], size=11)]
+    doc += [bar(legend_x, 26, 10, 10, BAR_B), text(legend_x + 14, 35, "B " + ARM_LABELS["B"], size=11)]
 
     excluded = (
         f"; {len(data['excluded'])} pair excluded ({data['excluded'][0].split(': ', 1)[1] if data['excluded'] else ''})"
@@ -253,12 +253,19 @@ def agent_panel_chart(data: Mapping, path: Path) -> None:
         else ""
     )
     acc = {arm: f"{numbers[arm]['judge_correct']}/{numbers[arm]['judge_total']}" for arm in ARMS}
-    footer = (
-        f"{data['measured']} of {data['pairs']} pairs measured{excluded}. Judge accuracy (decision = gold): "
-        f"A {acc['A']}, B {acc['B']}. Jev called in {numbers['B']['jev_called']}/{numbers['B']['runs']} with-Jev runs. "
+    footer_left = (
+        f"{data['measured']} of {data['pairs']} pairs measured{excluded}. "
+        f"Judge accuracy (decision = gold): A {acc['A']}, B {acc['B']}."
+    )
+    footer_right = (
+        f"Jev called in {numbers['B']['jev_called']}/{numbers['B']['runs']} with-Jev runs. "
         "Descriptive only: n is small, no significance test."
     )
-    doc += [text(x0, height - 14, footer, size=11, fill=MUTED)]
+    footer = f"{footer_left} {footer_right}"
+    doc += [
+        text(x0, height - 28, footer_left, size=11, fill=MUTED),
+        text(x0, height - 12, footer_right, size=11, fill=MUTED),
+    ]
     path.write_text(svg(doc, width, height, f"Agent outcomes: {data['agent']}", footer))
 
 
