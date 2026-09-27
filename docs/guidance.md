@@ -84,7 +84,7 @@ first answer is needed to gather the next evidence.
 - A **choice** answer gives you `probabilities` and a `confidence` (how peaked the distribution is —
   not how likely it is correct). Threshold `confidence`; that is the docs' default, and you can
   define your own (https://docs.typesafe.ai/confidence.md). This server's classify, compare, and
-  extract policy also thresholds the top probability and the margin; verify and gate threshold
+  extract threshold the top probability and the margin, not `confidence`; verify and gate threshold
   `confidence`. For statistical rules, read the distribution, not just the argmax.
 - A **score** answer gives you a probability-weighted position; threshold it against levels, and do
   not interpolate a magnitude between them.
