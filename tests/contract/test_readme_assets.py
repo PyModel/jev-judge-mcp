@@ -22,7 +22,7 @@ def _relative(raw: str) -> str | None:
 def test_readme_relative_targets_are_tracked() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     tracked = set(subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines())
-    missing = []
+    missing: list[str] = []
     for match in _TARGET.finditer(readme):
         rel = _relative(match.group(1) or match.group(2))
         if rel is None:
