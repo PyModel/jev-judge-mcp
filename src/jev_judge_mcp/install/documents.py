@@ -1,6 +1,5 @@
 """Read and update one named server entry in a JSON, JSONC, or TOML config."""
 
-import json
 import tomllib
 from collections.abc import Mapping
 
@@ -11,7 +10,6 @@ from tomlkit.items import Table
 from jev_judge_mcp.domain import is_json_object
 from jev_judge_mcp.install.errors import ConfigParseError, ConfigShapeError
 from jev_judge_mcp.install.jsonedit import assign, delete, loads
-from jev_judge_mcp.install.layout import OMP_SCHEMA
 from jev_judge_mcp.install.values import is_json_array
 
 
@@ -64,8 +62,6 @@ def server_map(document: object, path: list[str]) -> dict[str, object]:
 
 
 def render_json(target: str, text: str, name: str, entry: Mapping[str, object]) -> str:
-    if target == "omp" and text.strip() == "":
-        text = json.dumps({"$schema": OMP_SCHEMA, "mcpServers": {}}, indent=2) + "\n"
     document = loads(text) if text.strip() else _empty_object()
     path = json_entry_path(target, document, name)
     return assign(text if text.strip() else "{}\n", path, dict(entry))

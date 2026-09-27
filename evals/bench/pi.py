@@ -35,9 +35,8 @@ _PROVIDER_FAILURE = re.compile(
     r"\b401\b|unauthorized|invalid api key",
     re.IGNORECASE,
 )
-_ADAPTER_DEFAULT = Path.home() / ".pi/agent/git/github.com/nicobailon/pi-mcp-adapter/index.ts"
-ADAPTER = Path(os.environ.get("PI_MCP_ADAPTER", str(_ADAPTER_DEFAULT)))
-"""The MCP adapter extension. Override with `PI_MCP_ADAPTER` if it lives elsewhere."""
+ADAPTER = Path(os.environ["PI_MCP_ADAPTER"]) if os.environ.get("PI_MCP_ADAPTER") else Path("PI_MCP_ADAPTER")
+"""MCP adapter extension path. Set `PI_MCP_ADAPTER` to its `index.ts`; there is no default path."""
 
 _CONTEXT_KEYS = ("input", "cacheRead", "cacheWrite")
 

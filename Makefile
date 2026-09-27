@@ -22,6 +22,7 @@ ci-linux:
 lint:
 	uv run ruff check
 	uv run ruff format --check
+	uv run python scripts/check_hidden_chars.py
 
 typecheck:
 	uv run pyright

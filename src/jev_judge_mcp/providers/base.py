@@ -159,7 +159,7 @@ def request_id_of(body: Mapping[str, object], headers: Mapping[str, str] | None 
 
 def decode_text(content: bytes) -> str:
     """`await response.text()`: UTF-8 with replacement characters, a leading BOM dropped."""
-    return content.decode("utf-8", errors="replace").removeprefix("﻿")
+    return content.decode("utf-8", errors="replace").removeprefix("\ufeff")
 
 
 def decode_body(content: bytes) -> object | None:

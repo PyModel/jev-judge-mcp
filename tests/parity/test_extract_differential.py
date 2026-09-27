@@ -28,7 +28,7 @@ GENERATED = 3_000
 DOCUMENTS = [
     "a😀b 😀c ABC-123 ABC-124 abc-125",
     "x\ud83dy \ude00z 😀😀",
-    "tab\there nbsp\u0085nel ls ps﻿bom　ideo end",
+    "tab\there nbsp\u0085nel ls ps\ufeffbom　ideo end",
     "Kelvin K k K ß SS ſ s S é É",
     "line1\nline2\r\nline3\n",
     "price $1,299.00 and $5.50; v1.2.3 v10.20.30 2026-09-21",

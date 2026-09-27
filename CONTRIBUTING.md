@@ -133,7 +133,7 @@ with `republish_tag` set to its tag.
 
 ## License
 
-The copyright holder is Mohamed Elkholy.
+The copyright holder is elkaix.
 
 By contributing, you agree that your contributions are licensed under the MIT
 License in `LICENSE`.

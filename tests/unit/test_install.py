@@ -382,7 +382,7 @@ def test_each_target_gains_one_entry(tmp_path: Path) -> None:
     assert pi["mcpServers"]["jev"]["directTools"] == pi_direct_tools()
     assert pi["mcpServers"]["jev"]["toolPrefix"] == "none"
     omp = json.loads((tmp_path / ".omp" / "agent" / "mcp.json").read_text(encoding="utf-8"))
-    assert omp["$schema"].endswith("mcp-schema.json")
+    assert "$schema" not in omp
     assert omp["mcpServers"]["jev"]["command"] == UVX
     pythinker = json.loads((tmp_path / ".pythinker-code" / "mcp.json").read_text(encoding="utf-8"))
     assert "env" not in pythinker["mcpServers"]["jev"]
@@ -973,7 +973,7 @@ def _pi_adapter(home: Path) -> None:
     directory = home / ".pi" / "agent"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "settings.json").write_text(
-        json.dumps({"packages": ["git:github.com/nicobailon/pi-mcp-adapter"]}) + "\n",
+        json.dumps({"packages": ["npm:pi-mcp-adapter"]}) + "\n",
         encoding="utf-8",
     )
 

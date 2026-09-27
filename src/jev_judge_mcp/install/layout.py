@@ -12,7 +12,6 @@ from jev_judge_mcp.domain import is_json_object
 from jev_judge_mcp.install.values import is_json_array
 
 PYTHINKER_DESKTOP_ID = "com.pythinker.desktop"
-OMP_SCHEMA = "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json"
 PI_ADAPTER_HINT = "pi install npm:pi-mcp-adapter"
 
 

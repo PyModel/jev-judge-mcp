@@ -88,7 +88,7 @@ Sanctioned Divergence and needs its own ADR.
 
 ## External benchmark (A8)
 
-JevBench (`fstandhartinger/jevbench`, MIT) publishes a leaderboard for Jev-class typed decision
+JevBench (MIT) publishes a leaderboard for Jev-class typed decision
 models; its own measured row for Jev 1.13.0 is the external anchor this repo lacks. The adapter
 `evals/external/jevbench.py` reads a JevBench checkout's **public** items as data — the checkout's
 manifest pins a sha256 per file, and a mismatch (or a missing manifest entry) refuses the
@@ -107,12 +107,11 @@ accuracy from this run is not comparable to JevBench's published leaderboard row
 534 decisions, their own prompt packing) and must not be reported as one. Report per-tier and
 per-family counts with any aggregate, and state the exclusions.
 
-The commands (the clone is pinned; `--depth 1` alone drifts with HEAD):
+The commands (pin the checkout; `--depth 1` alone drifts with HEAD). The adapter takes a checkout path and does not fetch:
 
 ```sh
-git clone https://github.com/fstandhartinger/jevbench.git /tmp/jevbench
-git -C /tmp/jevbench checkout 1bcc55eb6c8cffde2306b3db03ede39b61c6152a
-python -m evals.external.jevbench /tmp/jevbench                   # offline, sha-pinned, writes evals/reports/jevbench/
+git -C /path/to/jevbench checkout 1bcc55eb6c8cffde2306b3db03ede39b61c6152a
+python -m evals.external.jevbench /path/to/jevbench              # offline, sha-pinned, writes evals/reports/jevbench/
 JEV_EVAL_LIVE=1 JEV_PROVIDER=typesafe JEV_MCP_MODEL=jev-1.13.0 \
   python -m evals.runners.live evals/reports/jevbench/jevbench-public.json \
   evals/reports/jevbench/jevbench-public-outputs.jsonl --cap 92   # paid
