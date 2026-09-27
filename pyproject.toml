@@ -54,9 +54,10 @@ build-backend = "hatchling.build"
 packages = ["src/jev_judge_mcp"]
 
 # Agent-facing skill material (the test-audit skill and its .pi/.claude symlinks)
-# is contributor tooling, never shipped content.
+# is contributor tooling, never shipped content. `.cache/` holds local reference caches such as the
+# crawled TypeSafe corpus (gitignored; docs/jev_docs/corpus.yaml), which hatch would otherwise pack.
 [tool.hatch.build.targets.sdist]
-exclude = [".agents", ".pi", ".claude"]
+exclude = [".agents", ".pi", ".claude", ".cache"]
 
 [tool.ruff]
 line-length = 120

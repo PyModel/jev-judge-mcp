@@ -1,0 +1,28 @@
+# Local reference corpus of the official TypeSafe / Jev documentation.
+# The pages themselves are not in this repository: TypeSafe's Terms of Use forbid redistributing
+# them (docs/research/jev-best-use.md § 1). Each clone that wants them keeps its own copy under
+# .cache/jev-docs/ (gitignored, excluded from the sdist). docs/jev_docs/README.md indexes every page.
+purpose: local reference corpus only
+packaged: false
+location: .cache/jev-docs/
+retrieved_at: "2026-09-27"
+retrieved_with: Firecrawl scrape, live fetch (maxAge 0); each file starts with its source URL and fetch date
+sources:
+  - url: https://docs.typesafe.ai
+    index: https://docs.typesafe.ai/llms.txt
+    local: .cache/jev-docs/docs.typesafe.ai/
+    version: not published by the site; pages describe jev-1.13 (jev-1.13.0), jaggedness page reviewed 2026-09-17
+    pages: 112
+  - url: https://typesafe.ai/legal
+    local: .cache/jev-docs/typesafe.ai/legal/
+    version: each page shows its own "Last updated" date
+    pages: 5
+  - url: https://github.com/typesafe-ai/skills
+    commit: 65a39f393687675ce170e6094757de20370365b9 # Release v0.5.7, the default branch head when fetched
+    license: MIT
+    local: .cache/jev-docs/github.com/typesafe-ai/skills/
+    pages: 3
+total_pages: 120
+not_saved:
+  - https://docs.typesafe.ai/llms-full.txt # the whole site in one file; duplicates the pages
+  - https://docs.typesafe.ai/migrating-to-v1.md # linked from the skill; Page Not Found on 2026-09-27

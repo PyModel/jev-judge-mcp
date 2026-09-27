@@ -1,25 +1,36 @@
 # Models
 
-All System One models share `POST /v1/systemone`. The `model` field selects which one.
+Repo-authored summary of TypeSafe's model page, in our own words. Last checked against the live
+page on 2026-09-27; the live page wins where they differ. Every System One model is served at
+`POST /v1/systemone`, and the request's `model` field picks one.
 
-## Current (fetched 2026-09-19)
+## Current (checked 2026-09-27)
 
 | | |
 | --- | --- |
 | Versioned ID | `jev-1.13.0` |
-| Aliases | `jev-latest` → `jev-1.13.0`; `jev-preview` → same (no preview build right now) |
+| Aliases | `jev-latest` and `jev-preview` both resolve to `jev-1.13.0`; there is no separate preview build yet |
 | Price | $42 / Btok input = $0.042 / Mtok. Output tokens free. |
-| Rate limits | 250k tokens/s and 1,200 rpm (dynamic; 429 over either). Higher on enterprise. |
-| Context | 64k tokens/request; 32k for `state` + longest question |
-| Input | Text only. String, object, or array of text. |
+| Rate limits | 250k tokens/s and 1,200 requests/min; TypeSafe says these move without notice for now. Over either → `429`. Enterprise plans go higher. |
+| Context | 64k tokens/request (state + every question); 32k for `state` + the longest single question |
+| Input | Text only: a string, a JSON object, or an array of text. Convert images, audio, and binaries to text first. |
 
-Pin `jev-1.13.0` if you have tuned thresholds against that version; aliases move on release. Response `model` reports the ID that answered.
+Aliases move when a release ships, so answers behind them can shift. If you tuned thresholds on a
+version, pin its versioned ID. The response's `model` field names the version that answered.
 
-Jev is not fine-tuned per account. Shape behavior with `state`, `instructions`, and `criteria`. Not trained on customer requests. English is the primary training language.
+Jev uses the same weights for every account: no per-customer fine-tuning. Adapt it through
+`state` (your own records and reference text), `instructions` and `criteria` (domain rules and
+boundary cases), and by splitting broad judgments into atomic questions combined in code. English
+is where accuracy is best; other languages, CJK included, work less well, so test first. TypeSafe
+does not train on customer requests; enterprise zero data retention is available.
 
-`evaluate` default: `jev-latest` (TypeSafe) or `~typesafe/jev-latest` (OpenRouter).
+Errors worth handling: `429` (rate limit) and `529` (overloaded) both call for a retry with
+exponential backoff; the SDKs do it for you.
 
-Official: [models](https://docs.typesafe.ai/models.md)
+On OpenRouter there is no `jev-latest` slug; this repo sends `typesafe/jev-1.13` there
+(`src/jev_judge_mcp/providers/openrouter.py`).
+
+Official: [models](https://docs.typesafe.ai/models.md) · [API errors](https://docs.typesafe.ai/api.md)
 
 ## Jaggedness (`jev-1.13`, reviewed 2026-09-17)
 
