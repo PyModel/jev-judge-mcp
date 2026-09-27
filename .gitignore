@@ -29,7 +29,8 @@ blackbox/
 improvment.md
 improvement-proposals-*.md
 .jevbench-tmp/
-
 # Local reference caches. .cache/jev-docs/ holds the crawled TypeSafe corpus, which stays on the
 # owner's machine only: the Terms of Use forbid redistributing it (docs/jev_docs/corpus.yaml).
 /.cache/
+# Local reference directory. Do not track.
+docs/reference/jev-skill/

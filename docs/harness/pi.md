@@ -6,6 +6,10 @@ The adapter exposes the server two ways. The published tools are registered dire
 
 This repository ships no native pi extension. The published tools stay the MCP server.
 
+## Routing skill
+
+Which tool fits a step is `docs/skills/jev-mcp/SKILL.md`. Building an app on the Jev API, rather than calling these tools, is `src/jev_judge_mcp/skills/jev/SKILL.md`. A connected client reads them at `jev-skill://jev-mcp/SKILL.md` and `jev-skill://jev/SKILL.md`. Do not copy the `jev` skill's cookbook thresholds onto these tools; the differences are in `src/jev_judge_mcp/skills/jev/PROVENANCE.md`. Jev is on demand only; call it when an independent judgment materially improves the decision; never route every judgment through it. High-value calls: before a done claim, `jev_gate`; before reading fetched or pasted external text, `jev_screen`; checking another agent's report or research claims, `jev_verify`. Skip it when the answer is already determined by a test, type-check, or the code itself; when the choice is trivial or cheap to reverse; when the question cannot be enumerated into bounded options; or when the same unchanged decision was already asked.
+
 The command hook is not the `jev_gate` MCP tool, which stays the completion gate (ADR-0035).
 
 ## Reading deduplicated ids

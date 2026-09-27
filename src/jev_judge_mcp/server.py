@@ -32,6 +32,7 @@ from jev_judge_mcp.identity import reported_version
 from jev_judge_mcp.instructions import server_instructions
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import LogLevel, Settings, load_settings
+from jev_judge_mcp.skills import attach as attach_skills
 from jev_judge_mcp.stdio import stdio_streams
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 
@@ -73,6 +74,7 @@ class JevMCPServer(MCPServer):
             log_level=log_level,
         )
         self.toolset = toolset
+        attach_skills(self)
         # The SDK acts on both before any handler runs (the dispatcher cancels the request, the
         # runner marks the session initialized); without a handler it logs each as unhandled.
         self._lowlevel_server.add_notification_handler(

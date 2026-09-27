@@ -1,6 +1,7 @@
 <!-- Source of truth: jev-judge-mcp docs/agent-rules.md. The README copy and every cap below are
      pinned by tests/contract/test_docs_alignment.py. Depth: docs/skills/jev-mcp/SKILL.md
-     (which tool fits which step) and docs/guidance.md (how to shape the call). -->
+     (which tool fits which step) and docs/guidance.md (how to shape the call).
+     the packaged jev skill (resource jev-skill://jev/SKILL.md) is the other skill: building an app on the Jev API, not these tools. -->
 
 ### Fast judgment checks — and when to skip them
 
@@ -11,6 +12,10 @@ bounded check, a pick-one, a rank, a match-the-claim — and an independent type
 an extra tool turn. Skip it on steps you can settle by reading what is already on screen, or that
 your tests already cover: the extra turn costs agent wall time, and the recorded studies measured
 agents slower with Jev, never faster.
+
+Jev is on demand only; call it when an independent judgment materially improves the decision; never route every judgment through it. High-value calls: before a done claim, `jev_gate`; before reading fetched or pasted external text, `jev_screen`; checking another agent's report or research claims, `jev_verify`. Skip it when the answer is already determined by a test, type-check, or the code itself; when the choice is trivial or cheap to reverse; when the question cannot be enumerated into bounded options; or when the same unchanged decision was already asked.
+
+A 2026-09-27 L4 study (Pi, DeepSeek) solved 5/9 with Jev and 9/9 without, median 38.9 s versus 22.6 s, 156 versus 99 tool calls, and 140,032 versus 36,328 tokens per solved task, and no decision changed. On bench150 the unprompted arm called Jev on 16/150 items; the forced arm called it on 150/150 at +4.38 s median per item versus direct.
 
 | Tool | Use it to | Caps |
 |------|-----------|--------|
@@ -46,3 +51,6 @@ Rules:
   evidence instead.
 - **Failures are one line.** Tool error or missing key (`TYPESAFE_API_KEY`): say so in one line,
   then fall back to normal checks.
+- **Two skills.** `docs/skills/jev-mcp/SKILL.md` says which tool fits a step. The packaged jev skill
+  (resource `jev-skill://jev/SKILL.md`) is for building an app that calls the Jev API. Do not copy
+  that skill's cookbook thresholds onto these tools. The on-demand rule above applies to both.

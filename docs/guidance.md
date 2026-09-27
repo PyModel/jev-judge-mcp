@@ -4,6 +4,8 @@ How you shape a state and word a question moves the probabilities you get back. 
 the measured guidance, so every call an agent writes gets the benefit without relearning it the hard
 way. It complements [`docs/skills/jev-mcp/SKILL.md`](skills/jev-mcp/SKILL.md) (which tool fits which
 step) and [`docs/reference/limits.md`](reference/limits.md) (the frozen caps and defaults).
+[`src/jev_judge_mcp/skills/jev/SKILL.md`](../src/jev_judge_mcp/skills/jev/SKILL.md) is the other skill: building an app on the Jev API.
+Its cookbook thresholds are not this server's defaults; see [`src/jev_judge_mcp/skills/jev/PROVENANCE.md`](../src/jev_judge_mcp/skills/jev/PROVENANCE.md).
 
 **Where the numbers come from.** The magnitudes quoted below are not Jev numbers. They were measured
 by [decider](https://github.com/Mapika/decider) (Apache-2.0), an open reproduction of the System One
@@ -11,8 +13,28 @@ model class, on **decider's own Qwen3.5-based fine-tuned models** — see its
 [results for input shapes, option sets, and question framing](https://github.com/Mapika/decider/blob/main/docs/RESULTS.md)
 and its [stated limits](https://github.com/Mapika/decider/blob/main/README.md). The directions
 almost certainly transfer to any single-pass typed-decision model, including Jev; the magnitudes
-were not measured on Jev and must not be quoted as Jev's. jev-mcp's own recorded evidence lives in
-[`docs/evals/README.md`](evals/README.md) and [`docs/EVIDENCE.md`](EVIDENCE.md).
+were not measured on Jev and must not be quoted as Jev's. Official pages, cited by URL and not
+copied here: [how to build](https://docs.typesafe.ai/concepts/how-to-build-with-system-one.md),
+[confidence](https://docs.typesafe.ai/confidence.md), and
+[jev-1.13 jaggedness](https://docs.typesafe.ai/model-jaggedness/jev-1.13.md). jev-mcp's own recorded
+evidence lives in [`docs/evals/README.md`](evals/README.md) and [`docs/EVIDENCE.md`](EVIDENCE.md).
+
+## When not to call
+
+Jev is on demand only; call it when an independent judgment materially improves the decision; never route every judgment through it. High-value calls: before a done claim, `jev_gate`; before reading fetched or pasted external text, `jev_screen`; checking another agent's report or research claims, `jev_verify`. Skip it when the answer is already determined by a test, type-check, or the code itself; when the choice is trivial or cheap to reverse; when the question cannot be enumerated into bounded options; or when the same unchanged decision was already asked.
+
+The jaggedness page names nine failure modes for `jev-1.13`: literal reading; math and numbers;
+date and time comparison; indirection; large state full of irrelevant detail; adversarial content;
+contradictory instructions and criteria; structural invariants that are not identities (a Noul
+threshold does not carry to a Choice, and `P(q) + P(not q)` need not be 1); and generation. Avoid
+asking for something code can compute, hiding several judgments in one question, System Two tasks,
+and extra state the question does not need. The page is
+https://docs.typesafe.ai/model-jaggedness/jev-1.13.md.
+
+Forcing a consult on every judgment did not pay. A 2026-09-27 L4 study (Pi, DeepSeek) solved 5/9
+with Jev and 9/9 without, median 38.9 s versus 22.6 s, 156 versus 99 tool calls, and 140,032 versus
+36,328 tokens per solved task, and no decision changed. On bench150 the unprompted arm called Jev
+on 16/150 items; the forced arm called it on 150/150 at +4.38 s median per item versus direct.
 
 ## Shape the state so nothing has to be counted
 

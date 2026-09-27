@@ -76,14 +76,20 @@ def server_env(extra: Mapping[str, str] | None = None) -> dict[str, str]:
 
 
 class StdioServer:
-    def __init__(self, command: Sequence[str] | None = None, env: Mapping[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        command: Sequence[str] | None = None,
+        env: Mapping[str, str] | None = None,
+        *,
+        cwd: Path | None = None,
+    ) -> None:
         self.process = subprocess.Popen(
             list(command or server_command()),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=server_env(env),
-            cwd=REPO_ROOT,
+            cwd=cwd or REPO_ROOT,
         )
         self.stdout_lines: list[bytes] = []
         self._lines: queue.Queue[bytes | None] = queue.Queue()

@@ -592,6 +592,20 @@
       "python_behavior": "initialize.instructions names each published tool once and says when to call jev_gate and to honor action. No threshold numbers, secrets, or harness names."
     },
     {
+      "id": "packaged-jev-skill",
+      "surface": "initialize",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0071-packaged-jev-skill.md",
+      "tests": [
+        "tests/contract/test_skill_resources.py",
+        "tests/integration/test_uvx_smoke.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The reference initialize response was never captured. This server previously advertised resource and prompt capabilities and served neither, and instructions did not name a skill.",
+      "python_behavior": "initialize.instructions names the jev and jev-mcp skills, their resource URIs, that jev cookbook thresholds are not this server's action policy, and the on-demand rule: call when an independent judgment materially improves the decision, never route every judgment through it, with jev_gate, jev_screen, and jev_verify as the high-value calls. resources/list and prompts/list serve both skills from the installed package. Tool schemas and policy are unchanged."
+    },
+    {
       "id": "file-list-and-evidence-metadata",
       "surface": "tool_schema",
       "tier": "tier_a",
