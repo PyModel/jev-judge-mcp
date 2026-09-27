@@ -211,6 +211,27 @@ def test_no_auth_provider_copies_no_auth_json(tmp_path: Path) -> None:
     assert seen["agent_dir"] == []
 
 
+def test_the_relay_log_is_written_in_the_sandbox_and_copied_to_the_records(tmp_path: Path) -> None:
+    """The proxy's log lives inside the run sandbox — the config the agent reads names no records
+    path — and run_agent copies it to the run's records when the run ends."""
+
+    def config(sandbox: Path) -> dict[str, Any]:
+        (sandbox / "jev-calls.jsonl").write_text('{"tool": "jev_verify"}\n', encoding="utf-8")
+        return {}
+
+    with run_agent(
+        _stub(),
+        mcp_config=config,
+        base_env={},
+        secret=KEY,
+        run_dir=tmp_path / "records",
+    ):
+        pass
+    copied = tmp_path / "records" / "jev-calls.jsonl"
+    assert copied.is_file()
+    assert "jev_verify" in copied.read_text(encoding="utf-8")
+
+
 def test_config_is_private_argv_carries_its_path_and_the_run_succeeds(tmp_path: Path) -> None:
     modes: list[int] = []
 

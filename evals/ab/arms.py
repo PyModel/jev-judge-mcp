@@ -6,10 +6,13 @@ recording proxy, and one sentence to the system addendum telling the agent to us
 for the judgment the task hinges on. Nothing else differs (`tests/evals/test_ab_harness.py` checks).
 """
 
+import shutil
 import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+
+from evals.agent import RELAY_LOG
 
 ARMS = ("A", "B")
 ARM_LABELS = {"A": "without Jev", "B": "with Jev MCP"}
@@ -33,13 +36,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def jev_sentence(agent: str, tool: str) -> str:
-    """Arm B's one added sentence: use the task's Jev tool for its judgment. Pi reaches the server
-    through its `mcp` gateway tool, which exposes each server tool as `<server>_<tool>` (`jev_jev_verify`)."""
-    how = (
-        f"connect to the jev MCP server through the mcp gateway tool and call its `jev_{tool}` tool"
-        if agent == "pi"
-        else f"call the `mcp__jev__{tool}` tool"
-    )
+    """Arm B's one added sentence: use the task's Jev tool for its judgment.
+
+    The ab config exposes the server eager and direct (`lifecycle`/`directTools`/`toolPrefix`, as
+    the bench's), so the published tools (`jev_verify`, ...) sit in the model's tool list under
+    their own names. The sentence names the tool the agent will actually see; the old gateway
+    wording named `jev_jev_verify`, which 30 of 33 recorded with-Jev runs never resolved.
+    """
+    how = f"call the `{tool}` tool" if agent == "pi" else f"call the `mcp__jev__{tool}` tool"
     return (
         f"This task hinges on a judgment. Before you commit to a decision, {how} with the relevant evidence "
         "from the repository, and use its result."
@@ -55,24 +59,74 @@ def jev_command() -> list[str]:
     return [sys.executable, "-m", "jev_judge_mcp"]
 
 
-def mcp_config(arm: str, *, jev_log: Path, server_env: Mapping[str, str]) -> dict[str, Any]:
-    """The `--mcp-config` document. Only B carries `server_env` (the TypeSafe key, live: `jev_env`)."""
-    servers: dict[str, Any] = {
-        "harness": {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": ["-m", "evals.ab.review_server"],
-            "env": {"PYTHONPATH": str(REPO_ROOT)},
-        },
+def sandbox_python(sandbox: Path) -> Path:
+    """A sandbox-local interpreter for the servers: `sandbox/bin/python3`, a launcher for the harness
+    venv's python.
+
+    The agent reads its own MCP config (recorded runs show it did), so the config text must name no
+    host path. A plain symlink does not work: CPython resolves argv0 through every hop, so a
+    sandbox symlink to the venv python starts the base interpreter without the venv's site-packages.
+    The launcher is one file inside the sandbox that names the venv — a path only a real read
+    boundary can fully hide, which the diagnosis records.
+    """
+    bin_dir = sandbox / "bin"
+    bin_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    launcher = bin_dir / "python3"
+    if not launcher.exists():
+        launcher.write_text(f"#!/bin/sh\nexec {sys.executable!r} \"$@\"\n", encoding="utf-8")
+        launcher.chmod(0o755)
+    return launcher
+
+
+def copy_servers(sandbox: Path, proxy_package: str) -> Path:
+    """Copy the relay, the proxy, and the harness server into the sandbox so the agent-visible MCP
+    config needs no repo path. `proxy_package` is `ab` or `bench`.
+    """
+    servers = sandbox / "servers"
+    package = servers / "evals" / proxy_package
+    package.mkdir(parents=True, exist_ok=True)
+    (servers / "evals" / "__init__.py").write_bytes((REPO_ROOT / "evals" / "__init__.py").read_bytes())
+    (servers / "evals" / "relay.py").write_bytes((REPO_ROOT / "evals" / "relay.py").read_bytes())
+    (package / "__init__.py").write_bytes((REPO_ROOT / "evals" / proxy_package / "__init__.py").read_bytes())
+    (package / "proxy.py").write_bytes((REPO_ROOT / "evals" / proxy_package / "proxy.py").read_bytes())
+    shutil.copyfile(REPO_ROOT / "evals" / "ab" / "review_server.py", servers / "harness_server.py")
+    return servers
+
+
+def mcp_config(arm: str, *, sandbox: Path, server_env: Mapping[str, str]) -> dict[str, Any]:
+    """The `--mcp-config` document, built against the run's private sandbox.
+
+    Every path in the document is inside `sandbox`: the servers run from copies placed there, the
+    interpreter is the sandbox symlink, and the relay log is written there and copied out to the
+    run's records after the run. Only B carries `server_env`.
+    """
+    python = sandbox_python(sandbox)
+    servers = copy_servers(sandbox, "ab")
+    harness = {
+        "type": "stdio",
+        "command": str(python),
+        "args": [str(servers / "harness_server.py")],
     }
+    servers_doc: dict[str, Any] = {"harness": harness}
     if arm != "A":
-        servers["jev"] = {
+        servers_doc["jev"] = {
             "type": "stdio",
-            "command": sys.executable,
-            "args": ["-m", "evals.ab.proxy", str(jev_log), "--", *jev_command()],
-            "env": dict(server_env),
+            "command": str(python),
+            "args": [
+                "-m",
+                "evals.ab.proxy",
+                str(sandbox / RELAY_LOG),
+                "--",
+                str(python),
+                "-m",
+                "jev_judge_mcp",
+            ],
+            "env": {**dict(server_env), "PYTHONPATH": str(servers)},
+            "lifecycle": "eager",
+            "directTools": True,
+            "toolPrefix": "none",
         }
-    return {"mcpServers": servers}
+    return {"mcpServers": servers_doc}
 
 
 def jev_env(*, api_key: str, path: str) -> dict[str, str]:

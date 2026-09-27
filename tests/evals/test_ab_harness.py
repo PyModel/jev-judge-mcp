@@ -435,21 +435,62 @@ def test_cost_of_is_the_agent_cost_plus_the_priced_jev_tokens(tmp_path: Path) ->
 
 def test_arms_configs_differ_only_in_the_jev_server(tmp_path: Path) -> None:
     api_key = "sk-test-arm-a-must-not-see-this"
-    server_env = arms.jev_env(api_key=api_key, path="/p")
-    configs = {arm: arms.mcp_config(arm, jev_log=tmp_path / "log", server_env=server_env) for arm in arms.ARMS}
-    assert set(configs["A"]["mcpServers"]) == {"harness"}
+    server_env = {"JEV_PROVIDER": "typesafe", "TYPESAFE_API_KEY": api_key}
+    sandboxes = {arm: tmp_path / arm for arm in arms.ARMS}
+    configs = {
+        arm: arms.mcp_config(arm, sandbox=sandbox, server_env=server_env if arm == "B" else {})
+        for arm, sandbox in sandboxes.items()
+    }
+    # Each sandbox gets the same copies, so both arms' harness entries are identical modulo the root.
+    a_harness = json.dumps(configs["A"]["mcpServers"]["harness"]).replace(str(sandboxes["A"]), "<box>")
+    b_harness = json.dumps(configs["B"]["mcpServers"]["harness"]).replace(str(sandboxes["B"]), "<box>")
+    assert a_harness == b_harness
     servers = configs["B"]["mcpServers"]
-    assert set(servers) == {"harness", "jev"} and servers["harness"] == configs["A"]["mcpServers"]["harness"]
-    assert servers["jev"]["env"] == server_env
-    assert servers["jev"]["args"][:3] == ["-m", "evals.ab.proxy", str(tmp_path / "log")]
-    assert servers["jev"]["args"][-2:] == ["-m", "jev_judge_mcp"]
-    # The harness entries quote this repository's own paths (the venv interpreter, PYTHONPATH), and a
-    # runner may check the repository out under a directory named after the key — the eval failure that
-    # motivated the short-secret guard. Ambient path text is not config content; scrub it before
-    # asserting the key is absent, so the assertion stays about the config itself.
-    ambient = json.dumps(configs["A"]).replace(str(arms.REPO_ROOT), "<repo>")
-    assert api_key not in ambient
-    assert servers["jev"]["env"]["TYPESAFE_API_KEY"] == api_key
+    assert set(servers) == {"harness", "jev"}
+    jev = servers["jev"]
+    assert jev["lifecycle"] == "eager" and jev["directTools"] is True and jev["toolPrefix"] == "none"
+    assert jev["env"]["PYTHONPATH"] == str(sandboxes["B"] / "servers")
+    assert jev["args"][0:3] == ["-m", "evals.ab.proxy", str(sandboxes["B"] / "jev-calls.jsonl")]
+    assert jev["args"][-2:] == ["-m", "jev_judge_mcp"]
+    assert jev["env"]["TYPESAFE_API_KEY"] == api_key
+
+
+def test_the_mcp_config_names_no_host_path(tmp_path: Path) -> None:
+    """The agent reads its own MCP config (the D3 study proved it), so the document names only paths
+    inside the run sandbox: no repo root, no interpreter path, no log path under the records."""
+    sandbox = tmp_path / "box"
+    for arm in arms.ARMS:
+        doc = arms.mcp_config(arm, sandbox=sandbox / arm, server_env={"K": "v"} if arm == "B" else {})
+        text = json.dumps(doc)
+        assert str(arms.REPO_ROOT) not in text
+        assert sys.executable not in text
+        assert str(tmp_path / "records") not in text
+        for entry in doc["mcpServers"].values():
+            assert entry["command"].startswith(str(sandbox / arm))
+
+
+def test_sandbox_config_artifacts_exist(tmp_path: Path) -> None:
+    sandbox = tmp_path / "box"
+    arms.mcp_config("B", sandbox=sandbox, server_env={})
+    launcher = sandbox / "bin" / "python3"
+    assert launcher.is_file() and launcher.stat().st_mode & 0o111
+    assert launcher.read_text(encoding="utf-8").startswith("#!/bin/sh\n")
+    for rel in (
+        "servers/harness_server.py",
+        "servers/evals/__init__.py",
+        "servers/evals/relay.py",
+        "servers/evals/ab/__init__.py",
+        "servers/evals/ab/proxy.py",
+    ):
+        assert (sandbox / rel).is_file(), rel
+    # The proxy creates the relay log on its first call; the config only names it.
+    assert not (sandbox / "jev-calls.jsonl").exists()
+
+
+def test_the_pi_sentence_names_the_published_tool() -> None:
+    sentence = arms.jev_sentence("pi", "jev_verify")
+    assert "`jev_verify`" in sentence and "jev_jev_" not in sentence
+    assert "`mcp__jev__jev_verify`" in arms.jev_sentence("claude", "jev_verify")
 
 
 @pytest.mark.parametrize("agent", ab_run.AGENTS)
@@ -469,7 +510,7 @@ def test_arm_command_lines_differ_only_in_the_jev_sentence(
         (arms.SYSTEM_ADDENDUM, f"{arms.SYSTEM_ADDENDUM} {arms.jev_sentence(agent, task.judgment.jev_tool)}")
     ]
     assert prompt in tails["A"]
-    exposed = f"`jev_{task.judgment.jev_tool}`" if agent == "pi" else f"`mcp__jev__{task.judgment.jev_tool}`"
+    exposed = f"`{task.judgment.jev_tool}`" if agent == "pi" else f"`mcp__jev__{task.judgment.jev_tool}`"
     assert exposed in arms.jev_sentence(agent, task.judgment.jev_tool)
 
 

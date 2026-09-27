@@ -50,6 +50,10 @@ REDACTED = b"[REDACTED]"
 # crosses (`auth_provider`). With no provider named, auth.json does not cross at all.
 PRIVATE_AGENT_FILES = ("auth.json", "models.json", "models-store.json")
 
+RELAY_LOG = "jev-calls.jsonl"
+"""The recording proxy's log name. It is written inside the run sandbox — never under a host path
+the agent could read in its own MCP config — and copied to the run's records when the run ends."""
+
 # One agent transcript. Past this, stdout raises inside `run_agent`'s try, so the finally scrub
 # still runs and the caller's `except Exception` can book the run. Stderr keeps this many bytes,
 # drops the rest, and appends `STDERR_TRUNCATED_LINE`.
@@ -448,6 +452,10 @@ def run_agent(
             _write_logs(run_dir, incomplete.captured_stdout, incomplete.captured_stderr)
             raise
         wall = time.perf_counter() - started
+        for name in (RELAY_LOG, str(Path(RELAY_LOG).with_suffix(".stderr"))):
+            relay = secret_dir / name
+            if relay.is_file():
+                shutil.copyfile(relay, run_dir / name)
         shutil.rmtree(secret_dir, ignore_errors=True)
         _write_logs(run_dir, stdout, stderr)
         trace = (parse or stream.parse)(stdout.splitlines())

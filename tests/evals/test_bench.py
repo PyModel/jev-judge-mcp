@@ -195,7 +195,7 @@ def test_the_arms_differ_only_in_the_jev_sentence() -> None:
     assert "jev_" in prompt.JEV_SENTENCE_PI
 
 
-def test_the_bench_exposes_the_jev_tools_directly() -> None:
+def test_the_bench_exposes_the_jev_tools_directly(tmp_path: Path) -> None:
     """B and C register the published tools in the model's initial list (ADR-0036 amendment).
 
     A lazy, proxy-only entry is the measured root cause of the automatic arm's zero adoption.
@@ -207,12 +207,13 @@ def test_the_bench_exposes_the_jev_tools_directly() -> None:
         base_env={},
         secret="synthetic-secret",  # noqa: S106 - a fixture value, never a real key
     )
+    sandbox = tmp_path / "box"
     for arm in ("B", "C"):
-        entry = run.mcp_config(arm, Path("log.jsonl"), setup)["mcpServers"]["jev"]
+        entry = run.mcp_config(arm, sandbox, setup)["mcpServers"]["jev"]
         assert entry["lifecycle"] == "eager"
         assert entry["directTools"] is True
         assert entry["toolPrefix"] == "none"
-    assert "jev" not in run.mcp_config("A", Path("log.jsonl"), setup)["mcpServers"]
+    assert "jev" not in run.mcp_config("A", sandbox, setup)["mcpServers"]
 
 
 def test_claude_command_carries_the_bench_addendum(tmp_path: Path) -> None:

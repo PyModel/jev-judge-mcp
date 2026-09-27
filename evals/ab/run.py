@@ -129,7 +129,7 @@ def preflight(setup: Setup, out: Path | None = None) -> AgentRunResult:
             ],
             base_env=setup.base_env,
             secret=setup.secret,
-            mcp_config=arms.mcp_config("A", jev_log=Path("unused"), server_env={}),
+            mcp_config={},
             login_keychain=setup.agent == "claude",
             parse=parser_for(setup.agent),
             timeout_s=PREFLIGHT_TIMEOUT_S,
@@ -170,7 +170,7 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
     )
     with run_agent(
         command,
-        mcp_config=arms.mcp_config(arm, jev_log=jev_log, server_env=setup.server_env),
+        mcp_config=lambda sandbox: arms.mcp_config(arm, sandbox=sandbox, server_env=setup.server_env),
         base_env=setup.base_env,
         secret=setup.secret,
         run_dir=run_dir,

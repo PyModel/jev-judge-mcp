@@ -42,6 +42,7 @@ from typing import Any
 
 from evals.ab import arms, stream
 from evals.agent import (
+    RELAY_LOG,
     AgentCommand,
     AgentPreflightError,
     AgentRunResult,
@@ -122,20 +123,33 @@ def schedule(items: Sequence[Item], seed: int = SEED) -> list[tuple[Item, tuple[
     return planned
 
 
-def mcp_config(arm: str, jev_log: Path, setup: Setup) -> dict[str, Any]:
+def mcp_config(arm: str, sandbox: Path, setup: Setup) -> dict[str, Any]:
     """P8's harness server in every arm; B and C add the Jev server behind the bench proxy.
 
     The jev entry is eager and direct (`lifecycle`/`directTools`/`toolPrefix`, as the installer's
     pi entry): the published tools sit in the model's initial tool list instead of behind the
     adapter's lazy gateway, which recorded runs show the model never walks on its own (ADR-0036).
+    Every path in the document is inside `sandbox`: the servers run from copies placed there, the
+    interpreter is the sandbox symlink, and the relay log is written there and copied out to the
+    run's records after the run.
     """
-    config = arms.mcp_config("A", jev_log=jev_log, server_env={})
+    python = arms.sandbox_python(sandbox)
+    servers = arms.copy_servers(sandbox, "bench")
+    config = arms.mcp_config("A", sandbox=sandbox, server_env={})
     if arm in ("B", "C"):
         config["mcpServers"]["jev"] = {
             "type": "stdio",
-            "command": sys.executable,
-            "args": ["-m", "evals.bench.proxy", str(jev_log), "--", *setup.server],
-            "env": dict(setup.server_env),
+            "command": str(python),
+            "args": [
+                "-m",
+                "evals.bench.proxy",
+                str(sandbox / RELAY_LOG),
+                "--",
+                str(python),
+                "-m",
+                "jev_judge_mcp",
+            ],
+            "env": {**dict(setup.server_env), "PYTHONPATH": str(servers)},
             "lifecycle": "eager",
             "directTools": True,
             "toolPrefix": "none",
@@ -174,7 +188,7 @@ def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) ->
     )
     with run_agent(
         command,
-        mcp_config=mcp_config(arm, jev_log, setup),
+        mcp_config=lambda sandbox: mcp_config(arm, sandbox, setup),
         base_env=setup.base_env,
         secret=setup.secret,
         run_dir=run_dir,
@@ -596,7 +610,7 @@ def live(
                 _preflight_argv(agent, binary),
                 base_env=base_env,
                 secret=key,
-                mcp_config=arms.mcp_config("A", jev_log=Path("unused"), server_env={}),
+                mcp_config={},
                 login_keychain=setup.login_keychain,
                 parse=parse,
                 auth_provider=setup.auth_provider or None,
