@@ -16,3 +16,4 @@ A missing local credential was already `auth`. An upstream 401 — the API's "mi
 
 - A client that branches on `auth` can tell a rejected key from an outage.
 - A client that treated every provider failure as an outage now sees `auth` for a 401.
+- With `JEV_HOOK_REQUIRED=1`, the completion hook asks on that 401, the same as a missing key (ADR-0065 amendment). A timeout, quota, or other provider error stays fail-open.

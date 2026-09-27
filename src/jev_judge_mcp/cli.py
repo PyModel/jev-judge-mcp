@@ -528,9 +528,10 @@ def completion_hook_main(
 
     A missing credential or a missing local path fails open: exit 0, stderr carries
     ``error.code``, stdout stays empty so it cannot be read as a pass.
-    ``JEV_HOOK_REQUIRED=1`` asks instead for bad stdin, missing credentials, and a gate
-    error that never reached the provider (ADR-0065). A provider timeout, quota, or
-    provider error stays fail-open.
+    ``JEV_HOOK_REQUIRED=1`` asks instead for bad stdin, missing credentials, a gate error
+    coded ``auth`` (a missing key, or an upstream 401 per ADR-0072), and a gate error that
+    never reached the provider (ADR-0065). A provider timeout, quota, or other provider
+    error stays fail-open.
     """
     if list(argv):
         sys.stderr.write("jev-judge-mcp completion-hook: usage: jev-judge-mcp completion-hook\n")

@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from mcp.types import CallToolResult, TextContent
 
 from jev_judge_mcp.cli import completion_hook_main, completion_matches, gate_main, judge_main
 
@@ -254,6 +255,33 @@ def test_required_flag_stays_open_after_the_provider_was_reached(
     assert captured.out == ""
     assert "error.code=timeout" in captured.err
     assert "allow" not in captured.out
+
+
+def test_required_completion_hook_asks_on_a_rejected_key(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A 401 reached the provider but is `auth` (ADR-0072): the required hook asks, like a missing key."""
+
+    async def rejected(_name: str, _arguments: dict[str, object]) -> CallToolResult:
+        text = "TypeSafe API 401: invalid API key"
+        return CallToolResult(content=[TextContent(type="text", text=text)], isError=True)
+
+    monkeypatch.setattr("jev_judge_mcp.cli._call", rejected)
+    monkeypatch.setattr("jev_judge_mcp.cli._gate_arguments", lambda _options: {})
+    code = completion_hook_main(
+        [],
+        text=_PUSH,
+        environ={
+            "JEV_HOOK_REQUIRED": "1",
+            "JEV_COMPLETION_DIFF": "HEAD",
+            "JEV_COMPLETION_CLAIMS": "claims.json",
+            "JEV_COMPLETION_TESTS": "tests.log",
+        },
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert json.loads(captured.out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+    assert "(auth)" in captured.out
 
 
 @pytest.mark.parametrize(

@@ -19,3 +19,7 @@ The flag applies to both `jev-judge-mcp hook gate` and `jev-judge-mcp completion
 
 - A machine that installed either hook before this flag still fail-opens.
 - An operator who sets the flag and forgets the key gets `ask`, not silence, on both hooks.
+
+## Amendment (2026-09-27): an upstream 401 asks
+
+An upstream 401 is `auth` (ADR-0072). It reached the provider, but the flag treats it like a missing key and asks. A timeout, quota, or other provider error after the call stays fail-open.
