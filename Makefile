@@ -60,10 +60,11 @@ build:
 	uv build
 	uv run python scripts/ci/check_sdist_excludes.py
 
-# The integration tests, then the slow `uvx --no-cache --from .` smoke test. `--no-cache` is
-# required: uv 0.9.x reuses a cached tool environment and ignores source edits. A command-line
-# `-m` replaces the addopts one, so the smoke line selects `smoke` alone and never re-admits
-# `live` (ADR-0027).
+# The integration tests, then the slow `uvx --no-cache --from .` smoke test. `--no-cache` makes
+# uvx build this checkout instead of reusing a cached tool environment (see pyproject.toml
+# [tool.uv]); it fetches every dependency from PyPI, so this stage needs the network. A
+# command-line `-m` replaces the addopts one, so the smoke line selects `smoke` alone and never
+# re-admits `live` (ADR-0027).
 smoke:
 	$(PYTEST) tests/integration
 	$(PYTEST) tests/integration -m smoke
