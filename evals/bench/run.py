@@ -137,6 +137,9 @@ def mcp_config(arm: str, sandbox: Path, setup: Setup) -> dict[str, Any]:
     servers = arms.copy_servers(sandbox, "bench")
     config = arms.mcp_config("A", sandbox=sandbox, server_env={})
     if arm in ("B", "C"):
+        env = {**dict(setup.server_env), "PYTHONPATH": str(servers)}
+        env = {k: v for k, v in env.items() if k != "TYPESAFE_API_KEY"}
+        env.update(arms.keyfile_env(sandbox, setup.secret))
         config["mcpServers"]["jev"] = {
             "type": "stdio",
             "command": str(python),
@@ -149,7 +152,7 @@ def mcp_config(arm: str, sandbox: Path, setup: Setup) -> dict[str, Any]:
                 "-m",
                 "jev_judge_mcp",
             ],
-            "env": {**dict(setup.server_env), "PYTHONPATH": str(servers)},
+            "env": env,
             "lifecycle": "eager",
             "directTools": True,
             "toolPrefix": "none",
@@ -569,7 +572,7 @@ def live(
         raise BenchRefusedError(f"unknown agent {agent!r}; one of claude, pi")
     base_env = arms.agent_env(environ)
     agent_path = base_env["PATH"]
-    server_env = {**arms.jev_env(api_key=key, path=agent_path), "JEV_MCP_LOG_LEVEL": "DEBUG"}
+    server_env = {"JEV_PROVIDER": "typesafe", "JEV_MCP_MODEL": arms.JEV_MODEL, "JEV_MCP_LOG_LEVEL": "DEBUG"}
     binary = shutil.which(agent, path=agent_path)
     if binary is None:
         raise BenchRefusedError(f"{agent} not found on PATH")

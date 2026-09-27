@@ -469,6 +469,23 @@ def test_the_mcp_config_names_no_host_path(tmp_path: Path) -> None:
             assert entry["command"].startswith(str(sandbox / arm))
 
 
+def test_the_typesafe_key_never_rides_in_the_config(tmp_path: Path) -> None:
+    """The key reaches the server by a 0600 sandbox keyfile (ADR-0046's JEV_MCP_KEY_FILE), never in
+    the env block of the config the agent reads. In the D3 study the agents read that env and
+    echoed the key to the model provider in 29 of 33 with-Jev runs."""
+    key = "sk-test-keyfile-not-a-real-key"
+    sandbox = tmp_path / "box"
+    doc = arms.mcp_config("B", sandbox=sandbox, server_env={"TYPESAFE_API_KEY": key}, api_key=key)
+    text = json.dumps(doc)
+    assert key not in text
+    key_file = sandbox / "typesafe.key"
+    assert key_file.is_file() and key_file.read_text(encoding="utf-8").strip() == key
+    assert key_file.stat().st_mode & 0o777 == 0o600
+    jev = doc["mcpServers"]["jev"]
+    assert jev["env"]["JEV_MCP_KEY_FILE"] == str(key_file)
+    assert "TYPESAFE_API_KEY" not in jev["env"]
+
+
 def test_sandbox_config_artifacts_exist(tmp_path: Path) -> None:
     sandbox = tmp_path / "box"
     arms.mcp_config("B", sandbox=sandbox, server_env={})

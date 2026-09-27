@@ -69,7 +69,7 @@ class Setup:
     binary: Sequence[str]
     """The command that stands in for the agent binary: the resolved path live, a stub offline."""
     server_env: Mapping[str, str]
-    """The Jev server's env in arm B (`arms.jev_env` live)."""
+    """The Jev server's env in arm B (no key: live, the key reaches the server by sandbox keyfile)."""
     base_env: Mapping[str, str]
     """The agent's whole environment (`arms.agent_env` of the caller's)."""
     secret: str
@@ -170,7 +170,12 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
     )
     with run_agent(
         command,
-        mcp_config=lambda sandbox: arms.mcp_config(arm, sandbox=sandbox, server_env=setup.server_env),
+        mcp_config=lambda sandbox: arms.mcp_config(
+            arm,
+            sandbox=sandbox,
+            server_env=setup.server_env,
+            api_key=setup.secret if arm == "B" else "",
+        ),
         base_env=setup.base_env,
         secret=setup.secret,
         run_dir=run_dir,
@@ -490,7 +495,10 @@ def held_constant(agent: str, timeout_s: float) -> dict[str, str]:
         "timeout": f"{timeout_s:.0f}s wall per run",
         "harness server (both arms)": "`request_human_review`",
         "system addendum (both arms)": arms.SYSTEM_ADDENDUM,
-        "Jev (arm B only)": f"`python -m jev_judge_mcp`, `JEV_PROVIDER=typesafe`, `JEV_MCP_MODEL={arms.JEV_MODEL}`",
+        "Jev (arm B only)": (
+            f"`python -m jev_judge_mcp`, `JEV_PROVIDER=typesafe`, `JEV_MCP_MODEL={arms.JEV_MODEL}`; "
+            "the key reaches the server by a 0600 keyfile in the run sandbox, never the agent-readable config"
+        ),
         "grader": (
             "ADR-0071: hidden acceptance tests, no regressions, pre-existing test content unchanged, "
             "added tests must pass, decision matches gold (`evals/ab/grade.py`)"
@@ -571,7 +579,7 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
     setup = Setup(
         agent=agent,
         binary=[binary],
-        server_env=arms.jev_env(api_key=key, path=agent_path),
+        server_env={"JEV_PROVIDER": "typesafe", "JEV_MCP_MODEL": arms.JEV_MODEL},
         base_env=base_env,
         secret=key,
         python3=python3,

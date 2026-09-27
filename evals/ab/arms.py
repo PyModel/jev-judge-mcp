@@ -73,7 +73,7 @@ def sandbox_python(sandbox: Path) -> Path:
     bin_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     launcher = bin_dir / "python3"
     if not launcher.exists():
-        launcher.write_text(f"#!/bin/sh\nexec {sys.executable!r} \"$@\"\n", encoding="utf-8")
+        launcher.write_text(f'#!/bin/sh\nexec {sys.executable!r} "$@"\n', encoding="utf-8")
         launcher.chmod(0o755)
     return launcher
 
@@ -93,7 +93,22 @@ def copy_servers(sandbox: Path, proxy_package: str) -> Path:
     return servers
 
 
-def mcp_config(arm: str, *, sandbox: Path, server_env: Mapping[str, str]) -> dict[str, Any]:
+def keyfile_env(sandbox: Path, api_key: str) -> dict[str, str]:
+    """Write the TypeSafe key as a 0600 file inside the sandbox and return the env that points the
+    server at it.
+
+    The key must never sit in the MCP config the agent can read: in the D3 study the agents read
+    that config's env and echoed the key to the model provider in 29 of 33 with-Jev runs. The
+    server reads `JEV_MCP_KEY_FILE` (ADR-0046). The file is still inside the sandbox the agent can
+    read; only the confinement boundary fully hides it.
+    """
+    path = sandbox / "typesafe.key"
+    path.write_text(api_key + "\n", encoding="utf-8")
+    path.chmod(0o600)
+    return {"JEV_MCP_KEY_FILE": str(path)}
+
+
+def mcp_config(arm: str, *, sandbox: Path, server_env: Mapping[str, str], api_key: str = "") -> dict[str, Any]:
     """The `--mcp-config` document, built against the run's private sandbox.
 
     Every path in the document is inside `sandbox`: the servers run from copies placed there, the
@@ -109,6 +124,10 @@ def mcp_config(arm: str, *, sandbox: Path, server_env: Mapping[str, str]) -> dic
     }
     servers_doc: dict[str, Any] = {"harness": harness}
     if arm != "A":
+        env = {**dict(server_env), "PYTHONPATH": str(servers)}
+        if api_key:
+            env = {k: v for k, v in env.items() if k != "TYPESAFE_API_KEY"}
+            env.update(keyfile_env(sandbox, api_key))
         servers_doc["jev"] = {
             "type": "stdio",
             "command": str(python),
@@ -121,22 +140,12 @@ def mcp_config(arm: str, *, sandbox: Path, server_env: Mapping[str, str]) -> dic
                 "-m",
                 "jev_judge_mcp",
             ],
-            "env": {**dict(server_env), "PYTHONPATH": str(servers)},
+            "env": env,
             "lifecycle": "eager",
             "directTools": True,
             "toolPrefix": "none",
         }
     return {"mcpServers": servers_doc}
-
-
-def jev_env(*, api_key: str, path: str) -> dict[str, str]:
-    return {
-        "JEV_PROVIDER": "typesafe",
-        "TYPESAFE_API_KEY": api_key,
-        "JEV_MCP_MODEL": JEV_MODEL,
-        "PYTHONPATH": str(REPO_ROOT),
-        "PATH": path,
-    }
 
 
 def claude_command(claude: str, prompt: str, mcp_config_path: Path, addendum: str = SYSTEM_ADDENDUM) -> list[str]:
