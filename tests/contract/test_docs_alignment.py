@@ -533,12 +533,15 @@ def test_limits_page_names_529_as_a_retried_status() -> None:
 
 def test_retry_docstring_states_the_installed_sdk_timeouts() -> None:
     """H1: the policy docstring must name the SDK timeouts it does not copy, not call them open."""
+    import importlib.metadata
+
     from typesafe_sdk import RetryPolicy
     from typesafe_sdk.constants import DEFAULT_TIMEOUT
 
     from jev_judge_mcp.providers.retry import RetryPolicy as ServerPolicy
 
     text = ServerPolicy.__doc__ or ""
+    assert importlib.metadata.version("typesafe-sdk") in text
     assert f"{DEFAULT_TIMEOUT:g} s per HTTP operation" in text
     assert f"{RetryPolicy().timeout:g} s total retry budget" in text
     assert "leaves open" not in text
@@ -583,7 +586,11 @@ def test_classify_card_does_not_claim_the_default_margin_binds() -> None:
 def test_find_card_says_the_exists_thresholds_are_frozen() -> None:
     """P4: the cookbook's 0.7/0.35 are examples to tune. This server freezes them."""
     section = _tool_section(_TOOL_CARDS.read_text(encoding="utf-8"), "## jev_find", "## jev_rerank")
-    assert "answered at ≥ 0.7, absent below 0.35" in section
+    needle = (
+        f"answered at ≥ {policy_thresholds.EXISTS_FOUND_AT:g}, "
+        f"absent below {policy_thresholds.EXISTS_ABSENT_BELOW:g}"
+    )
+    assert needle in section
     assert "examples to tune" in section
     assert "frozen parity defaults" in section
     assert "ADR-0001" in section
@@ -627,6 +634,8 @@ def test_gate_card_discloses_implicit_diff_and_tests_while_they_are_sent() -> No
         assert "ADR-0063" in section
         assert "again as implicit evidence" in section
         assert "100k extra UTF-16" in section
+    else:
+        assert "again as implicit evidence" not in section
 
 
 def test_calibrate_advisory_says_to_pin_the_measured_model() -> None:
