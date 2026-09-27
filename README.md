@@ -350,6 +350,9 @@ transient failure — connection errors, timeouts, 408/429/5xx — is retried, u
 capped exponential backoff (server `Retry-After` hints honored, capped at 5 s) inside a 90 s
 budget. A call whose attempts all fail reports the provider, the attempt count, and the last
 failure.
+
+Other operator facts:
+
 - `initialize`'s `serverInfo.version`, the one startup log line, and `jev-judge-mcp --version`
   report the same build. A wheel, and a checkout whose HEAD is the tag `v<version>`, report that
   version. Any other git checkout reports `<version>+g<short sha>` (ADR-0054). The wire name stays
