@@ -11,15 +11,42 @@ import tarfile
 import tomllib
 import zipfile
 from pathlib import Path
+from typing import TypeGuard, cast
 
 ROOT = Path(__file__).resolve().parents[2]
 FORBIDDEN = (".venv/", "__pycache__/", ".pytest_cache/", ".ruff_cache/", ".jevbench-tmp/", "docs/reference/jev-skill/")
 
 
+def _table(value: object) -> TypeGuard[dict[str, object]]:
+    return isinstance(value, dict)
+
+
+def _cache_key_globs(root: Path) -> list[str]:
+    parsed: object = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    if not _table(parsed):
+        return []
+    tool = parsed.get("tool")
+    if not _table(tool):
+        return []
+    uv = tool.get("uv")
+    if not _table(uv):
+        return []
+    keys = uv.get("cache-keys")
+    if not isinstance(keys, list):
+        return []
+    globs: list[str] = []
+    for key in cast(list[object], keys):
+        if not _table(key):
+            continue
+        file = key.get("file")
+        if isinstance(file, str):
+            globs.append(file)
+    return globs
+
+
 def check_wheel_cache_keys(root: Path, wheel: Path) -> list[str]:
     """Every packaged file must match a tool.uv cache-key glob, or an edit to it serves a stale build."""
-    keys = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["uv"]["cache-keys"]
-    globs = [key["file"] for key in keys if isinstance(key, dict) and "file" in key]
+    globs = _cache_key_globs(root)
     with zipfile.ZipFile(wheel) as archive:
         members = [name for name in archive.namelist() if name.startswith("jev_judge_mcp/")]
     # fnmatch's `*` crosses `/`, so `src/**/*.py` also matches `src/jev_judge_mcp/x.py`.

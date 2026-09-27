@@ -288,7 +288,11 @@ def _uvx_reporting(directory: Path, line: str) -> Path:
 def _qualifying_uvx(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Point `which` at a uvx new enough for `--from-checkout`. The path stub never ran before."""
     script = _uvx_reporting(tmp_path / "bin", "uvx 0.12.19 (bea138450 2026-09-24 aarch64-apple-darwin)")
-    monkeypatch.setattr(install_cli, "which", lambda _name: str(script))
+
+    def found(name: str) -> str | None:
+        return str(script) if name == "uvx" else None
+
+    monkeypatch.setattr(install_cli, "which", found)
 
 
 def test_checkout_flag_renders_the_checkout_spec(
