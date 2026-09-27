@@ -378,7 +378,7 @@ This is a Python rewrite of the TypeScript `@jkudish/jev-mcp` 0.5.0. The ten ref
 
 ```sh
 uv sync --locked --all-extras   # development needs every extra; --extra typesafe alone only runs the server
-make ci      # lint, types, unit, property, policy coverage, contract, parity, security, build, smoke, eval
+make ci      # lint, types, unit, property, policy coverage, contract, parity, security, build, smoke, eval, load canary
 ```
 
 `make eval-live`, `make security-live`, and `JEV_AB_LIVE=1 make ab` call paid services and stay off CI. Contribution notes are in [`CONTRIBUTING.md`](CONTRIBUTING.md).

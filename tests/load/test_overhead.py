@@ -6,8 +6,11 @@ and telemetry at its default setting. The provider is a stub that sleeps `PROVID
 from the P6 permissive cases; nothing reaches the network. A call's local overhead is its wall time
 minus the nominal provider time, so event-loop queueing, late wake-ups, and GC pauses count against
 the budget. The fixed provider delay keeps the in-flight calls in lockstep, the worst case for queueing.
+A CI canary (`make load_canary`) runs the same path at concurrency 1 and 4, so a question the stub cannot
+answer fails `make ci` instead of shipping unseen behind the timing-based `make load`.
 """
 
+import json
 import math
 from time import perf_counter
 from typing import Any, ClassVar, override
@@ -23,8 +26,9 @@ from jev_judge_mcp.server import JevMCPServer, freeze_startup_heap
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from tests.security.tools import CASES
+from tests.support.jev import text_of
 
-pytestmark = [pytest.mark.anyio, pytest.mark.load]
+pytestmark = [pytest.mark.anyio]
 
 LEVELS = (1, 4, 16, 32, 64)
 MIN_CALLS = 320
@@ -50,6 +54,37 @@ def answer_book() -> dict[str, Any]:
     return book
 
 
+def answer_for(book: dict[str, Any], key: str, question: JsonValue) -> Any:
+    """The case's permissive answer, or one derived from the question's own wire criteria.
+
+    jev_gate asks a `source_<index>` Choice whose labels are the evidence ids of the case it is scoring,
+    and no case records that answer. Deriving it from the criteria — the case's own evidence ids, not a
+    hardcoded label — means a tool question added later is answered too, and fails here only when its
+    shape is not a Choice, Score, or Noul.
+    """
+    if key in book:
+        return book[key]
+    if isinstance(question, dict):
+        kind = question.get("type")
+        criteria = question.get("criteria")
+        if kind == "choice" and isinstance(criteria, dict) and criteria:
+            chosen = next(iter(criteria))
+            return {
+                "choice": chosen,
+                "probabilities": {label: 1.0 if label == chosen else 0.0 for label in criteria},
+                "confidence": 0.99,
+            }
+        if kind == "score" and isinstance(criteria, list) and len(criteria) >= 2:
+            return {
+                "score": 0,
+                "probabilities": {str(index): 1.0 if index == 0 else 0.0 for index in range(len(criteria))},
+                "confidence": 0.95,
+            }
+        if kind == "noul":
+            return {"noul": 0.95}
+    raise AssertionError(f"stub cannot answer {key}: unrecognized question {question!r}")
+
+
 class StubProvider(JevProvider):
     name: ClassVar[ProviderName] = "compatible"
     label: ClassVar[str] = "Stub"
@@ -63,7 +98,8 @@ class StubProvider(JevProvider):
         self, state: JsonValue, questions: dict[str, JsonValue], model: str, timeout: float | None
     ) -> Evaluation:
         await anyio.sleep(PROVIDER_S)
-        return Evaluation({key: self.book[key] for key in questions}, Usage(1, 1), self.name, model)
+        answers = {key: answer_for(self.book, key, question) for key, question in questions.items()}
+        return Evaluation(answers, Usage(1, 1), self.name, model)
 
     @override
     async def aclose(self) -> None:
@@ -102,6 +138,7 @@ async def overheads(client: Client, concurrency: int, calls: int) -> list[float]
     return samples
 
 
+@pytest.mark.load
 async def test_local_overhead_stays_within_budget_up_to_64_concurrent_calls() -> None:
     toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: StubProvider()), TOOLS)
     server = JevMCPServer(toolset=toolset, log_level="WARNING")
@@ -126,3 +163,28 @@ async def test_local_overhead_stays_within_budget_up_to_64_concurrent_calls() ->
     assert calls == max(LEVELS) + sum(calls_at(level) for level in LEVELS)
     assert "regex_timeouts" not in metrics
     assert failures == []
+
+
+@pytest.mark.load_canary
+async def test_every_tool_call_succeeds_at_low_concurrency() -> None:
+    """Every tool's real server path finishes at concurrency 1 and 4, the CI-visible load guard.
+
+    `make load` measures overhead and stays out of CI, which is how an unanswered `source_<index>`
+    question shipped in 0.5.0. One pass per tool per level fails on the first question the stub
+    cannot answer, and the gate call must validate the derived source answer, not merely not crash.
+    """
+    toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: StubProvider()), TOOLS)
+    server = JevMCPServer(toolset=toolset, log_level="WARNING")
+    freeze_startup_heap()
+    try:
+        async with Client(server) as client:
+            for level in (1, 4):
+                samples = await overheads(client, level, len(CASES))
+                assert len(samples) == len(CASES)
+            gate = next(case for case in CASES if case.tool == "jev_gate")
+            result = await client.call_tool(gate.tool, dict(gate.arguments))
+            assert not result.is_error, result.content
+            payload = json.loads(text_of(result))
+            assert payload["verification"]["summary"]["invalid_response"] == 0
+    finally:
+        await toolset.aclose()

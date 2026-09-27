@@ -3,9 +3,9 @@
 # in the same commit that adds its tests.
 PYTEST := uv run pytest
 
-.PHONY: ci lint typecheck unit property policy-coverage contract parity security build smoke eval eval-live security-live ab load hooks ci-linux
+.PHONY: ci lint typecheck unit property policy-coverage contract parity security build smoke eval eval-live security-live ab load load_canary hooks ci-linux
 
-ci: lint typecheck unit property policy-coverage contract parity policy-replay security build smoke eval
+ci: lint typecheck unit property policy-coverage contract parity policy-replay security build smoke eval load_canary
 
 # The pre-push gate (ADR-0056). `make hooks` enables the gate for this clone and proves it
 # is reachable — with empty stdin nothing is checked, but the gate's banner must appear. The
@@ -65,9 +65,14 @@ smoke:
 	$(PYTEST) tests/integration -m smoke
 
 # ROADMAP P9: local overhead at 1/4/16/32/64 concurrent calls, provider stubbed (tests/load/). Timing-based,
-# so it stays out of `make ci`.
+# so it stays out of `make ci`. The canary below is the CI-visible guard for the same path.
 load:
 	$(PYTEST) tests/load -m load -s
+
+# The load stub must answer every question each tool asks. Concurrency 1 and 4, one pass per tool, no timing
+# budget, so it is cheap enough for `make ci` and a regression cannot hide behind the timing-based `load`.
+load_canary:
+	$(PYTEST) tests/load -m load_canary -s
 
 # ROADMAP P7: offline eval scorer and calibration tests. No network, no API key.
 eval:

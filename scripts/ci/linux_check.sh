@@ -114,6 +114,7 @@ run make:security 1200 make security
 run make:build 1200 make build
 run make:smoke 3600 make smoke
 run make:eval 1200 make eval
+run make:load_canary 600 make load_canary
 # The smoke job's last step: the installer-entry guard with Python 3.10 first on PATH
 # (actions/setup-python 3.10), as ADR-0053's CI guard runs it. --no-project: inside the
 # project, `uv python find 3.10` resolves the project's 3.12 instead of the managed 3.10.
