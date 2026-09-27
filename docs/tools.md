@@ -15,10 +15,10 @@ datasets, 3 cases per tool) covers `jev_classify` and `jev_verify` only. Every o
 unmeasured live; its "weak spots" are frozen behaviors and documented gaps, not measured failure
 rates. Certified operating points: none yet ([`docs/EVIDENCE.md`](EVIDENCE.md)).
 
-A result reports the model it requested (`jev-latest` unless `JEV_MCP_MODEL` is set), not the
-versioned id that answered. A `jev-latest` caller cannot see which version answered. That is parity
-with the reference (ADR-0001). The compatible provider
-reports a string `model` from the body when one is present. UTF-16 caps below are not Jev's context
+The `model` field is the requested model on the TypeSafe provider (`jev-latest` unless
+`JEV_MCP_MODEL` is set) and the slug sent on OpenRouter (`typesafe/jev-1.13` for `jev-latest`).
+The compatible and Cloudflare providers report the body's `model` when it has one. A `jev-latest`
+caller on TypeSafe cannot see which version answered (ADR-0001 parity). UTF-16 caps below are not Jev's context
 window (64k tokens per request, 32k for state plus the longest question). An input inside every cap
 can still exceed that window and come back as `provider`, not `input_too_large`.
 

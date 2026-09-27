@@ -598,9 +598,12 @@ def test_find_card_says_the_exists_thresholds_are_frozen() -> None:
 
 
 def test_tool_cards_say_results_name_the_requested_model() -> None:
-    """H3 disclosure: the card must not let a caller read `model` as the version that answered."""
+    """H3: each provider's reported model is named, and the OpenRouter slug comes from the code."""
+    from jev_judge_mcp.providers.openrouter import LATEST
+
     text = _TOOL_CARDS.read_text(encoding="utf-8")
-    assert "reports the model it requested" in text
+    assert f"typesafe/{LATEST}" in text
+    assert "Cloudflare" in text
     assert "cannot see which version answered" in text
     assert "ADR-0001" in text
 
