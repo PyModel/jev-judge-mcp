@@ -35,8 +35,25 @@ _PROVIDER_FAILURE = re.compile(
     r"\b401\b|unauthorized|invalid api key",
     re.IGNORECASE,
 )
-ADAPTER = Path(os.environ["PI_MCP_ADAPTER"]) if os.environ.get("PI_MCP_ADAPTER") else Path("PI_MCP_ADAPTER")
-"""MCP adapter extension path. Set `PI_MCP_ADAPTER` to its `index.ts`; there is no default path."""
+
+
+class AdapterMissing(RuntimeError):
+    """The Pi arm needs `PI_MCP_ADAPTER` and it is unset."""
+
+
+ADAPTER: Path | None = None
+"""A test may set this. Production leaves it unset and reads `PI_MCP_ADAPTER` when the arm runs."""
+
+
+def adapter_path() -> Path:
+    """The adapter extension. Unset `PI_MCP_ADAPTER` fails here, not at import."""
+    if isinstance(ADAPTER, Path):
+        return ADAPTER
+    raw = os.environ.get("PI_MCP_ADAPTER")
+    if not raw:
+        raise AdapterMissing("PI_MCP_ADAPTER is not set; set it to the pi-mcp-adapter index.ts")
+    return Path(raw)
+
 
 _CONTEXT_KEYS = ("input", "cacheRead", "cacheWrite")
 
@@ -54,7 +71,7 @@ def pi_command(pi: str, prompt_text: str, mcp_config_path: Path, addendum: str, 
         PI_THINKING,
         "--no-extensions",
         "-e",
-        str(ADAPTER),
+        str(adapter_path()),
         "--mcp-config",
         str(mcp_config_path),
         "--no-session",

@@ -505,7 +505,7 @@ def _other_servers(servers: Mapping[str, object], name: str) -> str:
             blob = json.dumps(value)
         except TypeError:
             blob = ""
-        if key == "evaluate" or "jev-mcp" in blob:
+        if key == "evaluate" or "@jkudish/jev-mcp" in blob:
             found.append(key)
     if not found:
         return ""

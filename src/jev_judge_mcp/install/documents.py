@@ -1,5 +1,6 @@
 """Read and update one named server entry in a JSON, JSONC, or TOML config."""
 
+import json
 import tomllib
 from collections.abc import Mapping
 
@@ -62,6 +63,8 @@ def server_map(document: object, path: list[str]) -> dict[str, object]:
 
 
 def render_json(target: str, text: str, name: str, entry: Mapping[str, object]) -> str:
+    if target == "omp" and text.strip() == "":
+        text = json.dumps({"mcpServers": {}}, indent=2) + "\n"
     document = loads(text) if text.strip() else _empty_object()
     path = json_entry_path(target, document, name)
     return assign(text if text.strip() else "{}\n", path, dict(entry))

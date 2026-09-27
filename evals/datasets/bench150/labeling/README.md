@@ -8,8 +8,8 @@ No benchmark answer or usefulness assessment in this packet has been supplied by
 | Role | Human | Coverage | Deliverable |
 | --- | --- | --- | --- |
 | R1 | elkaix | All 150 items | `reviewer-r1.csv`, independently completed |
-| R2 | elkaix | All 150 items | `reviewer-r2.csv`, independently completed |
-| R3 | elkaix | Every disagreement, blocked item and final consistency check | Written adjudication with item IDs, evidence and final labels |
+| R2 | elkholy90 | All 150 items | `reviewer-r2.csv`, independently completed |
+| R3 | unicorn | Every disagreement, blocked item and final consistency check | Written adjudication with item IDs, evidence and final labels |
 
 The user supplied all three reviewer identities for the independent human roles. Do not substitute
 model reviews or role IDs for human identities in the dataset's `label.labelers` field. No invitations
@@ -19,7 +19,7 @@ of their review materials. Reviewers disclose prior exposure to those materials 
 
 ## Review procedure
 
-1. **Assigned:** R1, R2, and R3 are elkaix. Use the same packet revision for both independent reviews.
+1. **Assigned:** R1 elkaix, R2 elkholy90, R3 unicorn. Use the same packet revision for both independent reviews.
 2. **Label independently:** read the question's supplied material, enter outcome labels and cite the
    decisive evidence. Do not consult Jev, another model, external facts or the other reviewer's sheet.
 3. **Resolve:** lock both sheets before comparing them. R3 resolves differences using evidence;

@@ -637,6 +637,14 @@ def test_live_run_refuses_without_flag_key_or_frozen_labels(tmp_path: Path) -> N
     assert not list(tmp_path.iterdir()), "a refused run writes nothing"
 
 
+def test_unset_pi_adapter_names_the_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unset PI_MCP_ADAPTER stops the Pi arm when it needs the adapter, not at import."""
+    monkeypatch.delenv("PI_MCP_ADAPTER", raising=False)
+    _agent_bin(tmp_path / "bin", "pi", "raise SystemExit(0)")
+    with pytest.raises(run.BenchRefusedError, match="PI_MCP_ADAPTER is not set"):
+        run.live(_bench_env(tmp_path / "bin", tmp_path), tmp_path / "out", items=(_FROZEN,), agent="pi")
+
+
 def _agent_bin(bindir: Path, name: str, body: str) -> None:
     bindir.mkdir(exist_ok=True)
     stub = bindir / name

@@ -380,7 +380,7 @@ One diagram covers the whole server: the tool-call loop from `tools/call` to the
 
 ## About this project
 
-This is a Python rewrite of the TypeScript `@jkudish/jev-mcp` 0.5.0. The ten reference tools match it on the wire, checked by recorded parity fixtures; `jev_score` is an addition. Vocabulary is in [`docs/CONTEXT.md`](docs/CONTEXT.md), decisions in [`docs/adr/`](docs/adr/), and security notes in [`SECURITY.md`](SECURITY.md). Windows is not supported; the server exits at startup on a non-POSIX platform.
+The ten reference tools' wire format is pinned by recorded parity fixtures; `jev_score` is an addition. Vocabulary is in [`docs/CONTEXT.md`](docs/CONTEXT.md), decisions in [`docs/adr/`](docs/adr/), and security notes in [`SECURITY.md`](SECURITY.md). Windows is not supported; the server exits at startup on a non-POSIX platform.
 
 ```sh
 uv sync --locked --all-extras   # development needs every extra; --extra typesafe alone only runs the server

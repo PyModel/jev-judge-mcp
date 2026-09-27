@@ -8,9 +8,9 @@
   "renderer_sha256": "702af93ddb729b2316e074b7756312671ff5ae254f24d3f58e3ef3764ea8eeb8",
   "assignments": {
     "R1": "elkaix",
-    "R2": "elkaix",
-    "R3": "elkaix"
+    "R2": "elkholy90",
+    "R3": "unicorn"
   },
-  "distinct_humans_confirmed": false,
+  "distinct_humans_confirmed": true,
   "status": "awaiting_human_reviews"
 }

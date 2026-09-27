@@ -1,6 +1,6 @@
 """Adapt the public JevBench items to this repo's eval harness (A8 preparation).
 
-JevBench (MIT) is a third-party benchmark for Jev-class typed decision
+JevBench (`fstandhartinger/jevbench`, MIT) is a third-party benchmark for Jev-class typed decision
 models; its published measurement of Jev 1.13.0 is the external anchor this repo currently lacks.
 This module READS a JevBench checkout as data — it never executes the harness, whose code is
 untrusted here — and converts its public items into this repo's dataset/manifest formats, so the

@@ -560,8 +560,12 @@ def live(
     if agent == "pi":
         from evals.bench import pi
 
-        if not pi.ADAPTER.is_file():
-            raise BenchRefusedError(f"pi MCP adapter not found at {pi.ADAPTER}")
+        try:
+            adapter = pi.adapter_path()
+        except pi.AdapterMissing as error:
+            raise BenchRefusedError(str(error)) from error
+        if not adapter.is_file():
+            raise BenchRefusedError(f"PI_MCP_ADAPTER is not a file: {adapter}")
         parse = pi.parse
         setup = Setup(
             agent=lambda _item, _arm: [binary],

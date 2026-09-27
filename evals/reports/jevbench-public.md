@@ -18,6 +18,7 @@ run does.
 ## Method
 
 - **Date:** 2026-09-26.
+- **Source:** JevBench (`fstandhartinger/jevbench`, MIT), pinned commit `1bcc55eb6c8cffde2306b3db03ede39b61c6152a`.
 - **Model:** `jev-1.13.0`, pinned (TypeSafe provider); the guarded runner aborts on any other
   reported model.
 - **Tool:** `jev_classify`, one call per item, at most one provider request per call (`NO_RETRIES`),
