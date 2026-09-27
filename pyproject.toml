@@ -47,6 +47,22 @@ dev = [
     "pytest-benchmark",
 ]
 
+# uv caches a build of this directory until a cache key changes. The defaults are only
+# pyproject.toml, setup.py, setup.cfg, and whether src/ exists, so a source edit that
+# leaves those untouched is what `uvx --from .` runs. Declaring cache-keys replaces the
+# defaults, so pyproject.toml stays listed. A missing git directory is ignored, so an
+# sdist build still works. uv 0.9.x tool environments ignore these keys; the smoke test
+# passes `--no-cache` so that stage cannot serve a stale wheel.
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "src/**/*.py" },
+    { file = "src/**/*.md" },
+    { file = "src/**/*.typed" },
+    { file = "src/**/LICENSE" },
+    { git = { commit = true } },
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
