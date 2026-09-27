@@ -43,7 +43,9 @@ as the transient connection failure it is.
 - **Backoff 0.5 s doubling to a 5.0 s cap, 25% subtractive jitter**: the SDK's default shape.
 - **`Retry-After` (delay seconds or HTTP date) and `retry-after-ms` honored, capped at 5 s**: the
   SDK honors the headers but not a cap; an unbounded server-chosen wait is not a bounded policy.
-- **Per-attempt timeout 30 s.** Jev's published provider latency is 70–500 ms (`docs/ROADMAP.md`).
+- **Per-attempt timeout 30 s.** Measured provider latency in this repo's records is 70–500 ms
+  (`docs/ROADMAP.md`); the official pages say most queries complete in about 100 ms
+  (https://docs.typesafe.ai/concepts/how-to-build-with-system-one.md).
   The measured bench150 round trips — through the whole MCP server, so an upper bound on provider
   latency — ran median 464.6 ms, p90 1245.3 ms, p95 1468.8 ms over n=157 calls
   (`evals/reports/bench150.md`). 30 s is ~20× the measured p95, and it matches the whole-call
@@ -110,3 +112,11 @@ and deterministic.
 - `Runtime`'s docstring claim ("no deadline") narrows to "no whole-call deadline".
 - Replay fixtures, contract fixtures, and paid runs must pass `NO_RETRIES`; the injection point is
   the provider constructor's `retry` parameter, and nothing else.
+
+## Amendment (2026-09-27): the reference timeout claim, and the latency cite
+
+`stdio-attempt-deadline`'s reference sentence that no provider request carries a timeout anywhere
+in askJev is withdrawn. askJev passes no timeout of its own, but the typesafe path inherits the
+pinned SDK 0.6.0 default of 10s per attempt. The fetch-based providers still pass no timeout.
+The 30 s choice above does not depend on calling 70–500 ms a published official figure; that range
+is this repo's recorded calls, and the official pages say about 100 ms.

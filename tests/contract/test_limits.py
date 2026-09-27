@@ -189,7 +189,7 @@ def test_extension_tool_caps_are_owned_by_the_adr() -> None:
     schema = score.DEFINITION.input_schema
     levels = schema["properties"]["levels"]
     assert levels["minItems"] == SCORE.levels_min == 2
-    assert levels["maxItems"] == SCORE.levels_max == 10  # docs/jev_docs/primitives.md: 1-10 levels
+    assert levels["maxItems"] == SCORE.levels_max == 10  # docs/jev_docs/primitives.md: 2-10 levels
     assert levels["items"]["maxLength"] == SCORE.level_units_max == 200
     assert schema["properties"]["subject"]["maxLength"] == SCORE.subject_max == 1500
     assert schema["properties"]["context"]["maxLength"] == SCORE.context_max == 12_000

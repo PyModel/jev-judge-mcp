@@ -161,8 +161,9 @@ class GateCaps:
 class ScoreCaps:
     """jev_score (extension tool, ADR-0048): no parity-manifest block exists, so the ADR owns every value.
 
-    Levels follow the documented score question space (`docs/jev_docs/primitives.md`: 1-10 levels,
-    at least 2 preferred; `ScoreQuestion` itself rejects fewer than two before sending). Text bounds
+    Levels follow the documented score question space (`docs/jev_docs/primitives.md`: 2-10 levels,
+    at least two, and the API takes up to 10; `ScoreQuestion` itself rejects fewer than two before
+    sending). Text bounds
     mirror the house scale for judgment inputs: a decide-sized subject budget, a class-description
     scale per level, presence-only for the optional context.
     """

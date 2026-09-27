@@ -43,27 +43,32 @@ backticked paths. Two rules follow:
   objects — so keep each claim self-contained and in a stable order.
 - **Send what the question needs, and no more.** Extra unrelated state lowers accuracy. The API
   budget is 64k tokens for the request and 32k for `state` plus the longest question
-  (https://docs.typesafe.ai/models.md). This server also truncates some inputs at a UTF-16 cap and
-  marks the cut ([`docs/reference/limits.md`](reference/limits.md)); a judgment over cut context
-  never gets action `auto`. When you must cut, cut at a boundary you can defend — a section, a
-  function, a message — not a blind character count.
+  (https://docs.typesafe.ai/models.md). An input inside this server's UTF-16 caps can still exceed
+  that window. The server does not count tokens, so that failure comes back as `provider`,
+  not `input_too_large`. This server also truncates some inputs at a UTF-16 cap and marks the cut
+  ([`docs/reference/limits.md`](reference/limits.md)); a judgment over cut context never gets action
+  `auto`. When you must cut, cut at a boundary you can defend — a section, a function, a message —
+  not a blind character count.
 
 ## Write options that separate, with a catch-all that deserves its name
 
-- **Describe every option.** Names alone are weak. A short description per option is what separates
-  lookalikes (https://docs.typesafe.ai/primitives/choice.md).
+- **Describe lookalike options.** A short description is what separates options that are easy to
+  confuse (https://docs.typesafe.ai/primitives/choice.md). A description may be `null` when the name
+  is already clear. A missing description does not separate lookalikes.
 - **Keep a generic option and a catch-all apart.** If the list may not cover the input, add an
   `other` or `none` option and say in its description what belongs there — and nothing else.
   `jev_decide` ships its own escape hatches (`ask_user`, `investigate`, `none`), so a decision among
   candidates you wrote down does not need your own `other`.
 
-## Keep rules out of the question
+## Domain rules go in the question; deterministic rules stay in code
 
-Jev reads the question literally. Put the facts in the state, the boundaries in the option or level
-descriptions, and deterministic rules in your code
-(https://docs.typesafe.ai/model-jaggedness/jev-1.13.md). This server already splits those jobs: the
-model judges, policy decides (ADR-0002). If a question needs "unless", "except", or "but only when"
-to be answerable, it is several questions.
+Jev reads the question literally. Encode domain rules and boundary cases in the instructions and in
+the option or level descriptions
+(https://docs.typesafe.ai/models.md, https://docs.typesafe.ai/model-jaggedness/jev-1.13.md).
+Counting, dates, and control flow are deterministic rules and stay in your code
+(https://docs.typesafe.ai/concepts/how-to-build-with-system-one.md). This server already splits that
+second job from policy: the model judges, policy decides (ADR-0002). If a question needs "unless",
+"except", or "but only when" to be answerable, it is several questions.
 
 ## One pass is not multi-step
 
@@ -77,8 +82,10 @@ first answer is needed to gather the next evidence.
 
 - A **noul** answer gives you a probability; threshold it. 0.5 is uncertainty, not "medium".
 - A **choice** answer gives you `probabilities` and a `confidence` (how peaked the distribution is —
-  not how likely it is correct). Threshold the top probability, and for statistical rules read the
-  distribution, not just the argmax.
+  not how likely it is correct). Threshold `confidence`; that is the docs' default, and you can
+  define your own (https://docs.typesafe.ai/confidence.md). This server's classify, compare, and
+  extract policy also thresholds the top probability and the margin; verify and gate threshold
+  `confidence`. For statistical rules, read the distribution, not just the argmax.
 - A **score** answer gives you a probability-weighted position; threshold it against levels, and do
   not interpolate a magnitude between them.
 - Unknown confidence never meets a threshold; a fail-closed answer keeps its row off `auto`.
@@ -93,4 +100,7 @@ Per-call thresholds are documented per tool in [`docs/reference/limits.md`](refe
 
 What is certified on Jev traffic so far — and what is not — is recorded in
 [`docs/EVIDENCE.md`](EVIDENCE.md). The frozen defaults are parity defaults from the reference
-implementation, not operating points fitted on your traffic.
+implementation, not operating points fitted on your traffic. Official guidance is to pin the versioned model id once you tune a threshold against a version (https://docs.typesafe.ai/models.md).
+This server still defaults to `jev-latest`. Live evals pin `jev-1.13.0`; the default stays the alias
+because these bars are parity values, not tuned on that version. `calibrate` reports a threshold and
+tells you to pin the model you measured; it does not change the default.

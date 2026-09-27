@@ -43,10 +43,11 @@ def uniform() -> float:
 class RetryPolicy:
     """The bounded retry shape every provider is driven by (ADR-0057).
 
-    The defaults are the typesafe-sdk `RetryPolicy` defaults (max 2 retries, 0.5 s backoff doubling
-    to 5 s, 25% subtractive jitter, 408/429/5xx, `Retry-After` honored) plus two bounds the SDK
-    leaves open: a 30 s per-attempt timeout and a 90 s overall budget — three attempts at their
-    30 s deadline. Evidence for the numbers is recorded in ADR-0057.
+    The retry counts, backoff, jitter, and status set match the typesafe-sdk `RetryPolicy` defaults
+    (max 2 retries, 0.5 s backoff doubling to 5 s, 25% subtractive jitter, 408/429/5xx, `Retry-After`
+    honored). The SDK in use (0.7.1) does not leave those deadlines unset: `constants.DEFAULT_TIMEOUT`
+    is 10 s per HTTP operation, and `RetryPolicy.timeout` is a 30 s total retry budget. This policy's
+    30 s per-attempt timeout and 90 s overall budget are this server's bounds (ADR-0057), not SDK gaps.
     """
 
     max_attempts: int = 3

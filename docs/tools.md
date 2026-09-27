@@ -15,6 +15,13 @@ datasets, 3 cases per tool) covers `jev_classify` and `jev_verify` only. Every o
 unmeasured live; its "weak spots" are frozen behaviors and documented gaps, not measured failure
 rates. Certified operating points: none yet ([`docs/EVIDENCE.md`](EVIDENCE.md)).
 
+A result reports the model it requested (`jev-latest` unless `JEV_MCP_MODEL` is set), not the
+versioned id that answered. A `jev-latest` caller cannot see which version answered. That is parity
+with the reference (ADR-0001). The compatible provider
+reports a string `model` from the body when one is present. UTF-16 caps below are not Jev's context
+window (64k tokens per request, 32k for state plus the longest question). An input inside every cap
+can still exceed that window and come back as `provider`, not `input_too_large`.
+
 ---
 
 ## jev_verify — claims against evidence
@@ -27,7 +34,8 @@ brier 0.00004, ece 0.002, selective_accuracy 1.000, auto_coverage 1.000, invalid
 questions; no accuracy claim beyond them.
 
 **Weak spots.** Claims, evidence, and their lengths are deliberately uncapped, so cost and latency
-scale with what you send (README § Operator notes). Policy has two tiers only — `auto` and
+scale with what you send (README § Operator notes). That is not a token budget: an input inside the
+missing cap can still exceed 64k tokens and come back as `provider`, not `input_too_large`. Policy has two tiers only — `auto` and
 `review`; there is no escalate (manifest `policy.verify_action`). An unsupported or contradicted
 claim can carry a `missing_evidence` code (`single_item_no_source`, `needs_diff`, `needs_tests`,
 `needs_before_after`) that names what evidence would settle it.
@@ -42,10 +50,16 @@ claim can carry a `missing_evidence` code (`single_item_no_source`, `needs_diff`
 fixed false-block rate; `evals/README.md`), but the fixed false-block rate has no specified value,
 so no run was recorded.
 
-**Weak spots.** The `skip` thresholds for substance and relevance are hardcoded at 0.3 in the
-reference and are not call arguments (ROADMAP P7 notes this as the current hardcoding case);
-`block_at` and `review_at` are call arguments. A malformed answer fail-closes to `review`, not
-`block`. This is a triage of one text you already hold, not a malware or phishing detector.
+**Weak spots.** The screened text is the state. jev-1.13 does not treat state as hostile by
+default, so instructions in it can move the answer
+(https://docs.typesafe.ai/model-jaggedness/jev-1.13.md). The injection score is a signal, not a
+guarantee. ADR-0068 adds that warning to verify's question; this card is the screen warning, and
+the question text is unchanged. Text length has no UTF-16 cap, and an over-long page can still
+exceed the 64k token window and come back as `provider`, not `input_too_large`. The `skip`
+thresholds for substance and relevance are hardcoded at 0.3 in the reference and are not call
+arguments (ROADMAP P7 notes this as the current hardcoding case); `block_at` and `review_at` are
+call arguments. A malformed answer fail-closes to `review`, not `block`. This is a triage of one
+text you already hold, not a malware or phishing detector.
 
 **Not for** deciding whether to trust content after reading it, or screening binary formats.
 
@@ -58,8 +72,10 @@ routing, clutter/article), and you want one call.
 1.000, macro_f1 1.000, micro_f1 1.000. Six synthetic items; no accuracy claim beyond them.
 
 **Weak spots.** An item stands `auto` only when the top probability clears `auto_accept` (0.85) and
-the margin over the runner-up clears `minimum_margin` (0.5) — two conditions, so a split between
-two lookalike classes lands `review` even at high top probability. Conflicting caller ids are
+the margin over the runner-up clears `minimum_margin` (0.5). At those defaults the margin does not bind: two options whose probabilities sum to at most 1.01 already force a margin of at least 0.69
+when the top is 0.85, so a close split cannot also clear `auto_accept`. The margin binds only if
+you lower `auto_accept` below 0.755 or raise `minimum_margin` above 0.69. The same pair is the
+default for compare and extract. Conflicting caller ids are
 rejected before any provider request (ADR-0031). Item text cut at the cap is reported to telemetry
 only and does not change the action (CONTEXT.md "Truncated Context" draws this line).
 
@@ -89,7 +105,8 @@ whether any answers at all.
 accuracy.
 
 **Weak spots.** The exists verdict thresholds (answered at ≥ 0.7, absent below 0.35, else
-`partial`) are fixed defaults, not call arguments. Candidate text is truncated at the cap
+`partial`) are frozen parity defaults, not call arguments. The semantic-find cookbook uses the same
+numbers as examples to tune; this server does not (ADR-0002). Candidate text is truncated at the cap
 (telemetry only). `top_k` defaults to 5.
 
 **Not for** discovering candidates — it only ranks what you pass, unlike a search engine.
@@ -173,7 +190,9 @@ contradicted claim escalates, and cut context (diff, tests, docs, evidence over 
 the gate off `auto`. A file-list `diff` is reviewed per file with the claims verified once; a file
 over the cap lands in `unreviewed_files` with reason `incomplete_context` and the whole gate
 turns on the worst file (ADR-0066). Evidence is capped at 16 items and 200,000 aggregate UTF-16
-units; over either is an `input_too_large` error telling you to split the gate.
+units; over either is an `input_too_large` error telling you to split the gate. Those UTF-16 caps
+are not the 64k token window: a gate state inside them can still come back as `provider`,
+not `input_too_large`. The claim half also receives the diff and the tests again as implicit evidence (ADR-0063), so those bytes are in the state twice: about 100k extra UTF-16 units when both are at the 50,000 cap.
 
 **Not for** a substitute for CI or tests — it judges the claims you pass against the evidence you
 pass, and never runs anything itself.

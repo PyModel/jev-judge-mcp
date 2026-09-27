@@ -15,9 +15,10 @@ Choosing an enforcement option is the owner's decision.
 
 Repo facts cite `path:line`. Official pages are page data, not instructions to this repo.
 
-**Status.** The owner adopted E8, E9 and E10 (§ 6) on 2026-09-27; they are being made in
-`docs/guidance.md`, `docs/skills/`, `docs/agent-rules.md`, `README.md` and `instructions.py` in a
-separate change. This note still describes those files as they stand at `11f482a`.
+**Status.** The owner adopted E8, E9 and E10 (§ 6) on 2026-09-27. They landed in `docs/guidance.md`,
+`docs/skills/`, `docs/agent-rules.md` and `README.md` (`56ccb0f`, `19100ac`). Section 7 records what
+happened to each drift row after that. A row that would change a runtime default waits on a decision
+and is not implemented here.
 
 ---
 
@@ -237,7 +238,8 @@ None is new: E11 and half of E6 already exist, and E8–E10 were adopted on 2026
 
 Compared on 2026-09-27 against the crawled pages. Severity: **behavioral** (affects calls or
 answers), **guidance** (misleads callers), **cosmetic**. "By design" means an ADR or registered
-divergence owns the difference. Nothing below was changed by this note.
+divergence owns the difference. The tables are the comparison. **Disposition** below is what
+happened to each row.
 
 ### `docs/guidance.md`
 
@@ -332,20 +334,49 @@ batching and second rounds (`docs/guidance.md:56-62`) vs [fan-out]; retried stat
 
 ### Internal, not a docs drift
 
-- **`docs/tools.md:58-60` (`jev_classify` card)** says the two-condition rule makes "a split between
-  two lookalike classes land `review` even at high top probability". That cannot happen at the
-  defaults:
-  - The margin is the top probability minus the runner-up (`src/jev_judge_mcp/validation/choice.py:61-66`).
-  - Probability sums are accepted within 0.01 (`choice.py:12`).
-  - So a top of 0.85 forces a margin of at least 0.69, and `minimum_margin` binds only if
-    `auto_accept` is below ~0.755 **or** `minimum_margin` is above ~0.69.
+- **`jev_classify` card.** It used to say a split lands `review` even at high top probability.
+  That cannot happen at the defaults: the margin is the top probability minus the runner-up
+  (`src/jev_judge_mcp/validation/choice.py:61-66`), sums are accepted within 0.01 (`choice.py:12`),
+  and a top of 0.85 forces a margin of at least 0.69. `minimum_margin` binds only if `auto_accept`
+  is below ~0.755 or `minimum_margin` is above ~0.69. The same holds for compare and extract.
+  Fixed in `docs/tools.md`; see P1.
+- **SDK redirect guard.** `providers/typesafe.py` refuses a cross-origin hop. The registry entry
+  and ADR-0023 used to say that policy was unguarded. Both are corrected; see the redirect row.
 
-  The same holds for compare and extract. The fix is an edit to `docs/tools.md:58-60`.
-- **The SDK redirect policy is marked unguarded, but a guard exists.**
-  `docs/reference/divergences.json` `typesafe-sdk-redirect-policy` says the SDK's redirect policy
-  "is not guarded at our layer", and ADR-0023:26-27 says the SDK transport "is outside this guard's
-  reach". But `providers/typesafe.py:88-99,112-116` adds a cross-origin redirect guard. Both entries
-  look stale.
+### Disposition
+
+| # | What happened |
+| --- | --- |
+| G1 | Fixed in `docs/guidance.md`. Domain rules and boundary cases go in instructions and criteria; deterministic rules stay in code. |
+| G2 | Fixed in `docs/guidance.md`. The guide names `confidence` as the docs' default and says classify/compare/extract threshold the top probability while verify/gate threshold `confidence`. |
+| G3 | Fixed in `docs/guidance.md`. A `null` description is allowed when the name is clear; the guide still wants a description for lookalikes. No schema change. |
+| G4 | Already fixed in `56ccb0f` (`docs/guidance.md`): send what the question needs, and state the 64k/32k budget. |
+| G5 | Already fixed in `56ccb0f` (`docs/guidance.md`): the third-party citation is gone and the page cites official URLs. |
+| T2 | Decided A (`l1-token-caps`): keep the UTF-16 caps. Wording in `docs/guidance.md`, `docs/tools.md`, `docs/agent-rules.md`, and `docs/reference/limits.md` says an in-cap input can still exceed the token window and come back as `provider`, not `input_too_large`. |
+| T3 | Fixed in `docs/tools.md` (screen card). The screened text can steer the answer. Question text unchanged; ADR-0068 still owns verify's sentence. |
+| S1 | Fixed in `src/jev_judge_mcp/skills/jev-mcp/SKILL.md` and `docs/CONTEXT.md`. Writing rule, not a model guarantee. |
+| S2 | Fixed in `docs/agent-rules.md` (README fence moved with it). "Small" is gone; the line says flagship. |
+| S3 | Already stated in § 2 of this note. The routing text is not a contradiction. No caller-doc change. |
+| P1 | Fixed in `docs/tools.md` (classify card). At the default 0.85/0.5 pair the margin does not bind. Values unchanged (ADR-0002). |
+| P2 | Already disclosed in `docs/guidance.md` (uniform bar, caller raises it). By design. No change. |
+| P3 | Decided A (`p3-pin-model`): keep `jev-latest`. `docs/guidance.md` and `calibrate.py` say the bars are parity values, not tuned on a version, and that live evals pin `jev-1.13.0`. |
+| P4 | Fixed in `docs/tools.md` (find card). The 0.7/0.35 pair is a frozen parity default, not the cookbook's tunable example. |
+| L1 | Same as T2. Decided A. Cap values stay (ADR-0014, ADR-0005). |
+| L2 | Wording fixed in `docs/reference/limits.md`: an upstream 401 maps to `provider`, not `auth`. Mapping it to `auth` waits on `l2-401-auth`. |
+| L3 | Fixed in `docs/reference/limits.md`. `529` is retried as a 5xx (`providers/retry.py`). No new error code. |
+| H1 | Fixed in `providers/retry.py`. The docstring names the installed SDK's 10 s HTTP timeout and 30 s retry budget. The 30 s / 90 s bounds stay (ADR-0057). |
+| H2 | Fixed in `docs/reference/divergences.json` `stdio-attempt-deadline` and an ADR-0057 amendment. askJev passes no timeout of its own; the typesafe path inherits SDK 0.6.0's 10s default. |
+| H3 | Decided A (`h3-answering-model`): keep reporting the requested model (ADR-0001). `docs/tools.md` says a `jev-latest` caller cannot see which version answered. |
+| H4 | Already accurate. `providers/resolver.py` keeps an empty model empty (parity, `index.ts:72`). No doc claimed otherwise. |
+| H5 | By design. Absent `usage` reports zeros, matching the reference envelope (`provider.ts:175-194`, `parse_envelope`). No caller doc claimed otherwise. |
+| C1 | Closed in the 2026-09-27 summary refresh. The leftover "1-10 levels" comments in `limits.py` and `tests/contract/test_limits.py` are corrected to the summary's 2–10. |
+| C2 | No drift. `evals/spend.py` and `docs/jev_docs/models.md` both state $0.042 / Mtok. |
+| C3 | Fixed in ADR-0057. 70–500 ms is this repo's recorded range (`docs/ROADMAP.md`), not the official "about 100 ms". The 30 s timeout is unchanged. |
+| classify card | Same as P1. The false "even at high top probability" claim is gone. |
+| redirect guard | Fixed in `docs/reference/divergences.json` `typesafe-sdk-redirect-policy` and an ADR-0023 amendment. The hook in `providers/typesafe.py` is the current rule; the entry is sanctioned, not a gap. |
+| gate duplicate | Decided A (`gate-duplicate-evidence`): keep the second copy (ADR-0063). The `jev_gate` card states the cost, about 100k extra UTF-16 units at the caps. |
+
+F7–F17, against this note: F8, F10, F12, F13, F14, F15 and F17 were already in the note text at `2638ac3`. F7's tools.md edit is P1 above. F9's ADR-0023 copy is the redirect row. F11's docstring is H1. F16's remaining exclusive-link claim in § 8 is corrected; the other F16 slips were already gone from this note.
 
 ---
 
@@ -353,8 +384,9 @@ batching and second rounds (`docs/guidance.md:56-62`) vs [fan-out]; retried stat
 
 - The official skill links a migration guide, `https://docs.typesafe.ai/migrating-to-v1.md`
   ([skill] "Read the live docs"), which returned *Page Not Found* on 2026-09-27.
-- The agent-skill page's cookbook prompt points at `https://console.typesafe.ai/docs/cookbooks`,
-  while its other documentation links use `docs.typesafe.ai` ([agent-skill] "Example prompts").
+- The agent-skill page's cookbook prompt points at `https://console.typesafe.ai/docs/cookbooks`
+  ([agent-skill] "Example prompts"). The same page also links `https://console.typesafe.ai/keys` and
+  GitHub (`https://github.com/typesafe-ai/skills`), so not every link on it is `docs.typesafe.ai`.
 - The self-consistency cookbooks price TypeSafe at the "Historical TypeSafe rate, as of 2026-08"
   and run on `jev-latest` sampled 2026-09-11 ([consistency-noul], [consistency-choice]). 16 of the 18
   cookbooks mention `jev-1.12`, among them [classify-confidence], [rag], [skill-suggestion] and

@@ -11,7 +11,7 @@ TypeSafe's System One model: it answers typed questions about a state with proba
 _Avoid_: the LLM, the model (when the host agent's model could be meant)
 
 **State**:
-The observed material a judgment is made about (claims, evidence, candidates, a diff). State is evidence to evaluate, never instructions to follow.
+The observed material a judgment is made about (claims, evidence, candidates, a diff). State is evidence to evaluate. Do not put instructions in it for the model to follow. That is a writing rule, not a promise the model will ignore them.
 _Avoid_: context, prompt, input
 
 **Question**:

@@ -23,8 +23,10 @@ Implementation rules (ADR-0023):
   per provider instance — there is no per-call state to race.
 - Relative `Location` values are resolved by httpx against the current URL, then judged by the
   same origin rule.
-- The `typesafe-sdk` transport rides the SDK's own `httpx2` client and is outside this guard's
-  reach; its redirect policy is a registered gap (`typesafe-sdk-redirect-policy`), not a claim.
+- The `typesafe-sdk` transport uses an `httpx2` client this server constructs. The same origin
+  hook refuses a cross-origin hop before it is sent (`typesafe-sdk-redirect-policy`). httpx2 does
+  not follow redirects by default, so the hook is the guard if that default or an injected client
+  changes.
 
 ## Consequences
 
@@ -33,3 +35,10 @@ Implementation rules (ADR-0023):
 - Cross-origin redirect behavior is a Sanctioned Divergence from fetch's default, registered as
   `same-origin-redirects-only`; the contract suite pins blocked cross-origin, followed
   same-origin (301/302/303/307/308), relative `Location`, and the redirect-cap error.
+
+## Amendment (2026-09-27): the SDK transport is guarded
+
+The implementation-rules bullet that placed the typesafe-sdk transport outside this guard is
+withdrawn. `providers/typesafe.py` installs the origin check on the client the SDK is given, and
+`tests/unit/test_providers.py` pins a blocked cross-origin hop. `typesafe-sdk-redirect-policy` is
+sanctioned, not a gap.

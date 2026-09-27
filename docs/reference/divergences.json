@@ -164,7 +164,7 @@
         "tests/contract/test_provider_retries.py"
       ],
       "fixtures": [],
-      "reference_behavior": "No provider request carries a timeout anywhere in askJev; a provider that stops answering keeps the tool call waiting until the client cancels.",
+      "reference_behavior": "askJev passes no timeout of its own. The typesafe path still gets the pinned SDK 0.6.0 default of 10s per attempt; the fetch-based providers pass no timeout, so a hung connection waits until the client cancels.",
       "python_behavior": "Runtime.ask still passes no whole-call deadline (the client's MCP cancellation is the recovery path for the call), but every provider attempt is bounded by the retry policy's 30 s per-attempt deadline and the whole bounded sequence by its 90 s budget, so a hung connection becomes a bounded, retryable failure and a transient one is retried (ADR-0057)."
     },
     {
@@ -211,14 +211,15 @@
       "id": "typesafe-sdk-redirect-policy",
       "surface": "provider",
       "tier": "both",
-      "status": "gap",
+      "status": "sanctioned",
       "adr": "docs/adr/0023-same-origin-redirects-only.md",
       "tests": [
-        "tests/contract/test_providers.py"
+        "tests/contract/test_providers.py",
+        "tests/unit/test_providers.py"
       ],
       "fixtures": [],
       "reference_behavior": "Node fetch follows redirects, including cross-origin, with the request body.",
-      "python_behavior": "The typesafe-sdk transport rides the SDK's own httpx2 client; its redirect policy is not guarded at our layer and is unaudited (ADR-0023 scope note)."
+      "python_behavior": "The typesafe-sdk transport uses an httpx2 client this server constructs; a request hook refuses a cross-origin hop before it is sent. httpx2 does not follow redirects by default, so the hook is the guard if that default or an injected client changes."
     },
     {
       "id": "initialize-capabilities-unverified",

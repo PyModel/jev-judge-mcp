@@ -12,6 +12,11 @@ all three in one change.
 Text lengths are UTF-16 code units, JavaScript's `.length` (ADR-0005) — not Python code points.
 Astral-plane characters (emoji, some CJK) count as two.
 
+These caps are not Jev's context window. The model accepts 64k tokens per request and 32k for
+`state` plus the longest question (https://docs.typesafe.ai/models.md). An input inside every cap
+on this page can still exceed that window. The server does not count tokens, so that failure comes
+back as `provider`, not `input_too_large`.
+
 ## The three behaviors at a bound
 
 1. **Reject** — the argument schema refuses the call. The result is an `isError` result whose text
@@ -37,10 +42,12 @@ block (ADR-0062). `src/jev_judge_mcp/responses.py` `error_code` is the mapping.
 | --- | --- |
 | `invalid_arguments` | a schema reject (every row marked reject below); an unknown tool; duplicate caller ids; a decide candidate id colliding with an escape hatch; a diff that is not the file-list shape; a broken `auto_accept`/`review_at` pair (the frozen text `Thresholds must satisfy 0 <= review_at <= auto_accept <= 1.`) |
 | `input_too_large` | every frozen budget refusal marked error below: the aggregate character budgets, jev_gate's item-count budget, and the file-list diff budget. `tests/contract/test_limits.py` pins each frozen budget text to this code |
-| `auth` | no provider credentials; the hook's fail-open text |
+| `auth` | no provider credentials; the hook's fail-open text. An upstream 401 is not this code: it maps to `provider` |
 | `timeout` | a provider timeout |
 | `quota` | HTTP 429 / rate limit |
-| `provider` | any other provider failure |
+| `provider` | any other provider failure, including an upstream 401 (a rejected key looks like an outage) |
+
+`529 Overloaded` is retried as a 5xx (`providers/retry.py`). A final failure is `provider` or `timeout`, not its own code.
 
 ## Input caps, per tool
 

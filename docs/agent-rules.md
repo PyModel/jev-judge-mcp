@@ -5,7 +5,7 @@
 
 ### Fast judgment checks — and when to skip them
 
-Jev (TypeSafe) is a small judgment model served by the jev-judge-mcp MCP server: its tools take
+Jev (TypeSafe) is TypeSafe's flagship judgment model served by the jev-judge-mcp MCP server: its tools take
 evidence plus a question with a fixed answer set and return typed probabilities, not text. Call a
 `jev_*` tool (`mcp__jev__*` in Claude Code) when a step judges material you already have — a
 bounded check, a pick-one, a rank, a match-the-claim — and an independent typed judgment is worth
@@ -29,7 +29,7 @@ Jev is invoked when an unresolved judgment earns a model decision. Deterministic
 | `jev_extract` | Your regex proposes candidates, Jev picks, the value comes back verbatim (versions, prices, dates, IDs) | 50,000 units per document, ≤32 fields |
 | `jev_score` | Grade severity or risk on your own ordered rubric; threshold the level, never interpolate a magnitude between levels | 2–10 levels |
 
-Caps are UTF-16 code units, frozen in the server's `limits.py`.
+Caps are UTF-16 code units, frozen in the server's `limits.py`. "no length bound" is not a token budget: Jev's context is 64k tokens per request, and an input inside the table can still come back as `provider`, not `input_too_large`.
 
 Rules:
 

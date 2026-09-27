@@ -31,7 +31,9 @@ from jev_judge_mcp.policy import PolicyThresholds, resolve_policy_thresholds
 USAGE = "usage: jev-judge-mcp calibrate <rows.jsonl> [--tool TOOL] [--max-error P] [--min-rows N]\n"
 ADVISORY = (
     "advisory only: this command reports a threshold for your traffic; it never changes the frozen"
-    " defaults in policy/thresholds.py (moving a frozen default is a Sanctioned Divergence)"
+    " defaults in policy/thresholds.py (moving a frozen default is a Sanctioned Divergence)."
+    " If you adopt the recommendation, pin the model version you measured against; the server"
+    " default stays jev-latest until an ADR says otherwise"
 )
 DEFAULT_MIN_ROWS = 40
 """Below this the certified bound is noise; the guard refuses instead of guessing."""

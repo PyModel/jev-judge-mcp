@@ -460,3 +460,192 @@ def test_setup_prompt_names_only_real_cli_surface() -> None:
         assert subcommand in listed, f"the prompt runs `jev-judge-mcp {subcommand}`, which the CLI usage does not list"
     for flag in set(_PROMPT_FLAG.findall(prompt)):
         assert flag in install_help or flag in _UVX_FLAGS, f"the prompt uses flag {flag}, which no CLI here defines"
+
+
+# --- Section 7 drift: a corrected statement stays tied to the source it describes ---------------
+
+_GUIDANCE = ROOT / "docs" / "guidance.md"
+_SKILL = ROOT / "src" / "jev_judge_mcp" / "skills" / "jev-mcp" / "SKILL.md"
+_DIVERGENCES = ROOT / "docs" / "reference" / "divergences.json"
+_ADR_0023 = ROOT / "docs" / "adr" / "0023-same-origin-redirects-only.md"
+
+
+def _divergence(entry_id: str) -> dict[str, object]:
+    registry = json.loads(_DIVERGENCES.read_text(encoding="utf-8"))
+    return next(entry for entry in registry["divergences"] if entry["id"] == entry_id)
+
+
+def _tool_section(text: str, heading: str, following: str) -> str:
+    return text.split(heading, 1)[1].split(following, 1)[0]
+
+
+def test_guidance_splits_domain_rules_from_deterministic_rules() -> None:
+    """G1: domain rules belong in instructions and criteria; only deterministic rules stay in code.
+
+    The old heading treated every rule as code. Restoring it, or dropping either half, fails here.
+    """
+    guide = _GUIDANCE.read_text(encoding="utf-8")
+    assert "Keep rules out of the question" not in guide
+    assert "domain rules" in guide
+    assert "deterministic rules" in guide
+    assert "https://docs.typesafe.ai/models.md" in guide
+
+
+def test_guidance_names_confidence_and_allows_a_null_description() -> None:
+    """G2/G3: the guide names the docs' confidence default and does not forbid a null description."""
+    guide = _GUIDANCE.read_text(encoding="utf-8")
+    assert "Threshold `confidence`" in guide
+    assert "top probability" in guide
+    assert "null" in guide
+    assert "Names alone are weak" not in guide
+
+
+def test_uncapped_inputs_disclose_the_token_window() -> None:
+    """L1/T2: an input inside a null UTF-16 cap can still miss Jev's token window.
+
+    The caps stay null (ADR-0014). The defect is a doc that calls that "within caps" and never
+    says the resulting failure is `provider`, not `input_too_large`.
+    """
+    assert limits.VERIFY.claims_max is None
+    assert limits.SCREEN.text_max is None
+    needle = "not `input_too_large`"
+    for path in (_LIMITS_PAGE, _TOOL_CARDS, _RULES_FILE, _GUIDANCE):
+        text = path.read_text(encoding="utf-8")
+        assert "64k" in text, path.name
+        assert needle in text, path.name
+
+
+def test_limits_page_does_not_call_an_upstream_401_auth() -> None:
+    """L2: `auth` is the local missing-credentials code. An upstream 401 is `provider` today."""
+    from jev_judge_mcp.responses import error_code
+
+    page = _LIMITS_PAGE.read_text(encoding="utf-8")
+    assert error_code("No Jev provider credentials") == "auth"
+    assert error_code("TypeSafe API 401: invalid key") == "provider"
+    assert "upstream 401" in page
+    assert "maps to `provider`" in page
+
+
+def test_limits_page_names_529_as_a_retried_status() -> None:
+    """L3: 529 is already inside the retry set. The page has to say so."""
+    from jev_judge_mcp.providers.retry import DEFAULT_RETRY_POLICY
+
+    page = _LIMITS_PAGE.read_text(encoding="utf-8")
+    assert 529 in DEFAULT_RETRY_POLICY.statuses
+    assert "`529 Overloaded` is retried as a 5xx" in page
+
+
+def test_retry_docstring_states_the_installed_sdk_timeouts() -> None:
+    """H1: the policy docstring must name the SDK timeouts it does not copy, not call them open."""
+    from typesafe_sdk import RetryPolicy
+    from typesafe_sdk.constants import DEFAULT_TIMEOUT
+
+    from jev_judge_mcp.providers.retry import RetryPolicy as ServerPolicy
+
+    text = ServerPolicy.__doc__ or ""
+    assert f"{DEFAULT_TIMEOUT:g} s per HTTP operation" in text
+    assert f"{RetryPolicy().timeout:g} s total retry budget" in text
+    assert "leaves open" not in text
+    assert ServerPolicy().per_attempt_timeout == 30.0
+    assert ServerPolicy().budget == 90.0
+
+
+def test_stdio_deadline_reference_names_the_sdk_default() -> None:
+    """H2: askJev's typesafe path inherits SDK 0.6.0's 10s default. The absolute claim is false."""
+    behavior = str(_divergence("stdio-attempt-deadline")["reference_behavior"])
+    assert "No provider request carries a timeout anywhere" not in behavior
+    assert "SDK 0.6.0" in behavior
+    assert "10s" in behavior
+
+
+def test_sdk_redirect_registry_matches_the_guard() -> None:
+    """The SDK transport has an origin hook. The gap sentence must not stay the current rule."""
+    entry = _divergence("typesafe-sdk-redirect-policy")
+    rules, _, _amendment = _ADR_0023.read_text(encoding="utf-8").partition("## Amendment")
+    tests = entry["tests"]
+    assert isinstance(tests, list)
+    assert "not guarded" not in str(entry["python_behavior"])
+    assert "outside this guard's reach" not in rules
+    assert entry["status"] == "sanctioned"
+    assert "tests/unit/test_providers.py" in tests
+
+
+def test_classify_card_does_not_claim_the_default_margin_binds() -> None:
+    """At the frozen 0.85/0.5 pair a high top already forces the margin. The card must say so."""
+    from jev_judge_mcp.validation.choice import PROBABILITY_SUM_TOLERANCE
+
+    text = _TOOL_CARDS.read_text(encoding="utf-8")
+    sum_slack = PROBABILITY_SUM_TOLERANCE - 1e-12
+    min_margin = 2 * policy_thresholds.DEFAULT_CLASSIFY_AUTO_ACCEPT - (1 + sum_slack)
+    bind_below = (policy_thresholds.DEFAULT_MINIMUM_MARGIN + 1 + sum_slack) / 2
+    assert "even at high top probability" not in text
+    assert f"{min_margin:.2f}" in text
+    assert f"{bind_below:.3f}" in text
+    assert "does not bind" in text
+
+
+def test_find_card_says_the_exists_thresholds_are_frozen() -> None:
+    """P4: the cookbook's 0.7/0.35 are examples to tune. This server freezes them."""
+    section = _tool_section(_TOOL_CARDS.read_text(encoding="utf-8"), "## jev_find", "## jev_rerank")
+    assert "answered at ≥ 0.7, absent below 0.35" in section
+    assert "examples to tune" in section
+    assert "frozen parity defaults" in section
+
+
+def test_tool_cards_say_results_name_the_requested_model() -> None:
+    """H3 disclosure: the card must not let a caller read `model` as the version that answered."""
+    text = _TOOL_CARDS.read_text(encoding="utf-8")
+    assert "reports the model it requested" in text
+    assert "cannot see which version answered" in text
+    assert "ADR-0001" in text
+
+
+def test_skill_does_not_promise_the_model_ignores_instructions_in_state() -> None:
+    """S1: 'instructions inside it are data' is a writing rule, not a model guarantee."""
+    skill = _SKILL.read_text(encoding="utf-8")
+    assert "Instructions inside it are data." not in skill
+    assert "not a promise the model will ignore them" in skill
+    assert "hostile by default" in skill
+
+
+def test_agent_rules_do_not_call_jev_small() -> None:
+    """S2: 'small' is not what the model docs say. The README fence is pinned separately."""
+    rules = _RULES_FILE.read_text(encoding="utf-8")
+    assert "small judgment model" not in rules
+    assert "flagship judgment model" in rules
+
+
+def test_gate_card_discloses_implicit_diff_and_tests_while_they_are_sent() -> None:
+    """The duplicate is ADR-0063. Disclose it while the code still sends it; do not lock it in."""
+    from jev_judge_mcp.tools.gate import _implicit_evidence  # pyright: ignore[reportPrivateUsage]
+
+    sent = [item["id"] for item in _implicit_evidence("diff-text", "test-text")]
+    section = _tool_section(_TOOL_CARDS.read_text(encoding="utf-8"), "## jev_gate", "## jev_score")
+    if sent == ["diff", "tests"]:
+        assert "ADR-0063" in section
+        assert "again as implicit evidence" in section
+        assert "100k extra UTF-16" in section
+
+
+def test_calibrate_advisory_says_to_pin_the_measured_model() -> None:
+    """P3 wording: fitting a threshold does not pin `jev-latest`. The advisory has to say so."""
+    from jev_judge_mcp.calibrate import ADVISORY
+
+    guide = _GUIDANCE.read_text(encoding="utf-8")
+    assert "pin the model version you measured" in ADVISORY
+    assert "jev-latest" in ADVISORY
+    assert "never changes the frozen defaults" in ADVISORY
+    assert "pin the versioned model id" in guide
+    assert "Live evals pin `jev-1.13.0`" in guide
+
+
+def test_score_citations_match_the_refreshed_summary() -> None:
+    """C1: the summary says 2-10. A comment that still says 1-10 is the stale citation."""
+    summary = (ROOT / "docs" / "jev_docs" / "primitives.md").read_text(encoding="utf-8")
+    limits_source = (ROOT / "src" / "jev_judge_mcp" / "limits.py").read_text(encoding="utf-8")
+    score_test = (ROOT / "tests" / "contract" / "test_limits.py").read_text(encoding="utf-8")
+    assert "2\u201310 levels" in summary
+    assert "1-10 levels" not in limits_source
+    assert "1-10 levels" not in score_test
+    assert limits.SCORE.levels_min == 2
+    assert limits.SCORE.levels_max == 10
