@@ -96,9 +96,12 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     for claim in claims:
         relation = answers.get(f"relation_{claim['id']}")
         validated = validate_choice(relation, RELATION_TO_VERDICT)
-        # source_* is auxiliary and asked only for several evidence items: its absence never
+        # source_* is auxiliary and asked only for several evidence items. Validating an answer
+        # that was never asked counts a fail-closed that did not happen. Its absence never
         # invalidates the relation, but a present source must name a supplied id or "none".
-        source = validate_choice(answers.get(f"source_{claim['id']}"), source_keys)
+        source = (
+            validate_choice(answers.get(f"source_{claim['id']}"), source_keys) if len(evidence) > 1 else None
+        )
         # Q4 (ADR-0012, ADR-0043): malformed confidence invalidates; absent confidence does not.
         if validated is None or validated.confidence_kind == "malformed":
             closed = fail_closed("verify")

@@ -335,7 +335,13 @@ def _verify_claims(
             continue
         verdict = CLAIM_VERDICTS[answer.choice]
         judgments.append(ClaimJudgment(verdict, answer.confidence))
-        source = validate_choice(answers.get(f"source_{index}"), [*evidence_ids, "none"])
+        # Asked only when more than one evidence item was sent (the same condition as the ask).
+        # Validating the missing answer would count a fail-closed that never happened.
+        source = (
+            validate_choice(answers.get(f"source_{index}"), [*evidence_ids, "none"])
+            if len(asked_evidence) > 1
+            else None
+        )
         support = source.choice if source is not None and source.choice != "none" else None
         action = require_complete_context(
             claim_action(verdict, answer.confidence, thresholds.auto_accept, thresholds.review_at), truncated

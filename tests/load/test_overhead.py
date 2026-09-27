@@ -189,5 +189,7 @@ async def test_every_tool_call_succeeds_at_low_concurrency() -> None:
             assert payload["verification"]["summary"]["invalid_response"] == 0
             row = payload["verification"]["results"][0]
             assert row["supporting_evidence"] == gate.arguments["evidence"][0]["id"], row
+            metrics = toolset.runtime.telemetry.metrics.snapshot()
+            assert [key for key in metrics if key.startswith("fail_closed")] == []
     finally:
         await toolset.aclose()

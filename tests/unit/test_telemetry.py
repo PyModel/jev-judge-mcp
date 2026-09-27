@@ -134,6 +134,34 @@ async def test_metrics_count_calls_errors_fail_closed_actions_tokens_and_truncat
     assert metrics['duration_ms_bucket{span="mcp.tool",le="+Inf"}'] == 5
 
 
+async def test_an_unasked_source_question_is_not_fail_closed() -> None:
+    """`source_*` is asked only when more than one evidence item was sent.
+
+    Validating the missing answer counts a fail-closed that never happened, which inflates the
+    ROADMAP P9 metric on every single-evidence verify. A missing answer for a source that was
+    asked still counts: the guard is "only when asked", not "never".
+    """
+    one = await run([("jev_verify", CASE["jev_verify"].arguments, CASE["jev_verify"].permissive)])
+    assert [key for key in one.metrics.snapshot() if key.startswith("fail_closed")] == []
+
+    asked = await run(
+        [
+            (
+                "jev_verify",
+                {
+                    "claims": ["The service listens on 8080."],
+                    "evidence": [
+                        {"id": "log", "text": "server.listen(8080)"},
+                        {"id": "cfg", "text": "port=8080"},
+                    ],
+                },
+                CASE["jev_verify"].permissive,
+            )
+        ]
+    )
+    assert asked.metrics.snapshot().get('fail_closed{kind="choice"}') == 1
+
+
 AT_CANDIDATE_CAP = "x" * 2_000  # CANDIDATES.text_units, CLASSIFY.item_units and class_description_units
 OVER_CANDIDATE_CAP = AT_CANDIDATE_CAP + "x"
 
