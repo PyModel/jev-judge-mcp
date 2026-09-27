@@ -7,21 +7,18 @@ step) and [`docs/reference/limits.md`](reference/limits.md) (the frozen caps and
 [`src/jev_judge_mcp/skills/jev/SKILL.md`](../src/jev_judge_mcp/skills/jev/SKILL.md) is the other skill: building an app on the Jev API.
 Its cookbook thresholds are not this server's defaults; see [`src/jev_judge_mcp/skills/jev/PROVENANCE.md`](../src/jev_judge_mcp/skills/jev/PROVENANCE.md).
 
-**Where the numbers come from.** The magnitudes quoted below are not Jev numbers. They were measured
-by [decider](https://github.com/Mapika/decider) (Apache-2.0), an open reproduction of the System One
-model class, on **decider's own Qwen3.5-based fine-tuned models** — see its
-[results for input shapes, option sets, and question framing](https://github.com/Mapika/decider/blob/main/docs/RESULTS.md)
-and its [stated limits](https://github.com/Mapika/decider/blob/main/README.md). The directions
-almost certainly transfer to any single-pass typed-decision model, including Jev; the magnitudes
-were not measured on Jev and must not be quoted as Jev's. Official pages, cited by URL and not
-copied here: [how to build](https://docs.typesafe.ai/concepts/how-to-build-with-system-one.md),
+**Where the guidance comes from.** Official pages, cited by URL and not copied here:
+[how to build](https://docs.typesafe.ai/concepts/how-to-build-with-system-one.md),
+[state](https://docs.typesafe.ai/concepts/state.md),
+[primitives](https://docs.typesafe.ai/primitives.md),
 [confidence](https://docs.typesafe.ai/confidence.md), and
-[jev-1.13 jaggedness](https://docs.typesafe.ai/model-jaggedness/jev-1.13.md). jev-mcp's own recorded
-evidence lives in [`docs/evals/README.md`](evals/README.md) and [`docs/EVIDENCE.md`](EVIDENCE.md).
+[jev-1.13 jaggedness](https://docs.typesafe.ai/model-jaggedness/jev-1.13.md).
+This server's own recorded evidence lives in [`docs/evals/README.md`](evals/README.md) and
+[`docs/EVIDENCE.md`](EVIDENCE.md). Do not quote another project's accuracy numbers as Jev's.
 
 ## When not to call
 
-Jev is on demand only; call it when an independent judgment materially improves the decision; never route every judgment through it. High-value calls: before a done claim, `jev_gate`; before reading fetched or pasted external text, `jev_screen`; checking another agent's report or research claims, `jev_verify`. Skip it when the answer is already determined by a test, type-check, or the code itself; when the choice is trivial or cheap to reverse; when the question cannot be enumerated into bounded options; or when the same unchanged decision was already asked.
+The on-demand rule, the high-value calls, and the skip cases are in [`docs/agent-rules.md`](agent-rules.md).
 
 The jaggedness page names nine failure modes for `jev-1.13`: literal reading; math and numbers;
 date and time comparison; indirection; large state full of irrelevant detail; adversarial content;
@@ -31,49 +28,42 @@ asking for something code can compute, hiding several judgments in one question,
 and extra state the question does not need. The page is
 https://docs.typesafe.ai/model-jaggedness/jev-1.13.md.
 
-Forcing a consult on every judgment did not pay. A 2026-09-27 L4 study (Pi, DeepSeek) solved 5/9
-with Jev and 9/9 without, median 38.9 s versus 22.6 s, 156 versus 99 tool calls, and 140,032 versus
-36,328 tokens per solved task, and no decision changed. On bench150 the unprompted arm called Jev
-on 16/150 items; the forced arm called it on 150/150 at +4.38 s median per item versus direct.
-
 ## Shape the state so nothing has to be counted
 
-A state is evidence, not a prompt ([`docs/CONTEXT.md`](CONTEXT.md)). Two shape rules follow from
-that, both measured by decider:
+A state is evidence, not a prompt ([`docs/CONTEXT.md`](CONTEXT.md)). The official state page says
+to keep facts in `state` and the judgment in the question, and to point at nested fields with
+backticked paths. Two rules follow:
 
-- **Name things; do not make the model count.** When decider's models had to pick one record out of
-  64 in a bare array, accuracy dropped from 0.70 (one record, named by path) to 0.51. Writing the
-  indices into the state as text recovered it to 0.62, still below naming the one record outright.
-  Prefer an object with named fields, or an array whose items carry explicit `id`s, and point at
-  nested fields with backticked paths like `` `ticket.messages[0].text` ``. The jev-mcp tools that
-  take a list of records (evidence items, candidates, classify items) let you give each one an id —
-  use them, and keep ids short and stable. Claims (jev_verify, jev_gate) are positional strings —
-  the schema rejects objects — so keep each claim self-contained and in a stable order.
-- **Send whole documents when the judgment depends on the whole.** Clipping an article decider's
-  models read whole at 0.71 accuracy cost 21 points (0.50 when clipped to 5000 characters). jev-mcp
-  truncates some inputs at a cap and marks the cut ([`docs/reference/limits.md`](reference/limits.md));
-  a judgment over cut context never gets action `auto`. When you must cut, cut at a boundary you can
-  defend — a section, a function, a message — not a blind character count.
+- **Name things; do not make the model count.** Prefer an object with named fields, or an array
+  whose items carry explicit `id`s, and point at nested fields with backticked paths like
+  `` `ticket.messages[0].text` ``. Counting, dates, and exact lookups belong in code
+  (https://docs.typesafe.ai/model-jaggedness/jev-1.13.md). The tools that take a list of records
+  (evidence items, candidates, classify items) let you give each one an id — use them, and keep ids
+  short and stable. Claims (`jev_verify`, `jev_gate`) are positional strings — the schema rejects
+  objects — so keep each claim self-contained and in a stable order.
+- **Send what the question needs, and no more.** Extra unrelated state lowers accuracy. The API
+  budget is 64k tokens for the request and 32k for `state` plus the longest question
+  (https://docs.typesafe.ai/models.md). This server also truncates some inputs at a UTF-16 cap and
+  marks the cut ([`docs/reference/limits.md`](reference/limits.md)); a judgment over cut context
+  never gets action `auto`. When you must cut, cut at a boundary you can defend — a section, a
+  function, a message — not a blind character count.
 
 ## Write options that separate, with a catch-all that deserves its name
 
-- **Describe every option.** Names alone are weak; a one-line description per option is what
-  separates lookalikes. decider's terse option sets scored 0.59 before its training made the same
-  buckets reach 0.86 — the labels alone were not doing the work.
-- **Keep a generic option and a catch-all apart.** When decider put a broad option like `other`
-  beside a generic in-scope option, in-scope items leaked into the catch-all (0.85 vs 0.95 when the
-  catch-all was scoped by description). If the list may not cover the input, say in the catch-all's
-  description what belongs there — and nothing else. `jev_decide` ships its own escape hatches
-  (`ask_user`, `investigate`, `none`), so a decision among candidates you wrote down does not need
-  your own `other`.
+- **Describe every option.** Names alone are weak. A short description per option is what separates
+  lookalikes (https://docs.typesafe.ai/primitives/choice.md).
+- **Keep a generic option and a catch-all apart.** If the list may not cover the input, add an
+  `other` or `none` option and say in its description what belongs there — and nothing else.
+  `jev_decide` ships its own escape hatches (`ask_user`, `investigate`, `none`), so a decision among
+  candidates you wrote down does not need your own `other`.
 
 ## Keep rules out of the question
 
-A one-sentence question scored 0.67 where the same judgment behind a paragraph of rules scored
-0.24, on decider's models: rules written into the question are read unevenly, at best. Put the
-facts in the state, the meaning in the option or level descriptions, and the rules in your code.
-jev-mcp already follows this: the model judges, policy decides (ADR-0002). If a question needs
-"unless", "except", or "but only when" to be answerable, it is several questions.
+Jev reads the question literally. Put the facts in the state, the boundaries in the option or level
+descriptions, and deterministic rules in your code
+(https://docs.typesafe.ai/model-jaggedness/jev-1.13.md). This server already splits those jobs: the
+model judges, policy decides (ADR-0002). If a question needs "unless", "except", or "but only when"
+to be answerable, it is several questions.
 
 ## One pass is not multi-step
 

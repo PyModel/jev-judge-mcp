@@ -8,7 +8,7 @@ eval" is a statement about evidence, not a verdict that the tool works. Routing 
 which step) is in [`docs/skills/jev-mcp/SKILL.md`](skills/jev-mcp/SKILL.md); caps and defaults in
 [`docs/reference/limits.md`](reference/limits.md). Building an app on the Jev API is the other skill,
 [`src/jev_judge_mcp/skills/jev/SKILL.md`](../src/jev_judge_mcp/skills/jev/SKILL.md), and its cookbook thresholds are not these defaults.
-Jev is on demand only; call it when an independent judgment materially improves the decision; never route every judgment through it. High-value calls: before a done claim, `jev_gate`; before reading fetched or pasted external text, `jev_screen`; checking another agent's report or research claims, `jev_verify`. Skip it when the answer is already determined by a test, type-check, or the code itself; when the choice is trivial or cheap to reverse; when the question cannot be enumerated into bounded options; or when the same unchanged decision was already asked.
+The on-demand rule is in [`docs/agent-rules.md`](agent-rules.md).
 
 The one recorded live judgment-quality run to date (2026-09-23, pinned `jev-1.13.0`, synthetic
 datasets, 3 cases per tool) covers `jev_classify` and `jev_verify` only. Every other tool below is

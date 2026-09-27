@@ -17,12 +17,20 @@ from pathlib import Path
 from jev_judge_mcp.domain import is_json_object
 from jev_judge_mcp.install.errors import InstallError
 from jev_judge_mcp.install.redact import is_reference
+from jev_judge_mcp.tools import TOOLS
 
 PACKAGE = "jev-judge-mcp"
 SERVER_NAME = "jev-mcp"
 REFERENCE = "${TYPESAFE_API_KEY}"
 OPENCODE_REFERENCE = "{env:TYPESAFE_API_KEY}"
 EXTRA = "typesafe"
+# pi-mcp-adapter resourceNameToToolName("jev-mcp/SKILL.md") with a get_ prefix.
+PI_SKILL_TOOL = "get_jev_mcp_skill_md"
+
+
+def pi_direct_tools() -> list[str]:
+    """Published tools plus the routing skill. Other packaged files stay resources, not Pi tools."""
+    return [*(tool.name for tool in TOOLS), PI_SKILL_TOOL]
 
 
 @dataclass(frozen=True)
@@ -173,16 +181,15 @@ def pi_entry(launch: Launch) -> dict[str, object]:
     The adapter's default server is lazy and proxy-only: no jev tool reaches the model until it
     walks the gateway (`mcp({server})` → `mcp({connect})` → `mcp({describe})` → `mcp({tool})`), and
     recorded agent runs show they never start that walk on their own (ADR-0036). `lifecycle:
-    "eager"` connects at startup, `directTools: true` registers every tool individually, and
-    `toolPrefix: "none"` keeps the published names (`jev_verify`, ...), so inside pi the tools are
-    visible and callable like any builtin.
+    "eager"` connects at startup, `directTools` is an allow-list so packaged skill files do not
+    become tools (ADR-0071), and `toolPrefix: "none"` keeps the published names (`jev_verify`, ...).
     """
     return {
         "command": launch.uvx,
         "args": launch.args(),
         "env": {"TYPESAFE_API_KEY": REFERENCE},
         "lifecycle": "eager",
-        "directTools": True,
+        "directTools": pi_direct_tools(),
         "toolPrefix": "none",
     }
 

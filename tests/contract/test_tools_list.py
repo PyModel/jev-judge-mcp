@@ -149,8 +149,10 @@ def test_initialize_names_each_tool_and_the_gate_rule() -> None:
     inventory = instructions.split(". ", 1)[0]
     for tool in TOOLS:
         assert inventory.count(tool.name) == 1
-    assert "call jev_gate" in instructions.lower() or "Call jev_gate" in instructions
+    assert "recommended final judgment" in instructions
     assert "before claiming done" in instructions
+    assert "unless tests, type checks, build, lint" in instructions
+    assert "Call jev_gate before claiming done" not in instructions
     assert "Honor action" in instructions
     assert "mcp__" not in instructions
     assert "0.8" not in instructions

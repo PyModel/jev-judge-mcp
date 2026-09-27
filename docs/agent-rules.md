@@ -13,9 +13,7 @@ an extra tool turn. Skip it on steps you can settle by reading what is already o
 your tests already cover: the extra turn costs agent wall time, and the recorded studies measured
 agents slower with Jev, never faster.
 
-Jev is on demand only; call it when an independent judgment materially improves the decision; never route every judgment through it. High-value calls: before a done claim, `jev_gate`; before reading fetched or pasted external text, `jev_screen`; checking another agent's report or research claims, `jev_verify`. Skip it when the answer is already determined by a test, type-check, or the code itself; when the choice is trivial or cheap to reverse; when the question cannot be enumerated into bounded options; or when the same unchanged decision was already asked.
-
-A 2026-09-27 L4 study (Pi, DeepSeek) solved 5/9 with Jev and 9/9 without, median 38.9 s versus 22.6 s, 156 versus 99 tool calls, and 140,032 versus 36,328 tokens per solved task, and no decision changed. On bench150 the unprompted arm called Jev on 16/150 items; the forced arm called it on 150/150 at +4.38 s median per item versus direct.
+Jev is invoked when an unresolved judgment earns a model decision. Deterministic evidence takes precedence; Jev is not a mandatory ceremony. High-value calls: before a done claim, `jev_gate`, unless tests, type checks, build, lint, or another explicit acceptance criterion already settle completion; before reading fetched or pasted external text, `jev_screen`; checking another agent's report or research claims, `jev_verify`. Skip it when the answer is already determined by a test, type-check, or the code itself; when the choice is trivial or cheap to reverse; when the question cannot be enumerated into bounded options; or when the same unchanged decision was already asked.
 
 | Tool | Use it to | Caps |
 |------|-----------|--------|
@@ -44,7 +42,7 @@ Rules:
   stronger check · `escalate` → stop and surface it. `invalid_response` → the row is unjudged;
   leave it without a verdict.
 - **Jev screens; it never proves.** A Jev check never replaces running the tests, lint, or types.
-  A `jev_gate` `auto` is necessary before "done", not sufficient.
+  A `jev_gate` `auto` is the recommended final judgment before "done", not sufficient, and it is skipped when tests, type checks, build, lint, or another explicit acceptance criterion already settle completion.
 - **Batch.** One call with every claim, candidate, or item beats many calls; questions inside one
   request cannot see each other's answers.
 - **No re-asks.** Do not re-ask an unchanged question hoping for a better answer; gather better

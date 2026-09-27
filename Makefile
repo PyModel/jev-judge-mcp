@@ -57,6 +57,7 @@ security-live:
 
 build:
 	uv build
+	uv run --with pathspec python scripts/ci/check_sdist_excludes.py
 
 # The integration tests, then the slow `uvx --from .` smoke test. A command-line `-m` replaces the addopts
 # one, so the smoke line selects `smoke` alone and never re-admits `live` (ADR-0027).

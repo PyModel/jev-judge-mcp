@@ -11,7 +11,20 @@
         "TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}"
       },
       "lifecycle": "eager",
-      "directTools": true,
+      "directTools": [
+        "jev_verify",
+        "jev_screen",
+        "jev_find",
+        "jev_classify",
+        "jev_decide",
+        "jev_rerank",
+        "jev_compare",
+        "jev_extract",
+        "jev_review",
+        "jev_gate",
+        "jev_score",
+        "get_jev_mcp_skill_md"
+      ],
       "toolPrefix": "none"
     }
   }

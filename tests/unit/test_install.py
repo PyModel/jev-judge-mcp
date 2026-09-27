@@ -21,6 +21,7 @@ from jev_judge_mcp.install.launch import (
     checkout_launch,
     find_package_root,
     local_install_warning,
+    pi_direct_tools,
     pi_entry,
     pypi_launch,
     requires_python,
@@ -378,7 +379,7 @@ def test_each_target_gains_one_entry(tmp_path: Path) -> None:
     pi = json.loads((tmp_path / ".pi" / "agent" / "mcp.json").read_text(encoding="utf-8"))
     assert pi["mcpServers"]["jev"]["env"]["TYPESAFE_API_KEY"] == "${TYPESAFE_API_KEY}"
     assert pi["mcpServers"]["jev"]["lifecycle"] == "eager"
-    assert pi["mcpServers"]["jev"]["directTools"] is True
+    assert pi["mcpServers"]["jev"]["directTools"] == pi_direct_tools()
     assert pi["mcpServers"]["jev"]["toolPrefix"] == "none"
     omp = json.loads((tmp_path / ".omp" / "agent" / "mcp.json").read_text(encoding="utf-8"))
     assert omp["$schema"].endswith("mcp-schema.json")
@@ -404,7 +405,7 @@ def test_pi_entry_puts_the_jev_tools_in_the_initial_list() -> None:
     """
     entry = pi_entry(LAUNCH)
     assert entry["lifecycle"] == "eager"
-    assert entry["directTools"] is True
+    assert entry["directTools"] == pi_direct_tools()
     assert entry["toolPrefix"] == "none"
     # With no prefix the registered names are exactly the published tool names.
     assert all(tool.name.startswith("jev_") for tool in TOOLS)

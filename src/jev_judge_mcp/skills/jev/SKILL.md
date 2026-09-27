@@ -9,7 +9,7 @@ description: Use when code needs a judgment about natural language that rules or
 
 Jev is a **System One model**: it takes a `state` plus named, typed questions and returns typed answers with calibrated probabilities. It never generates text. **Code owns the workflow. Jev supplies narrow snap judgments.** It is not a chat or coding LLM and cannot power a coding agent.
 
-**Before you design anything new, check prior art:** open `prior-art/INDEX.md`. It maps intents (control loop, gate, rerank, stream filter, incremental, agent memory, LLM pairing, and more) to shape files. Each shape file has a code sketch, field lessons, and linked community projects. Or grep `prior-art/` for a domain word. It also lists the known bad fits.
+**Before you design anything new, check the shape index:** open `prior-art/INDEX.md`. It maps intents (control loop, gate, rerank, stream filter, incremental, agent memory, LLM pairing, and more) to shape files. Each shape file has a code sketch and the field lessons behind it. Or grep `prior-art/` for a domain word. It also lists the known bad fits.
 
 Exact request/response shapes, SDK signatures, limits, and errors: see `api-reference.md`. It ends with a map of which live docs page to read for which task. Patterns and the cookbook index: see `patterns.md`. The live docs win on conflict: fetch `https://docs.typesafe.ai/llms.txt`, and append `.md` to any page path. Do not guess field names. Check them there. If the docs cannot be reached, read the installed SDK's types, tell the user you did, and do not invent details that depend on the version.
 

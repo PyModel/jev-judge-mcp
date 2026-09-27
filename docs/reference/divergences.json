@@ -603,7 +603,7 @@
       ],
       "fixtures": [],
       "reference_behavior": "The reference initialize response was never captured. This server previously advertised resource and prompt capabilities and served neither, and instructions did not name a skill.",
-      "python_behavior": "initialize.instructions names the jev and jev-mcp skills, their resource URIs, that jev cookbook thresholds are not this server's action policy, and the on-demand rule: call when an independent judgment materially improves the decision, never route every judgment through it, with jev_gate, jev_screen, and jev_verify as the high-value calls. resources/list and prompts/list serve both skills from the installed package. Tool schemas and policy are unchanged."
+      "python_behavior": "initialize.instructions names the jev and jev-mcp skills and their resource URIs, and states that Jev is invoked when an unresolved judgment earns a model decision, not as a mandatory ceremony. jev_gate is the recommended final judgment before claiming done, skipped when deterministic evidence already settles completion. resources/list and prompts/list serve the packaged allowlist from https://github.com/PyModel/jev-skill at ba5dd9f plus the routing skill. Tool schemas and policy are unchanged."
     },
     {
       "id": "file-list-and-evidence-metadata",

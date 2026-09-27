@@ -35,6 +35,51 @@ def post_initialize(url: str) -> dict[str, object]:
     return message
 
 
+def test_http_serves_skill_resources_and_prompts() -> None:
+    """Resources and prompts are the same handlers on HTTP as on stdio (ADR-0071)."""
+    port = free_port()
+    env = {"JEV_MCP_TRANSPORT": "streamable-http", "JEV_MCP_HTTP_PORT": str(port)}
+    url = f"http://127.0.0.1:{port}/mcp"
+    headers = {"Accept": "application/json, text/event-stream"}
+    with StdioServer(env=env) as server:
+        deadline = time.monotonic() + 15
+        while True:
+            try:
+                init_response = httpx.post(url, json=INITIALIZE, headers=headers)
+                break
+            except httpx.ConnectError:
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.1)
+        init_response.raise_for_status()
+        session = init_response.headers.get("mcp-session-id")
+        if session:
+            headers = {**headers, "mcp-session-id": session}
+        httpx.post(
+            url,
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            headers=headers,
+        )
+        listed = httpx.post(
+            url, json={"jsonrpc": "2.0", "id": 2, "method": "resources/list", "params": {}}, headers=headers
+        )
+        prompts = httpx.post(
+            url, json={"jsonrpc": "2.0", "id": 3, "method": "prompts/list", "params": {}}, headers=headers
+        )
+        server.process.send_signal(signal.SIGTERM)
+        server.wait()
+    init_body = next(line[len("data: ") :] for line in init_response.text.splitlines() if line.startswith("data: "))
+    assert "instructions" in json.loads(init_body)["result"]
+    listed.raise_for_status()
+    prompts.raise_for_status()
+    listed_body = next(line[len("data: ") :] for line in listed.text.splitlines() if line.startswith("data: "))
+    prompts_body = next(line[len("data: ") :] for line in prompts.text.splitlines() if line.startswith("data: "))
+    resources = json.loads(listed_body)["result"]["resources"]
+    names = {item["name"] for item in json.loads(prompts_body)["result"]["prompts"]}
+    assert any(item["uri"] == "jev-skill://jev-mcp/SKILL.md" for item in resources)
+    assert names == {"jev", "jev-mcp"}
+
+
 @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM], ids=["SIGINT", "SIGTERM"])
 def test_http_initialize_and_clean_shutdown(signum: signal.Signals) -> None:
     port = free_port()

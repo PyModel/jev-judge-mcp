@@ -16,10 +16,11 @@ def test_uvx_from_source_initializes(tmp_path: Path) -> None:
     # cwd is not the checkout: a server that reads the skill off the source tree fails here.
     with StdioServer(["uvx", "--from", str(REPO_ROOT), "jev-judge-mcp"], cwd=tmp_path) as server:
         reply = server.initialize()
+        listed = server.request({"jsonrpc": "2.0", "id": 2, "method": "resources/list", "params": {}})
         skill = server.request(
             {
                 "jsonrpc": "2.0",
-                "id": 2,
+                "id": 3,
                 "method": "resources/read",
                 "params": {"uri": "jev-skill://jev/SKILL.md"},
             }
@@ -31,5 +32,8 @@ def test_uvx_from_source_initializes(tmp_path: Path) -> None:
     # A wheel has no source-tree suffix, even when `uvx --from .` built it from a checkout (ADR-0054).
     assert reply["result"]["serverInfo"]["version"] == importlib.metadata.version("jev-judge-mcp")
     assert "+" not in reply["result"]["serverInfo"]["version"]
+    uris = {item["uri"] for item in listed["result"]["resources"]}
+    assert "jev-skill://jev/SKILL.md" in uris
+    assert "jev-skill://jev-mcp/SKILL.md" in uris
     assert skill["result"]["contents"][0]["text"].startswith("---\nname: jev\n")
     assert returncode == 0, stderr

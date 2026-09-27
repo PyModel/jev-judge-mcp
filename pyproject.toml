@@ -63,8 +63,6 @@ exclude = [".agents", ".pi", ".claude", ".cache"]
 line-length = 120
 target-version = "py312"
 src = ["src", "tests"]
-# Vendored skill text stays verbatim, including the Python fences ruff would reflow.
-extend-exclude = ["src/jev_judge_mcp/skills/jev", "docs/skills/jev"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "S", "RUF"]
