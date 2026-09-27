@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from evals.ab import arms, ledger, outcomes, report, stream, tasks, unsafe
-from evals.ab.grade import expected_ids, grade
+from evals.ab.grade import expected_ids, grade, old_rule_success, run_correct
 from evals.agent import (
     PREFLIGHT_TIMEOUT_S,
     AgentCommand,
@@ -203,6 +203,12 @@ _RECORD_KEYS = (
     "acceptance_total",
     "regressions",
     "protected_changed",
+    "preexisting_altered",
+    "added_tests",
+    "old_rule_success",
+    "failure_category",
+    "unnecessary_jev_calls",
+    "jev_answer",
     "wall_s",
     "tokens",
     "tool_calls",
@@ -279,6 +285,11 @@ def _record(
     chosen = outcomes.decision(trace.result_field("result"), task.judgment)
     cycles = outcomes.test_cycles(trace.tool_uses)
     cost = book.cost_of(trace.result_field("total_cost_usd"), calls)
+    matches = outcomes.decision_correct(chosen, task.judgment)
+    stream_path = run_dir / "stream.jsonl"
+    stream_text = stream_path.read_text(encoding="utf-8") if stream_path.is_file() else ""
+    answer = outcomes.jev_answer(stream_text, task.judgment.options)
+    succeeded = run_correct(result, decision_matches_gold=matches)
     return _outcome_record(
         rid,
         task.id,
@@ -293,19 +304,40 @@ def _record(
             "measurement": outcomes.measurement(
                 arm, status=run.status, reached=reached, calls=calls, mcp_servers=trace.mcp_servers
             ),
-            "success": result.correct,
+            "success": succeeded,
             "final_tests_passed": result.test_pass_rate == 1.0,
             "acceptance_passed": result.acceptance_passed,
             "acceptance_total": result.acceptance_total,
             "regressions": list(result.regressions),
             "protected_changed": list(result.protected_changed),
+            "preexisting_altered": list(result.preexisting_altered),
+            "added_tests": [
+                {"file": item.file, "name": item.name, "outcome": item.outcome, "relevant": item.relevant}
+                for item in result.added_tests
+            ],
+            "old_rule_success": old_rule_success(result),
+            "failure_category": outcomes.failure_category(
+                status=run.status,
+                success=succeeded,
+                acceptance_passed=result.acceptance_passed,
+                acceptance_total=result.acceptance_total,
+                regressions=result.regressions,
+                preexisting_altered=result.preexisting_altered,
+                added_failing=bool(result.added_failing),
+                decision_matches_gold=matches,
+                jev_calls=calls,
+            ),
+            "unnecessary_jev_calls": outcomes.unnecessary_jev_calls(
+                control=task.judgment.control, uses=trace.tool_uses, calls=calls
+            ),
+            "jev_answer": answer,
             "jev_calls": len(outcomes.jev_rows(calls)),
             "jev_call_log": calls,
             "test_cycles": cycles,
             "retries": max(cycles - 1, 0),
             "wrong_branches": outcomes.wrong_branches(trace.tool_uses, task.judgment),
             "decision": chosen,
-            "decision_correct": outcomes.decision_correct(chosen, task.judgment),
+            "decision_correct": matches,
             "agent_cost_usd": cost.agent_usd,
             "jev_cost_usd": cost.jev_usd,
             "cost_usd": cost.total_usd,
@@ -349,6 +381,12 @@ def failed_record(
             "acceptance_total": 0,
             "regressions": [],
             "protected_changed": [],
+            "preexisting_altered": [],
+            "added_tests": [],
+            "old_rule_success": False,
+            "failure_category": "harness error",
+            "unnecessary_jev_calls": 0,
+            "jev_answer": None,
             "jev_calls": 0,
             "jev_call_log": [],
             "test_cycles": 0,
@@ -449,7 +487,10 @@ def held_constant(agent: str, timeout_s: float) -> dict[str, str]:
         "harness server (both arms)": "`request_human_review`",
         "system addendum (both arms)": arms.SYSTEM_ADDENDUM,
         "Jev (arm B only)": f"`python -m jev_judge_mcp`, `JEV_PROVIDER=typesafe`, `JEV_MCP_MODEL={arms.JEV_MODEL}`",
-        "grader": "pristine pre-existing tests + hidden acceptance tests (`evals/ab/grade.py`)",
+        "grader": (
+            "ADR-0071: hidden acceptance tests, no regressions, pre-existing test content unchanged, "
+            "added tests must pass, decision matches gold (`evals/ab/grade.py`)"
+        ),
     }
     if agent == "pi":
         return {

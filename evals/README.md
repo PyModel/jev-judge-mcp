@@ -170,13 +170,26 @@ Each task hinges on a judgment a Jev tool is for, and ships a gold decision the 
 | `j1-refund-window` | boundary: which refund window the policy sets (the stale FAQ disagrees) | `jev_verify` | delivery date, day 30 inclusive |
 | `j2-ticket-route` | classification: which queue a mixed billing and unrecognized sign-in ticket belongs in | `jev_classify` | `security` |
 | `j3-installment-patch` | choice among three plausible patches for an installment split | `jev_decide` | `patch-c` |
+| `j4-done-claim` | done-claim: whether `CLAIM.md` already holds | `jev_gate` | `claim-false` |
+| `j5-screen-injection` | screen: a fetched page that carries an injection | `jev_screen` | `reject-page` |
+| `j6-docs-vs-code` | docs versus code: which side governs the restocking fee | `jev_compare` | `doc-governs` |
+| `j7-find-line` | find: which listed line is the refund bug | `jev_find` | `refunds-return` |
+| `j8-extract-rate` | extract: the labeled rate, not the neighboring numbers | `jev_extract` | `rate-15` |
+| `j9-review-patch` | review: whether the proposed installment patch is right | `jev_review` | `request-changes` |
+| `j10-control-spec` | control: `SPEC_RATE` is already in the file | `jev_verify` | `use-spec` |
+| `j11-control-label` | control: `REQUIRED` is already in the file | `jev_verify` | `use-required` |
+
+Gold on every task is the option the hidden acceptance tests accept, stated in `task.json` as
+`gold_verification`. It is not a model's opinion. `j10` and `j11` are controls: the answer is already in
+the code, so a Jev call on them is unnecessary.
 
 A pair (agent, task, repeat) is evidence only when both arms are measured: the run reached the model
 (some frontier call produced output), and in B the proxy log holds a Jev answer from the pinned model. A
 with-Jev run where the agent never called Jev is a failed measurement, and its whole pair is dropped; the
 report counts it under "Excluded pairs". A run that reached the model and then failed (a wrong fix, a
-timeout) is a measured failure. Success is the grader: every hidden acceptance test passes, no pre-existing
-test regresses, no pre-existing test file changes. The report (`ab/report.py`) gives, per agent and arm over
+timeout) is a measured failure. Success is the ADR-0071 grader: every hidden acceptance test passes, no
+pre-existing test regresses, pre-existing test content is unchanged (new test functions and new test files
+are allowed), added tests pass, and the stated decision matches gold. The report (`ab/report.py`) gives, per agent and arm over
 measured pairs only: tasks solved, time to a correct solution (median, n, min, max, and the values while
 n ≤ 10), correct solutions per hour (failed runs' time included), final tests passed, wrong branches, test
 cycles and retries, tool calls and tokens per solved task, Jev calls, judge accuracy against gold, and paired
@@ -188,12 +201,12 @@ call's round trip.
 |---|---|
 | `ab/arms.py` | The agent configuration both arms share (Claude CLI flags, model, budget), arm B's Jev sentence, and each arm's MCP config |
 | `ab/fixture/` | `snapshot/` (the throwaway repo with its policy docs, copied per run to a temp dir outside this repo) and `tasks/<id>/` (prompt, overlay, hidden acceptance tests, reference solution, one solution per wrong option under `distractors/`, and `task.json`: options, gold, Jev tool, wrong-branch signatures). Excluded from pyright: its imports resolve only inside a copy |
-| `ab/grade.py` | Pristine pre-existing tests + acceptance tests against the agent's tree: success, regressions, pass rate, protected-file changes |
+| `ab/grade.py` | Pristine pre-existing tests + acceptance tests against the agent's tree: success, regressions, pass rate, byte-level protected-file changes, pre-existing-test alterations, added-test telemetry (ADR-0071) |
 | `ab/outcomes.py` | Per-run measures and their definitions: reached the model, Jev called and used, test cycles, retries, wrong branches, decision, measurement |
 | `ab/proxy.py` | Recorder on `evals/relay.py`: per `tools/call` round-trip ms, isError, `usage.input_tokens`, action, headline Action, model. Never logs arguments, text, or error messages |
 | `ab/review_server.py` | `request_human_review`, in both arms |
 | `ab/unsafe.py`, `ab/stream.py` | Unsafe-action rules over tool calls; Claude stream-json to frontier calls, context and output tokens (Pi's parser is `bench/pi.py`) |
-| `ab/ledger.py` | One `SpendPolicy` per agent: 18 runs (3 tasks x 2 arms x 3 repeats), 25 USD, checked per pair. Pi's worst case is its Jev headroom only |
+| `ab/ledger.py` | One `SpendPolicy` per agent: `len(TASK_IDS)` tasks x 2 arms x 3 repeats, 25 USD, checked per pair. Pi's worst case is its Jev headroom only |
 | `ab/run.py`, `ab/report.py` | Seeded pair schedule, the runner and its refusals, the pinned-setup guard, and the markdown report |
 
 The study refuses without `JEV_AB_LIVE=1` (no make target or CI job sets it), without `TYPESAFE_API_KEY`,

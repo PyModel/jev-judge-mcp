@@ -1,10 +1,12 @@
 """The fixed outcome tasks and the throwaway repository each run works in.
 
-Every task hinges on one judgment a Jev tool is for (a boundary, a classification, a choice among
-plausible patches). `task.json` holds the judgment's options, the gold decision and where the snapshot
-settles it, the Jev tool the with-Jev arm is told to use, and the signatures of the wrong options. It
-stays in the harness: the agent under test only ever sees a fresh copy of `fixture/snapshot` (plus the
-task's overlay) in a temporary directory outside this repo, so it cannot read the gold or the grader.
+Every task hinges on one judgment a Jev tool is for. `task.json` holds the judgment's options, the
+gold decision and where the snapshot settles it, the Jev tool the with-Jev arm is told to use, and the
+signatures of the wrong options. Gold is the option the hidden acceptance tests accept, never a
+model's opinion; `gold_verification` says so. A `control` task is one whose answer the code or tests
+already determine, so a Jev call on it is unnecessary. It stays in the harness: the agent under test
+only ever sees a fresh copy of `fixture/snapshot` (plus the task's overlay) in a temporary directory
+outside this repo, so it cannot read the gold or the grader.
 """
 
 import hashlib
@@ -18,7 +20,31 @@ from pathlib import Path
 
 FIXTURE = Path(__file__).parent / "fixture"
 SNAPSHOT = FIXTURE / "snapshot"
-TASK_IDS = ("j1-refund-window", "j2-ticket-route", "j3-installment-patch")
+TASK_IDS = (
+    "j1-refund-window",
+    "j2-ticket-route",
+    "j3-installment-patch",
+    "j4-done-claim",
+    "j5-screen-injection",
+    "j6-docs-vs-code",
+    "j7-find-line",
+    "j8-extract-rate",
+    "j9-review-patch",
+    "j10-control-spec",
+    "j11-control-label",
+)
+JUDGMENT_KINDS = (
+    "boundary",
+    "classification",
+    "patch choice",
+    "done-claim",
+    "screen",
+    "docs-vs-code",
+    "find",
+    "extract",
+    "review",
+    "control",
+)
 TEST_COMMAND = "python3 -m unittest discover -s tests"
 
 
@@ -36,6 +62,8 @@ class Judgment:
     wrong_branch_signatures: Mapping[str, tuple[str, ...]]
     """Regexes that mark a write or command committing to a non-gold option. Absent for a task whose
     wrong options leave no distinctive trace; such a task reports no wrong-branch count."""
+    control: bool = False
+    """True when the code or tests already determine the answer, so a Jev call adds nothing."""
 
 
 @dataclass(frozen=True)
@@ -51,6 +79,10 @@ class Task:
     distractors: Mapping[str, Path]
     """Option id to a solution that implements that wrong option; each must fail acceptance."""
     judgment: Judgment
+    target_module: str
+    """Module an added test must import to count as relevant to this task."""
+    gold_verification: str
+    """Why the gold option is mechanical: the hidden acceptance tests accept it, not a model's opinion."""
 
 
 def load_task(task_id: str) -> Task:
@@ -64,11 +96,20 @@ def load_task(task_id: str) -> Task:
         options=dict(spec["options"]),
         gold=spec.get("gold"),
         wrong_branch_signatures={k: tuple(v) for k, v in spec.get("wrong_branch_signatures", {}).items()},
+        control=bool(spec.get("control", False)),
     )
+    if judgment.kind not in JUDGMENT_KINDS:
+        raise ValueError(f"{task_id}: unknown judgment {judgment.kind!r}")
     if judgment.gold is not None and judgment.gold not in judgment.options:
         raise ValueError(f"{task_id}: gold {judgment.gold!r} is not an option")
     if unknown := set(judgment.wrong_branch_signatures) - set(judgment.options):
         raise ValueError(f"{task_id}: signatures for unknown options {sorted(unknown)}")
+    target = spec.get("target_module")
+    verification = spec.get("gold_verification")
+    if not isinstance(target, str) or not target:
+        raise ValueError(f"{task_id}: target_module is required")
+    if not isinstance(verification, str) or "acceptance" not in verification.lower():
+        raise ValueError(f"{task_id}: gold_verification must say the acceptance tests settle gold")
     distractors = root / "distractors"
     return Task(
         id=task_id,
@@ -78,6 +119,8 @@ def load_task(task_id: str) -> Task:
         reference=root / "reference",
         distractors={p.name: p for p in sorted(distractors.iterdir())} if distractors.is_dir() else {},
         judgment=judgment,
+        target_module=target,
+        gold_verification=verification,
     )
 
 

@@ -120,6 +120,197 @@ def decision_correct(chosen: str | None, judgment: Judgment) -> bool | None:
     return None if judgment.gold is None else chosen == judgment.gold
 
 
+def exposed_jev_tool(use: ToolUse) -> str | None:
+    """The Jev tool a stream use invoked, or None for gateway chatter."""
+    name = use.name
+    exposed: object = None
+    if name in JEV_TOOLS:
+        return name
+    if name in ("mcp", "mcp__jev"):
+        exposed = use.input.get("tool")
+    elif name.startswith("mcp__jev__"):
+        exposed = name.removeprefix("mcp__jev__")
+    if not isinstance(exposed, str):
+        return None
+    if exposed in JEV_TOOLS:
+        return exposed
+    stripped = exposed.removeprefix("jev_")
+    return stripped if stripped in JEV_TOOLS else None
+
+
+def _question_args(use: ToolUse) -> object:
+    """Arguments that identify the question, without the gateway wrapper."""
+    if use.name not in ("mcp", "mcp__jev"):
+        return dict(use.input)
+    inner = use.input.get("args")
+    if inner is None:
+        inner = use.input.get("arguments")
+    if isinstance(inner, str):
+        try:
+            return json.loads(inner)
+        except json.JSONDecodeError:
+            return inner
+    return inner if inner is not None else {key: value for key, value in use.input.items() if key != "tool"}
+
+
+def unnecessary_jev_calls(*, control: bool, uses: Sequence[ToolUse], calls: Sequence[Mapping[str, Any]]) -> int:
+    """How many proxy-logged Jev calls were unnecessary.
+
+    A call is unnecessary when the task is a control (the code or tests already determine the
+    answer) or when it repeats an earlier call of the same tool with the same arguments. The
+    repeat count cannot exceed the proxy log: a stream use the proxy did not see is not a call.
+    """
+    logged = len(jev_rows(calls))
+    if control:
+        return logged
+    seen: set[str] = set()
+    repeats = 0
+    for use in uses:
+        tool = exposed_jev_tool(use)
+        if tool is None:
+            continue
+        key = tool + "\0" + json.dumps(_question_args(use), sort_keys=True, default=str)
+        if key in seen:
+            repeats += 1
+        else:
+            seen.add(key)
+    return min(repeats, logged)
+
+
+def _option_in(value: object, options: frozenset[str]) -> str | None:
+    found: str | None = None
+    if isinstance(value, str) and value in options:
+        return value
+    if isinstance(value, Mapping):
+        for item in cast(Mapping[str, object], value).values():
+            match = _option_in(item, options)
+            if match is not None:
+                found = match
+    elif isinstance(value, list):
+        for item in cast(list[object], value):
+            match = _option_in(item, options)
+            if match is not None:
+                found = match
+    return found
+
+
+def _as_dict(value: object) -> dict[str, Any]:
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+
+
+def jev_answer(stream: str, options: Mapping[str, str]) -> str | None:
+    """The last task option id in a non-error Jev tool result, or None when the result names none.
+
+    The proxy does not keep result text. This reads the agent stream's tool-result payloads only,
+    so the agent's own final decision line cannot count as Jev's answer.
+    """
+    option_ids = frozenset(options)
+    if not option_ids or not stream:
+        return None
+    pending: dict[str, str] = {}
+    last: str | None = None
+    for raw in stream.splitlines():
+        line = raw.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        payload = cast(dict[str, Any], event)
+        kind = payload.get("type")
+        if kind == "tool_execution_start":
+            name = str(payload.get("toolName") or "")
+            tool = exposed_jev_tool(ToolUse(name, _as_dict(payload.get("args"))))
+            call_id = str(payload.get("toolCallId") or "")
+            if tool is not None and call_id:
+                pending[call_id] = tool
+        elif kind == "tool_execution_end":
+            call_id = str(payload.get("toolCallId") or "")
+            if call_id not in pending:
+                name = str(payload.get("toolName") or "")
+                if exposed_jev_tool(ToolUse(name, {})) is None:
+                    continue
+            if payload.get("isError") is True:
+                pending.pop(call_id, None)
+                continue
+            match = _option_in(payload.get("result"), option_ids)
+            if match is not None:
+                last = match
+            pending.pop(call_id, None)
+        elif kind in ("assistant", "user"):
+            message = _as_dict(payload.get("message"))
+            raw_content = message.get("content") if message else payload.get("content")
+            blocks: list[dict[str, Any]] = []
+            if isinstance(raw_content, list):
+                for item in cast(list[object], raw_content):
+                    if isinstance(item, dict):
+                        blocks.append(cast(dict[str, Any], item))
+            wanted = "tool_use" if kind == "assistant" else "tool_result"
+            for block in blocks:
+                if block.get("type") != wanted:
+                    continue
+                if kind == "assistant":
+                    name = str(block.get("name") or "")
+                    tool = exposed_jev_tool(ToolUse(name, _as_dict(block.get("input"))))
+                    block_id = str(block.get("id") or "")
+                    if tool is not None and block_id:
+                        pending[block_id] = tool
+                    continue
+                block_id = str(block.get("tool_use_id") or "")
+                if block_id not in pending or block.get("is_error") is True:
+                    pending.pop(block_id, None)
+                    continue
+                match = _option_in(block.get("content"), option_ids)
+                if match is not None:
+                    last = match
+                pending.pop(block_id, None)
+    return last
+
+
+def failure_category(
+    *,
+    status: str,
+    success: bool,
+    acceptance_passed: int,
+    acceptance_total: int,
+    regressions: Sequence[str],
+    preexisting_altered: Sequence[str],
+    added_failing: bool,
+    decision_matches_gold: bool | None,
+    jev_calls: Sequence[Mapping[str, Any]],
+) -> str | None:
+    """Why a failed run failed. First match wins. A correct run has no category.
+
+    Order: timeout, agent error, acceptance miss, regression, pre-existing test altered,
+    added test failing, wrong decision, Jev error, harness error, other.
+    """
+    if success:
+        return None
+    lowered = status.lower()
+    if "timeout" in lowered:
+        return "timeout"
+    if status.startswith("failed:") and "post-processing" not in lowered:
+        return "agent error"
+    if acceptance_passed < acceptance_total:
+        return "acceptance miss"
+    if regressions:
+        return "regression"
+    if preexisting_altered:
+        return "pre-existing test altered"
+    if added_failing:
+        return "added test failing"
+    if decision_matches_gold is False:
+        return "wrong decision"
+    if any(call.get("is_error") or call.get("unanswered") for call in jev_rows(jev_calls)):
+        return "Jev error"
+    if "post-processing" in lowered:
+        return "harness error"
+    return "other"
+
+
 def tokens(trace: Trace) -> dict[str, int]:
     """Context tokens summed over frontier calls, output tokens, and their total."""
     return {

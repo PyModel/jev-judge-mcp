@@ -21,6 +21,7 @@ evals/reports/*
 !evals/reports/jevbench-public-score.json
 !evals/reports/jevbench-public-outputs.jsonl
 !evals/reports/agent-study-2026-09-27.md
+!evals/reports/d3-paired.md
 .DS_Store
 /.treehouse/
 AGENTS.md

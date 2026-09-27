@@ -1,0 +1,1 @@
+`CLAIM.md` says refund handling is already done. Decide whether that claim holds, then make `refund_allowed` in `refunds.py` match the truth of the claim. The documents in `docs/` are the policy. Do not treat the claim as proof.

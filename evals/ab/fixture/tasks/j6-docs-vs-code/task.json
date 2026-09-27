@@ -1,0 +1,18 @@
+{
+  "judgment": "docs-vs-code",
+  "jev_tool": "jev_compare",
+  "question": "When docs/fees.md and fees.py disagree, which one governs?",
+  "options": {
+    "doc-governs": "docs/fees.md governs; change fees.py to match it",
+    "code-governs": "fees.py governs; leave the code as it is",
+    "rate-only": "use the document's percent and ignore its waiver"
+  },
+  "gold": "doc-governs",
+  "control": false,
+  "target_module": "fees",
+  "gold_verification": "The gold option is the one the hidden acceptance tests accept. It is not a model's opinion. code-governs and rate-only fail the waiver or the percent check.",
+  "gold_source": "docs/fees.md says it is the source of truth: no fee within 7 days of delivery, otherwise 15 percent rounded half up to the cent.",
+  "wrong_branch_signatures": {
+    "code-governs": ["price_cents\\s*//\\s*10"]
+  }
+}

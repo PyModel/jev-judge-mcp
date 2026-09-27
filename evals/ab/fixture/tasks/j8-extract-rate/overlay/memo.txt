@@ -1,0 +1,8 @@
+Warehouse memo, 2026-08-02.
+
+Legacy handling percent: 10
+Waiver window in days: 7
+Example invoice: 30.00
+RESTOCK_RATE: 15
+
+The restocking rate is the RESTOCK_RATE line. Do not use the legacy handling percent or the waiver window as the rate.

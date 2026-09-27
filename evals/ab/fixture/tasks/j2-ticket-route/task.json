@@ -9,6 +9,9 @@
     "general": "general"
   },
   "gold": "security",
+  "control": false,
+  "target_module": "routing",
+  "gold_verification": "The gold option is the one the hidden acceptance tests accept. It is not a model's opinion.",
   "gold_source": "docs/routing.md in the snapshot: security first for an unrecognized sign-in, whatever else the ticket mentions; docs/faq.md defers to it",
   "wrong_branch_signatures": {}
 }

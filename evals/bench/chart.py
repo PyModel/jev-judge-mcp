@@ -9,7 +9,9 @@ records that exist.
 """
 
 import html
+import json
 import statistics
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
@@ -390,6 +392,103 @@ def _fmt(value: object) -> str:
     return str(value)
 
 
+def _bench_telemetry(records: Sequence[analysis.Record], *, labeled_items: int) -> str:
+    """D3 fields that do not need gold. Correctness of a Jev-changed decision is never claimed here."""
+    reached = [run for run in records if _reached(run) and not run.get("server_failure")]
+    calls: list[dict[str, Any]] = [
+        cast(dict[str, Any], call)
+        for run in reached
+        for call in cast(list[object], run.get("jev_calls") or [])
+        if isinstance(call, dict)
+    ]
+    with_call = sum(bool(run.get("jev_calls")) for run in reached)
+    unnecessary = _unnecessary_bench_calls(calls)
+    changed = _bench_decision_changes(records)
+    categories = _bench_failure_categories(records)
+    correct = (
+        "not computable (0 labeled items)"
+        if labeled_items == 0
+        else "not computed here; bench gold is human-labeled and this section does not score it"
+    )
+    return (
+        "D3 telemetry, computable without gold. "
+        "A Jev call is unnecessary when it repeats an earlier call of the same tool with the same "
+        "arguments (`jev_calls[].arguments`); calls without arguments are not counted as repeats. "
+        "Jev changed the decision when the with-Jev arm's answer differs from the direct arm and equals "
+        "an option id in that run's Jev result text. Whether that change was correct needs gold: "
+        f"{correct}. "
+        f"Invocation: {len(calls)} calls across {len(reached)} model-reached runs, "
+        f"{with_call} runs with at least one call. "
+        f"Unnecessary calls: {unnecessary}. "
+        f"Jev changed the decision: {changed}. "
+        f"Failure categories: {categories}. "
+        "Latency is the Jev round-trip line above and each arm's wall time. Tokens are the token line above."
+    )
+
+
+def _unnecessary_bench_calls(calls: Sequence[Mapping[str, Any]]) -> str:
+    if not calls:
+        return "0"
+    if not any("arguments" in call for call in calls):
+        return "not recorded (call arguments are not in these rows)"
+    seen: set[str] = set()
+    repeats = 0
+    for call in calls:
+        key = str(call.get("tool")) + "\0" + json.dumps(call.get("arguments"), sort_keys=True, default=str)
+        if key in seen:
+            repeats += 1
+        else:
+            seen.add(key)
+    return str(repeats)
+
+
+def _bench_decision_changes(records: Sequence[analysis.Record]) -> str:
+    triplets = analysis.complete_triplets(records)
+    observed = 0
+    changed = 0
+    for triplet in triplets.values():
+        direct, automatic, forced = triplet
+        for run in (automatic, forced):
+            answer = run.get("answer")
+            texts = [
+                cast(dict[str, Any], call).get("text")
+                for call in cast(list[object], run.get("jev_calls") or [])
+                if isinstance(call, dict)
+            ]
+            if not isinstance(answer, str) or not any(isinstance(text, str) and answer in text for text in texts):
+                continue
+            observed += 1
+            if answer != direct.get("answer"):
+                changed += 1
+    if observed == 0:
+        return "not observed (no Jev result text named the arm's answer)"
+    return f"{changed} of {observed} observed"
+
+
+def _bench_failure_categories(records: Sequence[analysis.Record]) -> str:
+    counts: Counter[str] = Counter()
+    for run in records:
+        if run.get("server_failure"):
+            counts["Jev error"] += 1
+            continue
+        status = str(run.get("status") or "")
+        if status == "ok" and run.get("gate") in (None, "n/a (arm has no Jev)", "did not call Jev", "used Jev"):
+            continue
+        if "timeout" in status.lower():
+            counts["timeout"] += 1
+        elif status.startswith("failed: post-processing") or status.startswith("failed: grading"):
+            counts["harness error"] += 1
+        elif status.startswith("failed:"):
+            counts["agent error"] += 1
+        elif run.get("parse_error"):
+            counts["agent error"] += 1
+        else:
+            counts["other"] += 1
+    if not counts:
+        return "none"
+    return "; ".join(f"{name} {count}" for name, count in counts.most_common())
+
+
 def numbers_md(
     records: Sequence[analysis.Record],
     *,
@@ -456,6 +555,7 @@ def numbers_md(
         f"{_latency_line(records)}\n\n"
         f"{_token_line(records)}\n\n"
         f"{_agent_spend_line(records)}\n\n"
+        f"{_bench_telemetry(records, labeled_items=labeled_items)}\n\n"
         f"Stop: {stop}{note}\n\n"
         f"{HISTORY}\n\n"
         "Speed and time use triplets where every arm reached the model. "

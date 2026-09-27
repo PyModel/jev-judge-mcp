@@ -8,6 +8,9 @@
     "patch-c": "patches/patch-c.diff: the first installments each take one extra cent"
   },
   "gold": "patch-c",
+  "control": false,
+  "target_module": "installments",
+  "gold_verification": "The gold option is the one the hidden acceptance tests accept. It is not a model's opinion.",
   "gold_source": "docs/installments.md in the snapshot: exact total, no two installments more than one cent apart, larger first; only patch-c meets all three for every total",
   "wrong_branch_signatures": {
     "patch-a": [

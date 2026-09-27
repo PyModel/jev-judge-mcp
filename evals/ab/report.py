@@ -28,8 +28,29 @@ DEFINITIONS = [
     "needs a Jev answer from the pinned model through the MCP server; the proxy log, not the agent's text, "
     "decides. A run that reached the model and then failed is a measured failure, never a fast completion.",
     "**Measured pair:** both arms of one task and repeat measured. Only measured pairs are summarized.",
-    "**Success:** the existing grader: every hidden acceptance test passes, no pre-existing test regresses, "
-    "no pre-existing test file changed. **Final tests passed:** every graded test passed.",
+    "**Success:** ADR-0071. Hidden acceptance tests all pass, no pre-existing test regresses, every "
+    "pre-existing test is unchanged in content (new test functions and new test files are allowed; "
+    "modifying, deleting, skipping, or weakening a pre-existing test line fails the run), every added "
+    "test passes, and the stated decision matches gold when the task has gold. **Old-rule success:** "
+    "the pre-ADR-0071 grader: acceptance passes, no regressions, and no pre-existing test file's bytes "
+    "changed. A correct fix plus an added test method fails the old rule and passes the new one. "
+    "Records graded before ADR-0071 store only the old rule in `success`. **Final tests passed:** "
+    "every pristine graded test passed; added tests are separate.",
+    "**Added tests:** count, file, name, pass/fail, and relevance. Relevant means the added test's file "
+    "imports the task's `target_module`. An irrelevant added test is recorded and does not fail the run. "
+    "A failing added test does.",
+    "**Unnecessary Jev call:** every proxy-logged Jev call on a control task (the code or tests already "
+    "determine the answer), or a later call of the same tool with the same arguments as an earlier call "
+    "in that run. The repeat count cannot exceed the proxy log.",
+    "**Jev changed the decision:** the with-Jev run's final decision differs from its paired without-Jev "
+    "run and equals the option id in Jev's last non-error tool result. If that result names no task "
+    "option, the change is not observed: the proxy does not keep result text, and the agent's own "
+    "decision line is not Jev's answer. **The change was correct** when that final decision equals gold.",
+    "**Jev round trip:** the proxy's per-call `ms`, which includes the server's local work and so bounds "
+    "provider latency from above. **Run wall** is `wall_s`.",
+    "**Failure category:** why a failed run failed, first match: timeout, agent error, acceptance miss, "
+    "regression, pre-existing test altered, added test failing, wrong decision, Jev error, harness error, "
+    "other. A correct run has none.",
     "**Correct solutions per hour:** successes divided by the summed wall time of every measured run of the "
     "arm, failures included.",
     "**Test cycles:** shell calls that run `unittest` or `pytest`. **Retries:** test cycles after the first.",
@@ -79,6 +100,42 @@ def _per_solved(total: float, solved: int) -> str:
     return _num(total / solved) if solved else "n/a (0 solved)"
 
 
+def _round_trip(runs: Sequence[Record]) -> str:
+    samples = [
+        float(call["ms"])
+        for run in runs
+        for call in cast(Sequence[Mapping[str, Any]], run.get("jev_call_log") or [])
+        if isinstance(call.get("ms"), int | float)
+    ]
+    return distribution(samples) if samples else "not recorded"
+
+
+def _flag_count(runs: Sequence[Record], key: str) -> str:
+    if not any(key in run for run in runs):
+        return "not recorded"
+    return f"{sum(bool(run.get(key)) for run in runs)}/{len(runs)}"
+
+
+def _categories(runs: Sequence[Record]) -> str:
+    failed = [run for run in runs if not run["success"]]
+    if not failed:
+        return "none"
+    if not any("failure_category" in run for run in failed):
+        return "not recorded"
+    counts = Counter(str(run.get("failure_category") or "other") for run in failed)
+    return "; ".join(f"{name} {count}" for name, count in counts.most_common())
+
+
+def jev_changed_decision(without: Record, with_jev: Record) -> bool | None:
+    """True when B's decision differs from A's and equals Jev's observed option. None if unobserved."""
+    answer = with_jev.get("jev_answer")
+    chosen = with_jev.get("decision")
+    other = without.get("decision")
+    if not isinstance(answer, str) or not isinstance(chosen, str) or not isinstance(other, str):
+        return None
+    return chosen != other and chosen == answer
+
+
 def arm_summary(runs: Sequence[Record]) -> dict[str, str]:
     solved = [r for r in runs if r["success"]]
     hours = sum(float(r["wall_s"]) for r in runs) / 3600
@@ -104,6 +161,10 @@ def arm_summary(runs: Sequence[Record]) -> dict[str, str]:
         "Jev calls (total; runs with one)": (
             f"{sum(int(r['jev_calls']) for r in runs)}; {sum(bool(r['jev_tool_called']) for r in runs)}/{len(runs)}"
         ),
+        "unnecessary Jev calls (total)": str(sum(int(r.get("unnecessary_jev_calls") or 0) for r in runs)),
+        "Jev round trip, ms": _round_trip(runs),
+        "old-rule successes": _flag_count(runs, "old_rule_success"),
+        "failure categories": _categories(runs),
         "judge accuracy (decision = gold)": (
             f"{sum(bool(r['decision_correct']) for r in judged)}/{len(judged)}" if judged else "no gold decision"
         ),
@@ -121,22 +182,53 @@ def paired_lines(measured: Sequence[Pair]) -> list[str]:
     if both:
         diffs = [float(b["wall_s"]) - float(a["wall_s"]) for a, b in both]
         lines.append(f"- Wall time, with minus without, pairs both solved (s): {distribution(diffs)}.")
+    observed = [item for item in (jev_changed_decision(a, b) for a, b in measured)]
+    changed = [item for item in observed if item is True]
+    correct = [
+        b for (_, b), item in zip(measured, observed, strict=True) if item is True and b.get("decision_correct") is True
+    ]
+    lines.append(
+        f"- Jev changed the decision: {len(changed)} observed changes; "
+        f"{len(correct)} of those equal gold; {observed.count(None)} pairs had no Jev option to compare."
+    )
+    lines.append("- Old-rule vs new-rule successes are the arm rows `old-rule successes` and `tasks solved`.")
     lines.append("- Descriptive only: no significance test, and n is small.")
+    return lines
+
+
+def _task_table(measured: Sequence[Pair]) -> list[str]:
+    """Old-rule and new-rule success, Jev calls, and failure categories, per task and arm."""
+    lines = [
+        "| task | arm | new-rule success | old-rule success | Jev calls | unnecessary | failure categories |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    by_task: dict[str, list[Pair]] = {}
+    for pair in measured:
+        by_task.setdefault(str(pair[0]["task"]), []).append(pair)
+    for task_id in sorted(by_task):
+        for index, arm in enumerate(ARMS):
+            runs = [pair[index] for pair in by_task[task_id]]
+            lines.append(
+                f"| {task_id} | {arm} | {sum(bool(r['success']) for r in runs)}/{len(runs)} | "
+                f"{_flag_count(runs, 'old_rule_success')} | {sum(int(r['jev_calls']) for r in runs)} | "
+                f"{sum(int(r.get('unnecessary_jev_calls') or 0) for r in runs)} | {_categories(runs)} |"
+            )
     return lines
 
 
 def _runs_table(runs: Sequence[Record]) -> list[str]:
     lines = [
         "| run | measurement | success | tests passed | wall s | tokens | tool calls | Jev calls | test cycles "
-        "| wrong branches | decision |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| wrong branches | decision | failure |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in runs:
         branches = "n/a" if r["wrong_branches"] is None else (", ".join(r["wrong_branches"]) or "0")
         lines.append(
             f"| {r['run_id']} | {r['measurement'] or 'measured'} | {'yes' if r['success'] else 'no'} | "
             f"{'yes' if r['final_tests_passed'] else 'no'} | {float(r['wall_s']):.1f} | {r['tokens']['total']} | "
-            f"{r['tool_calls']} | {r['jev_calls']} | {r['test_cycles']} | {branches} | {r['decision'] or 'none'} |"
+            f"{r['tool_calls']} | {r['jev_calls']} | {r['test_cycles']} | {branches} | {r['decision'] or 'none'} | "
+            f"{r.get('failure_category') or ''} |"
         )
     return lines
 
@@ -179,6 +271,10 @@ def agent_section(agent: str, records: Sequence[Record], meta: Mapping[str, Any]
             "### Paired",
             "",
             *paired_lines(measured),
+            "",
+            "### Per task",
+            "",
+            *_task_table(measured),
             "",
         ]
     lines += ["### Runs", "", *_runs_table(sorted(records, key=lambda r: r["run_id"])), ""]

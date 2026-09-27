@@ -1,0 +1,19 @@
+{
+  "judgment": "extract",
+  "jev_tool": "jev_extract",
+  "question": "Which number in memo.txt is the restocking rate?",
+  "options": {
+    "rate-15": "15, the RESTOCK_RATE line",
+    "rate-10": "10, the legacy handling percent",
+    "rate-7": "7, the waiver window in days"
+  },
+  "gold": "rate-15",
+  "control": false,
+  "target_module": "tariff",
+  "gold_verification": "The gold option is the one the hidden acceptance tests accept. It is not a model's opinion. rate-10 and rate-7 produce a different fee on 1000 cents.",
+  "gold_source": "memo.txt labels RESTOCK_RATE as 15 and says not to use the legacy handling percent. tariff.py still uses 10.",
+  "wrong_branch_signatures": {
+    "rate-10": ["RATE\\s*=\\s*10\\b"],
+    "rate-7": ["RATE\\s*=\\s*7\\b"]
+  }
+}

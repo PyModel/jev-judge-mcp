@@ -36,3 +36,17 @@ Stop: all 150 triplets recorded
 History: the 2026-09-22 two-arm Pi run recorded 150 pairs; after 43 with-Jev runs reached the local model, 127.0.0.1:8000 stopped accepting connections (Pi reported Connection error with zero tokens, on both arms) and the remaining 107 runs were server failures, not model speed.
 
 Speed and time use triplets where every arm reached the model. Source: run records `evals/reports/bench150/*/result.json` (raw transcripts gitignored).
+
+## D3 telemetry
+
+Definitions, also emitted by `evals.bench.chart.numbers_md` when records are re-rendered. A call is unnecessary when it repeats an earlier call of the same tool with the same arguments. Jev changed the decision when a with-Jev arm's answer differs from the direct arm and equals an option id in that run's Jev result text. Whether that change was correct needs gold.
+
+This published summary does not carry per-call arguments or result text, so those two counts are not recomputed here. What this file already measures, without gold:
+
+- Invocation: B called Jev 0/150; C called Jev 150/150 (table above). Calls per run are not in this summary.
+- Unnecessary calls: not recorded (call arguments are not in this summary).
+- Jev changed the decision: not observed (no Jev result text in this summary).
+- That change was correct: not computable (0 labeled items).
+- Latency: Jev round trip median 464.6 ms; wall medians are in the table above.
+- Tokens: the token line above.
+- Failure category: stop line is `all 150 triplets recorded`. This summary has no per-run failure breakdown. The renderer classifies `server_failure`, timeout, agent error, and harness error from the run records when they are present.

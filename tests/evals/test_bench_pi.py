@@ -192,6 +192,8 @@ def test_unlabeled_chart_says_accuracy_is_not_measured() -> None:
     table = chart.numbers_md([record, other, forced], labeled_items=0, stop="all 1 triplets recorded")
     assert "not measured (0 labeled items)" in table and "result.json" in table
     assert "Tokens: not measured." in table
+    assert "not computable (0 labeled items)" in table
+    assert "A Jev call is unnecessary when it repeats" in table
 
 
 def test_chart_labels_a_grading_failure_apart_from_a_connection_error() -> None:

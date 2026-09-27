@@ -14,7 +14,7 @@ import pytest
 
 from evals.ab import arms, ledger, outcomes, report, stream, tasks, unsafe
 from evals.ab import run as ab_run
-from evals.ab.grade import changed_protected, expected_ids, grade, run_tests
+from evals.ab.grade import changed_protected, expected_ids, grade, old_rule_success, run_tests
 from evals.ab.stream import ToolUse, Trace
 from evals.bench import pi
 from evals.spend import JEV_PUBLISHED_USD_PER_MTOK_INPUT, SpendLedger
@@ -63,7 +63,9 @@ def test_every_task_hinges_on_its_judgment(tmp_path: Path, task: tasks.Task) -> 
     """Every wrong option a task ships as a solution fails the hidden tests while keeping the old ones:
     only the right judgment passes."""
     judgment = task.judgment
-    assert judgment.kind in ("boundary", "classification", "patch choice")
+    assert judgment.kind in tasks.JUDGMENT_KINDS
+    assert "acceptance" in task.gold_verification.lower()
+    assert task.target_module
     assert judgment.gold in judgment.options and judgment.jev_tool in outcomes.JEV_TOOLS
     assert task.distractors and judgment.gold not in task.distractors
     for option, solution in task.distractors.items():
@@ -116,6 +118,96 @@ def test_agent_edits_to_tests_do_not_count(tmp_path: Path) -> None:
     assert result.regressions == ()
     assert not result.correct
     assert not any("test_mine" in test_id for test_id in run_tests(tree, task, PYTHON))
+
+
+def _add_day_30_method(tree: Path) -> None:
+    """The 2026-09-27 shape: a new test method inside the pre-existing refund test class."""
+    path = tree / "tests" / "test_refunds.py"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "class RefundTest(unittest.TestCase):\n",
+            "class RefundTest(unittest.TestCase):\n"
+            "    def test_day_30_after_delivery_is_on_time(self) -> None:\n"
+            "        self.assertTrue(refund_allowed(date(2026, 3, 1), date(2026, 3, 5), date(2026, 4, 4)))\n\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_a_correct_fix_plus_an_added_test_method_is_correct(tmp_path: Path) -> None:
+    """ADR-0071: the 2026-09-27 with-Jev shape grades correct, and still fails the old byte rule."""
+    task = tasks.load_task("j1-refund-window")
+    tree = _tree(tmp_path, task, solution=task.reference)
+    _add_day_30_method(tree)
+    result = grade(tree, task, PYTHON)
+    assert result.protected_changed == ("tests/test_refunds.py",)
+    assert result.preexisting_altered == ()
+    assert result.correct
+    assert not old_rule_success(result)
+    added = result.added_tests
+    assert len(added) == 1
+    assert added[0].file == "tests/test_refunds.py"
+    assert added[0].name == "RefundTest.test_day_30_after_delivery_is_on_time"
+    assert added[0].outcome == "pass" and added[0].relevant
+
+
+def test_a_failing_added_test_fails_the_run_and_an_irrelevant_one_does_not(tmp_path: Path) -> None:
+    task = tasks.load_task("j1-refund-window")
+    tree = _tree(tmp_path, task, solution=task.reference)
+    notes = (
+        "import unittest\n\n\n"
+        "class Notes(unittest.TestCase):\n"
+        "    def test_unrelated(self) -> None:\n"
+        "        self.assertTrue(True)\n"
+    )
+    (tree / "tests" / "test_notes.py").write_text(notes, encoding="utf-8")
+    irrelevant = grade(tree, task, PYTHON)
+    assert irrelevant.correct
+    assert irrelevant.added_tests[0].relevant is False and irrelevant.added_tests[0].outcome == "pass"
+    (tree / "tests" / "test_notes.py").write_text(
+        notes.replace("self.assertTrue(True)", "self.fail('added')"),
+        encoding="utf-8",
+    )
+    failing = grade(tree, task, PYTHON)
+    assert not failing.correct
+    assert failing.added_tests[0].outcome == "fail"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        "assertion",
+        "skip",
+        "delete",
+    ],
+)
+def test_preexisting_test_edits_still_fail(tmp_path: Path, mutate: str) -> None:
+    task = tasks.load_task("j1-refund-window")
+    tree = _tree(tmp_path, task, solution=task.reference)
+    path = tree / "tests" / "test_refunds.py"
+    text = path.read_text(encoding="utf-8")
+    if mutate == "assertion":
+        path.write_text(text.replace("self.assertTrue", "self.assertFalse", 1), encoding="utf-8")
+    elif mutate == "skip":
+        path.write_text(
+            text.replace(
+                "    def test_soon_after_delivery_is_allowed",
+                "    @unittest.skip('x')\n    def test_soon_after_delivery_is_allowed",
+                1,
+            ),
+            encoding="utf-8",
+        )
+    else:
+        path.unlink()
+    result = grade(tree, task, PYTHON)
+    assert result.preexisting_altered == ("tests/test_refunds.py",)
+    assert not result.correct
+
+
+def test_two_control_tasks_are_marked() -> None:
+    controls = [task for task in tasks.load_tasks() if task.judgment.control]
+    assert {task.id for task in controls} >= {"j10-control-spec", "j11-control-label"}
 
 
 def test_protected_files_are_the_pre_existing_tests() -> None:
@@ -296,13 +388,13 @@ def _book(tmp_path: Path, agent: str = "claude") -> SpendLedger:
 
 
 def test_the_run_cap_is_the_grid_in_pairs(tmp_path: Path) -> None:
-    assert ledger.MAX_RUNS == len(tasks.TASK_IDS) * len(arms.ARMS) * ledger.REPEATS == 18
+    assert ledger.MAX_RUNS == len(tasks.TASK_IDS) * len(arms.ARMS) * ledger.REPEATS == 66
     book = _book(tmp_path)
     for i in range(ledger.MAX_RUNS - 2):
         book.record(f"r{i}", 0.0)
     assert book.can_start(ledger.PAIR)
     book.record("last-1", 0.0)
-    assert book.blocker(ledger.PAIR) == "run cap: 17 of 18 runs done"
+    assert book.blocker(ledger.PAIR) == f"run cap: {ledger.MAX_RUNS - 1} of {ledger.MAX_RUNS} runs done"
     assert _book(tmp_path).runs == book.runs
 
 
@@ -677,6 +769,84 @@ def test_decision_accuracy_needs_gold() -> None:
     no_gold = tasks.Judgment("boundary", "jev_verify", "q", {"x": "", "y": ""}, None, {})
     assert outcomes.decision_correct("x", no_gold) is None
     assert outcomes.wrong_branches([], no_gold) is None
+
+
+def test_a_control_task_marks_every_jev_call_unnecessary_and_a_repeat_marks_the_later_call() -> None:
+    calls = [{"tool": "jev_verify", "is_error": False}, {"tool": "jev_verify", "is_error": False}]
+    same = ToolUse("jev_verify", {"claims": ["same"]})
+    assert outcomes.unnecessary_jev_calls(control=True, uses=[same], calls=calls) == 2
+    assert outcomes.unnecessary_jev_calls(control=False, uses=[same, same], calls=calls) == 1
+    other = ToolUse("jev_verify", {"claims": ["other"]})
+    assert outcomes.unnecessary_jev_calls(control=False, uses=[same, other], calls=calls) == 0
+
+
+def test_jev_answer_reads_a_tool_result_and_not_the_agents_decision_line() -> None:
+    options = {"claim-false": "fix", "claim-stands": "leave"}
+    stream = "\n".join(
+        [
+            json.dumps({"type": "tool_execution_start", "toolCallId": "c1", "toolName": "jev_gate", "args": {}}),
+            json.dumps(
+                {
+                    "type": "tool_execution_end",
+                    "toolCallId": "c1",
+                    "toolName": "jev_gate",
+                    "isError": False,
+                    "result": {"choice": "claim-false"},
+                }
+            ),
+            json.dumps({"type": "agent_end", "result": '{"decision": "claim-stands"}'}),
+        ]
+    )
+    assert outcomes.jev_answer(stream, options) == "claim-false"
+    errored = stream.replace('"isError": false', '"isError": true')
+    assert outcomes.jev_answer(errored, options) is None
+
+
+def _category(
+    status: str,
+    *,
+    success: bool,
+    preexisting: tuple[str, ...] = (),
+    added_failing: bool = False,
+    decision_matches_gold: bool | None = True,
+) -> str | None:
+    return outcomes.failure_category(
+        status=status,
+        success=success,
+        acceptance_passed=3,
+        acceptance_total=3,
+        regressions=(),
+        preexisting_altered=preexisting,
+        added_failing=added_failing,
+        decision_matches_gold=decision_matches_gold,
+        jev_calls=(),
+    )
+
+
+def test_failure_category_prefers_the_first_matching_cause() -> None:
+    assert _category("ok", success=True) is None
+    assert _category("failed: timeout after 900s", success=False) == "timeout"
+    assert _category("ok", success=False, preexisting=("tests/test_refunds.py",)) == "pre-existing test altered"
+    assert _category("ok", success=False, added_failing=True) == "added test failing"
+    assert _category("ok", success=False, decision_matches_gold=False) == "wrong decision"
+
+
+def test_report_defines_unnecessary_calls_and_counts_an_observed_decision_change() -> None:
+    text = report.render([], {})
+    assert "Unnecessary Jev call:" in text and "Jev changed the decision:" in text
+    without = _run("j1", "A", decision="keep-rate")
+    with_jev = _run(
+        "j1",
+        "B",
+        decision="use-spec",
+        decision_correct=True,
+        jev_answer="use-spec",
+        jev_call_log=[{"tool": "jev_verify", "ms": 12.5}],
+    )
+    rendered = report.render([without, with_jev], {})
+    assert "Jev changed the decision: 1 observed changes; 1 of those equal gold" in rendered
+    assert report.jev_changed_decision(without, with_jev) is True
+    assert report.jev_changed_decision(without, {**with_jev, "jev_answer": None}) is None
 
 
 def _trace(frontier: int, output: int) -> Trace:

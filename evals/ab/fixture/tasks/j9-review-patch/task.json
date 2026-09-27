@@ -1,0 +1,18 @@
+{
+  "judgment": "review",
+  "jev_tool": "jev_review",
+  "question": "Does patches/proposed.diff match the finance rules?",
+  "options": {
+    "approve": "the patch is correct; apply it",
+    "request-changes": "the patch is not correct; do not apply it, and make split follow the finance rules",
+    "reject": "the patch is not correct; leave split unchanged"
+  },
+  "gold": "request-changes",
+  "control": false,
+  "target_module": "installments",
+  "gold_verification": "The gold option is the one the hidden acceptance tests accept. It is not a model's opinion. Applying the patch or leaving split unchanged both fail those tests.",
+  "gold_source": "docs/installments.md requires an exact total, no two installments more than one cent apart, and the larger ones first. proposed.diff puts the entire remainder on the last installment.",
+  "wrong_branch_signatures": {
+    "approve": ["\\[base\\]\\s*\\*\\s*\\(parts\\s*-\\s*1\\)\\s*\\+\\s*\\["]
+  }
+}

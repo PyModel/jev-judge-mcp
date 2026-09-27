@@ -1,0 +1,16 @@
+{
+  "judgment": "find",
+  "jev_tool": "jev_find",
+  "question": "Which listed line is the refund bug?",
+  "options": {
+    "refunds-return": "refunds.py:12, the return in refund_allowed",
+    "routing-rules": "routing.py:5, the RULES table",
+    "installments-round": "installments.py:10, the round call in split"
+  },
+  "gold": "refunds-return",
+  "control": false,
+  "target_module": "refunds",
+  "gold_verification": "The gold option is the one the hidden acceptance tests accept. It is not a model's opinion. Fixing either other file leaves refund_allowed on the snapshot behavior, which those tests reject.",
+  "gold_source": "docs/refunds.md counts 30 days from delivery, inclusive. refunds.py:12 still counts from the order date. The other listed lines are not that bug.",
+  "wrong_branch_signatures": {}
+}

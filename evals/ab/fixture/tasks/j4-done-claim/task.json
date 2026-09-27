@@ -1,0 +1,16 @@
+{
+  "judgment": "done-claim",
+  "jev_tool": "jev_gate",
+  "question": "Does the done-claim in CLAIM.md hold?",
+  "options": {
+    "claim-stands": "the claim is true; leave the code as it is",
+    "claim-false": "the claim is false; change the code so the claim becomes true",
+    "claim-unverifiable": "the claim cannot be checked; leave the code as it is"
+  },
+  "gold": "claim-false",
+  "control": false,
+  "target_module": "refunds",
+  "gold_verification": "The gold option is the one the hidden acceptance tests accept. It is not a model's opinion. claim-stands and claim-unverifiable leave the snapshot implementation, which the acceptance tests reject.",
+  "gold_source": "CLAIM.md says refund handling already follows docs/refunds.md. The snapshot refunds.py still counts from the order date, so the claim is false until the code matches that document.",
+  "wrong_branch_signatures": {}
+}

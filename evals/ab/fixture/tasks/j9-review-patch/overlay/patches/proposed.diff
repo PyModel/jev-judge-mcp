@@ -1,0 +1,11 @@
+diff --git a/installments.py b/installments.py
+index 1ee946a..f737f40 100644
+--- a/installments.py
++++ b/installments.py
+@@ -7,4 +7,5 @@ def split(total_cents: int, parts: int) -> list[int]:
+         raise ValueError("parts must be at least 1")
+     if total_cents < 0:
+         raise ValueError("total must be non-negative")
+-    return [round(total_cents / parts)] * parts
++    base = total_cents // parts
++    return [base] * (parts - 1) + [total_cents - base * (parts - 1)]
