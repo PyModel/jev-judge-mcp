@@ -298,7 +298,8 @@ def _record(
     stream_path = run_dir / "stream.jsonl"
     stream_text = stream_path.read_text(encoding="utf-8") if stream_path.is_file() else ""
     answer = outcomes.jev_answer(stream_text, task.judgment.options)
-    succeeded = run_correct(result, decision_matches_gold=matches)
+    escaped = run.escape
+    succeeded = run_correct(result, decision_matches_gold=matches) and not escaped
     return _outcome_record(
         rid,
         task.id,
@@ -325,7 +326,7 @@ def _record(
                 for item in result.added_tests
             ],
             "old_rule_success": old_rule_success(result),
-            "failure_category": outcomes.failure_category(
+            "failure_category": "escape" if escaped else outcomes.failure_category(
                 status=run.status,
                 success=succeeded,
                 acceptance_passed=result.acceptance_passed,
@@ -446,7 +447,15 @@ def runs_remain(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed:
 
 
 def study(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int = SEED) -> str:
-    """Run every pair not yet recorded, within the caps; returns why it stopped."""
+    """Run every pair not yet recorded, within the caps; returns why it stopped.
+
+    A recorded escape stops the study: the agent left its boundary, so nothing recorded after it is
+    comparable until the escape is understood. The guard also fires on resume, before any new run.
+    """
+    for path in sorted(out.glob("*/result.json")):
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if record.get("failure_category") == "escape":
+            return f"stopped: sandbox escape on {record.get('run_id')} (recorded earlier)"
     book, plan = _load_book(setup, out, repeats=repeats, seed=seed)
     for task, repeat, order in plan:
         pending = [arm for arm in order if run_id(task.id, arm, repeat) not in book.runs]
@@ -457,12 +466,14 @@ def study(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int =
         for arm in pending:
             rid = run_id(task.id, arm, repeat)
             sys.stderr.write(f"run {setup.agent} {rid} (spent ${book.spent:.2f})\n")
-            run_recorded(
+            record = run_recorded(
                 book,
                 rid,
                 out / rid / "result.json",
                 lambda task=task, arm=arm, repeat=repeat: run_one(task, arm, repeat, setup, book, out),
             )
+            if isinstance(record, Mapping) and record.get("failure_category") == "escape":
+                return f"stopped: sandbox escape on {rid}"
     return f"all {len(plan)} pairs recorded"
 
 

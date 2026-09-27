@@ -127,3 +127,27 @@ def test_dry_run_scores_a_wrong_judgment_as_a_measured_failure(tmp_path: Path, l
         assert record["measurement"] is None and not record["success"]
         assert record["regressions"] == [] and record["acceptance_passed"] < record["acceptance_total"]
         assert record["wrong_branches"] == ["delivery-date-exclusive"] and record["decision_correct"] is False
+
+
+def test_an_escape_fails_the_run_and_stops_the_study(tmp_path: Path, loopback: Loopback) -> None:
+    """A tool input that reaches outside the boundary is an escape: the run fails with the category
+    and the study stops after it instead of paying for more runs."""
+    out = tmp_path / "out" / "claude"
+
+    def plan_with_escape(arm: str, repeat: int) -> Plan:
+        plan = solve()(arm, repeat)
+        return {
+            **plan,
+            "uses": [
+                *plan["uses"],
+                {"name": "Bash", "input": {"command": "cat /Users/panda/.pi/agent/auth.json"}},
+            ],
+        }
+
+    stop = ab_run.study(setup(tmp_path, loopback, plan_with_escape), out, repeats=1)
+    assert "escape" in stop and "r1" in stop
+    records = _records(out)
+    assert len(records) == 1, "the study must stop on the first escape"
+    (escaped,) = records.values()
+    assert escaped["failure_category"] == "escape" and escaped["success"] is False
+    assert escaped["final_tests_passed"] is True  # the tree was fine; the boundary was not

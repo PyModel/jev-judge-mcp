@@ -26,6 +26,7 @@ environment below that boundary.
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -62,6 +63,90 @@ STDERR_TRUNCATED_LINE = "[stderr truncated]"
 
 _PIPE_READ = 65_536
 
+_HOST_PATH = re.compile(r"(?<![\w./])/(?:Users|home|Volumes|opt|private|tmp|var)/[^\s\"'\\)\],}]*")
+_CREDENTIAL_NAME = re.compile(
+    r"(?:/|^)(?:auth\.json|id_rsa|id_ed25519|\.env|credentials(?:\.json)?|login\.keychain-db)$",
+    re.IGNORECASE,
+)
+
+
+def _walk_strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        out: list[str] = []
+        for item in cast(dict[str, object], value).values():
+            out.extend(_walk_strings(item))
+        return out
+    if isinstance(value, list):
+        out = []
+        for item in cast(list[object], value):
+            out.extend(_walk_strings(item))
+        return out
+    return []
+
+
+def _escaped_path(candidate: str, *, workdir: str, sandbox: str) -> bool:
+    resolved = candidate.rstrip("*.")
+    for root in (workdir, sandbox):
+        if resolved == root or resolved.startswith(root.rstrip("/") + "/"):
+            return False
+    return True
+
+
+def escape_scan(stdout: str, *, workdir: str, sandbox: str) -> str | None:
+    """Why the run left its boundary, or None when every tool input and result stayed inside it.
+
+    The D3 study's agents read the operator's configs, other worktrees, and the harness sources, and
+    the model provider saw all of it as tool output. This canary reads the same transcript the study
+    keeps: tool inputs (what the agent chose to read or run) and tool results (what reached the
+    model) from both stream shapes, Claude stream-json and Pi events. Two rules, first hit wins: an
+    absolute path outside `workdir` and `sandbox`, or any credential file's name.
+    """
+    for raw in stdout.splitlines():
+        line = raw.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        payload: dict[str, Any] = cast(dict[str, Any], event)
+        kind = payload.get("type")
+        texts: list[str] = []
+        if kind == "assistant":
+            message = cast(dict[str, Any], payload.get("message") or {})
+            for raw_block in cast(list[object], message.get("content") or []):
+                if not isinstance(raw_block, dict):
+                    continue
+                block = cast(dict[str, Any], raw_block)
+                if block.get("type") == "tool_use":
+                    texts.extend(_walk_strings(block.get("input")))
+        elif kind == "tool_execution_start":
+            texts.extend(_walk_strings(payload.get("args")))
+        elif kind == "user":
+            message = cast(dict[str, Any], payload.get("message") or {})
+            for raw_block in cast(list[object], message.get("content") or []):
+                if not isinstance(raw_block, dict):
+                    continue
+                block = cast(dict[str, Any], raw_block)
+                if block.get("type") == "tool_result":
+                    texts.extend(_walk_strings(block.get("content")))
+        elif kind == "tool_execution_end":
+            texts.extend(_walk_strings(payload.get("result")))
+        else:
+            continue
+        for text in texts:
+            for candidate in _HOST_PATH.findall(text):
+                if _escaped_path(candidate, workdir=workdir, sandbox=sandbox):
+                    return f"escape: host path {candidate[:200]}"
+            for candidate in text.split():
+                if _CREDENTIAL_NAME.search(candidate.rstrip('",;:')):
+                    return f"escape: credential file {Path(candidate).name[:80]}"
+    return None
+
 
 @dataclass(frozen=True)
 class AgentCommand:
@@ -89,6 +174,8 @@ class AgentRunResult:
     trace: stream.Trace
     status: str
     """`ok`, or `failed: ...` for a timeout, a nonzero exit, or a result that is not a success."""
+    escape: str | None = None
+    """Why the run left its boundary (`escape_scan`), or None when the transcript stayed inside."""
 
 
 def secret_scrub(root: Path, secret: str) -> None:
@@ -468,6 +555,7 @@ def run_agent(
             wall_s=wall,
             trace=trace,
             status=_status(returncode, trace, command.timeout_s),
+            escape=escape_scan(stdout, workdir=str(workdir), sandbox=str(secret_dir)),
         )
     finally:
         shutil.rmtree(secret_dir, ignore_errors=True)
