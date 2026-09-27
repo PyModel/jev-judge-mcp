@@ -39,5 +39,8 @@ def test_uvx_from_source_initializes(tmp_path: Path) -> None:
     uris = {item["uri"] for item in listed["result"]["resources"]}
     assert "jev-skill://jev/SKILL.md" in uris
     assert "jev-skill://jev-mcp/SKILL.md" in uris
-    assert skill["result"]["contents"][0]["text"].startswith("---\nname: jev\n")
+    # The served skill is this checkout's bytes: a stale cached build fails here instead of passing.
+    assert skill["result"]["contents"][0]["text"] == (
+        REPO_ROOT / "src" / "jev_judge_mcp" / "skills" / "jev" / "SKILL.md"
+    ).read_text(encoding="utf-8")
     assert returncode == 0, stderr
