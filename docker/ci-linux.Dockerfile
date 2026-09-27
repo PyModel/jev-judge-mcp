@@ -3,15 +3,16 @@
 #
 # Everything the GitHub `ci` workflow's runners provide is baked here: the Node 24.19.0 the
 # parity stage grounds JS behavior with (actions/setup-node's exact version, checksum
-# verified), the system tools the tests shell out to (git, make, ps/procps), and the uv the
-# workflow's setup-uv step provides. The base is pinned by digest;
+# verified), the system tools the tests shell out to (git, make, ps/procps), and the uv that
+# satisfies pyproject's `required-version` (0.12.19). The base is pinned by digest;
 # tests/unit/test_ci_prepush_coverage.py asserts the pins stay.
 #
 # The check runs as the non-root `runner` user (uid 1000), like GitHub's runner: permission
 # behavior differs under root, and scripts/ci/linux_check.sh drops to this user before any
 # stage runs. Its uv caches live in /home/runner and are mounted as named volumes by
 # scripts/ci/linux_check.sh, so repeated checks do not re-download wheels or interpreters.
-FROM ghcr.io/astral-sh/uv@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58
+# ghcr.io/astral-sh/uv:0.12.19-python3.12-trixie-slim (bookworm images stop at uv 0.9.30)
+FROM ghcr.io/astral-sh/uv@sha256:10b94fe3550b7a96e3982860bb82cdefba6300264a7a40bb9334acf21a450974
 
 # git: the check runs against a real clone (identity.py reads .git directly, and parity's
 # reference harness expects a git checkout). make and procps: the integration census and the

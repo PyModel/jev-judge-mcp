@@ -15,6 +15,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
       - run: uv sync --locked --all-extras
       - run: make lint
 
@@ -23,6 +25,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
       - run: uv sync --locked --all-extras
       - run: make typecheck
 
@@ -31,6 +35,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
       - run: uv sync --locked --all-extras
       - run: make unit
 
@@ -39,6 +45,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
       - run: uv sync --locked --all-extras
       - run: make property
       - run: make policy-coverage
@@ -50,6 +58,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
       - run: uv sync --locked --all-extras
       - run: make contract
 
@@ -59,6 +69,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
       # Pinned to the parity oracle's Node (Makefile NODE, tests/parity/harness/reference.sh);
       # a floating 24.x can drift ICU rendering.
       - uses: actions/setup-node@v4
@@ -73,6 +85,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
       - run: uv sync --locked --all-extras
       - run: make security
 
@@ -87,9 +101,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: security stage under a one-CPU quota, non-root
         run: |
-          # ghcr.io/astral-sh/uv:python3.12-bookworm-slim, pinned by digest (multi-arch index).
+          # ghcr.io/astral-sh/uv:0.12.19-python3.12-trixie-slim, pinned by digest (multi-arch index).
           docker run --rm --cpus 1 --entrypoint sh -v "$PWD":/src:ro \
-            ghcr.io/astral-sh/uv@sha256:e5b65587bce7de595f299855d7385fe7fca39b8a74baa261ba1b7147afa78e58 -c '
+            ghcr.io/astral-sh/uv@sha256:10b94fe3550b7a96e3982860bb82cdefba6300264a7a40bb9334acf21a450974 -c '
             set -eux
             apt-get update -qq && apt-get install -y -qq make git procps >/dev/null
             useradd -m runner
@@ -103,6 +117,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
       - run: make build
       - uses: actions/upload-artifact@v4
         with:
@@ -115,6 +131,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
       - run: uv sync --locked --all-extras
       - run: make smoke
       # ADR-0053 guard: an installer-written entry must start when the first Python on PATH is
@@ -132,6 +150,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
       - run: uv sync --locked --all-extras
       - run: make eval
       # Cheap guard for the load stub: concurrency 1 and 4, no timing budget. The full timing run is
