@@ -5,7 +5,9 @@ PYTEST := uv run pytest
 
 .PHONY: ci lint typecheck unit property policy-coverage contract parity security build smoke eval eval-live security-live ab load load_canary hooks ci-linux
 
-ci: lint typecheck unit property policy-coverage contract parity policy-replay security build smoke eval load_canary
+ci:
+	uv sync --locked --all-extras
+	$(MAKE) lint typecheck unit property policy-coverage contract parity policy-replay security build smoke eval load_canary
 
 # The pre-push gate (ADR-0056). `make hooks` enables the gate for this clone and proves it
 # is reachable — with empty stdin nothing is checked, but the gate's banner must appear. The
