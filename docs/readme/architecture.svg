@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1360 660" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase" style="" width="1360" height="660" xmlns="http://www.w3.org/2000/svg"><style>
+<svg viewBox="0 0 1360 680" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase" style="" width="1360" height="680" xmlns="http://www.w3.org/2000/svg"><style>
 /* No font is embedded. Text uses the system monospace stack. */
   
 svg { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono CJK SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', monospace; }
@@ -315,7 +315,7 @@ rect.c-bg-rect { fill: var(--bg); }
         <!-- Connection paths (before components for correct z-order) -->
         <path data-edge-from="client" data-edge-to="server" data-edge-label="tools/call" data-edge-key="0" data-edge-id="call" data-composition-points="174,307;330,307" d="M 174 307 L 330 307" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="server" data-edge-to="instructions" data-edge-label="client loads" data-edge-key="1" data-edge-id="client-loads" data-composition-points="414,280;414,80" d="M 414 280 L 414 80" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="instructions" data-edge-to="skills" data-edge-label="prompts" data-edge-key="2" data-edge-id="serves-skills" data-composition-points="498,54;700,54" d="M 498 54 L 700 54" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="server" data-edge-to="skills" data-edge-label="resources · prompts" data-edge-key="2" data-edge-id="serves-skills" data-composition-points="414,280;414,96;784,96;784,80" d="M 414 280 L 414 104 Q 414 96 422 96 L 776 96 Q 784 96 784 88 L 784 80" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="server" data-edge-to="arguments" data-edge-label="validate args" data-edge-key="3" data-edge-id="validate-args" data-composition-points="498,307;514,307;514,194;530,194" d="M 498 307 L 506 307 Q 514 307 514 299 L 514 202 Q 514 194 522 194 L 530 194" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="arguments" data-edge-to="tools" data-edge-label="typed args" data-edge-key="4" data-edge-id="typed-args" data-composition-points="605,220;605,250;770,250;770,280" d="M 605 220 L 605 242 Q 605 250 613 250 L 762 250 Q 770 250 770 258 L 770 280" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="limits" data-edge-to="tools" data-edge-label="cap values" data-edge-key="5" data-edge-id="cap-values" data-composition-points="930,220;930,250;798,250;798,280" d="M 930 220 L 930 242 Q 930 250 922 250 L 806 250 Q 798 250 798 258 L 798 280" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
@@ -325,16 +325,17 @@ rect.c-bg-rect { fill: var(--bg); }
         <path data-edge-from="validation" data-edge-to="policy" data-edge-label="judgments" data-edge-key="9" data-edge-id="judgments" data-composition-points="700,465;498,465" d="M 700 465 L 498 465" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="policy" data-edge-to="serialize" data-edge-label="actions" data-edge-key="10" data-edge-id="decided" data-composition-points="330,465;180,465" d="M 330 465 L 180 465" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="serialize" data-edge-to="server" data-edge-label="result text" data-edge-key="11" data-edge-id="result-text" data-composition-points="102,440;102,387;414,387;414,334" d="M 102 440 L 102 395 Q 102 387 110 387 L 406 387 Q 414 387 414 379 L 414 334" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="settings" data-edge-to="runtime" data-edge-label="redaction" data-edge-key="12" data-edge-id="config" data-composition-points="1188,54;1174,54;1174,300;1160,300" d="M 1188 54 L 1181 54 Q 1174 54 1174 61 L 1174 293 Q 1174 300 1167 300 L 1160 300" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="settings" data-edge-to="runtime" data-edge-label="redaction" data-edge-key="12" data-edge-id="config" data-composition-points="1090,80;1090,280" d="M 1090 80 L 1090 280" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="tools" data-edge-to="extract" data-edge-label="patterns" data-edge-key="13" data-edge-id="patterns" data-composition-points="784,280;784,220" d="M 784 280 L 784 220" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="oracle" data-edge-to="serialize" data-edge-label="byte-equal" data-edge-key="14" data-edge-id="byte-equal" data-composition-points="99,572;99,548;118,548;118,514;102,514;102,490" d="M 99 572 L 99 556 Q 99 548 107 548 L 110 548 Q 118 548 118 540 L 118 522 Q 118 514 110 514 L 110 514 Q 102 514 102 506 L 102 490" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="runtime" data-edge-to="telemetry" data-edge-label="spans" data-edge-key="15" data-edge-id="spans" data-composition-points="1160,314;1174,314;1174,466;1188,466" d="M 1160 314 L 1167 314 Q 1174 314 1174 321 L 1174 459 Q 1174 466 1181 466 L 1188 466" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="evals" data-edge-to="client" data-edge-label="agent runs" data-edge-key="16" data-edge-id="agent-runs" data-composition-points="99,162;99,280" d="M 99 162 L 99 280" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="keyfile" data-edge-to="providers" data-edge-label="key fallback" data-edge-key="17" data-edge-id="stored-key" data-composition-points="935,572;935,531;1090,531;1090,490" d="M 935 572 L 935 539 Q 935 531 943 531 L 1082 531 Q 1090 531 1090 523 L 1090 490" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="setup" data-edge-to="keyfile" data-edge-label="verified key" data-edge-key="18" data-edge-id="setup-stores" data-composition-points="710,596;860,596" d="M 710 596 L 860 596" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="cache" data-edge-to="runtime" data-edge-label="replay" data-edge-key="19" data-edge-id="cache-hit" data-composition-points="1188,316;1164,316;1164,332;1184,332;1184,307;1160,307" d="M 1188 316 L 1172 316 Q 1164 316 1164 324 L 1164 324 Q 1164 332 1172 332 L 1176 332 Q 1184 332 1184 324 L 1184 315 Q 1184 307 1176 307 L 1160 307" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="cache" data-edge-to="runtime" data-edge-label="replay" data-edge-key="19" data-edge-id="cache-hit" data-composition-points="1224,310;1200,310;1200,326;1184,326;1184,300;1160,300" d="M 1224 310 L 1208 310 Q 1200 310 1200 318 L 1200 318 Q 1200 326 1192 326 L 1192 326 Q 1184 326 1184 318 L 1184 308 Q 1184 300 1176 300 L 1160 300" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="hook" data-edge-to="client" data-edge-label="gate" data-edge-key="20" data-edge-id="hook-runs" data-composition-points="275,248;275,264;99,264;99,280" d="M 275 248 L 275 256 Q 275 264 267 264 L 107 264 Q 99 264 99 272 L 99 280" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="doctor" data-edge-to="keyfile" data-edge-label="key presence" data-edge-key="21" data-edge-id="reads-key" data-composition-points="1100,596;1010,596" d="M 1100 596 L 1010 596" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="cli-judge" data-edge-to="tools" data-edge-label="in-process" data-edge-key="22" data-edge-id="in-process" data-composition-points="784,360;784,334" d="M 784 360 L 784 334" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
         <g id="node-client" data-node-id="client" data-node-label="MCP Client" tabindex="0" role="button" aria-label="Focus MCP Client, host agent, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="host agent" data-node-context="Architecture component">
@@ -349,15 +350,15 @@ rect.c-bg-rect { fill: var(--bg); }
         <text x="99" y="321" class="t-muted" font-size="9" text-anchor="middle">host agent</text>
         </g>
 
-        <g id="node-server" data-node-id="server" data-node-label="MCP server" tabindex="0" role="button" aria-label="Focus MCP server, Toolset · stdio · http, judgment layers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Toolset · stdio · http" data-node-context="judgment layers">
-          <title>MCP server · Toolset · stdio · http · judgment layers</title>
+        <g id="node-server" data-node-id="server" data-node-label="MCP server" tabindex="0" role="button" aria-label="Focus MCP server, stdio · http (bearer), judgment layers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="stdio · http (bearer)" data-node-context="judgment layers">
+          <title>MCP server · stdio · http (bearer) · judgment layers</title>
           <rect x="330" y="280" width="168" height="54" rx="6" class="c-mask"/>
           <rect x="330" y="280" width="168" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(336 286) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-node-label="" x="414" y="305" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">MCP server</text>
-        <text x="414" y="321" class="t-muted" font-size="9" text-anchor="middle">Toolset · stdio · http</text>
+        <text x="414" y="321" class="t-muted" font-size="9" text-anchor="middle">stdio · http (bearer)</text>
         </g>
 
         <g id="node-instructions" data-node-id="instructions" data-node-label="Instructions" tabindex="0" role="button" aria-label="Focus Instructions, names all 11 tools, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="names all 11 tools" data-node-context="Architecture component">
@@ -439,14 +440,14 @@ rect.c-bg-rect { fill: var(--bg); }
 
         <g id="node-settings" data-node-id="settings" data-node-label="Settings" tabindex="0" role="button" aria-label="Focus Settings, env-only · redacts, Architecture component" aria-pressed="false" data-node-kind="security" data-node-sublabel="env-only · redacts" data-node-context="Architecture component">
           <title>Settings · env-only · redacts · Architecture component</title>
-          <rect x="1188" y="28" width="148" height="52" rx="6" class="c-mask"/>
-          <rect x="1188" y="28" width="148" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(1194 34) scale(0.6875)">
+          <rect x="1020" y="28" width="140" height="52" rx="6" class="c-mask"/>
+          <rect x="1020" y="28" width="140" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(1026 34) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" x="1262" y="52" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Settings</text>
-        <text x="1262" y="68" class="t-muted" font-size="9" text-anchor="middle">env-only · redacts</text>
+          <text data-node-label="" x="1090" y="52" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Settings</text>
+        <text x="1090" y="68" class="t-muted" font-size="9" text-anchor="middle">env-only · redacts</text>
         </g>
 
         <g id="node-extract" data-node-id="extract" data-node-label="extract" tabindex="0" role="button" aria-label="Focus extract, killable workers, judgment layers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="killable workers" data-node-context="judgment layers">
@@ -505,15 +506,15 @@ rect.c-bg-rect { fill: var(--bg); }
         <text x="99" y="610" class="t-muted" font-size="9" text-anchor="middle">282 fixtures</text>
         </g>
 
-        <g id="node-telemetry" data-node-id="telemetry" data-node-label="Telemetry" tabindex="0" role="button" aria-label="Focus Telemetry, in-process spans, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="in-process spans" data-node-context="Architecture component">
-          <title>Telemetry · in-process spans · Architecture component</title>
+        <g id="node-telemetry" data-node-id="telemetry" data-node-label="Telemetry" tabindex="0" role="button" aria-label="Focus Telemetry, spans · metrics, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="spans · metrics" data-node-context="Architecture component">
+          <title>Telemetry · spans · metrics · Architecture component</title>
           <rect x="1188" y="440" width="148" height="52" rx="6" class="c-mask"/>
           <rect x="1188" y="440" width="148" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1194 446) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-node-label="" x="1262" y="464" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Telemetry</text>
-        <text x="1262" y="480" class="t-muted" font-size="9" text-anchor="middle">in-process spans</text>
+        <text x="1262" y="480" class="t-muted" font-size="9" text-anchor="middle">spans · metrics</text>
         </g>
 
         <g id="node-keyfile" data-node-id="keyfile" data-node-label="Key file" tabindex="0" role="button" aria-label="Focus Key file, env wins over file, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="env wins over file" data-node-context="Architecture component">
@@ -529,13 +530,13 @@ rect.c-bg-rect { fill: var(--bg); }
 
         <g id="node-cache" data-node-id="cache" data-node-label="Response cache" tabindex="0" role="button" aria-label="Focus Response cache, JEV_MCP_CACHE, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="JEV_MCP_CACHE" data-node-context="Architecture component">
           <title>Response cache · JEV_MCP_CACHE · Architecture component</title>
-          <rect x="1188" y="292" width="148" height="48" rx="6" class="c-mask"/>
-          <rect x="1188" y="292" width="148" height="48" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1194 298) scale(0.6875)">
+          <rect x="1224" y="286" width="120" height="48" rx="6" class="c-mask"/>
+          <rect x="1224" y="286" width="120" height="48" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1230 292) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="1262" y="314" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Response cache</text>
-        <text x="1262" y="330" class="t-muted" font-size="9" text-anchor="middle">JEV_MCP_CACHE</text>
+          <text data-node-label="" x="1284" y="308" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Response cache</text>
+        <text x="1284" y="324" class="t-muted" font-size="9" text-anchor="middle">JEV_MCP_CACHE</text>
         </g>
 
         <g id="node-setup" data-node-id="setup" data-node-label="setup CLI" tabindex="0" role="button" aria-label="Focus setup CLI, verify, store 0600, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="verify, store 0600" data-node-context="Architecture component">
@@ -572,15 +573,15 @@ rect.c-bg-rect { fill: var(--bg); }
         <text x="325" y="610" class="t-muted" font-size="9" text-anchor="middle">8 agent targets</text>
         </g>
 
-        <g id="node-hook" data-node-id="hook" data-node-label="hook gate" tabindex="0" role="button" aria-label="Focus hook gate, deny · ask · abstain, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="deny · ask · abstain" data-node-context="Architecture component">
-          <title>hook gate · deny · ask · abstain · Architecture component</title>
+        <g id="node-hook" data-node-id="hook" data-node-label="hook gate" tabindex="0" role="button" aria-label="Focus hook gate, completion-hook, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="completion-hook" data-node-context="Architecture component">
+          <title>hook gate · completion-hook · Architecture component</title>
           <rect x="200" y="196" width="150" height="52" rx="6" class="c-mask"/>
           <rect x="200" y="196" width="150" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(206 202) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-node-label="" x="275" y="220" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">hook gate</text>
-        <text x="275" y="236" class="t-muted" font-size="9" text-anchor="middle">deny · ask · abstain</text>
+        <text x="275" y="236" class="t-muted" font-size="9" text-anchor="middle">completion-hook</text>
         </g>
 
         <g id="node-doctor" data-node-id="doctor" data-node-label="doctor CLI" tabindex="0" role="button" aria-label="Focus doctor CLI, offline config check, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="offline config check" data-node-context="Architecture component">
@@ -594,18 +595,29 @@ rect.c-bg-rect { fill: var(--bg); }
         <text x="1180" y="610" class="t-muted" font-size="9" text-anchor="middle">offline config check</text>
         </g>
 
+        <g id="node-cli-judge" data-node-id="cli-judge" data-node-label="judge · gate CLI" tabindex="0" role="button" aria-label="Focus judge · gate CLI, one call, no MCP, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="one call, no MCP" data-node-context="Architecture component">
+          <title>judge · gate CLI · one call, no MCP · Architecture component</title>
+          <rect x="700" y="360" width="168" height="52" rx="6" class="c-mask"/>
+          <rect x="700" y="360" width="168" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(706 366) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" x="784" y="384" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">judge · gate CLI</text>
+        <text x="784" y="400" class="t-muted" font-size="9" text-anchor="middle">one call, no MCP</text>
+        </g>
+
         <!-- Connection labels -->
         <g data-edge-from="client" data-edge-to="server" data-edge-label="tools/call" data-edge-key="0" data-edge-id="call">
           <rect x="223" y="287" width="58" height="14" rx="3" class="c-mask"/>
           <text x="252" y="297" class="t-backend" font-size="8" text-anchor="middle">tools/call</text>
         </g>
         <g data-edge-from="server" data-edge-to="instructions" data-edge-label="client loads" data-edge-key="1" data-edge-id="client-loads">
-          <rect x="380.2" y="260" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="414" y="270" class="t-muted" font-size="8" text-anchor="middle">client loads</text>
+          <rect x="431.2" y="120" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="465" y="130" class="t-muted" font-size="8" text-anchor="middle">client loads</text>
         </g>
-        <g data-edge-from="instructions" data-edge-to="skills" data-edge-label="prompts" data-edge-key="2" data-edge-id="serves-skills">
-          <rect x="577.2" y="34" width="43.6" height="14" rx="3" class="c-mask"/>
-          <text x="599" y="44" class="t-muted" font-size="8" text-anchor="middle">prompts</text>
+        <g data-edge-from="server" data-edge-to="skills" data-edge-label="resources · prompts" data-edge-key="2" data-edge-id="serves-skills">
+          <rect x="549.4" y="78" width="101.2" height="14" rx="3" class="c-mask"/>
+          <text x="600" y="88" class="t-muted" font-size="8" text-anchor="middle">resources · prompts</text>
         </g>
         <g data-edge-from="server" data-edge-to="arguments" data-edge-label="validate args" data-edge-key="3" data-edge-id="validate-args">
           <rect x="477.8" y="230.5" width="72.4" height="14" rx="3" class="c-mask"/>
@@ -644,8 +656,8 @@ rect.c-bg-rect { fill: var(--bg); }
           <text x="258" y="377" class="t-muted" font-size="8" text-anchor="middle">result text</text>
         </g>
         <g data-edge-from="settings" data-edge-to="runtime" data-edge-label="redaction" data-edge-key="12" data-edge-id="config">
-          <rect x="1147.4" y="157" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-          <text x="1174" y="167" class="t-security" font-size="8" text-anchor="middle">redaction</text>
+          <rect x="1063.4" y="170" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
+          <text x="1090" y="180" class="t-security" font-size="8" text-anchor="middle">redaction</text>
         </g>
         <g data-edge-from="tools" data-edge-to="extract" data-edge-label="patterns" data-edge-key="13" data-edge-id="patterns">
           <rect x="759.8" y="224" width="48.4" height="14" rx="3" class="c-mask"/>
@@ -672,8 +684,8 @@ rect.c-bg-rect { fill: var(--bg); }
           <text x="785" y="586" class="t-muted" font-size="8" text-anchor="middle">verified key</text>
         </g>
         <g data-edge-from="cache" data-edge-to="runtime" data-edge-label="replay" data-edge-key="19" data-edge-id="cache-hit">
-          <rect x="1242.6" y="266" width="38.8" height="14" rx="3" class="c-mask"/>
-          <text x="1262" y="276" class="t-muted" font-size="8" text-anchor="middle">replay</text>
+          <rect x="1180.6" y="298" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="1200" y="308" class="t-muted" font-size="8" text-anchor="middle">replay</text>
         </g>
         <g data-edge-from="hook" data-edge-to="client" data-edge-label="gate" data-edge-key="20" data-edge-id="hook-runs">
           <rect x="176" y="252" width="30" height="14" rx="3" class="c-mask"/>
@@ -683,6 +695,10 @@ rect.c-bg-rect { fill: var(--bg); }
           <rect x="1021.2" y="576" width="67.6" height="14" rx="3" class="c-mask"/>
           <text x="1055" y="586" class="t-messagebus" font-size="8" text-anchor="middle">key presence</text>
         </g>
+        <g data-edge-from="cli-judge" data-edge-to="tools" data-edge-label="in-process" data-edge-key="22" data-edge-id="in-process">
+          <rect x="871" y="338" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="900" y="348" class="t-messagebus" font-size="8" text-anchor="middle">in-process</text>
+        </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
         <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="judgment layers">
@@ -691,5 +707,23 @@ rect.c-bg-rect { fill: var(--bg); }
         </g>
 
         <!-- Legend -->
-
+        <g data-legend="">
+          <text x="40" y="644" class="t-primary" font-size="12" font-weight="650">Legend</text>
+          <g data-legend-semantic-kind="backend" data-legend-x="40" data-legend-baseline="664" data-legend-width="78">
+            <rect x="40" y="655" width="16" height="10" rx="2.5" class="c-backend" stroke-width="1"/>
+            <text x="62" y="664" class="t-muted" font-size="10" font-weight="500">Backend</text>
+          </g>
+          <g data-legend-semantic-kind="cloud" data-legend-x="140" data-legend-baseline="664" data-legend-width="68">
+            <rect x="140" y="655" width="16" height="10" rx="2.5" class="c-cloud" stroke-width="1"/>
+            <text x="162" y="664" class="t-muted" font-size="10" font-weight="500">Cloud</text>
+          </g>
+          <g data-legend-semantic-kind="security" data-legend-x="230" data-legend-baseline="664" data-legend-width="83">
+            <rect x="230" y="655" width="16" height="10" rx="2.5" class="c-security" stroke-width="1"/>
+            <text x="252" y="664" class="t-muted" font-size="10" font-weight="500">Security</text>
+          </g>
+          <g data-legend-semantic-kind="external" data-legend-x="335" data-legend-baseline="664" data-legend-width="83">
+            <rect x="335" y="655" width="16" height="10" rx="2.5" class="c-external" stroke-width="1"/>
+            <text x="357" y="664" class="t-muted" font-size="10" font-weight="500">External</text>
+          </g>
+        </g>
       </svg>

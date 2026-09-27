@@ -6,37 +6,76 @@
     "output": "architecture.html",
     "locale": "en",
     "quality_profile": "showcase",
-    "viewBox": [1360, 660],
+    "viewBox": [
+      1360,
+      680
+    ],
     "views": [
       {
         "id": "call",
         "label": "Call",
-        "focus": ["client", "server", "instructions", "arguments", "tools", "runtime", "providers", "validation", "policy", "serialize"],
+        "focus": [
+          "client",
+          "server",
+          "instructions",
+          "arguments",
+          "tools",
+          "runtime",
+          "providers",
+          "validation",
+          "policy",
+          "serialize"
+        ],
         "note": "One tools/call: typed args in, a Jev answer back, action text out, over stdio or streamable-http."
       },
       {
         "id": "answers",
         "label": "Answers",
-        "focus": ["providers", "validation", "policy", "serialize"],
-        "note": "Validation rejects a malformed answer. Policy is pure. A bad confidence never yields auto."
+        "focus": [
+          "providers",
+          "validation",
+          "policy",
+          "serialize"
+        ],
+        "note": "Validation rejects a malformed answer. Policy is pure. verify, gate, and review never auto on a malformed confidence."
       },
       {
         "id": "skills",
         "label": "Skills",
-        "focus": ["server", "skills", "instructions", "tools"],
+        "focus": [
+          "server",
+          "skills",
+          "instructions",
+          "tools"
+        ],
         "note": "The server serves jev-mcp and jev as resources and prompts. Instructions name every tool."
       },
       {
         "id": "config",
         "label": "Config",
-        "focus": ["settings", "keyfile", "setup", "runtime", "cache", "providers"],
+        "focus": [
+          "settings",
+          "keyfile",
+          "setup",
+          "runtime",
+          "cache",
+          "providers"
+        ],
         "note": "Env-only config. setup stores a verified key. The optional cache replays an identical request."
       },
       {
         "id": "clis",
         "label": "CLIs",
-        "focus": ["installer", "hook", "doctor", "setup", "keyfile", "client"],
-        "note": "install registers eight agents. hook gate judges one action. doctor checks config offline."
+        "focus": [
+          "installer",
+          "hook",
+          "doctor",
+          "setup",
+          "keyfile",
+          "client",
+          "cli-judge"
+        ],
+        "note": "install, hook gate, completion-hook, doctor, and calibrate. judge and gate call tools in-process."
       }
     ]
   },
@@ -46,191 +85,353 @@
       "type": "external",
       "label": "MCP Client",
       "sublabel": "host agent",
-      "pos": [24, 280],
-      "size": [150, 54]
+      "pos": [
+        24,
+        280
+      ],
+      "size": [
+        150,
+        54
+      ]
     },
     {
       "id": "server",
       "type": "backend",
       "label": "MCP server",
-      "sublabel": "Toolset · stdio · http",
-      "pos": [330, 280],
-      "size": [168, 54]
+      "sublabel": "stdio \u00b7 http (bearer)",
+      "pos": [
+        330,
+        280
+      ],
+      "size": [
+        168,
+        54
+      ]
     },
     {
       "id": "instructions",
       "type": "backend",
       "label": "Instructions",
       "sublabel": "names all 11 tools",
-      "pos": [330, 28],
-      "size": [168, 52]
+      "pos": [
+        330,
+        28
+      ],
+      "size": [
+        168,
+        52
+      ]
     },
     {
       "id": "skills",
       "type": "backend",
       "label": "Packaged skills",
-      "sublabel": "jev-mcp · jev",
-      "pos": [700, 28],
-      "size": [168, 52]
+      "sublabel": "jev-mcp \u00b7 jev",
+      "pos": [
+        700,
+        28
+      ],
+      "size": [
+        168,
+        52
+      ]
     },
     {
       "id": "arguments",
       "type": "backend",
       "label": "arguments",
       "sublabel": "compiled parsers",
-      "pos": [530, 168],
-      "size": [150, 52]
+      "pos": [
+        530,
+        168
+      ],
+      "size": [
+        150,
+        52
+      ]
     },
     {
       "id": "limits",
       "type": "backend",
       "label": "limits",
       "sublabel": "frozen caps",
-      "pos": [860, 168],
-      "size": [140, 52]
+      "pos": [
+        860,
+        168
+      ],
+      "size": [
+        140,
+        52
+      ]
     },
     {
       "id": "tools",
       "type": "backend",
       "label": "Eleven tools",
       "sublabel": "10 frozen + jev_score",
-      "pos": [700, 280],
-      "size": [168, 54]
+      "pos": [
+        700,
+        280
+      ],
+      "size": [
+        168,
+        54
+      ]
     },
     {
       "id": "runtime",
       "type": "backend",
       "label": "Runtime",
       "sublabel": "lazy provider",
-      "pos": [1020, 280],
-      "size": [140, 54]
+      "pos": [
+        1020,
+        280
+      ],
+      "size": [
+        140,
+        54
+      ]
     },
     {
       "id": "providers",
       "type": "cloud",
       "label": "Providers x4",
       "sublabel": "envelope only",
-      "pos": [1020, 440],
-      "size": [140, 50]
+      "pos": [
+        1020,
+        440
+      ],
+      "size": [
+        140,
+        50
+      ]
     },
     {
       "id": "settings",
       "type": "security",
       "label": "Settings",
-      "sublabel": "env-only · redacts",
-      "pos": [1188, 28],
-      "size": [148, 52]
+      "sublabel": "env-only \u00b7 redacts",
+      "pos": [
+        1020,
+        28
+      ],
+      "size": [
+        140,
+        52
+      ]
     },
     {
       "id": "extract",
       "type": "backend",
       "label": "extract",
       "sublabel": "killable workers",
-      "pos": [700, 168],
-      "size": [150, 52]
+      "pos": [
+        700,
+        168
+      ],
+      "size": [
+        150,
+        52
+      ]
     },
     {
       "id": "serialize",
       "type": "backend",
       "label": "serialize",
-      "sublabel": "JSON · UTF-16",
-      "pos": [24, 440],
-      "size": [156, 50]
+      "sublabel": "JSON \u00b7 UTF-16",
+      "pos": [
+        24,
+        440
+      ],
+      "size": [
+        156,
+        50
+      ]
     },
     {
       "id": "policy",
       "type": "backend",
       "label": "Policy",
-      "sublabel": "auto · review · escalate",
-      "pos": [330, 440],
-      "size": [168, 50]
+      "sublabel": "auto \u00b7 review \u00b7 escalate",
+      "pos": [
+        330,
+        440
+      ],
+      "size": [
+        168,
+        50
+      ]
     },
     {
       "id": "validation",
       "type": "backend",
       "label": "Validation",
       "sublabel": "rejects malformed",
-      "pos": [700, 440],
-      "size": [168, 50]
+      "pos": [
+        700,
+        440
+      ],
+      "size": [
+        168,
+        50
+      ]
     },
     {
       "id": "oracle",
       "type": "external",
       "label": "Parity oracle",
       "sublabel": "282 fixtures",
-      "pos": [24, 572],
-      "size": [150, 48]
+      "pos": [
+        24,
+        572
+      ],
+      "size": [
+        150,
+        48
+      ]
     },
     {
       "id": "telemetry",
       "type": "backend",
       "label": "Telemetry",
-      "sublabel": "in-process spans",
-      "pos": [1188, 440],
-      "size": [148, 52]
+      "sublabel": "spans \u00b7 metrics",
+      "pos": [
+        1188,
+        440
+      ],
+      "size": [
+        148,
+        52
+      ]
     },
     {
       "id": "keyfile",
       "type": "backend",
       "label": "Key file",
       "sublabel": "env wins over file",
-      "pos": [860, 572],
-      "size": [150, 48]
+      "pos": [
+        860,
+        572
+      ],
+      "size": [
+        150,
+        48
+      ]
     },
     {
       "id": "cache",
       "type": "backend",
       "label": "Response cache",
       "sublabel": "JEV_MCP_CACHE",
-      "pos": [1188, 292],
-      "size": [148, 48]
+      "pos": [
+        1224,
+        286
+      ],
+      "size": [
+        120,
+        48
+      ]
     },
     {
       "id": "setup",
       "type": "backend",
       "label": "setup CLI",
       "sublabel": "verify, store 0600",
-      "pos": [560, 572],
-      "size": [150, 48]
+      "pos": [
+        560,
+        572
+      ],
+      "size": [
+        150,
+        48
+      ]
     },
     {
       "id": "evals",
       "type": "external",
       "label": "Eval harness",
       "sublabel": "paid agent runs",
-      "pos": [24, 110],
-      "size": [150, 52]
+      "pos": [
+        24,
+        110
+      ],
+      "size": [
+        150,
+        52
+      ]
     },
     {
       "id": "installer",
       "type": "backend",
       "label": "install CLI",
       "sublabel": "8 agent targets",
-      "pos": [250, 572],
-      "size": [150, 48]
+      "pos": [
+        250,
+        572
+      ],
+      "size": [
+        150,
+        48
+      ]
     },
     {
       "id": "hook",
       "type": "backend",
       "label": "hook gate",
-      "sublabel": "deny · ask · abstain",
-      "pos": [200, 196],
-      "size": [150, 52]
+      "sublabel": "completion-hook",
+      "pos": [
+        200,
+        196
+      ],
+      "size": [
+        150,
+        52
+      ]
     },
     {
       "id": "doctor",
       "type": "backend",
       "label": "doctor CLI",
       "sublabel": "offline config check",
-      "pos": [1100, 572],
-      "size": [160, 48]
+      "pos": [
+        1100,
+        572
+      ],
+      "size": [
+        160,
+        48
+      ]
+    },
+    {
+      "id": "cli-judge",
+      "type": "backend",
+      "label": "judge \u00b7 gate CLI",
+      "sublabel": "one call, no MCP",
+      "pos": [
+        700,
+        360
+      ],
+      "size": [
+        168,
+        52
+      ]
     }
   ],
   "boundaries": [
     {
       "kind": "region",
       "label": "judgment layers",
-      "wraps": ["server", "arguments", "limits", "tools", "runtime", "providers", "extract", "policy", "validation"]
+      "wraps": [
+        "server",
+        "arguments",
+        "limits",
+        "tools",
+        "runtime",
+        "providers",
+        "extract",
+        "policy",
+        "validation"
+      ]
     }
   ],
   "connections": [
@@ -249,15 +450,33 @@
       "to": "instructions",
       "label": "client loads",
       "fromSide": "top",
-      "toSide": "bottom"
+      "toSide": "bottom",
+      "labelAt": [
+        465,
+        130
+      ]
     },
     {
       "id": "serves-skills",
-      "from": "instructions",
+      "from": "server",
       "to": "skills",
-      "label": "prompts",
-      "fromSide": "right",
-      "toSide": "left"
+      "label": "resources \u00b7 prompts",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "via": [
+        [
+          414,
+          96
+        ],
+        [
+          784,
+          96
+        ]
+      ],
+      "labelAt": [
+        600,
+        88
+      ]
     },
     {
       "id": "validate-args",
@@ -337,9 +556,13 @@
       "from": "settings",
       "to": "runtime",
       "label": "redaction",
-      "fromSide": "left",
-      "toSide": "right",
-      "variant": "security"
+      "fromSide": "bottom",
+      "toSide": "top",
+      "variant": "security",
+      "labelAt": [
+        1090,
+        180
+      ]
     },
     {
       "id": "patterns",
@@ -376,7 +599,10 @@
       "variant": "dashed",
       "fromSide": "bottom",
       "toSide": "top",
-      "labelAt": [92, 176]
+      "labelAt": [
+        92,
+        176
+      ]
     },
     {
       "id": "stored-key",
@@ -400,8 +626,7 @@
       "to": "runtime",
       "label": "replay",
       "fromSide": "left",
-      "toSide": "right",
-      "labelAt": [1262, 276]
+      "toSide": "right"
     },
     {
       "id": "hook-runs",
@@ -411,7 +636,10 @@
       "variant": "dashed",
       "fromSide": "bottom",
       "toSide": "top",
-      "labelAt": [191, 262]
+      "labelAt": [
+        191,
+        262
+      ]
     },
     {
       "id": "reads-key",
@@ -421,6 +649,19 @@
       "variant": "dashed",
       "fromSide": "left",
       "toSide": "right"
+    },
+    {
+      "id": "in-process",
+      "from": "cli-judge",
+      "to": "tools",
+      "label": "in-process",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        900,
+        348
+      ]
     }
   ],
   "cards": [
@@ -437,7 +678,7 @@
       "title": "Fail-closed answers",
       "items": [
         "validation rejects; policy is pure",
-        "truncated or unknown confidence never yields auto"
+        "verify, gate, review: a malformed confidence never yields auto"
       ]
     },
     {
