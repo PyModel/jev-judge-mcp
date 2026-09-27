@@ -216,6 +216,47 @@ def _task_table(measured: Sequence[Pair]) -> list[str]:
     return lines
 
 
+def _rule_comparison(records: Sequence[Record]) -> list[str]:
+    """Old-rule vs new-rule counts over every recorded run, not only measured pairs.
+
+    A pair whose with-Jev arm never called Jev is not an outcome, but it is still a grader
+    result. The D2 effect is a run the old byte rule fails and the new rule passes.
+    """
+    if not any("old_rule_success" in run for run in records):
+        return []
+    lines = [
+        "### Old rule vs new rule, all recorded runs",
+        "",
+        "Not limited to measured pairs. New-rule success allows added tests and requires the decision "
+        "to match gold. Old-rule success fails any byte change to a pre-existing test file and does not "
+        "read the decision. A save is a run the old rule fails and the new rule passes.",
+        "",
+        "| task | arm | runs | new-rule | old-rule | saves |",
+        "|---|---|---|---|---|---|",
+    ]
+    by_task: dict[str, list[Record]] = {}
+    for run in records:
+        by_task.setdefault(str(run["task"]), []).append(run)
+    for task_id in sorted(by_task):
+        for arm in ARMS:
+            runs = [run for run in by_task[task_id] if run["arm"] == arm]
+            if not runs:
+                continue
+            saves = sum(bool(run["success"]) and not run.get("old_rule_success") for run in runs)
+            lines.append(
+                f"| {task_id} | {arm} | {len(runs)} | {sum(bool(run['success']) for run in runs)}/{len(runs)} | "
+                f"{sum(bool(run.get('old_rule_success')) for run in runs)}/{len(runs)} | {saves} |"
+            )
+    saves = sum(bool(run["success"]) and not run.get("old_rule_success") for run in records)
+    lines += [
+        "",
+        f"All recorded runs: new-rule {sum(bool(run['success']) for run in records)}/{len(records)}, "
+        f"old-rule {sum(bool(run.get('old_rule_success')) for run in records)}/{len(records)}, saves {saves}.",
+        "",
+    ]
+    return lines
+
+
 def _runs_table(runs: Sequence[Record]) -> list[str]:
     lines = [
         "| run | measurement | success | tests passed | wall s | tokens | tool calls | Jev calls | test cycles "
@@ -277,7 +318,7 @@ def agent_section(agent: str, records: Sequence[Record], meta: Mapping[str, Any]
             *_task_table(measured),
             "",
         ]
-    lines += ["### Runs", "", *_runs_table(sorted(records, key=lambda r: r["run_id"])), ""]
+    lines += [*_rule_comparison(records), "### Runs", "", *_runs_table(sorted(records, key=lambda r: r["run_id"])), ""]
     return lines
 
 

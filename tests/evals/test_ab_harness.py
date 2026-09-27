@@ -847,6 +847,10 @@ def test_report_defines_unnecessary_calls_and_counts_an_observed_decision_change
     assert "Jev changed the decision: 1 observed changes; 1 of those equal gold" in rendered
     assert report.jev_changed_decision(without, with_jev) is True
     assert report.jev_changed_decision(without, {**with_jev, "jev_answer": None}) is None
+    saved = _run("j1", "A", success=True, old_rule_success=False)
+    compared = report.render([saved, _run("j1", "B", success=True, old_rule_success=True)], {})
+    assert "### Old rule vs new rule, all recorded runs" in compared
+    assert "saves 1" in compared
 
 
 def _trace(frontier: int, output: int) -> Trace:
