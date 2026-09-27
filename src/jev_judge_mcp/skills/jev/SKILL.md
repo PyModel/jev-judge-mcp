@@ -3,7 +3,7 @@ name: jev
 description: Use when code needs a judgment about natural language that rules or regex cannot make (classify, route, triage, moderate, score, rank, match, dedupe, filter, extract, verify, or gate an action), when brainstorming where AI could fit in an app, when an LLM call exists only to pick a label, score, or yes/no, or when code uses TypeSafe AI, Jev, System One, typesafe-sdk, or @typesafe-ai/sdk.
 ---
 
-# Building with Jev
+# Jev skill
 
 ## Overview
 

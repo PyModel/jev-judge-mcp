@@ -7,7 +7,7 @@ A client that only speaks MCP never sees a checkout path. The routing skill alre
 
 ## Decision
 
-- `src/jev_judge_mcp/skills/jev/` is the owner's skill, packaged from https://github.com/PyModel/jev-skill at `ba5dd9f`. The allowlist is `SKILL.md`, `api-reference.md`, `patterns.md`, `prior-art/*.md`, and `LICENSE` (Copyright (c) 2026 elkaix). Nothing else under `src/jev_judge_mcp/skills/` ships or is served, except `jev-mcp/SKILL.md` and this package's `__init__.py`. `docs/reference/jev-skill/` stays gitignored.
+- `src/jev_judge_mcp/skills/jev/` is the owner's skill, packaged from https://github.com/PyModel/jev-skill at `a596996`. The allowlist is `SKILL.md`, `api-reference.md`, `patterns.md`, `prior-art/*.md`, and `LICENSE` (Copyright (c) 2026 elkaix). Nothing else under `src/jev_judge_mcp/skills/` ships or is served, except `jev-mcp/SKILL.md` and this package's `__init__.py`. `docs/reference/jev-skill/` stays gitignored.
 - `docs/skills/jev-mcp/SKILL.md` is a symlink to the packaged routing skill. There is no `docs/skills/jev` symlink: a directory symlink makes Hatch record those bytes under `docs/` and drop them from the wheel.
 - The server reads skill files only through `importlib.resources`. There is no checkout fallback.
 - `initialize.instructions` names both skills and their resource URIs, and carries `ON_DEMAND` from this module's sibling `instructions.py`. No threshold numbers, no secrets, no harness names.

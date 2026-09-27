@@ -77,11 +77,18 @@ def test_packaged_skill_descriptions_fit_the_agent_skills_limit() -> None:
 
 
 def test_on_demand_sentence_has_one_owner() -> None:
-    sentence = ON_DEMAND.split(". ", 1)[0] + "."
-    rules = (ROOT / "docs" / "agent-rules.md").read_text(encoding="utf-8")
-    assert sentence in rules
-    assert sentence in server_instructions([tool.name for tool in TOOLS])
-    assert sentence in (PACKAGED / "jev-mcp" / "SKILL.md").read_text(encoding="utf-8")
+    first, rest = ON_DEMAND.split(". ", 1)
+    sentences = (first + ".", rest.split(". ", 1)[0] + ".")
+    copies = (
+        (ROOT / "docs" / "agent-rules.md").read_text(encoding="utf-8"),
+        (ROOT / "README.md").read_text(encoding="utf-8"),
+        server_instructions([tool.name for tool in TOOLS]),
+        (PACKAGED / "jev-mcp" / "SKILL.md").read_text(encoding="utf-8"),
+    )
+    for sentence in sentences:
+        assert sentence in ON_DEMAND
+        for text in copies:
+            assert sentence in text
 
 
 def test_stdio_serves_the_allowlist_and_names_both_skills() -> None:

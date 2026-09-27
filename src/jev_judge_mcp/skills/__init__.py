@@ -1,6 +1,6 @@
 """Packaged agent skills a uvx or PyPI install can read (divergence `packaged-jev-skill`).
 
-`jev` is the owner's skill, packaged from https://github.com/PyModel/jev-skill at ba5dd9f.
+`jev` is the owner's skill, packaged from https://github.com/PyModel/jev-skill at a596996.
 `jev-mcp` routes this server's tools. Files are read only through `importlib.resources`.
 """
 
