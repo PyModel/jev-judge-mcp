@@ -6,18 +6,20 @@ from pathlib import Path
 
 import pytest
 
+from jev_judge_mcp.install.launch import checkout_launch
 from tests.support.stdio import PROTOCOL_VERSION, REPO_ROOT, StdioServer
 
 pytestmark = pytest.mark.smoke
 
+# `--no-cache`: uvx before 0.10.10 reuses a cached tool environment for `--from` a directory
+# and ignores source edits, `--refresh`, and `--reinstall` (astral-sh/uv#18396); on every uv
+# the cache-keys miss an uncommitted deletion. The temporary cache builds from this checkout.
+_NO_CACHE = "--no-cache"
 
-@pytest.mark.skipif(shutil.which("uvx") is None, reason="uvx not on PATH")
-def test_uvx_from_source_initializes(tmp_path: Path) -> None:
+
+def _assert_serves_this_checkout(command: list[str], tmp_path: Path) -> None:
     # cwd is not the checkout: a server that reads the skill off the source tree fails here.
-    # `--no-cache`: uvx before 0.10.10 reuses a cached tool environment for `--from` a directory
-    # and ignores source edits, `--refresh`, and `--reinstall` (astral-sh/uv#18396); on every uv
-    # the cache-keys miss an uncommitted deletion. The temporary cache builds from this checkout.
-    with StdioServer(["uvx", "--no-cache", "--from", str(REPO_ROOT), "jev-judge-mcp"], cwd=tmp_path) as server:
+    with StdioServer(command, cwd=tmp_path) as server:
         reply = server.initialize()
         listed = server.request({"jsonrpc": "2.0", "id": 2, "method": "resources/list", "params": {}})
         skill = server.request(
@@ -43,3 +45,15 @@ def test_uvx_from_source_initializes(tmp_path: Path) -> None:
         REPO_ROOT / "src" / "jev_judge_mcp" / "skills" / "jev" / "SKILL.md"
     ).read_text(encoding="utf-8")
     assert returncode == 0, stderr
+
+
+@pytest.mark.skipif(shutil.which("uvx") is None, reason="uvx not on PATH")
+def test_uvx_from_source_initializes(tmp_path: Path) -> None:
+    _assert_serves_this_checkout(["uvx", _NO_CACHE, "--from", str(REPO_ROOT), "jev-judge-mcp"], tmp_path)
+
+
+@pytest.mark.skipif(shutil.which("uvx") is None, reason="uvx not on PATH")
+def test_uvx_from_checkout_launch_initializes(tmp_path: Path) -> None:
+    """The spec `install --from-checkout` writes, still built with `--no-cache`."""
+    launch = checkout_launch(shutil.which("uvx") or "uvx")
+    _assert_serves_this_checkout([launch.uvx, _NO_CACHE, *launch.args()], tmp_path)
