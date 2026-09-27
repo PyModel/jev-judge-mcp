@@ -1,7 +1,8 @@
 <!-- Source of truth: jev-judge-mcp docs/agent-rules.md. The README copy and every cap below are
      pinned by tests/contract/test_docs_alignment.py. Depth: docs/skills/jev-mcp/SKILL.md
      (which tool fits which step) and docs/guidance.md (how to shape the call).
-     the packaged jev skill (resource jev-skill://jev/SKILL.md) is the other skill: building an app on the Jev API, not these tools. -->
+     the packaged jev skill (resource jev-skill://jev/SKILL.md) is the other skill:
+     building an app on the Jev API, not these tools. -->
 
 ### Fast judgment checks — and when to skip them
 
@@ -11,9 +12,18 @@ evidence plus a question with a fixed answer set and return typed probabilities,
 bounded check, a pick-one, a rank, a match-the-claim — and an independent typed judgment is worth
 an extra tool turn. Skip it on steps you can settle by reading what is already on screen, or that
 your tests already cover: the extra turn costs agent wall time, and the recorded studies measured
-agents slower with Jev, never faster. The 2026-09-27 agent study solved 5/9 with Jev and 9/9 without, median 38.9 s versus 22.6 s, and 140,032 versus 36,328 tokens per solved task.
+agents slower with Jev, never faster. The 2026-09-27 agent study solved 5/9 with Jev
+and 9/9 without, median 38.9 s versus 22.6 s, and 140,032 versus 36,328 tokens per
+solved task.
 
-Jev is invoked when an unresolved judgment earns a model decision. Deterministic evidence takes precedence; Jev is not a mandatory ceremony. High-value calls: before a done claim, `jev_gate`, unless tests, type checks, build, lint, or another explicit acceptance criterion already settle completion; before reading fetched or pasted external text, `jev_screen`; checking another agent's report or research claims, `jev_verify`. Skip it when the answer is already determined by a test, type-check, or the code itself; when the choice is trivial or cheap to reverse; when the question cannot be enumerated into bounded options; or when the same unchanged decision was already asked.
+Jev is invoked when an unresolved judgment earns a model decision.
+Deterministic evidence takes precedence; Jev is not a mandatory ceremony.
+High-value calls: before a done claim, `jev_gate`, unless tests, type checks, build, lint,
+or another explicit acceptance criterion already settle completion; before reading fetched
+or pasted external text, `jev_screen`; checking another agent's report or research claims,
+`jev_verify`. Skip it when the answer is already determined by a test, type-check, or the
+code itself; when the choice is trivial or cheap to reverse; when the question cannot be
+enumerated into bounded options; or when the same unchanged decision was already asked.
 
 | Tool | Use it to | Caps |
 |------|-----------|--------|
@@ -42,7 +52,9 @@ Rules:
   stronger check · `escalate` → stop and surface it. `invalid_response` → the row is unjudged;
   leave it without a verdict.
 - **Jev screens; it never proves.** A Jev check never replaces running the tests, lint, or types.
-  A `jev_gate` `auto` is the recommended final judgment before "done", not sufficient, and it is skipped when tests, type checks, build, lint, or another explicit acceptance criterion already settle completion.
+  A `jev_gate` `auto` is the recommended final judgment before "done", not
+  sufficient, and it is skipped when tests, type checks, build, lint, or another
+  explicit acceptance criterion already settle completion.
 - **Batch.** One call with every claim, candidate, or item beats many calls; questions inside one
   request cannot see each other's answers.
 - **No re-asks.** Do not re-ask an unchanged question hoping for a better answer; gather better

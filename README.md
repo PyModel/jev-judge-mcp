@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./docs/readme/banner.svg" alt="jev-judge-mcp, with a scales-of-justice emblem: typed judgment tools for MCP agents. Model judges, policy decides: auto, review, or escalate. Check, find, decide, ship." width="100%" />
+<img src="./docs/readme/hero.png" alt="jev-judge-mcp, with a scales-of-justice emblem: typed judgment tools for MCP agents. Model judges, policy decides: auto, review, or escalate. A four-stage decision pipeline: check, find, decide, ship." width="100%" />
 
 <p>
   <a href="https://github.com/PyModel/jev-judge-mcp/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/PyModel/jev-judge-mcp/ci.yml?branch=main&style=flat&label=CI&logo=githubactions&logoColor=white&labelColor=0a0a0f"></a>
@@ -41,9 +41,7 @@ uv sync --extra typesafe
 uv run jev-judge-mcp install --from-checkout
 ```
 
-That extra is only for running the server. Development and `make typecheck` need the full sync:
-`uv sync --locked --all-extras` — a plain `uv sync` fails `make typecheck` with confusing
-`Import "typesafe_sdk" could not be resolved` errors.
+That extra is only for running the server. Development and `make typecheck` need the full sync: `uv sync --locked --all-extras` — a plain `uv sync` fails `make typecheck` with confusing `Import "typesafe_sdk" could not be resolved` errors.
 
 Running `install` from an unreleased clone without `--from-checkout`? It prints a note that the pinned PyPI build does not include your local changes, and points here. The post-write check then exercises the published build, not your tree.
 
@@ -163,7 +161,8 @@ The rule block the prompt adds. One tracked copy lives at [`docs/agent-rules.md`
 <!-- Source of truth: jev-judge-mcp docs/agent-rules.md. The README copy and every cap below are
      pinned by tests/contract/test_docs_alignment.py. Depth: docs/skills/jev-mcp/SKILL.md
      (which tool fits which step) and docs/guidance.md (how to shape the call).
-     the packaged jev skill (resource jev-skill://jev/SKILL.md) is the other skill: building an app on the Jev API, not these tools. -->
+     the packaged jev skill (resource jev-skill://jev/SKILL.md) is the other skill:
+     building an app on the Jev API, not these tools. -->
 
 ### Fast judgment checks — and when to skip them
 
@@ -173,9 +172,18 @@ evidence plus a question with a fixed answer set and return typed probabilities,
 bounded check, a pick-one, a rank, a match-the-claim — and an independent typed judgment is worth
 an extra tool turn. Skip it on steps you can settle by reading what is already on screen, or that
 your tests already cover: the extra turn costs agent wall time, and the recorded studies measured
-agents slower with Jev, never faster. The 2026-09-27 agent study solved 5/9 with Jev and 9/9 without, median 38.9 s versus 22.6 s, and 140,032 versus 36,328 tokens per solved task.
+agents slower with Jev, never faster. The 2026-09-27 agent study solved 5/9 with Jev
+and 9/9 without, median 38.9 s versus 22.6 s, and 140,032 versus 36,328 tokens per
+solved task.
 
-Jev is invoked when an unresolved judgment earns a model decision. Deterministic evidence takes precedence; Jev is not a mandatory ceremony. High-value calls: before a done claim, `jev_gate`, unless tests, type checks, build, lint, or another explicit acceptance criterion already settle completion; before reading fetched or pasted external text, `jev_screen`; checking another agent's report or research claims, `jev_verify`. Skip it when the answer is already determined by a test, type-check, or the code itself; when the choice is trivial or cheap to reverse; when the question cannot be enumerated into bounded options; or when the same unchanged decision was already asked.
+Jev is invoked when an unresolved judgment earns a model decision.
+Deterministic evidence takes precedence; Jev is not a mandatory ceremony.
+High-value calls: before a done claim, `jev_gate`, unless tests, type checks, build, lint,
+or another explicit acceptance criterion already settle completion; before reading fetched
+or pasted external text, `jev_screen`; checking another agent's report or research claims,
+`jev_verify`. Skip it when the answer is already determined by a test, type-check, or the
+code itself; when the choice is trivial or cheap to reverse; when the question cannot be
+enumerated into bounded options; or when the same unchanged decision was already asked.
 
 | Tool | Use it to | Caps |
 |------|-----------|--------|
@@ -204,7 +212,9 @@ Rules:
   stronger check · `escalate` → stop and surface it. `invalid_response` → the row is unjudged;
   leave it without a verdict.
 - **Jev screens; it never proves.** A Jev check never replaces running the tests, lint, or types.
-  A `jev_gate` `auto` is the recommended final judgment before "done", not sufficient, and it is skipped when tests, type checks, build, lint, or another explicit acceptance criterion already settle completion.
+  A `jev_gate` `auto` is the recommended final judgment before "done", not
+  sufficient, and it is skipped when tests, type checks, build, lint, or another
+  explicit acceptance criterion already settle completion.
 - **Batch.** One call with every claim, candidate, or item beats many calls; questions inside one
   request cannot see each other's answers.
 - **No re-asks.** Do not re-ask an unchanged question hoping for a better answer; gather better
@@ -310,38 +320,14 @@ The server reads environment variables only. It does not load a `.env` file.
 
 ## Operator notes
 
-Every input cap and default is tabulated in [`docs/reference/limits.md`](docs/reference/limits.md),
-machine-checked against the code; the page also states the error code each refusal produces. Two
-parity-sanctioned facts — the reference server behaves the same way — that show up as cost
-or latency:
+Every input cap and default is tabulated in [`docs/reference/limits.md`](docs/reference/limits.md), machine-checked against the code; the page also states the error code each refusal produces. Two parity-sanctioned facts — the reference server behaves the same way — that show up as cost or latency:
 
-- `jev_verify` and `jev_screen` put no length bound on their input. The claims, evidence, or page
-text are sent to the provider in one request, however large, so token cost and latency scale with
-what the caller passes. Bound the text at the call site when it is not yours.
-- Requests over stdio still carry no whole-call provider deadline (the sanctioned divergence
-`stdio-attempt-deadline`): the client's cancellation remains the recovery path for a call. Every
-provider attempt is bounded, though (ADR-0057): a hung connection times out after 30 s and a
-transient failure — connection errors, timeouts, 408/429/5xx — is retried, up to 3 attempts with
-capped exponential backoff (server `Retry-After` hints honored, capped at 5 s) inside a 90 s
-budget. A call whose attempts all fail reports the provider, the attempt count, and the last
-failure.
-- `initialize`'s `serverInfo.version`, the one startup log line, and `jev-judge-mcp --version`
-  report the same build. A wheel, and a checkout whose HEAD is the tag `v<version>`, report that
-  version. Any other git checkout reports `<version>+g<short sha>` (ADR-0054). The wire name stays
-  `jev-mcp` (ADR-0049).
-- `jev_rerank` returns every candidate in `ranked`, highest `relevance` first. `relevance` is that
-  candidate's probability, to four decimal places. The response has no spread field. A flat band of
-  low values means the candidates were not distinguishable: treat the order as weak, and read
-  `ranked[].relevance` rather than the rank numbers.
-- `jev_review` and `jev_gate` escalate when the lowest rubric confidence, or `safe_to_apply`, is
-  below `thresholds.review_at` (the reference rule; default 0.5). That includes a low-confidence
-  ancillary score such as `test_gap` on a patch the other scores accept. Escalate here is
-  uncertainty, not a finding that the patch is wrong. The driving score is the `scores` entry —
-  under `review` on `jev_gate` — whose `confidence` is below `thresholds.review_at`. Compare
-  `safe_to_apply` to the same threshold. The response does not name the driver; those two fields do.
-- Per-tool weak spots and what recorded evidence exists for each tool are in
-  [`docs/tools.md`](docs/tools.md); per-release evidence, including certified operating points, is
-  recorded in [`docs/EVIDENCE.md`](docs/EVIDENCE.md).
+- `jev_verify` and `jev_screen` put no length bound on their input. The claims, evidence, or page text are sent to the provider in one request, however large, so token cost and latency scale with what the caller passes. Bound the text at the call site when it is not yours.
+- Requests over stdio still carry no whole-call provider deadline (the sanctioned divergence `stdio-attempt-deadline`): the client's cancellation remains the recovery path for a call. Every provider attempt is bounded, though (ADR-0057): a hung connection times out after 30 s and a transient failure — connection errors, timeouts, 408/429/5xx — is retried, up to 3 attempts with capped exponential backoff (server `Retry-After` hints honored, capped at 5 s) inside a 90 s budget. A call whose attempts all fail reports the provider, the attempt count, and the last failure.
+- `initialize`'s `serverInfo.version`, the one startup log line, and `jev-judge-mcp --version` report the same build. A wheel, and a checkout whose HEAD is the tag `v<version>`, report that version. Any other git checkout reports `<version>+g<short sha>` (ADR-0054). The wire name stays `jev-mcp` (ADR-0049).
+- `jev_rerank` returns every candidate in `ranked`, highest `relevance` first. `relevance` is that candidate's probability, to four decimal places. The response has no spread field. A flat band of low values means the candidates were not distinguishable: treat the order as weak, and read `ranked[].relevance` rather than the rank numbers.
+- `jev_review` and `jev_gate` escalate when the lowest rubric confidence, or `safe_to_apply`, is below `thresholds.review_at` (the reference rule; default 0.5). That includes a low-confidence ancillary score such as `test_gap` on a patch the other scores accept. Escalate here is uncertainty, not a finding that the patch is wrong. The driving score is the `scores` entry — under `review` on `jev_gate` — whose `confidence` is below `thresholds.review_at`. Compare `safe_to_apply` to the same threshold. The response does not name the driver; those two fields do.
+- Per-tool weak spots and what recorded evidence exists for each tool are in [`docs/tools.md`](docs/tools.md); per-release evidence, including certified operating points, is recorded in [`docs/EVIDENCE.md`](docs/EVIDENCE.md).
 
 ### Running over HTTP (experimental)
 
@@ -365,8 +351,11 @@ Every HTTP request must then carry the token; a request without it, or with a wr
 
 ```sh
 curl -H "Authorization: Bearer <token>" \
-  -H "Accept: application/json, text/event-stream" -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"example","version":"0"}}}' \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize",'\
+'"params":{"protocolVersion":"2025-06-18","capabilities":{},'\
+'"clientInfo":{"name":"example","version":"0"}}}' \
   http://127.0.0.1:8088/mcp
 ```
 
@@ -383,8 +372,11 @@ One diagram covers the whole server: the tool-call loop from `tools/call` to the
 The ten original tools keep a frozen wire format, pinned by recorded parity fixtures; `jev_score` is an addition. Vocabulary is in [`docs/CONTEXT.md`](docs/CONTEXT.md), decisions in [`docs/adr/`](docs/adr/), and security notes in [`SECURITY.md`](SECURITY.md). Windows is not supported; the server exits at startup on a non-POSIX platform.
 
 ```sh
-uv sync --locked --all-extras   # development needs every extra; --extra typesafe alone only runs the server
-make ci      # lint, types, unit, property, policy coverage, contract, parity, security, build, smoke, eval, load canary
+# development needs every extra; --extra typesafe alone only runs the server
+uv sync --locked --all-extras
+# lint, types, unit, property, policy coverage, contract, parity,
+# security, build, smoke, eval, load canary
+make ci
 ```
 
 `make eval-live`, `make security-live`, and `JEV_AB_LIVE=1 make ab` call paid services and stay off CI. Contribution notes are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
