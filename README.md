@@ -41,7 +41,9 @@ uv sync --extra typesafe
 uv run jev-judge-mcp install --from-checkout
 ```
 
-That extra is only for running the server. Development and `make typecheck` need the full sync: `uv sync --locked --all-extras` — a plain `uv sync` fails `make typecheck` with confusing `Import "typesafe_sdk" could not be resolved` errors.
+That extra is only for running the server. Development and `make typecheck` need the full sync:
+`uv sync --locked --all-extras` — a plain `uv sync` fails `make typecheck` with confusing
+`Import "typesafe_sdk" could not be resolved` errors.
 
 Running `install` from an unreleased clone without `--from-checkout`? It prints a note that the pinned PyPI build does not include your local changes, and points here. The post-write check then exercises the published build, not your tree.
 
@@ -325,14 +327,38 @@ The server reads environment variables only. It does not load a `.env` file.
 
 ## Operator notes
 
-Every input cap and default is tabulated in [`docs/reference/limits.md`](docs/reference/limits.md), machine-checked against the code; the page also states the error code each refusal produces. Two parity-sanctioned facts — the reference server behaves the same way — that show up as cost or latency:
+Every input cap and default is tabulated in [`docs/reference/limits.md`](docs/reference/limits.md),
+machine-checked against the code; the page also states the error code each refusal produces. Two
+parity-sanctioned facts — the reference server behaves the same way — that show up as cost
+or latency:
 
-- `jev_verify` and `jev_screen` put no length bound on their input. The claims, evidence, or page text are sent to the provider in one request, however large, so token cost and latency scale with what the caller passes. Bound the text at the call site when it is not yours.
-- Requests over stdio still carry no whole-call provider deadline (the sanctioned divergence `stdio-attempt-deadline`): the client's cancellation remains the recovery path for a call. Every provider attempt is bounded, though (ADR-0057): a hung connection times out after 30 s and a transient failure — connection errors, timeouts, 408/429/5xx — is retried, up to 3 attempts with capped exponential backoff (server `Retry-After` hints honored, capped at 5 s) inside a 90 s budget. A call whose attempts all fail reports the provider, the attempt count, and the last failure.
-- `initialize`'s `serverInfo.version`, the one startup log line, and `jev-judge-mcp --version` report the same build. A wheel, and a checkout whose HEAD is the tag `v<version>`, report that version. Any other git checkout reports `<version>+g<short sha>` (ADR-0054). The wire name stays `jev-mcp` (ADR-0049).
-- `jev_rerank` returns every candidate in `ranked`, highest `relevance` first. `relevance` is that candidate's probability, to four decimal places. The response has no spread field. A flat band of low values means the candidates were not distinguishable: treat the order as weak, and read `ranked[].relevance` rather than the rank numbers.
-- `jev_review` and `jev_gate` escalate when the lowest rubric confidence, or `safe_to_apply`, is below `thresholds.review_at` (the reference rule; default 0.5). That includes a low-confidence ancillary score such as `test_gap` on a patch the other scores accept. Escalate here is uncertainty, not a finding that the patch is wrong. The driving score is the `scores` entry — under `review` on `jev_gate` — whose `confidence` is below `thresholds.review_at`. Compare `safe_to_apply` to the same threshold. The response does not name the driver; those two fields do.
-- Per-tool weak spots and what recorded evidence exists for each tool are in [`docs/tools.md`](docs/tools.md); per-release evidence, including certified operating points, is recorded in [`docs/EVIDENCE.md`](docs/EVIDENCE.md).
+- `jev_verify` and `jev_screen` put no length bound on their input. The claims, evidence, or page
+text are sent to the provider in one request, however large, so token cost and latency scale with
+what the caller passes. Bound the text at the call site when it is not yours.
+- Requests over stdio still carry no whole-call provider deadline (the sanctioned divergence
+`stdio-attempt-deadline`): the client's cancellation remains the recovery path for a call. Every
+provider attempt is bounded, though (ADR-0057): a hung connection times out after 30 s and a
+transient failure — connection errors, timeouts, 408/429/5xx — is retried, up to 3 attempts with
+capped exponential backoff (server `Retry-After` hints honored, capped at 5 s) inside a 90 s
+budget. A call whose attempts all fail reports the provider, the attempt count, and the last
+failure.
+- `initialize`'s `serverInfo.version`, the one startup log line, and `jev-judge-mcp --version`
+  report the same build. A wheel, and a checkout whose HEAD is the tag `v<version>`, report that
+  version. Any other git checkout reports `<version>+g<short sha>` (ADR-0054). The wire name stays
+  `jev-mcp` (ADR-0049).
+- `jev_rerank` returns every candidate in `ranked`, highest `relevance` first. `relevance` is that
+  candidate's probability, to four decimal places. The response has no spread field. A flat band of
+  low values means the candidates were not distinguishable: treat the order as weak, and read
+  `ranked[].relevance` rather than the rank numbers.
+- `jev_review` and `jev_gate` escalate when the lowest rubric confidence, or `safe_to_apply`, is
+  below `thresholds.review_at` (the reference rule; default 0.5). That includes a low-confidence
+  ancillary score such as `test_gap` on a patch the other scores accept. Escalate here is
+  uncertainty, not a finding that the patch is wrong. The driving score is the `scores` entry —
+  under `review` on `jev_gate` — whose `confidence` is below `thresholds.review_at`. Compare
+  `safe_to_apply` to the same threshold. The response does not name the driver; those two fields do.
+- Per-tool weak spots and what recorded evidence exists for each tool are in
+  [`docs/tools.md`](docs/tools.md); per-release evidence, including certified operating points, is
+  recorded in [`docs/EVIDENCE.md`](docs/EVIDENCE.md).
 
 ### Running over HTTP (experimental)
 
