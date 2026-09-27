@@ -13,8 +13,13 @@ still exists. On leaving the block, however it is left, both temp dirs are gone 
 The agent's environment is `base_env` updated with `command.env`, then isolated: `HOME`,
 `PI_CODING_AGENT_DIR`, and `TMPDIR` are replaced with private directories inside the run's sandbox,
 and only `PRIVATE_AGENT_FILES` is copied into the private agent dir, so no user MCP config, adapter
-cache, settings, or instructions reach the agent (`_isolated_env`). Nothing is read from this
-process's environment below that boundary.
+cache, settings, or instructions reach the agent (`_isolated_env`). `CLAUDE_CONFIG_DIR` is left unset
+on purpose: a sandboxed one hides the macOS login keychain from Claude Code, which then dies at
+startup with "Not logged in" and never reaches its model. Instead the sandbox home's
+`Library/Keychains` is a symlink to the real home's, so the login resolves while every other Claude
+project state still lands in the sandbox and dies with it. That link is the same kind of exposure as
+the copied `auth.json`: the agent under test can read the login keychain through it. Nothing is read
+from this process's environment below that boundary.
 """
 
 import json
@@ -296,13 +301,19 @@ def _isolated_env(base_env: Mapping[str, str], sandbox: Path) -> dict[str, str]:
     instructions reach it. Copied from the caller's real agent dir — `PI_CODING_AGENT_DIR` in
     `base_env`, else `<HOME>/.pi/agent` — resolved before the override is applied. The sandbox is
     deleted with the run; the copies never outlive it.
+
+    `CLAUDE_CONFIG_DIR` stays unset. Claude Code 2.1.283 keeps its login in the macOS login keychain,
+    and a sandboxed config dir plus a sandboxed `HOME` hides that keychain, so every run dies at
+    startup with "Not logged in" before any model call. The sandbox home's `Library/Keychains` is
+    therefore a symlink to the real home's, resolved from `base_env["HOME"]` before the override.
+    The link is an exposure: the agent under test can read the login keychain through it, exactly as
+    it can read the copied `auth.json`. No credential is copied, read, or passed.
     """
     home, agent_dir, tmp = (sandbox / name for name in ("home", "agent", "tmp"))
     for directory in (home, agent_dir, tmp):
         directory.mkdir(mode=0o700, exist_ok=True)
-    real = base_env.get("PI_CODING_AGENT_DIR") or (
-        str(Path(base_env["HOME"]) / ".pi" / "agent") if base_env.get("HOME") else ""
-    )
+    real_home = base_env.get("HOME")
+    real = base_env.get("PI_CODING_AGENT_DIR") or (str(Path(real_home) / ".pi" / "agent") if real_home else "")
     if real:
         for name in PRIVATE_AGENT_FILES:
             source = Path(real) / name
@@ -310,11 +321,16 @@ def _isolated_env(base_env: Mapping[str, str], sandbox: Path) -> dict[str, str]:
                 target = agent_dir / name
                 target.write_bytes(source.read_bytes())
                 os.chmod(target, 0o600)
+    # Resolved from the real HOME before the override below replaces it.
+    if real_home:
+        keychains = home / "Library" / "Keychains"
+        keychains.parent.mkdir(mode=0o700, exist_ok=True)
+        if not keychains.is_symlink():
+            keychains.symlink_to(Path(real_home) / "Library" / "Keychains", target_is_directory=True)
     return {
         "HOME": str(home),
         "PI_CODING_AGENT_DIR": str(agent_dir),
         "TMPDIR": str(tmp),
-        "CLAUDE_CONFIG_DIR": str(sandbox),
     }
 
 

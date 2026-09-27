@@ -7,7 +7,9 @@ that never calls Jev is recorded as "did not call Jev", not a failure (ADR-0036)
 server plus the one-sentence instruction, and a run with no Jev answer fails the use gate.
 
 The bench model is Pi `opencode-go/deepseek-v4.1-flash` at thinking high. One Pi prompt preflights
-that model. The first provider connection, auth, or rate-limit error stops the run. That attempt is
+that model, and one Claude prompt preflights the Claude agent the same way. A preflight that never
+reaches the model stops the bench before any run is booked, so a dead login cannot spend the run cap.
+The first provider connection, auth, or rate-limit error stops the run. That attempt is
 booked so it is never retried, and it is not an arm result. Only complete triplets are analyzed.
 After the first 10 triplets the forced-arm compliance stop and the Jev-spend projection apply. The
 25 USD ceiling applies to Jev spend. Agent model spend is recorded separately from Pi's usage cost
@@ -36,7 +38,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from evals.ab import arms, stream
+from evals.ab import arms, outcomes, stream
 from evals.agent import AgentCommand, AgentRunResult, run_agent
 from evals.bench import analysis, answer, chart, gate, prompt, spans
 from evals.bench.items import Item, load_items
@@ -490,6 +492,42 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
     return 0
 
 
+def _preflight_detail(run: AgentRunResult) -> str:
+    """The run's status plus the agent's own first error line, so a stop names the cause."""
+    line = next((stripped for raw in run.stderr.splitlines() if (stripped := raw.strip())), "")
+    return f"{run.status}; {line[:160]}" if line else run.status
+
+
+def claude_preflight(binary: str, base_env: Mapping[str, str], secret: str) -> str:
+    """One prompt through `run_agent`'s own env. Returns the model Claude reported.
+
+    A run that never reaches the model raises ServerUnreachable. The 2026-09-27 batch booked a full
+    cap of Claude runs that died at startup with "Not logged in"; the preflight stops the bench
+    first, and it books nothing.
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="jev-bench-preflight-"))
+    try:
+        command = AgentCommand(
+            argv=lambda config: arms.claude_command(binary, "Reply with the single word ok.", config),
+            timeout_s=PREFLIGHT_TIMEOUT_S,
+        )
+        with run_agent(
+            command,
+            mcp_config=arms.mcp_config("A", jev_log=scratch / "jev.jsonl", server_env={}),
+            base_env=base_env,
+            secret=secret,
+            run_dir=scratch,
+        ) as run:
+            failure = run.trace.result_field("server_error")
+            if isinstance(failure, str):
+                raise ServerUnreachable(failure.splitlines()[0][:160])
+            if not outcomes.reached_model(run.trace):
+                raise ServerUnreachable(_preflight_detail(run))
+            return run.trace.model or arms.AGENT_MODEL
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def pi_preflight(binary: str, base_env: Mapping[str, str], secret: str) -> str:
     """One prompt on the bench model. Returns the model id Pi reported.
 
@@ -577,6 +615,14 @@ def live(
         claude = shutil.which("claude", path=agent_path)
         if claude is None:
             raise BenchRefusedError("claude not found on PATH")
+        try:
+            seen = claude_preflight(claude, base_env, key)
+        except ServerUnreachable as error:
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "preflight.txt").write_text("failed\n", encoding="utf-8")
+            return f"stopped: Claude preflight failed ({error}); not an arm result"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "model.txt").write_text(seen + "\n", encoding="utf-8")
         setup = Setup(
             agent=lambda _item, _arm: [claude],
             server=arms.jev_command(),

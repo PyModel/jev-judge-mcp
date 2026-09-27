@@ -636,6 +636,76 @@ def test_live_run_refuses_without_flag_key_or_frozen_labels(tmp_path: Path) -> N
     assert not list(tmp_path.iterdir()), "a refused run writes nothing"
 
 
+def _claude_on_path(bindir: Path, body: str) -> None:
+    bindir.mkdir()
+    stub = bindir / "claude"
+    stub.write_text(f"#!{sys.executable}\n{body}", encoding="utf-8")
+    stub.chmod(0o755)
+
+
+_DEAD_LOGIN = "\n".join(
+    [
+        "import sys",
+        'sys.stderr.write("Not logged in · Please run /login\\n")',
+        "raise SystemExit(1)",
+    ]
+)
+_REACHES_MODEL = (
+    "import json\n"
+    'print(json.dumps({"type": "system", "subtype": "init", "model": "stub-model", "mcp_servers": []}))\n'
+    'print(json.dumps({"type": "assistant", "message": {"id": "m",\n'
+    '    "usage": {"input_tokens": 5, "output_tokens": 3},\n'
+    '    "content": [{"type": "text", "text": "ok"}]}}))\n'
+    'print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "ok"}))\n'
+)
+
+
+def test_a_dead_claude_preflight_stops_the_bench_before_any_run_is_booked(tmp_path: Path) -> None:
+    """A Claude that dies at startup stops the bench before the ledger exists, so it spends no cap.
+
+    The 2026-09-27 batch booked every dead "Not logged in" run until the cap refused the rest.
+    Empty items make a skipped preflight return "all 0 triplets recorded" instead, so this fails
+    both if the preflight is removed and if it runs after the runs are booked.
+    """
+    _claude_on_path(tmp_path / "bin", _DEAD_LOGIN)
+    out = tmp_path / "out"
+    stop = run.live(
+        {
+            "JEV_BENCH_LIVE": "1",
+            "TYPESAFE_API_KEY": BENCH_FAKE_API_KEY,
+            "PATH": str(tmp_path / "bin"),
+            "HOME": str(tmp_path),
+        },
+        out,
+        items=(),
+    )
+    assert stop.startswith("stopped: Claude preflight failed")
+    assert "Not logged in" in stop
+    assert (out / "preflight.txt").read_text(encoding="utf-8") == "failed\n"
+    assert not (out / "model.txt").exists()
+    assert not (out / "ledger.json").exists()
+    assert list(out.glob("*/result.json")) == []
+
+
+def test_a_claude_preflight_that_reaches_the_model_lets_the_bench_proceed(tmp_path: Path) -> None:
+    """The gate is not unconditional: a billed turn is recorded and the bench continues."""
+    _claude_on_path(tmp_path / "bin", _REACHES_MODEL)
+    out = tmp_path / "out"
+    stop = run.live(
+        {
+            "JEV_BENCH_LIVE": "1",
+            "TYPESAFE_API_KEY": BENCH_FAKE_API_KEY,
+            "PATH": str(tmp_path / "bin"),
+            "HOME": str(tmp_path),
+        },
+        out,
+        items=(),
+    )
+    assert stop == "all 0 triplets recorded"
+    assert (out / "model.txt").read_text(encoding="utf-8") == "stub-model\n"
+    assert not (out / "preflight.txt").exists()
+
+
 def test_setup_needs_a_secret_to_scrub() -> None:
     with pytest.raises(ValueError, match="non-empty key"):
         run.Setup(agent=lambda _i, _a: [], server=[], server_env={}, base_env={}, secret="")

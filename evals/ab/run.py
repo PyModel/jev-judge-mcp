@@ -7,7 +7,9 @@ One agent, both arms, the same tasks. Each task runs `REPEATS` times per arm, in
 order is seeded and random; a pair starts only if the whole pair fits the agent's ledger, and a
 recorded run, failed or not, is never retried, so an interrupted study resumes where it stopped. The
 study refuses to resume when the Jev revision, the fixture, or the agent's pinned setup has changed
-since its first run, so no pair spans two setups. The TypeSafe key reaches only the Jev server's env,
+since its first run, so no pair spans two setups. Before the first paid run, one live preflight goes
+through `run_agent`'s own env; a preflight that never reaches the model refuses the batch and books
+nothing, so a dead login cannot spend the run cap. The TypeSafe key reaches only the Jev server's env,
 through the 0600 config file `evals.agent.run_agent` writes and deletes; every kept artifact is
 scrubbed of it. `evals.study_runner` owns the run, the result file, and the booking handler (ADR-0045).
 """
@@ -21,6 +23,7 @@ import random
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,6 +48,10 @@ PINNED = ("jev_revision", "fixture_sha256", "agent", "agent_version", "held_cons
 
 class StudyRefusedError(RuntimeError):
     pass
+
+
+PREFLIGHT_TIMEOUT_S = 180.0
+"""One prompt to prove the agent can reach its model, before any paid run is booked."""
 
 
 @dataclass(frozen=True)
@@ -97,6 +104,46 @@ def parser_for(agent: str) -> Callable[[Iterable[str]], stream.Trace]:
 
 def run_id(task_id: str, arm: str, repeat: int) -> str:
     return f"{task_id}.{arm}.r{repeat}"
+
+
+def _preflight_detail(run: AgentRunResult) -> str:
+    """The run's status plus the agent's own first error line, so a refusal names the cause."""
+    line = next((stripped for raw in run.stderr.splitlines() if (stripped := raw.strip())), "")
+    return f"{run.status}; {line[:160]}" if line else run.status
+
+
+def preflight(setup: Setup) -> None:
+    """One prompt through `run_agent`'s own env, before the first paid run of a study.
+
+    On 2026-09-27 every Claude run died at startup with "Not logged in" and the ledger booked each
+    dead run until the cap refused the rest of the batch. A preflight that never reaches the model
+    refuses the batch first. It books nothing: its scratch dir is not the study's `out`, and it never
+    touches the ledger.
+    """
+    scratch = Path(tempfile.mkdtemp(prefix="jev-ab-preflight-"))
+    try:
+        command = AgentCommand(
+            argv=lambda config: [
+                *setup.binary,
+                *argv_tail(setup.agent, "Reply with the single word ok.", config, arms.SYSTEM_ADDENDUM),
+            ],
+            timeout_s=PREFLIGHT_TIMEOUT_S,
+        )
+        with run_agent(
+            command,
+            mcp_config=arms.mcp_config("A", jev_log=scratch / "jev.jsonl", server_env={}),
+            base_env=setup.base_env,
+            secret=setup.secret,
+            run_dir=scratch,
+            parse=parser_for(setup.agent),
+        ) as run:
+            if not outcomes.reached_model(run.trace):
+                raise StudyRefusedError(
+                    f"{setup.agent} preflight could not reach its model ({_preflight_detail(run)}); "
+                    "refusing the batch before any run is booked"
+                )
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -464,6 +511,7 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
         secret=key,
         python3=python3,
     )
+    preflight(setup)
     return study(setup, agent_out, repeats=repeats)
 
 

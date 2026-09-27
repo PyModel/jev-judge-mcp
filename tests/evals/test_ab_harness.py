@@ -403,7 +403,14 @@ def test_agent_env_drops_keys_and_the_virtualenv() -> None:
 def test_claude_command_pins_model_and_budget(tmp_path: Path) -> None:
     command = arms.claude_command("claude", "do it", tmp_path / "mcp.json")
     joined = " ".join(command)
-    for fragment in ("--model claude-sonnet-5", "--effort medium", "--max-turns 40", "--max-budget-usd 2.00"):
+    # The fragments come from the arms constants, so changing the model (or effort, turns, budget)
+    # changes the command and this pin together instead of breaking `make eval` on a stale literal.
+    for fragment in (
+        f"--model {arms.AGENT_MODEL}",
+        f"--effort {arms.AGENT_EFFORT}",
+        f"--max-turns {arms.MAX_TURNS}",
+        f"--max-budget-usd {arms.RUN_BUDGET_USD:.2f}",
+    ):
         assert fragment in joined
     assert "--strict-mcp-config" in command
     assert command[command.index("--setting-sources") + 1] == ""
@@ -431,6 +438,105 @@ def test_the_study_refuses_without_its_flag_or_key(tmp_path: Path) -> None:
     with pytest.raises(ab_run.StudyRefusedError, match="pi not found"):
         ab_run.live({"JEV_AB_LIVE": "1", "TYPESAFE_API_KEY": fake_key, "PATH": ""}, tmp_path, agent="pi")
     assert ab_run.main([], environ={}) == 2
+
+
+def _dead_login() -> str:
+    return "\n".join(
+        [
+            "import sys",
+            'sys.stderr.write("Not logged in · Please run /login\\n")',
+            "raise SystemExit(1)",
+        ]
+    )
+
+
+def _reaches_model(agent: str) -> str:
+    """A stub transcript with one billed assistant turn. Claude and Pi do not share a stream shape."""
+    if agent == "pi":
+        return (
+            "import json\n"
+            "events = [\n"
+            '    {"type": "message_end", "message": {"role": "assistant", "provider": "stub",\n'
+            '        "model": "stub-model", "usage": {"input": 5, "output": 3, "cacheRead": 0,\n'
+            '        "cacheWrite": 0, "totalTokens": 8},\n'
+            '        "content": [{"type": "text", "text": "ok"}], "stopReason": "stop"}},\n'
+            '    {"type": "agent_end", "willRetry": False},\n'
+            "]\n"
+            "for event in events:\n"
+            "    print(json.dumps(event))\n"
+        )
+    return (
+        "import json\n"
+        'print(json.dumps({"type": "system", "subtype": "init", "model": "stub-model", "mcp_servers": []}))\n'
+        'print(json.dumps({"type": "assistant", "message": {"id": "m",\n'
+        '    "usage": {"input_tokens": 5, "output_tokens": 3},\n'
+        '    "content": [{"type": "text", "text": "ok"}]}}))\n'
+        'print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "ok"}))\n'
+    )
+
+
+def _preflight_setup(tmp_path: Path, agent: str, script: str) -> ab_run.Setup:
+    fake_key = "sk-test-preflight-not-a-real-key"
+    return ab_run.Setup(
+        agent=agent,
+        binary=[sys.executable, "-c", script],
+        server_env={},
+        base_env=arms.agent_env({"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}),
+        secret=fake_key,
+        python3=sys.executable,
+    )
+
+
+@pytest.mark.parametrize("agent", ab_run.AGENTS)
+def test_preflight_refuses_when_the_agent_never_reaches_its_model(tmp_path: Path, agent: str) -> None:
+    """A startup death ("Not logged in", no model turn) refuses the batch, and the error names the cause."""
+    with pytest.raises(ab_run.StudyRefusedError, match="preflight could not reach its model") as refusal:
+        ab_run.preflight(_preflight_setup(tmp_path, agent, _dead_login()))
+    assert "Not logged in" in str(refusal.value)
+
+
+@pytest.mark.parametrize("agent", ab_run.AGENTS)
+def test_preflight_passes_when_the_agent_reaches_its_model(tmp_path: Path, agent: str) -> None:
+    """The gate is not unconditional: a run that billed a model turn is not a refusal."""
+    ab_run.preflight(_preflight_setup(tmp_path, agent, _reaches_model(agent)))
+
+
+def test_a_dead_preflight_refuses_the_batch_before_any_run_is_booked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`live` runs the preflight before the study. A dead one books nothing, so it cannot spend the cap.
+
+    `expected_ids` is the reference grader, unrelated to this gate; standing in for it keeps the test
+    on the preflight. Removing the preflight, or running it after `study`, books the dead run and
+    this assertion fails.
+    """
+    fake_key = "sk-test-preflight-not-a-real-key"
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    dead = bindir / "claude"
+    dead.write_text(f"#!{sys.executable}\n{_dead_login()}\n", encoding="utf-8")
+    dead.chmod(0o755)
+    (bindir / "python3").symlink_to(sys.executable)
+
+    def skip_reference_grader(_task: object, _python: str) -> tuple[str, ...]:
+        return ()
+
+    monkeypatch.setattr(ab_run, "expected_ids", skip_reference_grader)
+    out = tmp_path / "out"
+    with pytest.raises(ab_run.StudyRefusedError, match="Not logged in"):
+        ab_run.live(
+            {
+                "JEV_AB_LIVE": "1",
+                "TYPESAFE_API_KEY": fake_key,
+                "PATH": str(bindir),
+                "HOME": str(tmp_path),
+            },
+            out,
+            agent="claude",
+        )
+    study_out = out / "claude"
+    assert not (study_out / "ledger.json").exists()
+    assert list(study_out.glob("*/result.json")) == []
 
 
 def test_a_resume_under_another_setup_is_refused(tmp_path: Path) -> None:
