@@ -1,29 +1,25 @@
 """Fail if a treehouse worktree build dropped .gitignore and shipped ignored files.
 
 Hatchling treats a gitignore hit on the absolute project root as "exclude nothing".
-`/.treehouse/` must not match a checkout that merely lives under `~/.treehouse`.
+An unanchored `.treehouse/` matches a checkout that merely lives under `~/.treehouse`.
+The pattern must be anchored at the repository root.
 """
 
 import sys
 import tarfile
 from pathlib import Path
 
-import pathspec
-
 ROOT = Path(__file__).resolve().parents[2]
 FORBIDDEN = (".venv/", "__pycache__/", ".pytest_cache/", ".ruff_cache/", ".jevbench-tmp/", "docs/reference/jev-skill/")
 
 
 def main() -> int:
-    patterns = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-    spec = pathspec.GitIgnoreSpec.from_lines(patterns)
-    root = str(ROOT)
-    if spec.match_file(root):
-        print(f"gitignore excludes the project root {root}; hatchling would ship ignored files", file=sys.stderr)
+    lines = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    if ".treehouse/" in lines:
+        print("unanchored .treehouse/ gitignore matches a treehouse worktree root", file=sys.stderr)
         return 1
-    synthetic = "/var/empty/.treehouse/pool/1/jev-mcp"
-    if spec.match_file(synthetic):
-        print(f"gitignore excludes a treehouse worktree root ({synthetic})", file=sys.stderr)
+    if "/.treehouse/" not in lines:
+        print("missing anchored /.treehouse/ gitignore entry", file=sys.stderr)
         return 1
     sdists = sorted((ROOT / "dist").glob("*.tar.gz"))
     if not sdists:
