@@ -171,7 +171,8 @@ async def test_every_tool_call_succeeds_at_low_concurrency() -> None:
 
     `make load` measures overhead and stays out of CI, which is how an unanswered `source_<index>`
     question shipped in 0.5.0. One pass per tool per level fails on the first question the stub
-    cannot answer, and the gate call must validate the derived source answer, not merely not crash.
+    cannot answer. The derived source answer must name the caller's evidence id: a claim row's
+    `invalid_response` does not see a source answer that failed validation.
     """
     toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: StubProvider()), TOOLS)
     server = JevMCPServer(toolset=toolset, log_level="WARNING")
@@ -186,5 +187,7 @@ async def test_every_tool_call_succeeds_at_low_concurrency() -> None:
             assert not result.is_error, result.content
             payload = json.loads(text_of(result))
             assert payload["verification"]["summary"]["invalid_response"] == 0
+            row = payload["verification"]["results"][0]
+            assert row["supporting_evidence"] == gate.arguments["evidence"][0]["id"], row
     finally:
         await toolset.aclose()
