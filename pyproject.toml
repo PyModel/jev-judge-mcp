@@ -63,6 +63,8 @@ exclude = [".agents", ".pi", ".claude", ".cache"]
 line-length = 120
 target-version = "py312"
 src = ["src", "tests"]
+# The owner's skill text is packaged as written. Do not reflow its examples.
+extend-exclude = ["src/jev_judge_mcp/skills/jev"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "S", "RUF"]
