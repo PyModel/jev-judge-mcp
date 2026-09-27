@@ -55,33 +55,24 @@ def answer_book() -> dict[str, Any]:
 
 
 def answer_for(book: dict[str, Any], key: str, question: JsonValue) -> Any:
-    """The case's permissive answer, or one derived from the question's own wire criteria.
+    """The case's permissive answer, or a Choice derived from the question's own labels.
 
     jev_gate asks a `source_<index>` Choice whose labels are the evidence ids of the case it is scoring,
-    and no case records that answer. Deriving it from the criteria — the case's own evidence ids, not a
-    hardcoded label — means a tool question added later is answered too, and fails here only when its
-    shape is not a Choice, Score, or Noul.
+    and no case records that answer. Those labels depend on the arguments, so they come from the question
+    itself, not a hardcoded id. Every Score and Noul key is already in the book; a question this cannot
+    answer raises, which the canary sees.
     """
     if key in book:
         return book[key]
-    if isinstance(question, dict):
-        kind = question.get("type")
+    if isinstance(question, dict) and question.get("type") == "choice":
         criteria = question.get("criteria")
-        if kind == "choice" and isinstance(criteria, dict) and criteria:
+        if isinstance(criteria, dict) and criteria:
             chosen = next(iter(criteria))
             return {
                 "choice": chosen,
                 "probabilities": {label: 1.0 if label == chosen else 0.0 for label in criteria},
                 "confidence": 0.99,
             }
-        if kind == "score" and isinstance(criteria, list) and len(criteria) >= 2:
-            return {
-                "score": 0,
-                "probabilities": {str(index): 1.0 if index == 0 else 0.0 for index in range(len(criteria))},
-                "confidence": 0.95,
-            }
-        if kind == "noul":
-            return {"noul": 0.95}
     raise AssertionError(f"stub cannot answer {key}: unrecognized question {question!r}")
 
 
