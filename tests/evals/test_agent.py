@@ -20,7 +20,7 @@ from evals.ab import run as ab_run
 from evals.ab.stream import Trace
 from evals.agent import STDERR_TRUNCATED_LINE, AgentCommand, AgentRunResult, run_agent, secret_scrub
 from evals.bench import ledger as bench_ledger
-from evals.bench import run
+from evals.bench import pi, run
 from evals.bench.items import load_items
 from evals.spend import SpendLedger, SpendPolicy
 
@@ -465,7 +465,10 @@ def test_study_and_bench_time_out_the_same_way(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("agent", ab_run.AGENTS)
-def test_the_study_launches_its_agent_with_that_agents_cli_tail(tmp_path: Path, agent: str) -> None:
+def test_the_study_launches_its_agent_with_that_agents_cli_tail(
+    tmp_path: Path, agent: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pi, "ADAPTER", tmp_path / "adapter.ts")
     setup = _setup(tmp_path, [sys.executable, "-c", STUB, "0"], agent=agent)
     book = SpendLedger(ledger.POLICIES[agent], tmp_path / "ledger.json")
     ab_run.run_one(TASK, "B", 1, setup, book, tmp_path / "out")

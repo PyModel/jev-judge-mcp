@@ -361,7 +361,10 @@ def test_arms_configs_differ_only_in_the_jev_server(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("agent", ab_run.AGENTS)
-def test_arm_command_lines_differ_only_in_the_jev_sentence(agent: str, task: tasks.Task) -> None:
+def test_arm_command_lines_differ_only_in_the_jev_sentence(
+    agent: str, task: tasks.Task, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pi, "ADAPTER", Path("/adapter.ts"))
     prompt = ab_run.user_prompt(task)
     config = Path("/cfg/mcp.json")
     tails = {
@@ -454,16 +457,22 @@ def _preflight_setup(tmp_path: Path, agent: str, script: str) -> ab_run.Setup:
 
 
 @pytest.mark.parametrize("agent", ab_run.AGENTS)
-def test_preflight_refuses_when_the_agent_never_reaches_its_model(tmp_path: Path, agent: str) -> None:
+def test_preflight_refuses_when_the_agent_never_reaches_its_model(
+    tmp_path: Path, agent: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A startup death ("Not logged in", no model turn) refuses the batch, and the error names the cause."""
+    monkeypatch.setattr(pi, "ADAPTER", tmp_path / "adapter.ts")
     with pytest.raises(ab_run.StudyRefusedError, match="preflight could not reach its model") as refusal:
         ab_run.preflight(_preflight_setup(tmp_path, agent, dead_login()))
     assert "Not logged in" in str(refusal.value)
 
 
 @pytest.mark.parametrize("agent", ab_run.AGENTS)
-def test_preflight_passes_when_the_agent_reaches_its_model(tmp_path: Path, agent: str) -> None:
+def test_preflight_passes_when_the_agent_reaches_its_model(
+    tmp_path: Path, agent: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The gate is not unconditional: a run that billed a model turn is not a refusal."""
+    monkeypatch.setattr(pi, "ADAPTER", tmp_path / "adapter.ts")
     result = ab_run.preflight(_preflight_setup(tmp_path, agent, reaches_model(agent)))
     assert result.trace.model
 
