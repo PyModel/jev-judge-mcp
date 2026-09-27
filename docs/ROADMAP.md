@@ -199,7 +199,7 @@ A mock parity 100% → B shadow (TS authoritative, Python non-authoritative; mea
 - [ ] stdio stream clean
 - [ ] live E2E green: TypeSafe, OpenRouter, Cloudflare, compatible
 - [ ] AUTO thresholds calibrated on held-out data; gate false-AUTO meets target on its upper bound
-- [ ] 64-concurrent load test passes
+- [x] 64-concurrent load test passes
 - [ ] rollback rehearsed and documented
 
 ## Decisions
