@@ -71,8 +71,9 @@ load:
 
 # The load stub must answer every question each tool asks. Concurrency 1 and 4, one pass per tool, no timing
 # budget, so it is cheap enough for `make ci` and a regression cannot hide behind the timing-based `load`.
+# addopts already deselects `load`, so a bare run of this directory is the canary and nothing else.
 load_canary:
-	$(PYTEST) tests/load -m load_canary -s
+	$(PYTEST) tests/load -s
 
 # ROADMAP P7: offline eval scorer and calibration tests. No network, no API key.
 eval:

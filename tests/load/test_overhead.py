@@ -164,7 +164,6 @@ async def test_local_overhead_stays_within_budget_up_to_64_concurrent_calls() ->
     assert failures == []
 
 
-@pytest.mark.load_canary
 async def test_every_tool_call_succeeds_at_low_concurrency() -> None:
     """Every tool's real server path finishes at concurrency 1 and 4, the CI-visible load guard.
 
