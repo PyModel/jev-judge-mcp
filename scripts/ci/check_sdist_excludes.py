@@ -3,6 +3,10 @@
 Hatchling treats a gitignore hit on the absolute project root as "exclude nothing".
 An unanchored `.treehouse/` matches a checkout that merely lives under `~/.treehouse`.
 The pattern must be anchored at the repository root.
+
+The wheel check also enforces two provenance contracts: every packaged file must
+match a `tool.uv` cache-key glob (an unlisted edit would serve a stale build), and
+both artifacts carry THIRD_PARTY_NOTICES.md.
 """
 
 import fnmatch
@@ -15,6 +19,7 @@ from typing import TypeGuard, cast
 
 ROOT = Path(__file__).resolve().parents[2]
 FORBIDDEN = (".venv/", "__pycache__/", ".pytest_cache/", ".ruff_cache/", ".jevbench-tmp/", "docs/reference/jev-skill/")
+NOTICE = "THIRD_PARTY_NOTICES.md"
 
 
 def _table(value: object) -> TypeGuard[dict[str, object]]:
@@ -73,14 +78,22 @@ def main() -> int:
         for name in leaked[:20]:
             print(f"  {name}", file=sys.stderr)
         return 1
+    if not any(name.endswith(f"/{NOTICE}") for name in names):
+        print(f"sdist is missing {NOTICE}", file=sys.stderr)
+        return 1
     wheels = sorted((ROOT / "dist").glob("*.whl"))
     if not wheels:
         print("no wheel in dist/; run uv build first", file=sys.stderr)
         return 1
+    with zipfile.ZipFile(wheels[-1]) as archive:
+        wheel_names = archive.namelist()
+    if not any(name.endswith(f".dist-info/licenses/{NOTICE}") for name in wheel_names):
+        print(f"wheel licenses/ is missing {NOTICE}", file=sys.stderr)
+        return 1
     missed = check_wheel_cache_keys(ROOT, wheels[-1])
     if missed:
-        print("wheel members match no tool.uv cache-key:", file=sys.stderr)
-        for name in missed[:20]:
+        print("wheel files no cache-key glob covers; add the path to [tool.uv] cache-keys:", file=sys.stderr)
+        for name in missed:
             print(f"  {name}", file=sys.stderr)
         return 1
     return 0

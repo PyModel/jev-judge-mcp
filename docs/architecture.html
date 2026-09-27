@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.17.0-dev.1">
-  <title>jev-judge-mcp — Design Architecture Diagram</title>
+  <title>jev-judge-mcp Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -4950,11 +4950,11 @@
            data-preset-badge-blueprint="BLUEPRINT / REV 01"
            data-preset-badge-editorial="EDITORIAL / FIELD NOTE">
         <div class="pulse-dot"></div>
-        <h1>jev-judge-mcp — Design Architecture</h1>
+        <h1>jev-judge-mcp</h1>
       </div>
     </div>
 
-    <script id="archify-guided-views-data" type="application/json">[{"id":"one-call","label":"One tool call","focus":["client","server","arguments","limits","tools","runtime","providers","validation","policy","serialize"],"note":"The whole judgment path: args in, Jev answer back, action out — over stdio or streamable-http."},{"id":"fail-closed","label":"Fail-closed answer path","focus":["providers","validation","policy","serialize"],"note":"Validation rejects; policy decides; malformed never yields auto."},{"id":"extract-isolation","label":"Extract isolation","focus":["tools","extract","runtime"],"note":"The dialect translates; candidates own refusal text; killable worker processes run under one deadline."},{"id":"config-redaction","label":"Config and redaction","focus":["settings","keyfile","setup","runtime","cache","providers"],"note":"Env-only config; setup stores a verified key the resolver falls back to; the optional cache replays identical requests."},{"id":"operator-surfaces","label":"Operator surfaces","focus":["installer","client","hook","doctor","keyfile"],"note":"install registers agents; hook gate judges one proposed action; doctor checks config offline."}]</script>
+    <script id="archify-guided-views-data" type="application/json">[{"id":"call","label":"Call","focus":["client","server","instructions","arguments","tools","runtime","providers","validation","policy","serialize"],"note":"One tools/call: typed args in, a Jev answer back, action text out, over stdio or streamable-http."},{"id":"answers","label":"Answers","focus":["providers","validation","policy","serialize"],"note":"Validation rejects a malformed answer. Policy is pure. A bad confidence never yields auto."},{"id":"skills","label":"Skills","focus":["server","skills","instructions","tools"],"note":"The server serves jev-mcp and jev as resources and prompts. Instructions name every tool."},{"id":"config","label":"Config","focus":["settings","keyfile","setup","runtime","cache","providers"],"note":"Env-only config. setup stores a verified key. The optional cache replays an identical request."},{"id":"clis","label":"CLIs","focus":["installer","hook","doctor","setup","keyfile","client"],"note":"install registers eight agents. hook gate judges one action. doctor checks config offline."}]</script>
 
     <script id="archify-i18n-data" type="application/json">{"locale":"en","messages":{"viewer.kind.frontend":"Frontend","viewer.kind.backend":"Backend","viewer.kind.database":"Database","viewer.kind.cloud":"Cloud","viewer.kind.security":"Security","viewer.kind.messagebus":"Message bus","viewer.kind.external":"External","viewer.kind.neutral":"Neutral","viewer.kind.node":"Node","viewer.kind.start":"Start","viewer.kind.active":"Active","viewer.kind.waiting":"Waiting","viewer.kind.decision":"Decision","viewer.kind.success":"Success","viewer.kind.failure":"Failure","viewer.toolbar.actions":"Diagram actions","viewer.theme.toggle.title":"Toggle theme (T)","viewer.theme.toggle":"Toggle color theme","viewer.theme.dark":"Dark","viewer.theme.light":"Light","viewer.preset.choose.title":"Choose visual style (S cycles)","viewer.preset.choose":"Choose visual style","viewer.preset.style":"Style","viewer.preset.menu":"Visual style","viewer.preset.identity":"Visual identity","viewer.preset.cycles":"S cycles","viewer.preset.classic":"Classic","viewer.preset.classic.short":"Classic","viewer.preset.classic.hint":"Stable technical default","viewer.preset.flow":"Signal Flow","viewer.preset.flow.short":"Flow","viewer.preset.flow.hint":"Motion-forward presentation","viewer.preset.blueprint":"Blueprint","viewer.preset.blueprint.hint":"Engineering review","viewer.preset.editorial":"Editorial","viewer.preset.editorial.hint":"Publication and launch notes","viewer.preset.badge.signalFlow":"SIGNAL FLOW","viewer.preset.badge.blueprint":"BLUEPRINT / REV 01","viewer.preset.badge.editorial":"EDITORIAL / FIELD NOTE","viewer.preset.badge.editorialPlate":"ARCHIFY / PLATE 04","viewer.preset.current":"Visual style: {style}. Choose visual style","viewer.motion.live":"Live","viewer.motion.still":"Still","viewer.motion.pause":"Pause motion","viewer.motion.resume":"Resume motion","viewer.motion.reduced":"Motion paused by reduced-motion preference","viewer.motion.hidden":"Motion paused while this page is hidden","viewer.motion.yielding":"Pause motion; currently yielding to {owner}","viewer.motion.yielding.title":"Live preview enabled · yielding to {owner}","viewer.owner.story":"the guided story","viewer.owner.chapter":"the active chapter","viewer.owner.chapterPreview":"the chapter delta preview","viewer.owner.handoff":"the chapter handoff","viewer.owner.route":"Route Probe","viewer.owner.lens":"Semantic Lens","viewer.owner.relationship":"Relationship Preview","viewer.owner.intent":"Intent Trace","viewer.owner.focus":"semantic focus","viewer.owner.legend":"legend preview","viewer.owner.reader":"reader interaction","viewer.present.enter":"Enter presentation stage","viewer.present.enter.title":"Presentation stage (F)","viewer.present.exit":"Exit presentation stage","viewer.present.exit.title":"Exit presentation stage (F or Escape)","viewer.present.present":"Present","viewer.present.exit.label":"Exit","viewer.export.button":"Export","viewer.export.button.title":"Export diagram (E)","viewer.export.diagram":"Export diagram","viewer.export.menu":"Export","viewer.export.subtitle":"Portable, clean outputs","viewer.export.share":"Share","viewer.export.shareCard":"Share Card","viewer.export.routeShareCard":"Route Share Card","viewer.export.reachShareCard":"Reach Share Card","viewer.export.copyShareCard":"Copy Share Card","viewer.export.copyDiagram":"Copy diagram","viewer.export.clipboardPng":"PNG to clipboard","viewer.export.raster":"Raster images","viewer.export.image":"Image","viewer.export.lossless":"Lossless image","viewer.export.compact":"Compact image","viewer.export.modern":"Modern image","viewer.export.vectorMotion":"Vector and motion","viewer.export.vectorMotion.heading":"Vector \u0026 motion","viewer.export.editable":"Editable vector","viewer.export.motion6s":"6s motion","viewer.export.unsupported":"Not supported by this browser","viewer.export.clipboardUnsupported":"Clipboard image write not supported by this browser","viewer.export.clipboardUnsupported.period":"Clipboard image write not supported by this browser.","viewer.export.clipboardUnsupported.short":"Clipboard image write not supported in this browser.","viewer.export.motionUnavailable":"Motion capture unavailable in this browser","viewer.export.webmUnavailable":"WebM unavailable in this browser","viewer.export.failed":"Export failed: {message}","viewer.export.unknownVariant":"Unknown Share Card variant: {variant}","viewer.export.routeRequired":"Trace a route before exporting a Route Share Card","viewer.export.reachRequired":"Trace authored reach before exporting a Reach Share Card","viewer.export.unknown":"unknown","viewer.export.routeFailed":"Route Share Card export failed: {message}","viewer.export.reachFailed":"Reach Share Card export failed: {message}","viewer.export.copyFailed":"Copy failed: {message}","viewer.export.copiedPng":"Copied PNG to clipboard","viewer.export.copiedShare":"Copied Share Card","viewer.export.downloadedShare":"Downloaded Share Card","viewer.export.downloadedRoute":"Downloaded Route Share Card","viewer.export.downloadedReach":"Downloaded Reach Share Card","viewer.export.downloadedWebm":"Downloaded WebM","viewer.export.recording":"Recording 6 seconds of motion…","viewer.export.card.routeSummary.one":"Route: {source} → {target} · {count} directed hop","viewer.export.card.routeSummary.other":"Route: {source} → {target} · {count} directed hops","viewer.export.card.reachSummary":"Authored {direction} from {origin} · {nodes} · {links} · max {hops}","viewer.export.card.node.one":"{count} node","viewer.export.card.node.other":"{count} nodes","viewer.export.card.link.one":"{count} link","viewer.export.card.link.other":"{count} links","viewer.export.card.hop.one":"{count} hop","viewer.export.card.hop.other":"{count} hops","viewer.export.card.routeBadge":"ARCHIFY · ROUTE · {hops}","viewer.export.card.reachBadge":"ARCHIFY · {direction} REACH","viewer.export.card.defaultBadge":"ARCHIFY · {preset} · {theme}","viewer.export.direction.upstream":"Upstream","viewer.export.direction.downstream":"Downstream","viewer.export.error.canvasUnavailable":"Canvas unavailable for {label}","viewer.export.error.contextUnavailable":"2D canvas context unavailable for {label}","viewer.export.error.toBlobUnavailable":"canvas.toBlob unavailable for {label}","viewer.export.error.toBlobNull":"canvas.toBlob returned no data for {label}","viewer.export.error.variantsCombined":"Share Card variants cannot be combined","viewer.export.error.viewerState":"Share Card export could not remove temporary viewer state","viewer.export.error.routeState":"Route Card export could not preserve the resolved route safely","viewer.export.error.reachState":"Reach Card export could not preserve authored reach safely","viewer.export.error.webmRequirements":"WebM motion export requires a trace animation and browser MediaRecorder support","viewer.export.error.mediaRecorder":"MediaRecorder failed","viewer.export.error.emptyWebm":"MediaRecorder produced an empty WebM","viewer.export.error.webmBackground":"SVG background could not be loaded for WebM export","viewer.guided.region":"Guided diagram views","viewer.guided.previous":"Previous guided view","viewer.guided.previous.title":"Previous guided view ([)","viewer.guided.next":"Next guided view","viewer.guided.next.title":"Next guided view (])","viewer.guided.views":"Guided views","viewer.guided.explore":"Explore this system","viewer.guided.intro":"Step through curated paths without changing the source diagram.","viewer.guided.trail":"Story trail","viewer.guided.beat":"Beat","viewer.guided.nextBeat":"Next","viewer.guided.play":"Play guided story","viewer.guided.play.title":"Play guided story (P)","viewer.guided.pause":"Pause guided story","viewer.guided.pause.title":"Pause guided story (P)","viewer.guided.replay":"Replay guided story","viewer.guided.replay.title":"Replay guided story (P)","viewer.guided.playStory":"Play story","viewer.guided.pauseStory":"Pause","viewer.guided.replayStory":"Replay story","viewer.guided.motionUnavailable":"Story playback unavailable while motion is Still","viewer.guided.enableMotion":"Switch motion to Live to play the guided story","viewer.guided.selectBeatLink":"Select a Story Beat to copy its exact link","viewer.guided.copyMoment":"Copy moment","viewer.guided.momentCopied":"Moment link copied","viewer.guided.momentCopyFailed":"Could not copy story moment link","viewer.guided.copied":"Copied","viewer.guided.copyFailed":"Copy failed","viewer.guided.showAll":"Show all","viewer.guided.showAll.aria":"Show entire diagram","viewer.guided.chapters":"Story chapters","viewer.guided.storyTrail":"Story trail for {label}: {count} beats","viewer.guided.chapter.open":"Open chapter {index} of {total}: {label}, {count} stops","viewer.guided.chapter.current":"Current chapter {index} of {total}: {label}, {count} stops","viewer.guided.chapter.selectedNodes":"{count} selected nodes","viewer.guided.chapter.stops":"{count} stops","viewer.guided.chapter.stop.one":"{count} stop","viewer.guided.chapter.stop.other":"{count} stops","viewer.guided.chapter.current.title":"{label} — current chapter, {count} stops","viewer.guided.chapter.delta.expanded":"{stay} stay, {enter} enter, {leave} leave","viewer.guided.chapter.delta.aria":"Open chapter {index} of {total}: {label}. Chapter focus delta: {delta}","viewer.guided.chapter.delta.title":"{label} — {delta} chapter focus","viewer.guided.handoff":"{from} → {to} · via {label}","viewer.guided.share.chapter":"Chapter {index} / {total}","viewer.guided.share.initial":"Chapter 01 / 01","viewer.guided.share.default":"Guided chapter","viewer.guided.state.ready":"Ready","viewer.guided.state.playing":"Playing","viewer.guided.state.settled":"Settled","viewer.guided.state.paused":"Paused","viewer.guided.state.pinned":"Pinned","viewer.guided.state.still":"Still","viewer.guided.share.step":"Step {index} / {total} · {label}","viewer.guided.share.staticMoment":"{step} · Static moment","viewer.guided.share.complete":"{count} steps complete · {note}","viewer.guided.share.settled":"Path settled for reading.","viewer.guided.share.staticPath":"{count} steps · Static path","viewer.guided.share.ready":"{count} steps · Ready","viewer.guided.share.aria":"{state} chapter {index} of {total}: {label}. {beat}. {route}","viewer.guided.beat.start":"Beat {index} / {total} · {label} · starting point","viewer.guided.beat.forward":"Beat {index} / {total} · {from} → {to}","viewer.guided.beat.reverse":"Beat {index} / {total} · {from} → {to} · reverse authored link","viewer.guided.beat.multiple":"Beat {index} / {total} · {from} ⇄ {to} · {count} authored links","viewer.guided.beat.group":"Beat {index} / {total} · {from} · {to} · grouped · no direct link","viewer.guided.beat.aria.prefix":"Story beat {index} of {total}: {label}. ","viewer.guided.beat.aria.start":"Starting point.","viewer.guided.beat.aria.forward":"From {from} through one authored forward relationship.","viewer.guided.beat.aria.reverse":"From {from}; the authored relationship points from {to} to {from}.","viewer.guided.beat.aria.multiple":"From {from} through {count} authored relationships; shown without arbitrary motion.","viewer.guided.beat.aria.group":"Grouped from {from} with no direct authored relationship.","viewer.guided.caption.start":"Starting point","viewer.guided.caption.grouped":"Grouped transition · no direct authored link","viewer.guided.caption.more":" +{count} more","viewer.guided.caption.reverse":"Reverse authored relationship","viewer.guided.caption.relationships":"{count} authored relationships","viewer.guided.caption.relationship":"Authored relationship","viewer.guided.caption.direction":"authored direction: {from} → {to}","viewer.guided.caption.starting":"Authored starting point","viewer.guided.beatLink":"Copy link to current story moment: Beat {index} of {total}: {label}","viewer.guided.noStory":"This diagram has no authored guided story.","viewer.guide.eyebrow":"Diagram guide","viewer.guide.close":"Close diagram guide","viewer.guide.inspecting":"Inspecting compiled semantics","viewer.guide.actions":"Diagram exploration actions","viewer.guide.find":"Find any node","viewer.guide.find.hint":"Search labels, responsibilities, kinds, and stable IDs.","viewer.guide.route":"Trace a route","viewer.guide.route.aria":"Trace a directed route","viewer.guide.route.hint":"Ask how two semantic nodes connect in authored direction.","viewer.guide.map":"See the whole system","viewer.guide.map.hint":"Open Semantic Radar with a live viewport and stable nodes.","viewer.guide.lens":"Compare semantic kinds","viewer.guide.lens.hint":"Count roles, reveal their traffic, and compare direct authored links.","viewer.guide.story":"Play the guided story","viewer.guide.story.hint":"Walk the authored chapters and real relationships.","viewer.guide.present":"Enter Presentation Stage","viewer.guide.present.hint":"Give the live diagram the viewport without changing export.","viewer.guide.shortcuts":"Additional keyboard shortcuts","viewer.guide.shortcut.export":"Export","viewer.guide.shortcut.theme":"Theme","viewer.guide.shortcut.style":"Style","viewer.guide.shortcut.reset":"Reset","viewer.guide.shortcut.zoomIn":"Zoom in","viewer.guide.shortcut.zoomOut":"Zoom out","viewer.guide.shortcut.close":"Close","viewer.guide.facts":"{nodes} · {relationships} · {views}","viewer.guide.fact.node.one":"{count} semantic node","viewer.guide.fact.node.other":"{count} semantic nodes","viewer.guide.fact.relationship.one":"{count} relationship","viewer.guide.fact.relationship.other":"{count} relationships","viewer.guide.fact.view.one":"{count} guided view","viewer.guide.fact.view.other":"{count} guided views","viewer.guide.story.available.one":"Walk {count} authored chapter and its real relationships.","viewer.guide.story.available.other":"Walk {count} authored chapters and their real relationships.","viewer.guide.story.unavailable":"No authored guided story in this diagram.","viewer.guide.open":"Open diagram guide","viewer.guide.noStory":"This diagram has no authored guided story.","viewer.finder.title":"Find a node","viewer.finder.close":"Close node finder","viewer.finder.placeholder":"Search labels or IDs","viewer.finder.search":"Search diagram nodes","viewer.finder.results":"Diagram nodes","viewer.finder.empty":"No matching nodes","viewer.finder.result.focus":"Focus {label}","viewer.finder.result.routeStart":"Choose {label} as route start","viewer.finder.result.routeTarget":"Choose {label} as route destination, {links}","viewer.finder.status.empty":"No matching nodes","viewer.finder.status.count.one":"{count} matching node","viewer.finder.status.count.other":"{count} matching nodes","viewer.finder.noun.nodes":"nodes","viewer.finder.link.one":"{count} link","viewer.finder.link.other":"{count} links","viewer.finder.result.focus.one":"Focus {label}, {count} related connection","viewer.finder.result.focus.other":"Focus {label}, {count} related connections","viewer.finder.status.filtered":"{visible} of {available} {noun}","viewer.finder.status.all":"{available} {noun}","viewer.passport.eyebrow":"Semantic passport","viewer.passport.metadata":"Node metadata","viewer.passport.evidence":"Verified source evidence","viewer.passport.verified":"Verified source","viewer.passport.verificationScope":"Verified against local Git at the pinned revision. Remote access has not been checked.","viewer.passport.reach":"Authored reach","viewer.passport.reach.trace":"Trace authored reachability","viewer.passport.upstream":"Upstream","viewer.passport.downstream":"Downstream","viewer.passport.upstream.trace":"Trace upstream authored reachability","viewer.passport.downstream.trace":"Trace downstream authored reachability","viewer.passport.close":"Close semantic passport","viewer.passport.copy":"Copy link","viewer.passport.copy.focus":"Copy link to focused node","viewer.passport.relations":"Relations","viewer.passport.relations.show":"Show connected relationships","viewer.passport.relations.hide":"Hide connected relationships","viewer.passport.relations.list":"Connected relationships","viewer.passport.copyRelation":"Copy relation","viewer.passport.copyNode":"Copy node","viewer.passport.copyPinned":"Copy link to pinned relationship","viewer.passport.copySource":"Copy link to source node","viewer.passport.copy.focused.success":"Focused node link copied","viewer.passport.copy.pinned.success":"Pinned relationship link copied","viewer.passport.copy.focused.failed":"Could not copy focused node link","viewer.passport.copy.pinned.failed":"Could not copy pinned relationship link","viewer.passport.relationship.none":"No connected relationships","viewer.passport.relationship.count.one":"{count} relation","viewer.passport.relationship.count.other":"{count} relations","viewer.passport.relationship.show.one":"Show {count} connected relationship","viewer.passport.relationship.show.other":"Show {count} connected relationships","viewer.passport.relationship.summary":"{out} outgoing · {in} incoming{loops}","viewer.passport.relationship.loops":" · {count} loop","viewer.passport.relationship.explorer":"Direct relationship explorer","viewer.passport.relationship.help":"Use arrow keys to explore relationships. Press Enter or Space to pin details; Escape clears.","viewer.passport.relationship.loopsBack":"loops back","viewer.passport.relationship.connectsTo":"connects to","viewer.passport.relationship.connectsFrom":"connects from","viewer.passport.relationship.pinned":"Pinned relationship · {from} → {to} · {label}","viewer.passport.relationship.inspect":"Inspect relationship {index} of {total}: {from} to {to}, {label}. Press Enter for details.","viewer.passport.relationship.group.out":"Outgoing","viewer.passport.relationship.group.in":"Incoming","viewer.passport.relationship.group.loop":"Self loops","viewer.passport.relationship.row":"{group}: {relationship}, {neighbor}","viewer.passport.relationship.direction.out":"OUT →","viewer.passport.relationship.direction.in":"← IN","viewer.passport.relationship.direction.loop":"LOOP","viewer.passport.sourceCount.one":"{count} verified source reference","viewer.passport.sourceCount.other":"{count} verified source references","viewer.passport.sourceMarker":"SRC","viewer.passport.beacon.one":"{count} verified source; focus this node to inspect","viewer.passport.beacon.other":"{count} verified sources; focus this node to inspect","viewer.passport.repository.open":"Open verified repository revision {revision}","viewer.passport.source.open":"Open verified source {path} at revision {revision}","viewer.passport.source.openLink":"Open ↗","viewer.passport.reach.upstream.one":"Trace {count} upstream authored node","viewer.passport.reach.upstream.other":"Trace {count} upstream authored nodes","viewer.passport.reach.downstream.one":"Trace {count} downstream authored node","viewer.passport.reach.downstream.other":"Trace {count} downstream authored nodes","viewer.passport.reach.noUpstream":"No upstream authored nodes","viewer.passport.reach.noDownstream":"No downstream authored nodes","viewer.passport.reach.status":"{direction} · {nodes} nodes · {links} links · max {hops} hops","viewer.route.eyebrow":"Route probe","viewer.route.start":"Choose a start node","viewer.route.start.find":"Find start","viewer.route.start.find.aria":"Find a route start","viewer.route.copy":"Copy link","viewer.route.copy.aria":"Copy link to traced route","viewer.route.clear":"Clear","viewer.route.clear.aria":"Clear route probe","viewer.route.traced":"Traced route","viewer.route.pickTwo":"Pick two semantic nodes on the diagram","viewer.route.pickOne":"Pick a semantic node on the diagram","viewer.route.controls":"Route journey controls","viewer.route.previous":"Previous route position","viewer.route.play":"Play route journey","viewer.route.pause":"Pause route journey","viewer.route.replay":"Replay route journey","viewer.route.next":"Next route position","viewer.route.journey":"Journey","viewer.route.pause.label":"Pause","viewer.route.replay.label":"Replay","viewer.route.overview":"Overview","viewer.route.overview.aria":"Show complete route overview","viewer.route.instructions":"Choose the source, then the destination. Direction matters.","viewer.route.destination":"Choose a destination from {label}","viewer.route.destination.find":"Find target","viewer.route.destination.find.aria":"Find a reachable route destination","viewer.route.differentDestination":"Choose a different destination","viewer.route.distinct":"A route needs two distinct semantic nodes.","viewer.route.unreachable":"No directed route to {label}","viewer.route.unreachable.detail":"{target} is not reachable from {source}. Pick a highlighted destination.","viewer.route.start.instructions":"Select the source. The next step will reveal only directed destinations.","viewer.route.copy.success":"Traced route link copied","viewer.route.copy.failed":"Could not copy traced route link","viewer.route.position":"Route position {index} of {total}: {label}","viewer.route.step":"Step {index} of {total} · {phase} · {label}","viewer.route.motionRequired":"Automatic journey requires Live motion","viewer.route.trigger.clear":"Clear traced route","viewer.route.overview.status":"{nodes} · {hops} · shortest authored route","viewer.route.overview.node.one":"{count} node","viewer.route.overview.node.other":"{count} nodes","viewer.route.overview.hop.one":"{count} directed hop","viewer.route.overview.hop.other":"{count} directed hops","viewer.route.phase.playing":"Playing","viewer.route.phase.complete":"Complete","viewer.route.phase.inspecting":"Inspecting","viewer.route.destination.count.one":"{count} directed destination available. Pick a highlighted node.","viewer.route.destination.count.other":"{count} directed destinations available. Pick a highlighted node.","viewer.route.noOutgoing":"No outgoing route starts here. Clear and choose another source.","viewer.route.result.title":"{source} to {target}","viewer.route.finder.source.title":"Choose route start","viewer.route.finder.source.placeholder":"Search route sources","viewer.route.finder.source.empty":"No matching route sources","viewer.route.finder.source.results":"Nodes that can start a route","viewer.route.finder.source.noun":"route sources","viewer.route.finder.source.badge":"start","viewer.route.finder.target.title":"Destination from {label}","viewer.route.finder.target.placeholder":"Search reachable destinations","viewer.route.finder.target.empty":"No matching reachable destinations","viewer.route.finder.target.results":"Reachable route destinations","viewer.route.finder.target.noun":"reachable destinations","viewer.route.hop.one":"{count} hop","viewer.route.hop.other":"{count} hops","viewer.lens.eyebrow":"Semantic lens","viewer.lens.title":"Compare system roles","viewer.lens.close":"Close semantic lens","viewer.lens.instruction":"Choose up to two semantic kinds. One reveals its real traffic; two compare only direct authored relationships.","viewer.lens.kinds":"Semantic kinds","viewer.lens.choose":"Choose a kind to inspect its nodes and touching relationships.","viewer.lens.copy":"Copy link to semantic lens","viewer.lens.clear":"Clear semantic lens","viewer.lens.open":"Open semantic lens","viewer.lens.openActive":"Open active semantic lens","viewer.lens.legend":"Semantic legend","viewer.lens.legend.inspect.one":"Inspect {label}, {count} node","viewer.lens.legend.inspect.other":"Inspect {label}, {count} nodes","viewer.lens.kind.count.one":"{label}, {count} node","viewer.lens.kind.count.other":"{label}, {count} nodes","viewer.lens.compare.one":"{first} → {second}: {forward} · {second} → {first}: {reverse} · {count} direct relationship","viewer.lens.compare.other":"{first} → {second}: {forward} · {second} → {first}: {reverse} · {count} direct relationships","viewer.lens.single":"{nodes} · {relationships} · connected peers remain visible","viewer.lens.node.one":"{count} {label} node","viewer.lens.node.other":"{count} {label} nodes","viewer.lens.relationship.one":"{count} touching relationship","viewer.lens.relationship.other":"{count} touching relationships","viewer.radar.title":"Semantic radar","viewer.radar.building":"Building overview","viewer.radar.openFull":"Open full semantic radar","viewer.radar.open":"Open radar","viewer.radar.close":"Close semantic radar","viewer.radar.surface":"Diagram overview. Click a node to focus it, or use arrow keys to pan.","viewer.radar.click":"Click node","viewer.radar.drag":"Drag to pan","viewer.radar.space":"Semantic radar needs more MAP space.","viewer.radar.nodes":"Semantic diagram radar nodes","viewer.radar.focus":"Focus {label} from Semantic Radar","viewer.radar.status":"{count} nodes · {viewport}","viewer.radar.fullMap":"{count} nodes · full map","viewer.radar.compacted":"Radar compacted to avoid covering the Semantic Passport or MAP controls.","viewer.radar.cancelWaiting":"Cancel semantic radar waiting for more MAP space","viewer.radar.needsSpace":"Semantic radar needs more visible MAP space","viewer.radar.viewport.full":"full map","viewer.radar.viewport.width":"{percent}% width","viewer.radar.viewport.scale":"{percent}% viewport","viewer.nav.controls":"Diagram view controls","viewer.nav.route":"Trace a directed route","viewer.nav.route.title":"Trace route (R)","viewer.nav.route.short":"PATH","viewer.nav.radar":"Open semantic radar","viewer.nav.radar.title":"Semantic radar (M)","viewer.nav.radar.short":"MAP","viewer.nav.lens":"Open semantic lens","viewer.nav.lens.title":"Semantic lens (L)","viewer.nav.lens.short":"LENS","viewer.nav.find":"Find a node","viewer.nav.find.title":"Find a node (/)","viewer.nav.guide":"Open diagram guide","viewer.nav.guide.title":"Diagram guide (?)","viewer.nav.zoomOut":"Zoom out","viewer.nav.zoomOut.title":"Zoom out (-)","viewer.nav.reset":"Reset diagram view","viewer.nav.reset.title":"Reset view (0)","viewer.nav.read":"READ","viewer.nav.zoomIn":"Zoom in","viewer.nav.zoomIn.title":"Zoom in (+)","viewer.nav.camera":"{hint}. Reset diagram view","viewer.nav.camera.title":"{semantic}{hint} · reset view (0)","viewer.nav.camera.semantic":"Semantic camera active · ","viewer.nav.level.map":"MAP","viewer.nav.level.read":"READ","viewer.nav.level.full":"FULL","viewer.nav.level.auto":"AUTO","viewer.nav.detail.map":"Zoom in to reveal relationship labels and node context","viewer.nav.detail.read":"Zoom in again to reveal tags and annotations","viewer.nav.detail.full":"Full diagram detail","viewer.intent.summary":"{label}. {out} outgoing, {in} incoming{loops}. {total} connections. Press Enter for details.","viewer.intent.loops":", {count} self loop","viewer.common.copied":"Copied","viewer.common.copyFailed":"Copy failed","viewer.common.copyLink":"Copy link","viewer.common.clear":"Clear","viewer.common.close":"Close"}}</script>
     <div class="guided-views no-print" id="guided-views" hidden aria-label="Guided diagram views">
@@ -4999,8 +4999,8 @@
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
-      <svg viewBox="0 0 1380 630" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
-        <title id="archify-diagram-title">jev-judge-mcp — Design Architecture</title>
+      <svg viewBox="0 0 1360 660" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
+        <title id="archify-diagram-title">jev-judge-mcp</title>
         <desc id="archify-diagram-description">An architecture diagram generated by Archify.</desc>
         <!-- Definitions -->
         <defs>
@@ -5025,352 +5025,384 @@
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Boundaries (behind everything) -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="one-way judgment layers (ADR-0002)" x="300" y="66" width="890" height="426" rx="12" class="c-region" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="judgment layers" x="300" y="138" width="890" height="372" rx="12" class="c-region" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="client" data-edge-to="server" data-edge-label="tools/call" data-edge-key="0" data-edge-id="call" data-composition-points="170,289;330,289" d="M 170 289 L 330 289" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="server" data-edge-to="arguments" data-edge-label="validate args" data-edge-key="1" data-edge-id="validate-args" data-composition-points="403,262;403,224" d="M 403 262 L 403 224" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="arguments" data-edge-to="tools" data-edge-label="typed args" data-edge-key="2" data-edge-id="typed-args" data-composition-points="417,224;417,243;768,243;768,262" d="M 417 224 L 417 235 Q 417 243 425 243 L 760 243 Q 768 243 768 251 L 768 262" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="limits" data-edge-to="tools" data-edge-label="cap values" data-edge-key="3" data-edge-id="cap-values" data-composition-points="660,198;680,198;680,289;700,289" d="M 660 198 L 672 198 Q 680 198 680 206 L 680 281 Q 680 289 688 289 L 700 289" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="tools" data-edge-to="runtime" data-edge-label="ask Jev" data-edge-key="4" data-edge-id="ask" data-composition-points="850,289;1010,289" d="M 850 289 L 1010 289" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="runtime" data-edge-to="providers" data-edge-label="evaluate" data-edge-key="5" data-edge-id="evaluate" data-composition-points="1085,316;1085,424" d="M 1085 316 L 1085 424" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="providers" data-edge-to="validation" data-edge-label="raw answers" data-edge-key="6" data-edge-id="raw-answers" data-composition-points="1010,448;850,448" d="M 1010 448 L 850 448" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="validation" data-edge-to="policy" data-edge-label="judgments" data-edge-key="7" data-edge-id="judgments" data-composition-points="700,448;470,448" d="M 700 448 L 470 448" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="policy" data-edge-to="serialize" data-edge-label="actions + reasons" data-edge-key="8" data-edge-id="decided" data-composition-points="330,448;175,448" d="M 330 448 L 175 448" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="serialize" data-edge-to="server" data-edge-label="result text" data-edge-key="9" data-edge-id="result-text" data-composition-points="100,424;100,370;410,370;410,316" d="M 100 424 L 100 378 Q 100 370 108 370 L 402 370 Q 410 370 410 362 L 410 316" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="settings" data-edge-to="runtime" data-edge-label="config · redaction" data-edge-key="10" data-edge-id="config" data-composition-points="480,48;1085,48;1085,262" d="M 480 48 L 1077 48 Q 1085 48 1085 56 L 1085 262" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="tools" data-edge-to="extract" data-edge-label="patterns" data-edge-key="11" data-edge-id="patterns" data-composition-points="782,262;782,148" d="M 782 262 L 782 148" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="oracle" data-edge-to="serialize" data-edge-label="byte-equal (ADR-0001)" data-edge-key="12" data-edge-id="byte-equal" data-composition-points="100,556;100,472" d="M 100 556 L 100 472" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="runtime" data-edge-to="telemetry" data-edge-label="spans · metrics" data-edge-key="13" data-edge-id="spans" data-composition-points="1160,289;1180,289;1180,198;1200,198" d="M 1160 289 L 1172 289 Q 1180 289 1180 281 L 1180 206 Q 1180 198 1188 198 L 1200 198" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="evals" data-edge-to="client" data-edge-label="paid agent runs" data-edge-key="14" data-edge-id="agent-runs" data-composition-points="175,122;199,122;199,238;93,238;93,262" d="M 175 122 L 191 122 Q 199 122 199 130 L 199 230 Q 199 238 191 238 L 101 238 Q 93 238 93 246 L 93 262" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="keyfile" data-edge-to="providers" data-edge-label="stored key fallback" data-edge-key="15" data-edge-id="stored-key" data-composition-points="1055,556;1055,514;1085,514;1085,472" d="M 1055 556 L 1055 522 Q 1055 514 1063 514 L 1077 514 Q 1085 514 1085 506 L 1085 472" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="setup" data-edge-to="keyfile" data-edge-label="verified key" data-edge-key="16" data-edge-id="setup-stores" data-composition-points="890,579;980,579" d="M 890 579 L 980 579" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="cache" data-edge-to="runtime" data-edge-label="replay identical" data-edge-key="17" data-edge-id="cache-hit" data-composition-points="1200,363;1180,363;1180,289;1160,289" d="M 1200 363 L 1188 363 Q 1180 363 1180 355 L 1180 297 Q 1180 289 1172 289 L 1160 289" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="client" data-edge-to="hook" data-edge-label="hook gate" data-edge-key="18" data-edge-id="hook-runs" data-composition-points="107,262;107,224" d="M 107 262 L 107 224" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="doctor" data-edge-to="keyfile" data-edge-label="key presence" data-edge-key="19" data-edge-id="reads-key" data-composition-points="1210,579;1130,579" d="M 1210 579 L 1130 579" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="client" data-edge-to="server" data-edge-label="tools/call" data-edge-key="0" data-edge-id="call" data-composition-points="174,307;330,307" d="M 174 307 L 330 307" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="server" data-edge-to="instructions" data-edge-label="client loads" data-edge-key="1" data-edge-id="client-loads" data-composition-points="414,280;414,80" d="M 414 280 L 414 80" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="instructions" data-edge-to="skills" data-edge-label="prompts" data-edge-key="2" data-edge-id="serves-skills" data-composition-points="498,54;700,54" d="M 498 54 L 700 54" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="server" data-edge-to="arguments" data-edge-label="validate args" data-edge-key="3" data-edge-id="validate-args" data-composition-points="498,307;514,307;514,194;530,194" d="M 498 307 L 506 307 Q 514 307 514 299 L 514 202 Q 514 194 522 194 L 530 194" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="arguments" data-edge-to="tools" data-edge-label="typed args" data-edge-key="4" data-edge-id="typed-args" data-composition-points="605,220;605,250;770,250;770,280" d="M 605 220 L 605 242 Q 605 250 613 250 L 762 250 Q 770 250 770 258 L 770 280" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="limits" data-edge-to="tools" data-edge-label="cap values" data-edge-key="5" data-edge-id="cap-values" data-composition-points="930,220;930,250;798,250;798,280" d="M 930 220 L 930 242 Q 930 250 922 250 L 806 250 Q 798 250 798 258 L 798 280" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="tools" data-edge-to="runtime" data-edge-label="ask Jev" data-edge-key="6" data-edge-id="ask" data-composition-points="868,307;1020,307" d="M 868 307 L 1020 307" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="runtime" data-edge-to="providers" data-edge-label="evaluate" data-edge-key="7" data-edge-id="evaluate" data-composition-points="1090,334;1090,440" d="M 1090 334 L 1090 440" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="providers" data-edge-to="validation" data-edge-label="raw answers" data-edge-key="8" data-edge-id="raw-answers" data-composition-points="1020,465;868,465" d="M 1020 465 L 868 465" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="validation" data-edge-to="policy" data-edge-label="judgments" data-edge-key="9" data-edge-id="judgments" data-composition-points="700,465;498,465" d="M 700 465 L 498 465" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="policy" data-edge-to="serialize" data-edge-label="actions" data-edge-key="10" data-edge-id="decided" data-composition-points="330,465;180,465" d="M 330 465 L 180 465" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="serialize" data-edge-to="server" data-edge-label="result text" data-edge-key="11" data-edge-id="result-text" data-composition-points="102,440;102,387;414,387;414,334" d="M 102 440 L 102 395 Q 102 387 110 387 L 406 387 Q 414 387 414 379 L 414 334" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="settings" data-edge-to="runtime" data-edge-label="redaction" data-edge-key="12" data-edge-id="config" data-composition-points="1188,54;1174,54;1174,300;1160,300" d="M 1188 54 L 1181 54 Q 1174 54 1174 61 L 1174 293 Q 1174 300 1167 300 L 1160 300" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="tools" data-edge-to="extract" data-edge-label="patterns" data-edge-key="13" data-edge-id="patterns" data-composition-points="784,280;784,220" d="M 784 280 L 784 220" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="oracle" data-edge-to="serialize" data-edge-label="byte-equal" data-edge-key="14" data-edge-id="byte-equal" data-composition-points="99,572;99,548;118,548;118,514;102,514;102,490" d="M 99 572 L 99 556 Q 99 548 107 548 L 110 548 Q 118 548 118 540 L 118 522 Q 118 514 110 514 L 110 514 Q 102 514 102 506 L 102 490" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="runtime" data-edge-to="telemetry" data-edge-label="spans" data-edge-key="15" data-edge-id="spans" data-composition-points="1160,314;1174,314;1174,466;1188,466" d="M 1160 314 L 1167 314 Q 1174 314 1174 321 L 1174 459 Q 1174 466 1181 466 L 1188 466" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="evals" data-edge-to="client" data-edge-label="agent runs" data-edge-key="16" data-edge-id="agent-runs" data-composition-points="99,162;99,280" d="M 99 162 L 99 280" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="keyfile" data-edge-to="providers" data-edge-label="key fallback" data-edge-key="17" data-edge-id="stored-key" data-composition-points="935,572;935,531;1090,531;1090,490" d="M 935 572 L 935 539 Q 935 531 943 531 L 1082 531 Q 1090 531 1090 523 L 1090 490" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="setup" data-edge-to="keyfile" data-edge-label="verified key" data-edge-key="18" data-edge-id="setup-stores" data-composition-points="710,596;860,596" d="M 710 596 L 860 596" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="cache" data-edge-to="runtime" data-edge-label="replay" data-edge-key="19" data-edge-id="cache-hit" data-composition-points="1188,316;1164,316;1164,332;1184,332;1184,307;1160,307" d="M 1188 316 L 1172 316 Q 1164 316 1164 324 L 1164 324 Q 1164 332 1172 332 L 1176 332 Q 1184 332 1184 324 L 1184 315 Q 1184 307 1176 307 L 1160 307" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="hook" data-edge-to="client" data-edge-label="gate" data-edge-key="20" data-edge-id="hook-runs" data-composition-points="275,248;275,264;99,264;99,280" d="M 275 248 L 275 256 Q 275 264 267 264 L 107 264 Q 99 264 99 272 L 99 280" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="doctor" data-edge-to="keyfile" data-edge-label="key presence" data-edge-key="21" data-edge-id="reads-key" data-composition-points="1100,596;1010,596" d="M 1100 596 L 1010 596" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
         <g id="node-client" data-node-id="client" data-node-label="MCP Client" tabindex="0" role="button" aria-label="Focus MCP Client, host agent, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="host agent" data-node-context="Architecture component">
           <title>MCP Client · host agent · Architecture component</title>
-          <rect x="30" y="262" width="140" height="54" rx="6" class="c-mask"/>
-          <rect x="30" y="262" width="140" height="54" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(36 268) scale(0.6875)">
+          <rect x="24" y="280" width="150" height="54" rx="6" class="c-mask"/>
+          <rect x="24" y="280" width="150" height="54" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(30 286) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="100" y="287" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">MCP Client</text>
-        <text data-detail="context" x="100" y="303" class="t-muted" font-size="9" text-anchor="middle">host agent</text>
+          <text data-node-label="" data-detail-anchor="" x="99" y="305" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">MCP Client</text>
+        <text data-detail="context" x="99" y="321" class="t-muted" font-size="9" text-anchor="middle">host agent</text>
         </g>
 
-        <g id="node-server" data-node-id="server" data-node-label="JevMCPServer + Toolset" tabindex="0" role="button" aria-label="Focus JevMCPServer + Toolset, stdio · streamable-http, one-way judgment layers (ADR-0002)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="stdio · streamable-http" data-node-context="one-way judgment layers (ADR-0002)">
-          <title>JevMCPServer + Toolset · stdio · streamable-http · one-way judgment layers (ADR-0002)</title>
-          <rect x="330" y="262" width="160" height="54" rx="6" class="c-mask"/>
-          <rect x="330" y="262" width="160" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(336 268) scale(0.6875)">
+        <g id="node-server" data-node-id="server" data-node-label="MCP server" tabindex="0" role="button" aria-label="Focus MCP server, Toolset · stdio · http, judgment layers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Toolset · stdio · http" data-node-context="judgment layers">
+          <title>MCP server · Toolset · stdio · http · judgment layers</title>
+          <rect x="330" y="280" width="168" height="54" rx="6" class="c-mask"/>
+          <rect x="330" y="280" width="168" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(336 286) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="410" y="287" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">JevMCPServer + Toolset</text>
-        <text data-detail="context" x="410" y="303" class="t-muted" font-size="9" text-anchor="middle">stdio · streamable-http</text>
+          <text data-node-label="" data-detail-anchor="" x="414" y="305" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">MCP server</text>
+        <text data-detail="context" x="414" y="321" class="t-muted" font-size="9" text-anchor="middle">Toolset · stdio · http</text>
         </g>
 
-        <g id="node-arguments" data-node-id="arguments" data-node-label="arguments" tabindex="0" role="button" aria-label="Focus arguments, compiled parsers, one-way judgment layers (ADR-0002)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="compiled parsers" data-node-context="one-way judgment layers (ADR-0002)">
-          <title>arguments · compiled parsers · one-way judgment layers (ADR-0002)</title>
-          <rect x="335" y="172" width="150" height="52" rx="6" class="c-mask"/>
-          <rect x="335" y="172" width="150" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(341 178) scale(0.6875)">
+        <g id="node-instructions" data-node-id="instructions" data-node-label="Instructions" tabindex="0" role="button" aria-label="Focus Instructions, names all 11 tools, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="names all 11 tools" data-node-context="Architecture component">
+          <title>Instructions · names all 11 tools · Architecture component</title>
+          <rect x="330" y="28" width="168" height="52" rx="6" class="c-mask"/>
+          <rect x="330" y="28" width="168" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(336 34) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="410" y="196" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">arguments</text>
-        <text data-detail="context" x="410" y="212" class="t-muted" font-size="9" text-anchor="middle">compiled parsers</text>
+          <text data-node-label="" data-detail-anchor="" x="414" y="52" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Instructions</text>
+        <text data-detail="context" x="414" y="68" class="t-muted" font-size="9" text-anchor="middle">names all 11 tools</text>
         </g>
 
-        <g id="node-limits" data-node-id="limits" data-node-label="limits" tabindex="0" role="button" aria-label="Focus limits, frozen caps (ADR-0014), one-way judgment layers (ADR-0002)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="frozen caps (ADR-0014)" data-node-context="one-way judgment layers (ADR-0002)">
-          <title>limits · frozen caps (ADR-0014) · one-way judgment layers (ADR-0002)</title>
-          <rect x="510" y="172" width="150" height="52" rx="6" class="c-mask"/>
-          <rect x="510" y="172" width="150" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(516 178) scale(0.6875)">
+        <g id="node-skills" data-node-id="skills" data-node-label="Packaged skills" tabindex="0" role="button" aria-label="Focus Packaged skills, jev-mcp · jev, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="jev-mcp · jev" data-node-context="Architecture component">
+          <title>Packaged skills · jev-mcp · jev · Architecture component</title>
+          <rect x="700" y="28" width="168" height="52" rx="6" class="c-mask"/>
+          <rect x="700" y="28" width="168" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(706 34) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="585" y="196" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">limits</text>
-        <text data-detail="context" x="585" y="212" class="t-muted" font-size="9" text-anchor="middle">frozen caps (ADR-0014)</text>
+          <text data-node-label="" data-detail-anchor="" x="784" y="52" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Packaged skills</text>
+        <text data-detail="context" x="784" y="68" class="t-muted" font-size="9" text-anchor="middle">jev-mcp · jev</text>
         </g>
 
-        <g id="node-tools" data-node-id="tools" data-node-label="Eleven JevTools" tabindex="0" role="button" aria-label="Focus Eleven JevTools, 10 frozen + jev_score, one-way judgment layers (ADR-0002)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="10 frozen + jev_score" data-node-context="one-way judgment layers (ADR-0002)">
-          <title>Eleven JevTools · 10 frozen + jev_score · one-way judgment layers (ADR-0002)</title>
-          <rect x="700" y="262" width="150" height="54" rx="6" class="c-mask"/>
-          <rect x="700" y="262" width="150" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(706 268) scale(0.6875)">
+        <g id="node-arguments" data-node-id="arguments" data-node-label="arguments" tabindex="0" role="button" aria-label="Focus arguments, compiled parsers, judgment layers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="compiled parsers" data-node-context="judgment layers">
+          <title>arguments · compiled parsers · judgment layers</title>
+          <rect x="530" y="168" width="150" height="52" rx="6" class="c-mask"/>
+          <rect x="530" y="168" width="150" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(536 174) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="775" y="287" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Eleven JevTools</text>
-        <text data-detail="context" x="775" y="303" class="t-muted" font-size="9" text-anchor="middle">10 frozen + jev_score</text>
+          <text data-node-label="" data-detail-anchor="" x="605" y="192" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">arguments</text>
+        <text data-detail="context" x="605" y="208" class="t-muted" font-size="9" text-anchor="middle">compiled parsers</text>
         </g>
 
-        <g id="node-runtime" data-node-id="runtime" data-node-label="Runtime" tabindex="0" role="button" aria-label="Focus Runtime, lazy provider · cache, one-way judgment layers (ADR-0002)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="lazy provider · cache" data-node-context="one-way judgment layers (ADR-0002)">
-          <title>Runtime · lazy provider · cache · one-way judgment layers (ADR-0002)</title>
-          <rect x="1010" y="262" width="150" height="54" rx="6" class="c-mask"/>
-          <rect x="1010" y="262" width="150" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1016 268) scale(0.6875)">
+        <g id="node-limits" data-node-id="limits" data-node-label="limits" tabindex="0" role="button" aria-label="Focus limits, frozen caps, judgment layers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="frozen caps" data-node-context="judgment layers">
+          <title>limits · frozen caps · judgment layers</title>
+          <rect x="860" y="168" width="140" height="52" rx="6" class="c-mask"/>
+          <rect x="860" y="168" width="140" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(866 174) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1085" y="287" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Runtime</text>
-        <text data-detail="context" x="1085" y="303" class="t-muted" font-size="9" text-anchor="middle">lazy provider · cache</text>
+          <text data-node-label="" data-detail-anchor="" x="930" y="192" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">limits</text>
+        <text data-detail="context" x="930" y="208" class="t-muted" font-size="9" text-anchor="middle">frozen caps</text>
         </g>
 
-        <g id="node-providers" data-node-id="providers" data-node-label="Providers ×4" tabindex="0" role="button" aria-label="Focus Providers ×4, envelope-only ×4, one-way judgment layers (ADR-0002)" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="envelope-only ×4" data-node-context="one-way judgment layers (ADR-0002)">
-          <title>Providers ×4 · envelope-only ×4 · one-way judgment layers (ADR-0002)</title>
-          <rect x="1010" y="424" width="150" height="48" rx="6" class="c-mask"/>
-          <rect x="1010" y="424" width="150" height="48" rx="6" class="c-cloud" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(1016 430) scale(0.6875)">
+        <g id="node-tools" data-node-id="tools" data-node-label="Eleven tools" tabindex="0" role="button" aria-label="Focus Eleven tools, 10 frozen + jev_score, judgment layers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="10 frozen + jev_score" data-node-context="judgment layers">
+          <title>Eleven tools · 10 frozen + jev_score · judgment layers</title>
+          <rect x="700" y="280" width="168" height="54" rx="6" class="c-mask"/>
+          <rect x="700" y="280" width="168" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(706 286) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="784" y="305" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Eleven tools</text>
+        <text data-detail="context" x="784" y="321" class="t-muted" font-size="9" text-anchor="middle">10 frozen + jev_score</text>
+        </g>
+
+        <g id="node-runtime" data-node-id="runtime" data-node-label="Runtime" tabindex="0" role="button" aria-label="Focus Runtime, lazy provider, judgment layers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="lazy provider" data-node-context="judgment layers">
+          <title>Runtime · lazy provider · judgment layers</title>
+          <rect x="1020" y="280" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="1020" y="280" width="140" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1026 286) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1090" y="305" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Runtime</text>
+        <text data-detail="context" x="1090" y="321" class="t-muted" font-size="9" text-anchor="middle">lazy provider</text>
+        </g>
+
+        <g id="node-providers" data-node-id="providers" data-node-label="Providers x4" tabindex="0" role="button" aria-label="Focus Providers x4, envelope only, judgment layers" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="envelope only" data-node-context="judgment layers">
+          <title>Providers x4 · envelope only · judgment layers</title>
+          <rect x="1020" y="440" width="140" height="50" rx="6" class="c-mask"/>
+          <rect x="1020" y="440" width="140" height="50" rx="6" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(1026 446) scale(0.6875)">
             <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1085" y="446" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Providers ×4</text>
-        <text data-detail="context" x="1085" y="462" class="t-muted" font-size="9" text-anchor="middle">envelope-only ×4</text>
+          <text data-node-label="" data-detail-anchor="" x="1090" y="463" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Providers x4</text>
+        <text data-detail="context" x="1090" y="479" class="t-muted" font-size="9" text-anchor="middle">envelope only</text>
         </g>
 
-        <g id="node-settings" data-node-id="settings" data-node-label="Settings → Redactor" tabindex="0" role="button" aria-label="Focus Settings → Redactor, env-only · derived secrets, Architecture component" aria-pressed="false" data-node-kind="security" data-node-sublabel="env-only · derived secrets" data-node-context="Architecture component">
-          <title>Settings → Redactor · env-only · derived secrets · Architecture component</title>
-          <rect x="330" y="22" width="150" height="52" rx="6" class="c-mask"/>
-          <rect x="330" y="22" width="150" height="52" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(336 28) scale(0.6875)">
+        <g id="node-settings" data-node-id="settings" data-node-label="Settings" tabindex="0" role="button" aria-label="Focus Settings, env-only · redacts, Architecture component" aria-pressed="false" data-node-kind="security" data-node-sublabel="env-only · redacts" data-node-context="Architecture component">
+          <title>Settings · env-only · redacts · Architecture component</title>
+          <rect x="1188" y="28" width="148" height="52" rx="6" class="c-mask"/>
+          <rect x="1188" y="28" width="148" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(1194 34) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="405" y="46" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Settings → Redactor</text>
-        <text data-detail="context" x="405" y="62" class="t-muted" font-size="9" text-anchor="middle">env-only · derived secrets</text>
+          <text data-node-label="" data-detail-anchor="" x="1262" y="52" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Settings</text>
+        <text data-detail="context" x="1262" y="68" class="t-muted" font-size="9" text-anchor="middle">env-only · redacts</text>
         </g>
 
-        <g id="node-extract" data-node-id="extract" data-node-label="extract" tabindex="0" role="button" aria-label="Focus extract, dialect · killable workers, one-way judgment layers (ADR-0002)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="dialect · killable workers" data-node-context="one-way judgment layers (ADR-0002)">
-          <title>extract · dialect · killable workers · one-way judgment layers (ADR-0002)</title>
-          <rect x="700" y="96" width="150" height="52" rx="6" class="c-mask"/>
-          <rect x="700" y="96" width="150" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(706 102) scale(0.6875)">
+        <g id="node-extract" data-node-id="extract" data-node-label="extract" tabindex="0" role="button" aria-label="Focus extract, killable workers, judgment layers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="killable workers" data-node-context="judgment layers">
+          <title>extract · killable workers · judgment layers</title>
+          <rect x="700" y="168" width="150" height="52" rx="6" class="c-mask"/>
+          <rect x="700" y="168" width="150" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(706 174) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="775" y="120" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">extract</text>
-        <text data-detail="context" x="775" y="136" class="t-muted" font-size="9" text-anchor="middle">dialect · killable workers</text>
+          <text data-node-label="" data-detail-anchor="" x="775" y="192" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">extract</text>
+        <text data-detail="context" x="775" y="208" class="t-muted" font-size="9" text-anchor="middle">killable workers</text>
         </g>
 
-        <g id="node-serialize" data-node-id="serialize" data-node-label="serialize + text" tabindex="0" role="button" aria-label="Focus serialize + text, JSON.stringify · UTF-16, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="JSON.stringify · UTF-16" data-node-context="Architecture component">
-          <title>serialize + text · JSON.stringify · UTF-16 · Architecture component</title>
-          <rect x="25" y="424" width="150" height="48" rx="6" class="c-mask"/>
-          <rect x="25" y="424" width="150" height="48" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(31 430) scale(0.6875)">
+        <g id="node-serialize" data-node-id="serialize" data-node-label="serialize" tabindex="0" role="button" aria-label="Focus serialize, JSON · UTF-16, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="JSON · UTF-16" data-node-context="Architecture component">
+          <title>serialize · JSON · UTF-16 · Architecture component</title>
+          <rect x="24" y="440" width="156" height="50" rx="6" class="c-mask"/>
+          <rect x="24" y="440" width="156" height="50" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(30 446) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="100" y="446" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">serialize + text</text>
-        <text data-detail="context" x="100" y="462" class="t-muted" font-size="9" text-anchor="middle">JSON.stringify · UTF-16</text>
+          <text data-node-label="" data-detail-anchor="" x="102" y="463" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">serialize</text>
+        <text data-detail="context" x="102" y="479" class="t-muted" font-size="9" text-anchor="middle">JSON · UTF-16</text>
         </g>
 
-        <g id="node-policy" data-node-id="policy" data-node-label="Policy (pure)" tabindex="0" role="button" aria-label="Focus Policy (pure), thresholds · decisions, one-way judgment layers (ADR-0002)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="thresholds · decisions" data-node-context="one-way judgment layers (ADR-0002)">
-          <title>Policy (pure) · thresholds · decisions · one-way judgment layers (ADR-0002)</title>
-          <rect x="330" y="424" width="140" height="48" rx="6" class="c-mask"/>
-          <rect x="330" y="424" width="140" height="48" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(336 430) scale(0.6875)">
+        <g id="node-policy" data-node-id="policy" data-node-label="Policy" tabindex="0" role="button" aria-label="Focus Policy, auto · review · escalate, judgment layers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="auto · review · escalate" data-node-context="judgment layers">
+          <title>Policy · auto · review · escalate · judgment layers</title>
+          <rect x="330" y="440" width="168" height="50" rx="6" class="c-mask"/>
+          <rect x="330" y="440" width="168" height="50" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(336 446) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="400" y="446" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Policy (pure)</text>
-        <text data-detail="context" x="400" y="462" class="t-muted" font-size="9" text-anchor="middle">thresholds · decisions</text>
+          <text data-node-label="" data-detail-anchor="" x="414" y="463" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Policy</text>
+        <text data-detail="context" x="414" y="479" class="t-muted" font-size="9" text-anchor="middle">auto · review · escalate</text>
         </g>
 
-        <g id="node-validation" data-node-id="validation" data-node-label="Validation" tabindex="0" role="button" aria-label="Focus Validation, answers · caps, one-way judgment layers (ADR-0002)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="answers · caps" data-node-context="one-way judgment layers (ADR-0002)">
-          <title>Validation · answers · caps · one-way judgment layers (ADR-0002)</title>
-          <rect x="700" y="424" width="150" height="48" rx="6" class="c-mask"/>
-          <rect x="700" y="424" width="150" height="48" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(706 430) scale(0.6875)">
+        <g id="node-validation" data-node-id="validation" data-node-label="Validation" tabindex="0" role="button" aria-label="Focus Validation, rejects malformed, judgment layers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="rejects malformed" data-node-context="judgment layers">
+          <title>Validation · rejects malformed · judgment layers</title>
+          <rect x="700" y="440" width="168" height="50" rx="6" class="c-mask"/>
+          <rect x="700" y="440" width="168" height="50" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(706 446) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="775" y="446" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Validation</text>
-        <text data-detail="context" x="775" y="462" class="t-muted" font-size="9" text-anchor="middle">answers · caps</text>
+          <text data-node-label="" data-detail-anchor="" x="784" y="463" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Validation</text>
+        <text data-detail="context" x="784" y="479" class="t-muted" font-size="9" text-anchor="middle">rejects malformed</text>
         </g>
 
-        <g id="node-oracle" data-node-id="oracle" data-node-label="Parity oracle" tabindex="0" role="button" aria-label="Focus Parity oracle, 282 fixtures · replay, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="282 fixtures · replay" data-node-context="Architecture component">
-          <title>Parity oracle · 282 fixtures · replay · Architecture component</title>
-          <rect x="25" y="556" width="150" height="48" rx="6" class="c-mask"/>
-          <rect x="25" y="556" width="150" height="48" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(31 562) scale(0.6875)">
+        <g id="node-oracle" data-node-id="oracle" data-node-label="Parity oracle" tabindex="0" role="button" aria-label="Focus Parity oracle, 282 fixtures, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="282 fixtures" data-node-context="Architecture component">
+          <title>Parity oracle · 282 fixtures · Architecture component</title>
+          <rect x="24" y="572" width="150" height="48" rx="6" class="c-mask"/>
+          <rect x="24" y="572" width="150" height="48" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(30 578) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="100" y="578" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Parity oracle</text>
-        <text data-detail="context" x="100" y="594" class="t-muted" font-size="9" text-anchor="middle">282 fixtures · replay</text>
+          <text data-node-label="" data-detail-anchor="" x="99" y="594" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Parity oracle</text>
+        <text data-detail="context" x="99" y="610" class="t-muted" font-size="9" text-anchor="middle">282 fixtures</text>
         </g>
 
-        <g id="node-telemetry" data-node-id="telemetry" data-node-label="Telemetry" tabindex="0" role="button" aria-label="Focus Telemetry, spans + metrics · in-process, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="spans + metrics · in-process" data-node-context="Architecture component">
-          <title>Telemetry · spans + metrics · in-process · Architecture component</title>
-          <rect x="1200" y="172" width="160" height="52" rx="6" class="c-mask"/>
-          <rect x="1200" y="172" width="160" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1206 178) scale(0.6875)">
+        <g id="node-telemetry" data-node-id="telemetry" data-node-label="Telemetry" tabindex="0" role="button" aria-label="Focus Telemetry, in-process spans, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="in-process spans" data-node-context="Architecture component">
+          <title>Telemetry · in-process spans · Architecture component</title>
+          <rect x="1188" y="440" width="148" height="52" rx="6" class="c-mask"/>
+          <rect x="1188" y="440" width="148" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1194 446) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1280" y="196" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Telemetry</text>
-        <text data-detail="context" x="1280" y="212" class="t-muted" font-size="9" text-anchor="middle">spans + metrics · in-process</text>
+          <text data-node-label="" data-detail-anchor="" x="1262" y="464" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Telemetry</text>
+        <text data-detail="context" x="1262" y="480" class="t-muted" font-size="9" text-anchor="middle">in-process spans</text>
         </g>
 
         <g id="node-keyfile" data-node-id="keyfile" data-node-label="Key file" tabindex="0" role="button" aria-label="Focus Key file, env wins over file, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="env wins over file" data-node-context="Architecture component">
           <title>Key file · env wins over file · Architecture component</title>
-          <rect x="980" y="556" width="150" height="46" rx="6" class="c-mask"/>
-          <rect x="980" y="556" width="150" height="46" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(986 562) scale(0.6875)">
+          <rect x="860" y="572" width="150" height="48" rx="6" class="c-mask"/>
+          <rect x="860" y="572" width="150" height="48" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(866 578) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1055" y="577" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Key file</text>
-        <text data-detail="context" x="1055" y="593" class="t-muted" font-size="9" text-anchor="middle">env wins over file</text>
+          <text data-node-label="" data-detail-anchor="" x="935" y="594" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Key file</text>
+        <text data-detail="context" x="935" y="610" class="t-muted" font-size="9" text-anchor="middle">env wins over file</text>
         </g>
 
         <g id="node-cache" data-node-id="cache" data-node-label="Response cache" tabindex="0" role="button" aria-label="Focus Response cache, JEV_MCP_CACHE, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="JEV_MCP_CACHE" data-node-context="Architecture component">
           <title>Response cache · JEV_MCP_CACHE · Architecture component</title>
-          <rect x="1200" y="340" width="140" height="46" rx="6" class="c-mask"/>
-          <rect x="1200" y="340" width="140" height="46" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1206 346) scale(0.6875)">
+          <rect x="1188" y="292" width="148" height="48" rx="6" class="c-mask"/>
+          <rect x="1188" y="292" width="148" height="48" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1194 298) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1270" y="361" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Response cache</text>
-        <text data-detail="context" x="1270" y="377" class="t-muted" font-size="9" text-anchor="middle">JEV_MCP_CACHE</text>
+          <text data-node-label="" data-detail-anchor="" x="1262" y="314" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Response cache</text>
+        <text data-detail="context" x="1262" y="330" class="t-muted" font-size="9" text-anchor="middle">JEV_MCP_CACHE</text>
         </g>
 
         <g id="node-setup" data-node-id="setup" data-node-label="setup CLI" tabindex="0" role="button" aria-label="Focus setup CLI, verify, store 0600, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="verify, store 0600" data-node-context="Architecture component">
           <title>setup CLI · verify, store 0600 · Architecture component</title>
-          <rect x="750" y="556" width="140" height="46" rx="6" class="c-mask"/>
-          <rect x="750" y="556" width="140" height="46" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(756 562) scale(0.6875)">
+          <rect x="560" y="572" width="150" height="48" rx="6" class="c-mask"/>
+          <rect x="560" y="572" width="150" height="48" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(566 578) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="820" y="577" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">setup CLI</text>
-        <text data-detail="context" x="820" y="593" class="t-muted" font-size="9" text-anchor="middle">verify, store 0600</text>
+          <text data-node-label="" data-detail-anchor="" x="635" y="594" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">setup CLI</text>
+        <text data-detail="context" x="635" y="610" class="t-muted" font-size="9" text-anchor="middle">verify, store 0600</text>
         </g>
 
-        <g id="node-evals" data-node-id="evals" data-node-label="Eval harness" tabindex="0" role="button" aria-label="Focus Eval harness, evals/agent.py · spend, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="evals/agent.py · spend" data-node-context="Architecture component">
-          <title>Eval harness · evals/agent.py · spend · Architecture component</title>
-          <rect x="25" y="96" width="150" height="52" rx="6" class="c-mask"/>
-          <rect x="25" y="96" width="150" height="52" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(31 102) scale(0.6875)">
+        <g id="node-evals" data-node-id="evals" data-node-label="Eval harness" tabindex="0" role="button" aria-label="Focus Eval harness, paid agent runs, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="paid agent runs" data-node-context="Architecture component">
+          <title>Eval harness · paid agent runs · Architecture component</title>
+          <rect x="24" y="110" width="150" height="52" rx="6" class="c-mask"/>
+          <rect x="24" y="110" width="150" height="52" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(30 116) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="100" y="120" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Eval harness</text>
-        <text data-detail="context" x="100" y="136" class="t-muted" font-size="9" text-anchor="middle">evals/agent.py · spend</text>
+          <text data-node-label="" data-detail-anchor="" x="99" y="134" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Eval harness</text>
+        <text data-detail="context" x="99" y="150" class="t-muted" font-size="9" text-anchor="middle">paid agent runs</text>
         </g>
 
-        <g id="node-installer" data-node-id="installer" data-node-label="install CLI" tabindex="0" role="button" aria-label="Focus install CLI, 8 agent targets · uvx, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="8 agent targets · uvx" data-node-context="Architecture component">
-          <title>install CLI · 8 agent targets · uvx · Architecture component</title>
-          <rect x="330" y="556" width="150" height="46" rx="6" class="c-mask"/>
-          <rect x="330" y="556" width="150" height="46" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(336 562) scale(0.6875)">
+        <g id="node-installer" data-node-id="installer" data-node-label="install CLI" tabindex="0" role="button" aria-label="Focus install CLI, 8 agent targets, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="8 agent targets" data-node-context="Architecture component">
+          <title>install CLI · 8 agent targets · Architecture component</title>
+          <rect x="250" y="572" width="150" height="48" rx="6" class="c-mask"/>
+          <rect x="250" y="572" width="150" height="48" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(256 578) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="405" y="577" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">install CLI</text>
-        <text data-detail="context" x="405" y="593" class="t-muted" font-size="9" text-anchor="middle">8 agent targets · uvx</text>
+          <text data-node-label="" data-detail-anchor="" x="325" y="594" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">install CLI</text>
+        <text data-detail="context" x="325" y="610" class="t-muted" font-size="9" text-anchor="middle">8 agent targets</text>
         </g>
 
-        <g id="node-hook" data-node-id="hook" data-node-label="Command hook" tabindex="0" role="button" aria-label="Focus Command hook, gate · deny/ask/abstain, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="gate · deny/ask/abstain" data-node-context="Architecture component">
-          <title>Command hook · gate · deny/ask/abstain · Architecture component</title>
-          <rect x="25" y="172" width="150" height="52" rx="6" class="c-mask"/>
-          <rect x="25" y="172" width="150" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(31 178) scale(0.6875)">
+        <g id="node-hook" data-node-id="hook" data-node-label="hook gate" tabindex="0" role="button" aria-label="Focus hook gate, deny · ask · abstain, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="deny · ask · abstain" data-node-context="Architecture component">
+          <title>hook gate · deny · ask · abstain · Architecture component</title>
+          <rect x="200" y="196" width="150" height="52" rx="6" class="c-mask"/>
+          <rect x="200" y="196" width="150" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(206 202) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="100" y="196" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Command hook</text>
-        <text data-detail="context" x="100" y="212" class="t-muted" font-size="9" text-anchor="middle">gate · deny/ask/abstain</text>
+          <text data-node-label="" data-detail-anchor="" x="275" y="220" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">hook gate</text>
+        <text data-detail="context" x="275" y="236" class="t-muted" font-size="9" text-anchor="middle">deny · ask · abstain</text>
         </g>
 
         <g id="node-doctor" data-node-id="doctor" data-node-label="doctor CLI" tabindex="0" role="button" aria-label="Focus doctor CLI, offline config check, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="offline config check" data-node-context="Architecture component">
           <title>doctor CLI · offline config check · Architecture component</title>
-          <rect x="1210" y="556" width="150" height="46" rx="6" class="c-mask"/>
-          <rect x="1210" y="556" width="150" height="46" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1216 562) scale(0.6875)">
+          <rect x="1100" y="572" width="160" height="48" rx="6" class="c-mask"/>
+          <rect x="1100" y="572" width="160" height="48" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1106 578) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1285" y="577" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">doctor CLI</text>
-        <text data-detail="context" x="1285" y="593" class="t-muted" font-size="9" text-anchor="middle">offline config check</text>
+          <text data-node-label="" data-detail-anchor="" x="1180" y="594" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">doctor CLI</text>
+        <text data-detail="context" x="1180" y="610" class="t-muted" font-size="9" text-anchor="middle">offline config check</text>
         </g>
 
         <!-- Connection labels -->
         <g data-detail="context" data-edge-from="client" data-edge-to="server" data-edge-label="tools/call" data-edge-key="0" data-edge-id="call">
-          <rect x="221" y="269" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="250" y="279" class="t-backend" font-size="8" text-anchor="middle">tools/call</text>
+          <rect x="223" y="287" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="252" y="297" class="t-backend" font-size="8" text-anchor="middle">tools/call</text>
         </g>
-        <g data-detail="context" data-edge-from="server" data-edge-to="arguments" data-edge-label="validate args" data-edge-key="1" data-edge-id="validate-args">
-          <rect x="336.8" y="242" width="72.4" height="14" rx="3" class="c-mask"/>
-          <text x="373" y="252" class="t-muted" font-size="8" text-anchor="middle">validate args</text>
+        <g data-detail="context" data-edge-from="server" data-edge-to="instructions" data-edge-label="client loads" data-edge-key="1" data-edge-id="client-loads">
+          <rect x="380.2" y="260" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="414" y="270" class="t-muted" font-size="8" text-anchor="middle">client loads</text>
         </g>
-        <g data-detail="context" data-edge-from="arguments" data-edge-to="tools" data-edge-label="typed args" data-edge-key="2" data-edge-id="typed-args">
-          <rect x="563.5" y="223" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="592.5" y="233" class="t-muted" font-size="8" text-anchor="middle">typed args</text>
+        <g data-detail="context" data-edge-from="instructions" data-edge-to="skills" data-edge-label="prompts" data-edge-key="2" data-edge-id="serves-skills">
+          <rect x="577.2" y="34" width="43.6" height="14" rx="3" class="c-mask"/>
+          <text x="599" y="44" class="t-muted" font-size="8" text-anchor="middle">prompts</text>
         </g>
-        <g data-detail="context" data-edge-from="limits" data-edge-to="tools" data-edge-label="cap values" data-edge-key="3" data-edge-id="cap-values">
-          <rect x="651" y="223.5" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="680" y="233.5" class="t-muted" font-size="8" text-anchor="middle">cap values</text>
+        <g data-detail="context" data-edge-from="server" data-edge-to="arguments" data-edge-label="validate args" data-edge-key="3" data-edge-id="validate-args">
+          <rect x="477.8" y="230.5" width="72.4" height="14" rx="3" class="c-mask"/>
+          <text x="514" y="240.5" class="t-muted" font-size="8" text-anchor="middle">validate args</text>
         </g>
-        <g data-detail="context" data-edge-from="tools" data-edge-to="runtime" data-edge-label="ask Jev" data-edge-key="4" data-edge-id="ask">
-          <rect x="908.2" y="269" width="43.6" height="14" rx="3" class="c-mask"/>
-          <text x="930" y="279" class="t-muted" font-size="8" text-anchor="middle">ask Jev</text>
+        <g data-detail="context" data-edge-from="arguments" data-edge-to="tools" data-edge-label="typed args" data-edge-key="4" data-edge-id="typed-args">
+          <rect x="658.5" y="230" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="687.5" y="240" class="t-muted" font-size="8" text-anchor="middle">typed args</text>
         </g>
-        <g data-detail="context" data-edge-from="runtime" data-edge-to="providers" data-edge-label="evaluate" data-edge-key="5" data-edge-id="evaluate">
-          <rect x="1060.8" y="320" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="1085" y="330" class="t-muted" font-size="8" text-anchor="middle">evaluate</text>
+        <g data-detail="context" data-edge-from="limits" data-edge-to="tools" data-edge-label="cap values" data-edge-key="5" data-edge-id="cap-values">
+          <rect x="835" y="230" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="864" y="240" class="t-muted" font-size="8" text-anchor="middle">cap values</text>
         </g>
-        <g data-detail="context" data-edge-from="providers" data-edge-to="validation" data-edge-label="raw answers" data-edge-key="6" data-edge-id="raw-answers">
-          <rect x="898.6" y="428" width="62.8" height="14" rx="3" class="c-mask"/>
-          <text x="930" y="438" class="t-muted" font-size="8" text-anchor="middle">raw answers</text>
+        <g data-detail="context" data-edge-from="tools" data-edge-to="runtime" data-edge-label="ask Jev" data-edge-key="6" data-edge-id="ask">
+          <rect x="922.2" y="287" width="43.6" height="14" rx="3" class="c-mask"/>
+          <text x="944" y="297" class="t-muted" font-size="8" text-anchor="middle">ask Jev</text>
         </g>
-        <g data-detail="context" data-edge-from="validation" data-edge-to="policy" data-edge-label="judgments" data-edge-key="7" data-edge-id="judgments">
-          <rect x="558.4" y="428" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-          <text x="585" y="438" class="t-muted" font-size="8" text-anchor="middle">judgments</text>
+        <g data-detail="context" data-edge-from="runtime" data-edge-to="providers" data-edge-label="evaluate" data-edge-key="7" data-edge-id="evaluate">
+          <rect x="1065.8" y="338" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="1090" y="348" class="t-muted" font-size="8" text-anchor="middle">evaluate</text>
         </g>
-        <g data-detail="context" data-edge-from="policy" data-edge-to="serialize" data-edge-label="actions + reasons" data-edge-key="8" data-edge-id="decided">
-          <rect x="206.7" y="428" width="91.6" height="14" rx="3" class="c-mask"/>
-          <text x="252.5" y="438" class="t-muted" font-size="8" text-anchor="middle">actions + reasons</text>
+        <g data-detail="context" data-edge-from="providers" data-edge-to="validation" data-edge-label="raw answers" data-edge-key="8" data-edge-id="raw-answers">
+          <rect x="912.6" y="445" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="944" y="455" class="t-muted" font-size="8" text-anchor="middle">raw answers</text>
         </g>
-        <g data-detail="context" data-edge-from="serialize" data-edge-to="server" data-edge-label="result text" data-edge-key="9" data-edge-id="result-text">
-          <rect x="223.6" y="350" width="62.8" height="14" rx="3" class="c-mask"/>
-          <text x="255" y="360" class="t-muted" font-size="8" text-anchor="middle">result text</text>
+        <g data-detail="context" data-edge-from="validation" data-edge-to="policy" data-edge-label="judgments" data-edge-key="9" data-edge-id="judgments">
+          <rect x="572.4" y="445" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
+          <text x="599" y="455" class="t-muted" font-size="8" text-anchor="middle">judgments</text>
         </g>
-        <g data-detail="context" data-edge-from="settings" data-edge-to="runtime" data-edge-label="config · redaction" data-edge-key="10" data-edge-id="config">
-          <rect x="1036.8" y="135" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
-          <text x="1085" y="145" class="t-security" font-size="8" text-anchor="middle">config · redaction</text>
+        <g data-detail="context" data-edge-from="policy" data-edge-to="serialize" data-edge-label="actions" data-edge-key="10" data-edge-id="decided">
+          <rect x="233.2" y="445" width="43.6" height="14" rx="3" class="c-mask"/>
+          <text x="255" y="455" class="t-muted" font-size="8" text-anchor="middle">actions</text>
         </g>
-        <g data-detail="context" data-edge-from="tools" data-edge-to="extract" data-edge-label="patterns" data-edge-key="11" data-edge-id="patterns">
-          <rect x="757.8" y="197" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="782" y="207" class="t-muted" font-size="8" text-anchor="middle">patterns</text>
+        <g data-detail="context" data-edge-from="serialize" data-edge-to="server" data-edge-label="result text" data-edge-key="11" data-edge-id="result-text">
+          <rect x="226.6" y="367" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="258" y="377" class="t-muted" font-size="8" text-anchor="middle">result text</text>
         </g>
-        <g data-detail="context" data-edge-from="oracle" data-edge-to="serialize" data-edge-label="byte-equal (ADR-0001)" data-edge-key="12" data-edge-id="byte-equal">
-          <rect x="44.6" y="536" width="110.8" height="14" rx="3" class="c-mask"/>
-          <text x="100" y="546" class="t-messagebus" font-size="8" text-anchor="middle">byte-equal (ADR-0001)</text>
+        <g data-detail="context" data-edge-from="settings" data-edge-to="runtime" data-edge-label="redaction" data-edge-key="12" data-edge-id="config">
+          <rect x="1147.4" y="157" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
+          <text x="1174" y="167" class="t-security" font-size="8" text-anchor="middle">redaction</text>
         </g>
-        <g data-detail="context" data-edge-from="runtime" data-edge-to="telemetry" data-edge-label="spans · metrics" data-edge-key="13" data-edge-id="spans">
-          <rect x="1139" y="228" width="82" height="14" rx="3" class="c-mask"/>
-          <text x="1180" y="238" class="t-messagebus" font-size="8" text-anchor="middle">spans · metrics</text>
+        <g data-detail="context" data-edge-from="tools" data-edge-to="extract" data-edge-label="patterns" data-edge-key="13" data-edge-id="patterns">
+          <rect x="759.8" y="224" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="784" y="234" class="t-muted" font-size="8" text-anchor="middle">patterns</text>
         </g>
-        <g data-detail="context" data-edge-from="evals" data-edge-to="client" data-edge-label="paid agent runs" data-edge-key="14" data-edge-id="agent-runs">
-          <rect x="158" y="160" width="82" height="14" rx="3" class="c-mask"/>
-          <text x="199" y="170" class="t-messagebus" font-size="8" text-anchor="middle">paid agent runs</text>
+        <g data-detail="context" data-edge-from="oracle" data-edge-to="serialize" data-edge-label="byte-equal" data-edge-key="14" data-edge-id="byte-equal">
+          <rect x="79.5" y="528" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="108.5" y="538" class="t-messagebus" font-size="8" text-anchor="middle">byte-equal</text>
         </g>
-        <g data-detail="context" data-edge-from="keyfile" data-edge-to="providers" data-edge-label="stored key fallback" data-edge-key="15" data-edge-id="stored-key">
-          <rect x="1019.4" y="494" width="101.2" height="14" rx="3" class="c-mask"/>
-          <text x="1070" y="504" class="t-muted" font-size="8" text-anchor="middle">stored key fallback</text>
+        <g data-detail="context" data-edge-from="runtime" data-edge-to="telemetry" data-edge-label="spans" data-edge-key="15" data-edge-id="spans">
+          <rect x="1157" y="370" width="34" height="14" rx="3" class="c-mask"/>
+          <text x="1174" y="380" class="t-messagebus" font-size="8" text-anchor="middle">spans</text>
         </g>
-        <g data-detail="context" data-edge-from="setup" data-edge-to="keyfile" data-edge-label="verified key" data-edge-key="16" data-edge-id="setup-stores">
-          <rect x="901.2" y="559" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="935" y="569" class="t-muted" font-size="8" text-anchor="middle">verified key</text>
+        <g data-detail="context" data-edge-from="evals" data-edge-to="client" data-edge-label="agent runs" data-edge-key="16" data-edge-id="agent-runs">
+          <rect x="63" y="166" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="92" y="176" class="t-messagebus" font-size="8" text-anchor="middle">agent runs</text>
         </g>
-        <g data-detail="context" data-edge-from="cache" data-edge-to="runtime" data-edge-label="replay identical" data-edge-key="17" data-edge-id="cache-hit">
-          <rect x="1136.6" y="320" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="1180" y="330" class="t-muted" font-size="8" text-anchor="middle">replay identical</text>
+        <g data-detail="context" data-edge-from="keyfile" data-edge-to="providers" data-edge-label="key fallback" data-edge-key="17" data-edge-id="stored-key">
+          <rect x="978.7" y="511" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="1012.5" y="521" class="t-muted" font-size="8" text-anchor="middle">key fallback</text>
         </g>
-        <g data-detail="context" data-edge-from="client" data-edge-to="hook" data-edge-label="hook gate" data-edge-key="18" data-edge-id="hook-runs">
-          <rect x="32.400000000000006" y="242" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-          <text x="59" y="252" class="t-messagebus" font-size="8" text-anchor="middle">hook gate</text>
+        <g data-detail="context" data-edge-from="setup" data-edge-to="keyfile" data-edge-label="verified key" data-edge-key="18" data-edge-id="setup-stores">
+          <rect x="751.2" y="576" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="785" y="586" class="t-muted" font-size="8" text-anchor="middle">verified key</text>
         </g>
-        <g data-detail="context" data-edge-from="doctor" data-edge-to="keyfile" data-edge-label="key presence" data-edge-key="19" data-edge-id="reads-key">
-          <rect x="1136.2" y="559" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="1170" y="569" class="t-messagebus" font-size="8" text-anchor="middle">key presence</text>
+        <g data-detail="context" data-edge-from="cache" data-edge-to="runtime" data-edge-label="replay" data-edge-key="19" data-edge-id="cache-hit">
+          <rect x="1242.6" y="266" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="1262" y="276" class="t-muted" font-size="8" text-anchor="middle">replay</text>
+        </g>
+        <g data-detail="context" data-edge-from="hook" data-edge-to="client" data-edge-label="gate" data-edge-key="20" data-edge-id="hook-runs">
+          <rect x="176" y="252" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="191" y="262" class="t-messagebus" font-size="8" text-anchor="middle">gate</text>
+        </g>
+        <g data-detail="context" data-edge-from="doctor" data-edge-to="keyfile" data-edge-label="key presence" data-edge-key="21" data-edge-id="reads-key">
+          <rect x="1021.2" y="576" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="1055" y="586" class="t-messagebus" font-size="8" text-anchor="middle">key presence</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
-        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="one-way judgment layers (ADR-0002)">
-          <rect data-graph-role="structural-frame-label-mask" x="304" y="76" width="193.6" height="16" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="308" y="89" class="t-cloud" font-size="9" font-weight="600">one-way judgment layers (ADR-0002)</text>
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="judgment layers">
+          <rect data-graph-role="structural-frame-label-mask" x="304" y="148" width="91" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="308" y="161" class="t-cloud" font-size="9" font-weight="600">judgment layers</text>
         </g>
 
         <!-- Legend -->
@@ -5564,44 +5596,33 @@
       <div class="card">
         <div class="card-header">
           <div class="card-dot cyan"></div>
-          <h3>One registry (ADR-0013)</h3>
+          <h3>One registry</h3>
         </div>
         <ul>
-          <li>&bull; list_tools ≡ call_tool — one Toolset</li>
-          <li>&bull; unknown tool returns owned text</li>
+          <li>&bull; list_tools and call_tool share one Toolset</li>
+          <li>&bull; eleven tools: ten frozen, plus jev_score</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>Model judges, policy decides (ADR-0002)</h3>
+          <h3>Fail-closed answers</h3>
         </div>
         <ul>
-          <li>&bull; validation rejects; policy is pure (traced in tools/observed)</li>
-          <li>&bull; truncated or unknown confidence ⇒ never auto</li>
-        </ul>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div class="card-dot rose"></div>
-          <h3>Trust boundary (ADR-0008/0017)</h3>
-        </div>
-        <ul>
-          <li>&bull; env-only config; tool args are model-controlled</li>
-          <li>&bull; providers: typesafe, openrouter, cloudflare, compatible</li>
+          <li>&bull; validation rejects; policy is pure</li>
+          <li>&bull; truncated or unknown confidence never yields auto</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot amber"></div>
-          <h3>Frozen parity (ADR-0001/0006/0016)</h3>
+          <h3>Skills and instructions</h3>
         </div>
         <ul>
-          <li>&bull; 282 fixtures replay byte-equal; divergences ADR-tagged</li>
-          <li>&bull; extract: one deadline incl. queue; stdlib re workers</li>
+          <li>&bull; resources and prompts: jev-mcp routes tools; jev is the API skill</li>
+          <li>&bull; instructions name every tool and say to honor action</li>
         </ul>
       </div>
     </div>

@@ -4,7 +4,7 @@ version = "0.5.0"
 description = "Behavior-compatible Python MCP server exposing TypeSafe's Jev judgment tools."
 requires-python = ">=3.12"
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [{ name = "elkaix" }]
 maintainers = [{ name = "elkaix" }]
 classifiers = [
@@ -50,16 +50,18 @@ dev = [
 # uv caches a build of this directory until a cache key changes. The defaults are only
 # pyproject.toml, setup.py, setup.cfg, and whether src/ exists, so a source edit that
 # leaves those untouched is what `uvx --from .` runs. Declaring cache-keys replaces the
-# defaults, so pyproject.toml stays listed; LICENSE ships as the wheel's license file.
-# A missing git directory is ignored, so an sdist build still works. uvx honors these keys
-# for its cached environments from uv 0.10.10 (astral-sh/uv#18396), hence the floor. The
-# keys compare the newest mtime, so an uncommitted deletion goes unseen until the commit
-# key changes; the smoke test passes `--no-cache` for that reason.
+# defaults, so pyproject.toml stays listed; LICENSE and THIRD_PARTY_NOTICES.md ship as
+# the wheel's licence files, so both stay listed. A missing git directory is ignored,
+# so an sdist build still works. uvx honors these keys for its cached environments from
+# uv 0.10.10 (astral-sh/uv#18396), hence the floor. The keys compare the newest mtime,
+# so an uncommitted deletion goes unseen until the commit key changes; the smoke test
+# passes `--no-cache` for that reason.
 [tool.uv]
 required-version = ">=0.10.10"
 cache-keys = [
     { file = "pyproject.toml" },
     { file = "LICENSE" },
+    { file = "THIRD_PARTY_NOTICES.md" },
     { file = "src/**/*.py" },
     { file = "src/**/*.md" },
     { file = "src/**/*.typed" },
