@@ -515,15 +515,20 @@ def test_uncapped_inputs_disclose_the_token_window() -> None:
         assert needle in text, path.name
 
 
-def test_limits_page_does_not_call_an_upstream_401_auth() -> None:
-    """L2: `auth` is the local missing-credentials code. An upstream 401 is `provider` today."""
+def test_upstream_401_is_auth_and_other_4xx_stay_provider() -> None:
+    """L2: a provider status 401 is `auth`. 403, 404, 422, and a 401 only in the body stay `provider`."""
     from jev_judge_mcp.responses import error_code
 
     page = _LIMITS_PAGE.read_text(encoding="utf-8")
     assert error_code("No Jev provider credentials") == "auth"
-    assert error_code("TypeSafe API 401: invalid key") == "provider"
+    assert error_code("TypeSafe API 401: invalid key") == "auth"
+    assert error_code("OpenRouter decisions API 401: denied") == "auth"
+    assert error_code("TypeSafe API 403: forbidden") == "provider"
+    assert error_code("TypeSafe API 404: missing") == "provider"
+    assert error_code("TypeSafe API 422: bad") == "provider"
+    assert error_code("TypeSafe API 500: see 401: docs") == "provider"
     assert "upstream 401" in page
-    assert "maps to `provider`" in page
+    assert "code `auth`" in page
 
 
 def test_limits_page_names_529_as_a_retried_status() -> None:

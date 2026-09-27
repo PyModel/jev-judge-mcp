@@ -362,7 +362,7 @@ batching and second rounds (`docs/guidance.md:56-62`) vs [fan-out]; retried stat
 | P3 | Decided A (`p3-pin-model`): keep `jev-latest`. `docs/guidance.md` and `calibrate.py` say the bars are parity values, not tuned on a version, and that live evals pin `jev-1.13.0`. |
 | P4 | Fixed in `docs/tools.md` (find card). The 0.7/0.35 pair is a frozen parity default, not the cookbook's tunable example. |
 | L1 | Same as T2. Decided A. Cap values stay (ADR-0014, ADR-0005). |
-| L2 | Wording fixed in `docs/reference/limits.md`: an upstream 401 maps to `provider`, not `auth`. Mapping it to `auth` waits on `l2-401-auth`. |
+| L2 | Decided B (`l2-401-auth`): an upstream 401 maps to `auth`; 403, 404, and 422 stay `provider`. Implemented in `responses.py`, ADR-0072, divergence `upstream-401-is-auth`. The error text is unchanged. |
 | L3 | Fixed in `docs/reference/limits.md`. `529` is retried as a 5xx (`providers/retry.py`). No new error code. |
 | H1 | Fixed in `providers/retry.py`. The docstring names the installed SDK's 10 s HTTP timeout and 30 s retry budget. The 30 s / 90 s bounds stay (ADR-0057). |
 | H2 | Fixed in `docs/reference/divergences.json` `stdio-attempt-deadline` and an ADR-0057 amendment. askJev passes no timeout of its own; the typesafe path inherits SDK 0.6.0's 10s default. |

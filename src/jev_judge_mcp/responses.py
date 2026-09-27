@@ -152,9 +152,20 @@ refusals are serialized payloads (`{"tool": …, "error": "evidence exceeds 16 i
 which carry none of the older substrings and start with none of these markers."""
 
 
+def _provider_status(text: str) -> str | None:
+    """The status token in ``{label} {status}: {body}`` (``providers/base.py`` ``_status_error``)."""
+    head, sep, _body = text.partition(": ")
+    if not sep:
+        return None
+    token = head.rsplit(" ", 1)[-1]
+    return token if token.isdigit() else None
+
+
 def error_code(text: str) -> str:
     """A code for an ``isError`` result. The text itself is not changed."""
     if text.startswith("No Jev provider credentials") or text.startswith("jev-judge-mcp hook: fail-open"):
+        return "auth"
+    if _provider_status(text) == "401":
         return "auth"
     if (
         text.startswith("MCP error -32602")

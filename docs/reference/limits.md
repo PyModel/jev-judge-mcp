@@ -42,10 +42,10 @@ block (ADR-0062). `src/jev_judge_mcp/responses.py` `error_code` is the mapping.
 | --- | --- |
 | `invalid_arguments` | a schema reject (every row marked reject below); an unknown tool; duplicate caller ids; a decide candidate id colliding with an escape hatch; a diff that is not the file-list shape; a broken `auto_accept`/`review_at` pair (the frozen text `Thresholds must satisfy 0 <= review_at <= auto_accept <= 1.`) |
 | `input_too_large` | every frozen budget refusal marked error below: the aggregate character budgets, jev_gate's item-count budget, and the file-list diff budget. `tests/contract/test_limits.py` pins each frozen budget text to this code |
-| `auth` | no provider credentials; the hook's fail-open text. An upstream 401 is not this code: it maps to `provider` |
+| `auth` | no provider credentials; the hook's fail-open text; an upstream 401 (`{label} 401:`), which is code `auth` |
 | `timeout` | a provider timeout |
 | `quota` | HTTP 429 / rate limit |
-| `provider` | any other provider failure, including an upstream 401 (a rejected key looks like an outage) |
+| `provider` | any other provider failure. 403, 404, and 422 stay here; a 401 that appears only in the body does too |
 
 `529 Overloaded` is retried as a 5xx (`providers/retry.py`). A final failure is `provider` or `timeout`, not its own code.
 
