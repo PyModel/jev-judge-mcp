@@ -456,6 +456,8 @@ _NO_CREDENTIALS = (
         pytest.param("diff exceeds the 200,000-character aggregate budget", "input_too_large", id="aggregate-budget"),
         pytest.param("TypeSafe request timed out.", "timeout", id="timeout"),
         pytest.param("OpenRouter 429: rate limit exceeded", "quota", id="quota"),
+        pytest.param("TypeSafe API 401: Missing or invalid API key", "auth", id="upstream-401"),
+        pytest.param("TypeSafe API 403: forbidden", "provider", id="upstream-403"),
         pytest.param(
             "evidence exceeds 16 items; split the gate or trim the evidence.",
             "input_too_large",

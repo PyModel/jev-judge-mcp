@@ -654,7 +654,8 @@
       "status": "sanctioned",
       "adr": "docs/adr/0072-upstream-401-is-auth.md",
       "tests": [
-        "tests/contract/test_docs_alignment.py"
+        "tests/unit/test_cli_judge.py",
+        "tests/unit/test_providers.py"
       ],
       "fixtures": [],
       "reference_behavior": "The reference has no typed error code. A 401 is the same error text as any other HTTP failure.",

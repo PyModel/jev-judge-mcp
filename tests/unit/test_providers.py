@@ -21,6 +21,7 @@ from jev_judge_mcp.providers.cloudflare import CloudflareProvider, cloudflare_sl
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.openrouter import openrouter_slug
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+from jev_judge_mcp.responses import error_code
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.server import configure_logging
 from jev_judge_mcp.settings import Settings
@@ -292,6 +293,24 @@ async def test_typesafe_invalid_api_key_is_a_provider_error() -> None:
     await provider.aclose()
 
     assert str(caught.value).startswith("TypeSafe API 401: ")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(("status", "code"), [(401, "auth"), (403, "provider"), (404, "provider"), (422, "provider")])
+async def test_an_upstream_status_error_codes_as_adr_0072_says(status: int, code: str) -> None:
+    """The text `_status_error` really writes is the text `error_code` reads (ADR-0072)."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        del request
+        return httpx2.Response(status, json={"detail": "see 401: docs"})
+
+    provider = typesafe(handler, NO_RETRIES)
+    try:
+        with pytest.raises(ProviderError) as raised:
+            await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
+    finally:
+        await provider.aclose()
+    assert error_code(str(raised.value)) == code
 
 
 @pytest.mark.anyio
