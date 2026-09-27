@@ -38,21 +38,19 @@ _PROVIDER_FAILURE = re.compile(
 
 
 class AdapterMissing(RuntimeError):
-    """The Pi arm needs `PI_MCP_ADAPTER` and it is unset."""
-
-
-ADAPTER: Path | None = None
-"""A test may set this. Production leaves it unset and reads `PI_MCP_ADAPTER` when the arm runs."""
+    """The Pi arm needs `PI_MCP_ADAPTER` naming an existing adapter file."""
 
 
 def adapter_path() -> Path:
-    """The adapter extension. Unset `PI_MCP_ADAPTER` fails here, not at import."""
-    if isinstance(ADAPTER, Path):
-        return ADAPTER
+    """The adapter extension, absolute. An unset or dangling `PI_MCP_ADAPTER` fails here, not at import."""
     raw = os.environ.get("PI_MCP_ADAPTER")
     if not raw:
         raise AdapterMissing("PI_MCP_ADAPTER is not set; set it to the pi-mcp-adapter index.ts")
-    return Path(raw)
+    # The agent runs in its own workdir, so a relative or `~` path must be fixed here.
+    path = Path(raw).expanduser().resolve()
+    if not path.is_file():
+        raise AdapterMissing(f"PI_MCP_ADAPTER is not a file: {path}")
+    return path
 
 
 _CONTEXT_KEYS = ("input", "cacheRead", "cacheWrite")

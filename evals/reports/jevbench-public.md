@@ -23,8 +23,8 @@ run does.
   reported model.
 - **Tool:** `jev_classify`, one call per item, at most one provider request per call (`NO_RETRIES`),
   through the repo's guarded live runner with an explicit 92-call cap.
-- **Items:** the 92 of JevBench's 231 public items (`fstandhartinger/jevbench`, snapshot
-  `1bcc55eb…`, sha256-pinned per file) that are classify-compatible: a `choice` question whose state
+- **Items:** the 92 of JevBench's 231 public items (snapshot `1bcc55eb6c8cffde2306b3db03ede39b61c6152a`,
+  sha256-pinned per file) that are classify-compatible: a `choice` question whose state
   is string item text within the classify item cap. The adapter `evals/external/jevbench.py`
   reads the checkout as data and never executes its code; state becomes item text, labels +
   criteria become the class catalog, instructions become the purpose, `expected` becomes gold.

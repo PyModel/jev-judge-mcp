@@ -516,11 +516,9 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
     python3 = _which("python3", agent_path)
     if agent == "pi":
         try:
-            adapter = pi.adapter_path()
+            pi.adapter_path()
         except pi.AdapterMissing as error:
             raise StudyRefusedError(str(error)) from error
-        if not adapter.is_file():
-            raise StudyRefusedError(f"PI_MCP_ADAPTER is not a file: {adapter}")
     for task in tasks.load_tasks():
         expected_ids(task, python3)
     version = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False).stdout.strip()

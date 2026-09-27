@@ -645,6 +645,25 @@ def test_unset_pi_adapter_names_the_env_var(tmp_path: Path, monkeypatch: pytest.
         run.live(_bench_env(tmp_path / "bin", tmp_path), tmp_path / "out", items=(_FROZEN,), agent="pi")
 
 
+@pytest.mark.parametrize("value", ["missing.ts", "~/no-such-adapter.ts"])
+def test_dangling_pi_adapter_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    """A path that names no file refuses with the resolved path, before any run is booked."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PI_MCP_ADAPTER", value)
+    _agent_bin(tmp_path / "bin", "pi", "raise SystemExit(0)")
+    with pytest.raises(run.BenchRefusedError, match="PI_MCP_ADAPTER is not a file: /"):
+        run.live(_bench_env(tmp_path / "bin", tmp_path), tmp_path / "out", items=(_FROZEN,), agent="pi")
+
+
+def test_relative_pi_adapter_reaches_pi_as_an_absolute_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The agent runs in its own workdir, so the adapter argument must not depend on the caller's cwd."""
+    (tmp_path / "adapter.ts").touch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PI_MCP_ADAPTER", "adapter.ts")
+    argv = pi.pi_command("pi", "hi", tmp_path / "mcp.json", "")
+    assert argv[argv.index("-e") + 1] == str(tmp_path.resolve() / "adapter.ts")
+
+
 def _agent_bin(bindir: Path, name: str, body: str) -> None:
     bindir.mkdir(exist_ok=True)
     stub = bindir / name
@@ -681,7 +700,7 @@ def test_a_dead_preflight_exits_2_and_books_nothing(
     _agent_bin(tmp_path / "bin", agent, dead_login())
     adapter = tmp_path / "adapter.ts"
     adapter.write_text("export {}", encoding="utf-8")
-    monkeypatch.setattr(pi, "ADAPTER", adapter)
+    monkeypatch.setenv("PI_MCP_ADAPTER", str(adapter))
     monkeypatch.setattr(run, "load_items", lambda: [_FROZEN])
     monkeypatch.setattr(run, "OUT", tmp_path / "out")
     monkeypatch.setattr(run, "publish", _refuse_publish)
@@ -701,7 +720,7 @@ def test_a_preflight_that_reaches_the_model_lets_the_bench_proceed(
     _agent_bin(tmp_path / "bin", agent, reaches_model(agent))
     adapter = tmp_path / "adapter.ts"
     adapter.write_text("export {}", encoding="utf-8")
-    monkeypatch.setattr(pi, "ADAPTER", adapter)
+    monkeypatch.setenv("PI_MCP_ADAPTER", str(adapter))
     out = tmp_path / "out"
     stop = run.live(
         _bench_env(tmp_path / "bin", tmp_path),
@@ -748,7 +767,7 @@ def test_an_unlinkable_keychain_refuses_with_exit_2(
     _agent_bin(tmp_path / "bin", agent, dead_login())
     adapter = tmp_path / "adapter.ts"
     adapter.write_text("export {}", encoding="utf-8")
-    monkeypatch.setattr(pi, "ADAPTER", adapter)
+    monkeypatch.setenv("PI_MCP_ADAPTER", str(adapter))
     monkeypatch.setattr(run, "load_items", lambda: [_FROZEN])
     monkeypatch.setattr(run, "OUT", tmp_path / "out")
     monkeypatch.setattr(run, "publish", _refuse_publish)

@@ -197,7 +197,7 @@ call's round trip.
 | `ab/run.py`, `ab/report.py` | Seeded pair schedule, the runner and its refusals, the pinned-setup guard, and the markdown report |
 
 The study refuses without `JEV_AB_LIVE=1` (no make target or CI job sets it), without `TYPESAFE_API_KEY`,
-without the agent binary (and, for Pi, the MCP adapter), and when `reports/agent-outcomes/<agent>/meta.json`
+without the agent binary (and, for Pi, the MCP adapter at `PI_MCP_ADAPTER`), and when `reports/agent-outcomes/<agent>/meta.json`
 records a different Jev revision, fixture hash, agent version, held-constant setup, or hardware: pairs
 never span two setups. Every run goes through `evals/agent.py`'s `run_agent`: a fresh sandbox, a minimal env
 with no provider keys, the key only in the Jev server's env through a 0600 config file, a timeout, cleanup,

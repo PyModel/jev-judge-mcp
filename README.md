@@ -380,7 +380,7 @@ One diagram covers the whole server: the tool-call loop from `tools/call` to the
 
 ## About this project
 
-The ten reference tools' wire format is pinned by recorded parity fixtures; `jev_score` is an addition. Vocabulary is in [`docs/CONTEXT.md`](docs/CONTEXT.md), decisions in [`docs/adr/`](docs/adr/), and security notes in [`SECURITY.md`](SECURITY.md). Windows is not supported; the server exits at startup on a non-POSIX platform.
+The ten original tools keep a frozen wire format, pinned by recorded parity fixtures; `jev_score` is an addition. Vocabulary is in [`docs/CONTEXT.md`](docs/CONTEXT.md), decisions in [`docs/adr/`](docs/adr/), and security notes in [`SECURITY.md`](SECURITY.md). Windows is not supported; the server exits at startup on a non-POSIX platform.
 
 ```sh
 uv sync --locked --all-extras   # development needs every extra; --extra typesafe alone only runs the server

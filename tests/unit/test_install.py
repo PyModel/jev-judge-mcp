@@ -350,8 +350,9 @@ def test_checkout_flag_without_a_checkout_fails_accurately(
     assert "before publication" not in out
 
 
-def test_each_target_gains_one_entry(tmp_path: Path) -> None:
-    _pi_adapter(tmp_path)
+@pytest.mark.parametrize("package", ["npm:pi-mcp-adapter", "git:example.test/owner/pi-mcp-adapter"])
+def test_each_target_gains_one_entry(tmp_path: Path, package: str) -> None:
+    _pi_adapter(tmp_path, package)
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".codex").mkdir()
     (tmp_path / ".config" / "opencode").mkdir(parents=True)
@@ -469,7 +470,8 @@ def test_remove_leaves_a_foreign_entry(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8") == original
 
 
-def test_unknown_shapes_are_left_untouched(tmp_path: Path) -> None:
+@pytest.mark.parametrize("package", ["npm:pi-mcp-adapter", "git:example.test/owner/pi-mcp-adapter"])
+def test_unknown_shapes_are_left_untouched(tmp_path: Path, package: str) -> None:
     samples = {
         "claude-code": (tmp_path / ".claude.json", '{"mcpServers": ["nope"]}\n'),
         "claude-desktop": (
@@ -482,7 +484,7 @@ def test_unknown_shapes_are_left_untouched(tmp_path: Path) -> None:
         "omp": (tmp_path / ".omp" / "agent" / "mcp.json", '["not-an-object"]\n'),
         "pythinker": (tmp_path / ".pythinker-code" / "mcp.json", '{"mcpServers": null}\n'),
     }
-    _pi_adapter(tmp_path)
+    _pi_adapter(tmp_path, package)
     for target, (path, body) in samples.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
@@ -524,8 +526,9 @@ def test_desktop_golden_redacts_the_key(tmp_path: Path) -> None:
     assert actual == _golden("claude-desktop.json")
 
 
-def test_json_targets_match_goldens(tmp_path: Path) -> None:
-    _pi_adapter(tmp_path)
+@pytest.mark.parametrize("package", ["npm:pi-mcp-adapter", "git:example.test/owner/pi-mcp-adapter"])
+def test_json_targets_match_goldens(tmp_path: Path, package: str) -> None:
+    _pi_adapter(tmp_path, package)
     code, text = execute(tmp_path, agents=("claude-code", "pi", "omp", "pythinker"))
     assert code == 0, text
     assert (tmp_path / ".claude.json").read_text(encoding="utf-8") == _golden("claude-code.json")
@@ -969,11 +972,11 @@ def _state_targets(home: Path) -> dict[str, dict[str, object]]:
     return state["targets"]
 
 
-def _pi_adapter(home: Path) -> None:
+def _pi_adapter(home: Path, package: str) -> None:
     directory = home / ".pi" / "agent"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "settings.json").write_text(
-        json.dumps({"packages": ["npm:pi-mcp-adapter"]}) + "\n",
+        json.dumps({"packages": [package]}) + "\n",
         encoding="utf-8",
     )
 

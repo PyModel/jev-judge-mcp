@@ -364,7 +364,7 @@ def test_arms_configs_differ_only_in_the_jev_server(tmp_path: Path) -> None:
 def test_arm_command_lines_differ_only_in_the_jev_sentence(
     agent: str, task: tasks.Task, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(pi, "ADAPTER", Path("/adapter.ts"))
+    monkeypatch.setattr(pi, "adapter_path", lambda: Path("/adapter.ts"))
     prompt = ab_run.user_prompt(task)
     config = Path("/cfg/mcp.json")
     tails = {
@@ -461,7 +461,8 @@ def test_preflight_refuses_when_the_agent_never_reaches_its_model(
     tmp_path: Path, agent: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A startup death ("Not logged in", no model turn) refuses the batch, and the error names the cause."""
-    monkeypatch.setattr(pi, "ADAPTER", tmp_path / "adapter.ts")
+    (tmp_path / "adapter.ts").touch()
+    monkeypatch.setenv("PI_MCP_ADAPTER", str(tmp_path / "adapter.ts"))
     with pytest.raises(ab_run.StudyRefusedError, match="preflight could not reach its model") as refusal:
         ab_run.preflight(_preflight_setup(tmp_path, agent, dead_login()))
     assert "Not logged in" in str(refusal.value)
@@ -472,7 +473,8 @@ def test_preflight_passes_when_the_agent_reaches_its_model(
     tmp_path: Path, agent: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The gate is not unconditional: a run that billed a model turn is not a refusal."""
-    monkeypatch.setattr(pi, "ADAPTER", tmp_path / "adapter.ts")
+    (tmp_path / "adapter.ts").touch()
+    monkeypatch.setenv("PI_MCP_ADAPTER", str(tmp_path / "adapter.ts"))
     result = ab_run.preflight(_preflight_setup(tmp_path, agent, reaches_model(agent)))
     assert result.trace.model
 
@@ -509,7 +511,7 @@ def test_a_dead_preflight_exits_2_and_books_nothing(
     _agent_bin(tmp_path / "bin", agent, dead_login())
     adapter = tmp_path / "adapter.ts"
     adapter.write_text("export {}", encoding="utf-8")
-    monkeypatch.setattr(pi, "ADAPTER", adapter)
+    monkeypatch.setenv("PI_MCP_ADAPTER", str(adapter))
     monkeypatch.setattr(ab_run, "expected_ids", _skip_grader)
     monkeypatch.setattr(ab_run, "OUT", tmp_path / "out")
     monkeypatch.setattr(ab_run, "REPORT", tmp_path / "report.md")
@@ -559,7 +561,7 @@ def test_an_unlinkable_keychain_refuses_with_exit_2(
     _agent_bin(tmp_path / "bin", agent, dead_login())
     adapter = tmp_path / "adapter.ts"
     adapter.write_text("export {}", encoding="utf-8")
-    monkeypatch.setattr(pi, "ADAPTER", adapter)
+    monkeypatch.setenv("PI_MCP_ADAPTER", str(adapter))
     monkeypatch.setattr(ab_run, "expected_ids", _skip_grader)
     monkeypatch.setattr(ab_run, "OUT", tmp_path / "out")
     monkeypatch.setattr(ab_run, "REPORT", tmp_path / "report.md")

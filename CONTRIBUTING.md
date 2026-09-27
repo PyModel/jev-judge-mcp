@@ -2,9 +2,8 @@
 
 jev-judge-mcp is a Python MCP server exposing TypeSafe's Jev judgment tools,
 frozen against a TypeScript reference server. The public repository is
-https://github.com/PyModel/jev-judge-mcp. elkaix is the author and the maintainer.
-An outside pull request is merged, and anyone is added as an author, maintainer,
-or contributor, only with the maintainer's approval.
+https://github.com/PyModel/jev-judge-mcp. Open a pull request against `main`.
+The maintainer, elkaix, approves every merge and every author, maintainer, or contributor addition.
 
 ## Read first
 
