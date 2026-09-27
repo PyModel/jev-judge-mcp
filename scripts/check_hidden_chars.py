@@ -4,7 +4,7 @@
 
 Stdlib only. Exit 0 clean, 1 on a hit, 2 when git cannot list the tree. Every tracked regular
 file is scanned; nothing is skipped as binary. A binary file joins BINARY by path when one is
-first tracked (none is today).
+first tracked.
 """
 
 import subprocess
@@ -13,7 +13,7 @@ import unicodedata
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-BINARY: frozenset[str] = frozenset()
+BINARY: frozenset[str] = frozenset({"docs/readme/hero.png"})
 # Trojan Source controls are never legitimate in this tree.
 BIDI_CONTROLS = frozenset(range(0x202A, 0x202F)) | frozenset(range(0x2066, 0x206A))
 # Joiners shape emoji and Indic/Persian words; marks steer RTL text. Each is allowed only
