@@ -264,10 +264,13 @@ def test_required_completion_hook_asks_on_a_rejected_key(
 
     async def rejected(_name: str, _arguments: dict[str, object]) -> CallToolResult:
         text = "TypeSafe API 401: invalid API key"
-        return CallToolResult(content=[TextContent(type="text", text=text)], isError=True)
+        return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
+
+    def empty_gate(_options: object) -> dict[str, object]:
+        return {}
 
     monkeypatch.setattr("jev_judge_mcp.cli._call", rejected)
-    monkeypatch.setattr("jev_judge_mcp.cli._gate_arguments", lambda _options: {})
+    monkeypatch.setattr("jev_judge_mcp.cli._gate_arguments", empty_gate)
     code = completion_hook_main(
         [],
         text=_PUSH,
