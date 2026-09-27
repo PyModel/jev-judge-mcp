@@ -5,12 +5,25 @@ An unanchored `.treehouse/` matches a checkout that merely lives under `~/.treeh
 The pattern must be anchored at the repository root.
 """
 
+import fnmatch
 import sys
 import tarfile
+import tomllib
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 FORBIDDEN = (".venv/", "__pycache__/", ".pytest_cache/", ".ruff_cache/", ".jevbench-tmp/", "docs/reference/jev-skill/")
+
+
+def check_wheel_cache_keys(root: Path, wheel: Path) -> list[str]:
+    """Every packaged file must match a tool.uv cache-key glob, or an edit to it serves a stale build."""
+    keys = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["uv"]["cache-keys"]
+    globs = [key["file"] for key in keys if isinstance(key, dict) and "file" in key]
+    with zipfile.ZipFile(wheel) as archive:
+        members = [name for name in archive.namelist() if name.startswith("jev_judge_mcp/")]
+    # fnmatch's `*` crosses `/`, so `src/**/*.py` also matches `src/jev_judge_mcp/x.py`.
+    return [name for name in members if not any(fnmatch.fnmatch(f"src/{name}", glob) for glob in globs)]
 
 
 def main() -> int:
@@ -31,6 +44,16 @@ def main() -> int:
     if leaked:
         print("sdist contains ignored paths:", file=sys.stderr)
         for name in leaked[:20]:
+            print(f"  {name}", file=sys.stderr)
+        return 1
+    wheels = sorted((ROOT / "dist").glob("*.whl"))
+    if not wheels:
+        print("no wheel in dist/; run uv build first", file=sys.stderr)
+        return 1
+    missed = check_wheel_cache_keys(ROOT, wheels[-1])
+    if missed:
+        print("wheel members match no tool.uv cache-key:", file=sys.stderr)
+        for name in missed[:20]:
             print(f"  {name}", file=sys.stderr)
         return 1
     return 0
