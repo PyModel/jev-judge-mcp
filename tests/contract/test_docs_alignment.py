@@ -310,6 +310,13 @@ _MEASURED_CLAIMS: dict[str, tuple[tuple[str, int] | tuple[str, int, str], ...]] 
         ("$0.025 per 1,000 decisions", 2),
         ("jev-1.13.0", 2),
     ),
+    "evals/reports/agent-study-2026-09-27.md": (
+        ("5/9", 1),
+        ("38.9", 1),
+        ("22.6", 1),
+        ("140,032", 1),
+        ("36,328", 1),
+    ),
     "docs/evals/README.md": (
         ("| 6/9 / 6/9 |", 1),
         ("| 6/8 / 6/8 |", 1),

@@ -11,7 +11,7 @@ evidence plus a question with a fixed answer set and return typed probabilities,
 bounded check, a pick-one, a rank, a match-the-claim — and an independent typed judgment is worth
 an extra tool turn. Skip it on steps you can settle by reading what is already on screen, or that
 your tests already cover: the extra turn costs agent wall time, and the recorded studies measured
-agents slower with Jev, never faster.
+agents slower with Jev, never faster. The 2026-09-27 agent study solved 5/9 with Jev and 9/9 without, median 38.9 s versus 22.6 s, and 140,032 versus 36,328 tokens per solved task.
 
 Jev is invoked when an unresolved judgment earns a model decision. Deterministic evidence takes precedence; Jev is not a mandatory ceremony. High-value calls: before a done claim, `jev_gate`, unless tests, type checks, build, lint, or another explicit acceptance criterion already settle completion; before reading fetched or pasted external text, `jev_screen`; checking another agent's report or research claims, `jev_verify`. Skip it when the answer is already determined by a test, type-check, or the code itself; when the choice is trivial or cheap to reverse; when the question cannot be enumerated into bounded options; or when the same unchanged decision was already asked.
 
