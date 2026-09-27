@@ -49,6 +49,7 @@ fi
 RUNNER=$(mktemp "${TMPDIR:-/tmp}/jev-prepush-stages.XXXXXX")
 LOG=$(mktemp "${TMPDIR:-/tmp}/jev-prepush-log.XXXXXX")
 CID=""
+COPY_DIR=""
 cleanup() {
 	# Always true: under bash 3.2 the EXIT trap's status would otherwise replace the
 	# script's own (a clean run would exit 1).
@@ -56,6 +57,9 @@ cleanup() {
 		docker rm -f "$CID" >/dev/null 2>&1
 	fi
 	rm -f "$RUNNER" "$LOG"
+	if [ -n "$COPY_DIR" ]; then
+		rm -rf "$COPY_DIR"
+	fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -126,6 +130,17 @@ echo "[pre-push] linux all stages ok ($LABEL)"
 RUNNER_EOF
 
 echo "[pre-push] linux ($LABEL): copying source into a throwaway container"
+# A linked worktree's .git is a gitdir pointer. docker cp copies that file, and the container
+# cannot follow the host path, so `git rev-parse` fails and the hidden-character check aborts.
+# Materialize a real checkout of HEAD, then overlay the working tree so uncommitted files
+# are still what gets checked. A normal clone's .git is a directory and is copied as-is.
+if [ -f "$SRC/.git" ]; then
+	echo "[pre-push] linux ($LABEL): worktree gitdir is not visible in the container; checking a materialized checkout"
+	COPY_DIR=$(mktemp -d "${TMPDIR:-/tmp}/jev-prepush-worktree.XXXXXX")
+	git clone --quiet --no-hardlinks "$SRC" "$COPY_DIR/src"
+	tar -C "$SRC" --exclude .git -cf - . | tar -C "$COPY_DIR/src" -xf -
+	SRC="$COPY_DIR/src"
+fi
 chmod 755 "$RUNNER"
 # --init: the runner reaps orphans, as GitHub's environment does; without an init the
 # killed agent groups in tests/evals linger as unreaped zombies and the group-death
