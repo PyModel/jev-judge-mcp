@@ -106,7 +106,7 @@ accuracy.
 
 **Weak spots.** The exists verdict thresholds (answered at ≥ 0.7, absent below 0.35, else
 `partial`) are frozen parity defaults, not call arguments. The semantic-find cookbook uses the same
-numbers as examples to tune; this server does not (ADR-0002). Candidate text is truncated at the cap
+numbers as examples to tune; this server does not (ADR-0001, `docs/reference/parity-manifest.json`). Candidate text is truncated at the cap
 (telemetry only). `top_k` defaults to 5.
 
 **Not for** discovering candidates — it only ranks what you pass, unlike a search engine.

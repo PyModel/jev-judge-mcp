@@ -357,10 +357,10 @@ batching and second rounds (`docs/guidance.md:56-62`) vs [fan-out]; retried stat
 | S1 | Fixed in `src/jev_judge_mcp/skills/jev-mcp/SKILL.md` and `docs/CONTEXT.md`. Writing rule, not a model guarantee. |
 | S2 | Fixed in `docs/agent-rules.md` (README fence moved with it). "Small" is gone; the line says flagship. |
 | S3 | Already stated in § 2 of this note. The routing text is not a contradiction. No caller-doc change. |
-| P1 | Fixed in `docs/tools.md` (classify card). At the default 0.85/0.5 pair the margin does not bind. Values unchanged (ADR-0002). |
+| P1 | Fixed in `docs/tools.md` (classify card). At the default 0.85/0.5 pair the margin does not bind. Values unchanged (ADR-0001, `docs/reference/parity-manifest.json`). |
 | P2 | Already disclosed in `docs/guidance.md` (uniform bar, caller raises it). By design. No change. |
 | P3 | Decided A (`p3-pin-model`): keep `jev-latest`. `docs/guidance.md` and `calibrate.py` say the bars are parity values, not tuned on a version, and that live evals pin `jev-1.13.0`. |
-| P4 | Fixed in `docs/tools.md` (find card). The 0.7/0.35 pair is a frozen parity default, not the cookbook's tunable example. |
+| P4 | Fixed in `docs/tools.md` (find card). The 0.7/0.35 pair is a frozen parity default (ADR-0001, `docs/reference/parity-manifest.json`), not the cookbook's tunable example. |
 | L1 | Same as T2. Decided A. Cap values stay (ADR-0014, ADR-0005). |
 | L2 | Decided B (`l2-401-auth`): an upstream 401 maps to `auth`; 403, 404, and 422 stay `provider`. Implemented in `responses.py`, ADR-0072, divergence `upstream-401-is-auth`. The error text is unchanged. |
 | L3 | Fixed in `docs/reference/limits.md`. `529` is retried as a 5xx (`providers/retry.py`). No new error code. |

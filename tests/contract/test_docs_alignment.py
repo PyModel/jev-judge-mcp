@@ -595,6 +595,9 @@ def test_find_card_says_the_exists_thresholds_are_frozen() -> None:
     assert "answered at ≥ 0.7, absent below 0.35" in section
     assert "examples to tune" in section
     assert "frozen parity defaults" in section
+    assert "ADR-0001" in section
+    assert "parity-manifest.json" in section
+    assert "ADR-0002" not in section
 
 
 def test_tool_cards_say_results_name_the_requested_model() -> None:
