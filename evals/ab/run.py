@@ -326,7 +326,9 @@ def _record(
                 for item in result.added_tests
             ],
             "old_rule_success": old_rule_success(result),
-            "failure_category": "escape" if escaped else outcomes.failure_category(
+            "failure_category": "escape"
+            if escaped
+            else outcomes.failure_category(
                 status=run.status,
                 success=succeeded,
                 acceptance_passed=result.acceptance_passed,
@@ -511,7 +513,7 @@ def held_constant(agent: str, timeout_s: float) -> dict[str, str]:
             "the key reaches the server by a 0600 keyfile in the run sandbox, never the agent-readable config"
         ),
         "grader": (
-            "ADR-0071: hidden acceptance tests, no regressions, pre-existing test content unchanged, "
+            "ADR-0073: hidden acceptance tests, no regressions, pre-existing test content unchanged, "
             "added tests must pass, decision matches gold (`evals/ab/grade.py`)"
         ),
     }

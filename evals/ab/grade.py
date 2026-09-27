@@ -4,7 +4,7 @@ The agent's tree is copied, its `tests/` is replaced by the pristine snapshot te
 acceptance tests, and every test id is recorded. The expected ids come from grading the task's
 reference solution, so a module that fails to import counts all of its tests as failed.
 
-Task correctness is separate from test-file edits (ADR-0071). Adding a test function, or a new test
+Task correctness is separate from test-file edits (ADR-0073). Adding a test function, or a new test
 file, does not fail the run. Modifying, deleting, skipping, or weakening a pre-existing test does.
 Added tests are run against the agent's own tree and must pass; an irrelevant added test is recorded,
 not failed. `Grade.correct` is that tree verdict. Whether the stated decision matches gold is
@@ -85,7 +85,7 @@ class Grade:
 
 
 def old_rule_success(result: Grade) -> bool:
-    """The pre-ADR-0071 rule: any byte change to a pre-existing test file fails the run.
+    """The pre-ADR-0073 rule: any byte change to a pre-existing test file fails the run.
 
     Decision match is not part of this rule. It exists so a study can show the D2 effect beside
     `run_correct`.

@@ -19,7 +19,7 @@ What disqualifies the study (full evidence in the operator's diagnosis at
    gateway. 30 of 33 pairs were therefore excluded, and the with-Jev arm's token cost (~10x the
    without-Jev arm) measured gateway confusion, not Jev.
 
-The grader change this study was meant to exercise (ADR-0071, added tests do not fail a correct
+The grader change this study was meant to exercise (ADR-0073, added tests do not fail a correct
 run) is itself pinned by offline tests in `tests/evals/test_ab_harness.py` and does not depend on
 this study. A replacement study must wait for the confinement decision (operator, 2026-09-27) and
 run no earlier than the boundary work lands.

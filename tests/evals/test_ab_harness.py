@@ -138,7 +138,7 @@ def _add_day_30_method(tree: Path) -> None:
 
 
 def test_a_correct_fix_plus_an_added_test_method_is_correct(tmp_path: Path) -> None:
-    """ADR-0071: the 2026-09-27 with-Jev shape grades correct, and still fails the old byte rule."""
+    """ADR-0073: the 2026-09-27 with-Jev shape grades correct, and still fails the old byte rule."""
     task = tasks.load_task("j1-refund-window")
     tree = _tree(tmp_path, task, solution=task.reference)
     _add_day_30_method(tree)

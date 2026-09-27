@@ -28,13 +28,13 @@ DEFINITIONS = [
     "needs a Jev answer from the pinned model through the MCP server; the proxy log, not the agent's text, "
     "decides. A run that reached the model and then failed is a measured failure, never a fast completion.",
     "**Measured pair:** both arms of one task and repeat measured. Only measured pairs are summarized.",
-    "**Success:** ADR-0071. Hidden acceptance tests all pass, no pre-existing test regresses, every "
+    "**Success:** ADR-0073. Hidden acceptance tests all pass, no pre-existing test regresses, every "
     "pre-existing test is unchanged in content (new test functions and new test files are allowed; "
     "modifying, deleting, skipping, or weakening a pre-existing test line fails the run), every added "
     "test passes, and the stated decision matches gold when the task has gold. **Old-rule success:** "
-    "the pre-ADR-0071 grader: acceptance passes, no regressions, and no pre-existing test file's bytes "
+    "the pre-ADR-0073 grader: acceptance passes, no regressions, and no pre-existing test file's bytes "
     "changed. A correct fix plus an added test method fails the old rule and passes the new one. "
-    "Records graded before ADR-0071 store only the old rule in `success`. **Final tests passed:** "
+    "Records graded before ADR-0073 store only the old rule in `success`. **Final tests passed:** "
     "every pristine graded test passed; added tests are separate.",
     "**Added tests:** count, file, name, pass/fail, and relevance. Relevant means the added test's file "
     "imports the task's `target_module`. An irrelevant added test is recorded and does not fail the run. "

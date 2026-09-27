@@ -13,7 +13,7 @@ This is an eval-harness decision. It does not change an MCP tool, a schema, a th
 - A run is correct when the hidden acceptance tests all pass, no pre-existing test regresses, every pre-existing test is unchanged in content, every added test passes, and the stated decision matches gold when the task has gold.
 - Adding a test function to a pre-existing test file, or adding a new test file, is allowed. Modifying, deleting, skipping, or weakening any pre-existing test function, or any pre-existing non-test statement those tests sit beside, still fails the run.
 - Added tests are executed in the agent's own suite. A failing added test fails the run. Each added test is recorded with its file, name, outcome, and a relevance flag: relevant when the file imports the task's `target_module`. An irrelevant added test is recorded and does not, by itself, fail the run.
-- `protected_changed` keeps its meaning: pre-existing test files whose bytes differ, or that were deleted. It no longer decides success. `old_rule_success` is the pre-ADR-0071 verdict, so a study can show both counts.
+- `protected_changed` keeps its meaning: pre-existing test files whose bytes differ, or that were deleted. It no longer decides success. `old_rule_success` is the pre-ADR-0073 verdict, so a study can show both counts.
 - Neither arm's prompt changes, and the with-Jev addendum still does not mention tests.
 - The paired task set grows past the original three, which stay as they are. New tasks cover a done-claim, screening fetched text that carries an injection, docs-versus-code, finding a line, extracting a value, reviewing a patch, and two controls whose answer the code already states. Every gold option is the one the hidden acceptance tests accept.
 
