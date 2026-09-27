@@ -58,7 +58,7 @@ packages = ["src/jev_judge_mcp"]
 # is contributor tooling, never shipped content. `.cache/` holds local reference caches such as the
 # crawled TypeSafe corpus (gitignored; docs/jev_docs/corpus.yaml), which hatch would otherwise pack.
 [tool.hatch.build.targets.sdist]
-exclude = [".agents", ".pi", ".claude", ".cache"]
+exclude = [".agents", ".pi", ".claude", ".cache", "docs/readme/hero.png"]
 
 [tool.ruff]
 line-length = 120
