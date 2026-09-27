@@ -10,7 +10,7 @@ import re
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[2]
 REFERENCE = "docs/reference/ts-0.5.0-tools-list.json"
@@ -18,12 +18,13 @@ REFERENCE = "docs/reference/ts-0.5.0-tools-list.json"
 
 def _descriptions(node: Any) -> Iterator[str]:
     if isinstance(node, dict):
-        for key, value in node.items():
+        members = cast(dict[str, Any], node)
+        for key, value in members.items():
             if key == "description" and isinstance(value, str) and len(value) >= 50:
                 yield value
             yield from _descriptions(value)
     elif isinstance(node, list):
-        for item in node:
+        for item in cast(list[Any], node):
             yield from _descriptions(item)
 
 
