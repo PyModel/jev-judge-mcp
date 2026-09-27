@@ -85,15 +85,20 @@ def test_env_is_base_env_then_command_env_and_never_ambient(tmp_path: Path, monk
     assert (env["KEEP"], env["OVERRIDE"], env["PATH"]) == ("base", "command", "/usr/bin:/bin")
 
 
-def test_the_agent_never_sees_the_real_home_or_the_repo(tmp_path: Path) -> None:
+@pytest.mark.parametrize("login_keychain", [True, False])
+def test_the_agent_never_sees_the_real_home_or_the_repo(tmp_path: Path, login_keychain: bool) -> None:
     """HOME, the pi agent dir, and TMPDIR are private; only the allowlist crosses.
 
     The sandbox gap this pins: a recorded smoke run's agent read `~/.pi/agent/mcp.json` and
     `~/.pi/agent/.env` and ran `uv sync` in a real checkout. The env the agent sees must never
     point at the caller's home tree or this repository, and the private agent dir must hold
-    credentials and the model catalog only — never the user's MCP config. The one path that does
-    cross is the login keychain: `Library/Keychains` in the sandbox home is a symlink to the real
-    one, and `CLAUDE_CONFIG_DIR` is unset so Claude Code can use that keychain.
+    credentials and the model catalog only — never the user's MCP config.
+
+    Claude's login has two requirements, both broken since HOME was sandboxed (bff5450, 2026-09-23):
+    the sandbox home must reach `login.keychain-db` (a sandboxed HOME empties the macOS search list),
+    and `CLAUDE_CONFIG_DIR` must be unset (a set value fails even when that file is reachable; 5a902c3
+    set it to the sandbox). Only `login_keychain` gets the file link. The directory stays in the
+    sandbox, so the rest of the real keychain directory is not reachable through HOME. Pi does not.
     """
     real_home = tmp_path / "real-home"
     real_agent = real_home / ".pi" / "agent"
@@ -101,8 +106,9 @@ def test_the_agent_never_sees_the_real_home_or_the_repo(tmp_path: Path) -> None:
     (real_agent / "auth.json").write_text('{"deepseek": {"type": "api_key", "key": "k"}}', encoding="utf-8")
     (real_agent / "mcp.json").write_text('{"mcpServers": {"user": {"command": "x"}}}', encoding="utf-8")
     (real_home / ".env").write_text("SOMETHING=x\n", encoding="utf-8")
-    real_keychains = real_home / "Library" / "Keychains"
-    real_keychains.mkdir(parents=True)
+    real_login = real_home / "Library" / "Keychains" / "login.keychain-db"
+    real_login.parent.mkdir(parents=True)
+    real_login.write_text("token-marker", encoding="utf-8")
     base = {
         "HOME": str(real_home),
         "USER": "tester",
@@ -116,63 +122,16 @@ def test_the_agent_never_sees_the_real_home_or_the_repo(tmp_path: Path) -> None:
         "import json, os\n"
         'home = os.environ["HOME"]\n'
         'keychains = os.path.join(home, "Library", "Keychains")\n'
-        'result = {"env": dict(os.environ),\n'
-        '          "agent_dir": sorted(os.listdir(os.environ["PI_CODING_AGENT_DIR"])),\n'
-        '          "home": sorted(os.listdir(home)),\n'
-        '          "keychains_is_link": os.path.islink(keychains),\n'
-        '          "keychains_target": os.path.realpath(keychains)}\n'
-        'init = json.dumps({"type": "system", "subtype": "init", "model": "stub", "mcp_servers": []})\n'
-        'line = json.dumps({"type": "result", "subtype": "success", "is_error": False,\n'
-        '                  "result": json.dumps(result)})\n'
-        "print(init, flush=True)\n"
-        "print(line)\n"
-    )
-    command = AgentCommand(argv=lambda _config: [sys.executable, "-c", probe], timeout_s=30, env={"STUB_SECRET": KEY})
-    run_dir = tmp_path / "records"
-    with run_agent(command, mcp_config={}, base_env=base, secret=KEY, run_dir=run_dir) as agent:
-        seen = json.loads(agent.trace.result_field("result"))
-    env = seen["env"]
-    # The allowlist crosses; the user's MCP config, env files, and everything else do not.
-    # The one exception is the login keychain: Claude Code keeps its login in the macOS keychain,
-    # so the sandbox home's Library/Keychains is a symlink to the real one. Nothing else crosses.
-    assert seen["agent_dir"] == ["auth.json"]
-    assert seen["home"] == ["Library"]
-    assert seen["keychains_is_link"] is True
-    assert seen["keychains_target"] == str(real_keychains.resolve())
-    assert env["PI_CODING_AGENT_DIR"] != str(real_agent)
-    for name, value in env.items():
-        assert str(real_home) not in value, f"{name} points at the real home"
-        assert str(REPO) not in value, f"{name} points at the repo checkout"
-    assert env["HOME"] != str(real_home)
-    assert env["TMPDIR"] != str(tmp_path / "outer-tmp")
-    # A sandboxed CLAUDE_CONFIG_DIR (commit 5a902c3) hides the keychain and every run dies at
-    # startup with "Not logged in". It must be absent, not pointed somewhere private.
-    assert "CLAUDE_CONFIG_DIR" not in env
-
-
-def test_claude_login_reaches_the_real_keychain_through_the_sandbox(tmp_path: Path) -> None:
-    """The 5a902c3 regression, offline: the agent process can open a keychain file through its own HOME.
-
-    Commit 5a902c3 set `CLAUDE_CONFIG_DIR` to the sandbox. With `HOME` sandboxed too, Claude Code
-    2.1.283 could not reach the macOS login keychain, so every live run died at startup with
-    "Not logged in" and the ledger booked each dead run. Both halves of that shape fail this test:
-    a sandboxed `CLAUDE_CONFIG_DIR` is present in the env, and a sandbox home without the keychain
-    link cannot open the marker file. What it proves is the mechanism the login needs, not the login
-    itself: the link is traversable from inside the agent process, and nothing redirects Claude Code's
-    config dir into the sandbox.
-    """
-    real_home = tmp_path / "real-home"
-    keychains = real_home / "Library" / "Keychains"
-    keychains.mkdir(parents=True)
-    (keychains / "login.keychain-db").write_text("token-marker", encoding="utf-8")
-    probe = (
-        "import json, os\n"
-        'home = os.environ["HOME"]\n'
-        'marker = os.path.join(home, "Library", "Keychains", "login.keychain-db")\n'
+        'link = os.path.join(keychains, "login.keychain-db")\n'
         "result = {\n"
-        '    "config_dir": os.environ.get("CLAUDE_CONFIG_DIR"),\n'
-        '    "marker": open(marker, encoding="utf-8").read(),\n'
-        '    "link": os.path.realpath(os.path.join(home, "Library", "Keychains")),\n'
+        '    "env": dict(os.environ),\n'
+        '    "agent_dir": sorted(os.listdir(os.environ["PI_CODING_AGENT_DIR"])),\n'
+        '    "home": sorted(os.listdir(home)),\n'
+        '    "keychains_is_dir": os.path.isdir(keychains) and not os.path.islink(keychains),\n'
+        '    "keychains_names": sorted(os.listdir(keychains)) if os.path.isdir(keychains) else [],\n'
+        '    "login_is_link": os.path.islink(link),\n'
+        '    "login_target": os.path.realpath(link) if os.path.islink(link) else None,\n'
+        '    "login_marker": open(link, encoding="utf-8").read() if os.path.islink(link) else None,\n'
         "}\n"
         'init = json.dumps({"type": "system", "subtype": "init", "model": "stub", "mcp_servers": []})\n'
         'line = json.dumps({"type": "result", "subtype": "success", "is_error": False,\n'
@@ -180,19 +139,38 @@ def test_claude_login_reaches_the_real_keychain_through_the_sandbox(tmp_path: Pa
         "print(init, flush=True)\n"
         "print(line)\n"
     )
-    command = AgentCommand(argv=lambda _config: [sys.executable, "-c", probe], timeout_s=30, env={"STUB_SECRET": KEY})
-    with run_agent(
-        command,
-        mcp_config={},
-        base_env={"HOME": str(real_home), "PATH": "/usr/bin:/bin"},
-        secret=KEY,
-        run_dir=tmp_path / "records",
-    ) as agent:
-        assert agent.status == "ok", agent.stderr
+    command = AgentCommand(
+        argv=lambda _config: [sys.executable, "-c", probe],
+        timeout_s=30,
+        env={"STUB_SECRET": KEY},
+        login_keychain=login_keychain,
+    )
+    run_dir = tmp_path / "records"
+    with run_agent(command, mcp_config={}, base_env=base, secret=KEY, run_dir=run_dir) as agent:
         seen = json.loads(agent.trace.result_field("result"))
-    assert seen["config_dir"] is None
-    assert seen["marker"] == "token-marker"
-    assert seen["link"] == str(keychains.resolve())
+    env = seen["env"]
+    # The allowlist crosses; the user's MCP config, env files, and everything else do not.
+    assert seen["agent_dir"] == ["auth.json"]
+    assert env["PI_CODING_AGENT_DIR"] != str(real_agent)
+    for name, value in env.items():
+        assert str(real_home) not in value, f"{name} points at the real home"
+        assert str(REPO) not in value, f"{name} points at the repo checkout"
+    assert env["HOME"] != str(real_home)
+    assert env["TMPDIR"] != str(tmp_path / "outer-tmp")
+    # A set CLAUDE_CONFIG_DIR fails the login even when the keychain file is reachable.
+    assert "CLAUDE_CONFIG_DIR" not in env
+    if login_keychain:
+        # The directory is the sandbox's. Only the login file links out, and it is readable.
+        assert seen["home"] == ["Library"]
+        assert seen["keychains_is_dir"] is True
+        assert seen["keychains_names"] == ["login.keychain-db"]
+        assert seen["login_is_link"] is True
+        assert seen["login_target"] == str(real_login.resolve())
+        assert seen["login_marker"] == "token-marker"
+    else:
+        assert seen["home"] == []
+        assert seen["login_is_link"] is False
+        assert seen["login_marker"] is None
 
 
 def test_config_is_private_argv_carries_its_path_and_the_run_succeeds(tmp_path: Path) -> None:

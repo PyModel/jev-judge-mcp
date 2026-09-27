@@ -9,7 +9,9 @@ recorded run, failed or not, is never retried, so an interrupted study resumes w
 study refuses to resume when the Jev revision, the fixture, or the agent's pinned setup has changed
 since its first run, so no pair spans two setups. Before the first paid run, one live preflight goes
 through `run_agent`'s own env; a preflight that never reaches the model refuses the batch and books
-nothing, so a dead login cannot spend the run cap. The TypeSafe key reaches only the Jev server's env,
+nothing, so a dead login cannot spend the run cap. A study with nothing left to launch skips it, and
+the preflight's cost is recorded in `preflight.json`, not the ledger. The TypeSafe key reaches only the
+Jev server's env,
 through the 0600 config file `evals.agent.run_agent` writes and deletes; every kept artifact is
 scrubbed of it. `evals.study_runner` owns the run, the result file, and the booking handler (ADR-0045).
 """
@@ -23,7 +25,6 @@ import random
 import shutil
 import subprocess
 import sys
-import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,7 +32,16 @@ from typing import Any
 
 from evals.ab import arms, ledger, outcomes, report, stream, tasks, unsafe
 from evals.ab.grade import expected_ids, grade
-from evals.agent import AgentCommand, AgentRunResult, run_agent
+from evals.agent import (
+    PREFLIGHT_TIMEOUT_S,
+    AgentCommand,
+    AgentPreflightError,
+    AgentRunResult,
+    AgentSetupError,
+    run_agent,
+    run_preflight,
+    write_preflight,
+)
 from evals.bench import pi
 from evals.spend import SpendLedger, agent_started, book_outcome
 from evals.study_runner import record_row, run_recorded, write_record
@@ -48,10 +58,6 @@ PINNED = ("jev_revision", "fixture_sha256", "agent", "agent_version", "held_cons
 
 class StudyRefusedError(RuntimeError):
     pass
-
-
-PREFLIGHT_TIMEOUT_S = 180.0
-"""One prompt to prove the agent can reach its model, before any paid run is booked."""
 
 
 @dataclass(frozen=True)
@@ -106,44 +112,42 @@ def run_id(task_id: str, arm: str, repeat: int) -> str:
     return f"{task_id}.{arm}.r{repeat}"
 
 
-def _preflight_detail(run: AgentRunResult) -> str:
-    """The run's status plus the agent's own first error line, so a refusal names the cause."""
-    line = next((stripped for raw in run.stderr.splitlines() if (stripped := raw.strip())), "")
-    return f"{run.status}; {line[:160]}" if line else run.status
-
-
-def preflight(setup: Setup) -> None:
+def preflight(setup: Setup, out: Path | None = None) -> AgentRunResult:
     """One prompt through `run_agent`'s own env, before the first paid run of a study.
 
-    On 2026-09-27 every Claude run died at startup with "Not logged in" and the ledger booked each
-    dead run until the cap refused the rest of the batch. A preflight that never reaches the model
-    refuses the batch first. It books nothing: its scratch dir is not the study's `out`, and it never
-    touches the ledger.
+    A preflight that never reaches the model refuses the batch and books nothing. When `out` is given,
+    the cost is written to `preflight.json` either way, so a report can add it and a rerun of a
+    finished study is not what records it. Only Claude gets the login-keychain link.
     """
-    scratch = Path(tempfile.mkdtemp(prefix="jev-ab-preflight-"))
     try:
-        command = AgentCommand(
-            argv=lambda config: [
+        result = run_preflight(
+            lambda config: [
                 *setup.binary,
                 *argv_tail(setup.agent, "Reply with the single word ok.", config, arms.SYSTEM_ADDENDUM),
             ],
-            timeout_s=PREFLIGHT_TIMEOUT_S,
-        )
-        with run_agent(
-            command,
-            mcp_config=arms.mcp_config("A", jev_log=scratch / "jev.jsonl", server_env={}),
             base_env=setup.base_env,
             secret=setup.secret,
-            run_dir=scratch,
+            mcp_config=arms.mcp_config("A", jev_log=Path("unused"), server_env={}),
+            login_keychain=setup.agent == "claude",
             parse=parser_for(setup.agent),
-        ) as run:
-            if not outcomes.reached_model(run.trace):
-                raise StudyRefusedError(
-                    f"{setup.agent} preflight could not reach its model ({_preflight_detail(run)}); "
-                    "refusing the batch before any run is booked"
-                )
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+            timeout_s=PREFLIGHT_TIMEOUT_S,
+        )
+    except AgentPreflightError as error:
+        if out is not None:
+            write_preflight(out, cost_usd=error.cost_usd, model=error.model)
+        raise StudyRefusedError(
+            f"{setup.agent} preflight could not reach its model ({error}); refusing the batch before any run is booked"
+        ) from error
+    if out is not None:
+        write_preflight(out, cost_usd=_usd(result), model=result.trace.model)
+    return result
+
+
+def _usd(result: AgentRunResult) -> float | None:
+    cost = result.trace.result_field("total_cost_usd")
+    if isinstance(cost, bool) or not isinstance(cost, int | float):
+        return None
+    return float(cost)
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -159,6 +163,7 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
     command = AgentCommand(
         argv=lambda config: [*setup.binary, *argv_tail(setup.agent, prompt, config, addendum)],
         timeout_s=setup.timeout_s,
+        login_keychain=setup.agent == "claude",
     )
     with run_agent(
         command,
@@ -373,16 +378,29 @@ def schedule(
     return plan
 
 
-def study(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int = SEED) -> str:
-    """Run every pair not yet recorded, within the caps; returns why it stopped."""
+def _load_book(
+    setup: Setup, out: Path, *, repeats: int, seed: int
+) -> tuple[SpendLedger, list[tuple[tasks.Task, int, tuple[str, ...]]]]:
+    """The ledger after already-started runs are booked, and the plan those runs came from."""
     book = SpendLedger.load(out / "ledger.json", ledger.POLICIES[setup.agent])
     plan = schedule(setup.task_list, repeats, seed)
     for task, repeat, order in plan:
         for arm in order:
             rid = run_id(task.id, arm, repeat)
-            run_dir = out / rid
-            if agent_started(run_dir):
-                book_outcome(book, rid, run_dir / "result.json")
+            if agent_started(out / rid):
+                book_outcome(book, rid, out / rid / "result.json")
+    return book, plan
+
+
+def runs_remain(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int = SEED) -> bool:
+    """True when a study call would launch at least one run. A finished study does not."""
+    book, plan = _load_book(setup, out, repeats=repeats, seed=seed)
+    return any(run_id(task.id, arm, repeat) not in book.runs for task, repeat, order in plan for arm in order)
+
+
+def study(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int = SEED) -> str:
+    """Run every pair not yet recorded, within the caps; returns why it stopped."""
+    book, plan = _load_book(setup, out, repeats=repeats, seed=seed)
     for task, repeat, order in plan:
         pending = [arm for arm in order if run_id(task.id, arm, repeat) not in book.runs]
         if not pending:
@@ -502,7 +520,6 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
         expected_ids(task, python3)
     version = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False).stdout.strip()
     agent_out = out / agent
-    pin_meta(agent_out, meta_for(agent, version, arms.RUN_TIMEOUT_S))
     setup = Setup(
         agent=agent,
         binary=[binary],
@@ -511,7 +528,12 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
         secret=key,
         python3=python3,
     )
-    preflight(setup)
+    # Preflight before pin_meta: a dead login must not pin a setup that has no runs, or the next
+    # resume is refused for an agent_version that never recorded anything. A finished study has
+    # nothing left to launch, so it does not pay for another preflight.
+    if runs_remain(setup, agent_out, repeats=repeats):
+        preflight(setup, agent_out)
+    pin_meta(agent_out, meta_for(agent, version, arms.RUN_TIMEOUT_S))
     return study(setup, agent_out, repeats=repeats)
 
 
@@ -532,7 +554,7 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
             stop = live(environ, OUT, agent=args.agent, repeats=args.repeats)
             sys.stderr.write(f"{stop}\n")
         write_report(OUT)
-    except StudyRefusedError as refusal:
+    except (StudyRefusedError, AgentSetupError) as refusal:
         sys.stderr.write(f"refused: {refusal}\n")
         return 2
     sys.stderr.write(f"report: {REPORT}\n")

@@ -26,6 +26,7 @@ from evals.scorers.tools import SCORERS, Example
 from evals.spend import SpendLedger
 from jev_judge_mcp.tools import TOOLS
 from jev_judge_mcp.tools.arguments import parse_arguments
+from tests.support.agent_stubs import dead_login, reaches_model
 
 REPO = Path(__file__).resolve().parents[2]
 DATA = Path(__file__).resolve().parent / "data"
@@ -636,74 +637,118 @@ def test_live_run_refuses_without_flag_key_or_frozen_labels(tmp_path: Path) -> N
     assert not list(tmp_path.iterdir()), "a refused run writes nothing"
 
 
-def _claude_on_path(bindir: Path, body: str) -> None:
-    bindir.mkdir()
-    stub = bindir / "claude"
-    stub.write_text(f"#!{sys.executable}\n{body}", encoding="utf-8")
+def _agent_bin(bindir: Path, name: str, body: str) -> None:
+    bindir.mkdir(exist_ok=True)
+    stub = bindir / name
+    stub.write_text(f"#!{sys.executable}\n{body}\n", encoding="utf-8")
     stub.chmod(0o755)
 
 
-_DEAD_LOGIN = "\n".join(
-    [
-        "import sys",
-        'sys.stderr.write("Not logged in · Please run /login\\n")',
-        "raise SystemExit(1)",
-    ]
-)
-_REACHES_MODEL = (
-    "import json\n"
-    'print(json.dumps({"type": "system", "subtype": "init", "model": "stub-model", "mcp_servers": []}))\n'
-    'print(json.dumps({"type": "assistant", "message": {"id": "m",\n'
-    '    "usage": {"input_tokens": 5, "output_tokens": 3},\n'
-    '    "content": [{"type": "text", "text": "ok"}]}}))\n'
-    'print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "ok"}))\n'
-)
+def _bench_env(bindir: Path, home: Path) -> dict[str, str]:
+    return {
+        "JEV_BENCH_LIVE": "1",
+        "TYPESAFE_API_KEY": BENCH_FAKE_API_KEY,
+        "PATH": str(bindir),
+        "HOME": str(home),
+    }
 
 
-def test_a_dead_claude_preflight_stops_the_bench_before_any_run_is_booked(tmp_path: Path) -> None:
-    """A Claude that dies at startup stops the bench before the ledger exists, so it spends no cap.
+def _refuse_publish(*_args: object, **_kwargs: object) -> None:
+    raise AssertionError("a refused preflight must not publish")
 
-    The 2026-09-27 batch booked every dead "Not logged in" run until the cap refused the rest.
-    Empty items make a skipped preflight return "all 0 triplets recorded" instead, so this fails
-    both if the preflight is removed and if it runs after the runs are booked.
+
+_FROZEN = load_items(DRYRUN)[0]
+
+
+@pytest.mark.parametrize("agent", ["claude", "pi"])
+def test_a_dead_preflight_exits_2_and_books_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], agent: str
+) -> None:
+    """A dead login refuses before any run is booked and publishes nothing.
+
+    The item is frozen, so a preflight placed after `run_bench` books the dead run and the ledger
+    appears. Empty items cannot show that: nothing can be booked either way. Exit 2 is `main`'s
+    refusal; a stop string that still publishes fails the publish stand-in.
     """
-    _claude_on_path(tmp_path / "bin", _DEAD_LOGIN)
+    _agent_bin(tmp_path / "bin", agent, dead_login())
+    adapter = tmp_path / "adapter.ts"
+    adapter.write_text("export {}", encoding="utf-8")
+    monkeypatch.setattr(pi, "ADAPTER", adapter)
+    monkeypatch.setattr(run, "load_items", lambda: [_FROZEN])
+    monkeypatch.setattr(run, "OUT", tmp_path / "out")
+    monkeypatch.setattr(run, "publish", _refuse_publish)
+    monkeypatch.setattr(run, "write_report", _refuse_publish)
+    assert run.main(["--agent", agent], environ=_bench_env(tmp_path / "bin", tmp_path)) == 2
+    assert "Not logged in" in capsys.readouterr().err
     out = tmp_path / "out"
-    stop = run.live(
-        {
-            "JEV_BENCH_LIVE": "1",
-            "TYPESAFE_API_KEY": BENCH_FAKE_API_KEY,
-            "PATH": str(tmp_path / "bin"),
-            "HOME": str(tmp_path),
-        },
-        out,
-        items=(),
-    )
-    assert stop.startswith("stopped: Claude preflight failed")
-    assert "Not logged in" in stop
-    assert (out / "preflight.txt").read_text(encoding="utf-8") == "failed\n"
-    assert not (out / "model.txt").exists()
     assert not (out / "ledger.json").exists()
     assert list(out.glob("*/result.json")) == []
 
 
-def test_a_claude_preflight_that_reaches_the_model_lets_the_bench_proceed(tmp_path: Path) -> None:
-    """The gate is not unconditional: a billed turn is recorded and the bench continues."""
-    _claude_on_path(tmp_path / "bin", _REACHES_MODEL)
+@pytest.mark.parametrize("agent", ["claude", "pi"])
+def test_a_preflight_that_reaches_the_model_lets_the_bench_proceed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str
+) -> None:
+    """The gate is not unconditional. The recorded model is the one the trace named, never a silent default."""
+    _agent_bin(tmp_path / "bin", agent, reaches_model(agent))
+    adapter = tmp_path / "adapter.ts"
+    adapter.write_text("export {}", encoding="utf-8")
+    monkeypatch.setattr(pi, "ADAPTER", adapter)
     out = tmp_path / "out"
     stop = run.live(
-        {
-            "JEV_BENCH_LIVE": "1",
-            "TYPESAFE_API_KEY": BENCH_FAKE_API_KEY,
-            "PATH": str(tmp_path / "bin"),
-            "HOME": str(tmp_path),
-        },
+        _bench_env(tmp_path / "bin", tmp_path),
         out,
-        items=(),
+        items=(_FROZEN,),
+        agent=agent,
     )
-    assert stop == "all 0 triplets recorded"
-    assert (out / "model.txt").read_text(encoding="utf-8") == "stub-model\n"
-    assert not (out / "preflight.txt").exists()
+    assert stop == "all 1 triplets recorded"
+    recorded = (out / "model.txt").read_text(encoding="utf-8").strip()
+    assert recorded == ("stub/stub-model" if agent == "pi" else "stub-model")
+    cost = json.loads((out / "preflight.json").read_text(encoding="utf-8"))["total_cost_usd"]
+    assert cost == 0.01
+
+
+def test_a_finished_bench_does_not_preflight_again(tmp_path: Path) -> None:
+    """Nothing left to launch means no second preflight."""
+    log = tmp_path / "launches"
+    body = "\n".join(
+        [
+            "import sys",
+            f"open({str(log)!r}, 'a').write('ran\\n')",
+            "raise SystemExit(1)",
+        ]
+    )
+    _agent_bin(tmp_path / "bin", "claude", body)
+    out = tmp_path / "out"
+    out.mkdir()
+    runs = {f"{_FROZEN.id}.{arm}": 0.0 for arm in "ABC"}
+    (out / "ledger.json").write_text(json.dumps({"runs": runs}) + "\n", encoding="utf-8")
+    stop = run.live(_bench_env(tmp_path / "bin", tmp_path), out, items=(_FROZEN,))
+    assert stop == "all 1 triplets recorded"
+    assert not log.exists()
+
+
+@pytest.mark.parametrize("agent", ["claude", "pi"])
+def test_an_unlinkable_keychain_refuses_with_exit_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], agent: str
+) -> None:
+    """An OSError while preparing the sandbox is a refusal, not a traceback, and publishes nothing."""
+
+    def unlinkable(*_args: object, **_kwargs: object) -> dict[str, str]:
+        raise OSError("unlinkable keychain")
+
+    _agent_bin(tmp_path / "bin", agent, dead_login())
+    adapter = tmp_path / "adapter.ts"
+    adapter.write_text("export {}", encoding="utf-8")
+    monkeypatch.setattr(pi, "ADAPTER", adapter)
+    monkeypatch.setattr(run, "load_items", lambda: [_FROZEN])
+    monkeypatch.setattr(run, "OUT", tmp_path / "out")
+    monkeypatch.setattr(run, "publish", _refuse_publish)
+    monkeypatch.setattr(run, "write_report", _refuse_publish)
+    monkeypatch.setattr("evals.agent._isolated_env", unlinkable)
+    assert run.main(["--agent", agent], environ=_bench_env(tmp_path / "bin", tmp_path)) == 2
+    assert "sandbox setup failed" in capsys.readouterr().err
+    assert not (tmp_path / "out" / "ledger.json").exists()
 
 
 def test_setup_needs_a_secret_to_scrub() -> None:

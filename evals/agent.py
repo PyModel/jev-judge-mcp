@@ -13,13 +13,15 @@ still exists. On leaving the block, however it is left, both temp dirs are gone 
 The agent's environment is `base_env` updated with `command.env`, then isolated: `HOME`,
 `PI_CODING_AGENT_DIR`, and `TMPDIR` are replaced with private directories inside the run's sandbox,
 and only `PRIVATE_AGENT_FILES` is copied into the private agent dir, so no user MCP config, adapter
-cache, settings, or instructions reach the agent (`_isolated_env`). `CLAUDE_CONFIG_DIR` is left unset
-on purpose: a sandboxed one hides the macOS login keychain from Claude Code, which then dies at
-startup with "Not logged in" and never reaches its model. Instead the sandbox home's
-`Library/Keychains` is a symlink to the real home's, so the login resolves while every other Claude
-project state still lands in the sandbox and dies with it. That link is the same kind of exposure as
-the copied `auth.json`: the agent under test can read the login keychain through it. Nothing is read
-from this process's environment below that boundary.
+cache, settings, or instructions reach the agent (`_isolated_env`). Claude Code's login has two
+independent requirements, and either one missing makes every run die at startup with "Not logged in".
+Sandboxing `HOME` (bff5450, 2026-09-23) empties the macOS default keychain search list, so a Claude
+run (`login_keychain`) gets a symlink to `login.keychain-db` only; the directory stays in the sandbox.
+A set `CLAUDE_CONFIG_DIR` fails the login even when that file is reachable (5a902c3 set it to the
+sandbox), so it stays unset and Claude's project state lands in the sandbox. Pi never gets the link:
+it logs in through the copied `auth.json`. The link is the same kind of exposure as that copy: a
+Claude run can read the login keychain file through it. Nothing is read from this process's
+environment below that boundary.
 """
 
 import json
@@ -64,6 +66,8 @@ class AgentCommand:
     timeout_s: float
     env: Mapping[str, str] = field(default_factory=dict[str, str])
     """Applied over the run's `base_env`."""
+    login_keychain: bool = False
+    """Claude runs only. Links `login.keychain-db` into the sandbox home. Off for Pi and every other agent."""
 
 
 @dataclass(frozen=True)
@@ -102,6 +106,22 @@ def _status(returncode: int | None, trace: stream.Trace, timeout_s: float) -> st
     if returncode != 0 or trace.result_field("subtype") != "success" or trace.result_field("is_error"):
         return f"failed: rc={returncode} subtype={trace.result_field('subtype')}"
     return "ok"
+
+
+class AgentSetupError(RuntimeError):
+    """The sandbox could not be prepared. Not a run: nothing is booked."""
+
+
+class AgentPreflightError(RuntimeError):
+    """The preflight never reached the model. The message is the agent's own error, capped, with no secret."""
+
+    cost_usd: float | None
+    model: str | None
+
+    def __init__(self, detail: str, *, cost_usd: float | None, model: str | None) -> None:
+        super().__init__(detail)
+        self.cost_usd = cost_usd
+        self.model = model
 
 
 class _StdoutCapExceeded(OSError):
@@ -291,7 +311,7 @@ def _capture(
     return stdout, stderr, proc.returncode
 
 
-def _isolated_env(base_env: Mapping[str, str], sandbox: Path) -> dict[str, str]:
+def _isolated_env(base_env: Mapping[str, str], sandbox: Path, login_keychain: bool) -> dict[str, str]:
     """A private HOME, pi agent dir, and TMPDIR inside `sandbox`, with the model client's allowlist.
 
     A recorded smoke run had a bench agent wander out of its sandbox: it read `~/.pi/agent/mcp.json`
@@ -302,12 +322,14 @@ def _isolated_env(base_env: Mapping[str, str], sandbox: Path) -> dict[str, str]:
     `base_env`, else `<HOME>/.pi/agent` — resolved before the override is applied. The sandbox is
     deleted with the run; the copies never outlive it.
 
-    `CLAUDE_CONFIG_DIR` stays unset. Claude Code 2.1.283 keeps its login in the macOS login keychain,
-    and a sandboxed config dir plus a sandboxed `HOME` hides that keychain, so every run dies at
-    startup with "Not logged in" before any model call. The sandbox home's `Library/Keychains` is
-    therefore a symlink to the real home's, resolved from `base_env["HOME"]` before the override.
-    The link is an exposure: the agent under test can read the login keychain through it, exactly as
-    it can read the copied `auth.json`. No credential is copied, read, or passed.
+    Claude Code's login needs both of the following, and either one missing reports "Not logged in".
+    Sandboxing `HOME` has done the first since bff5450 (2026-09-23): it empties the macOS default
+    keychain search list. A set `CLAUDE_CONFIG_DIR` does the second even when the keychain file is
+    reachable, which is what 5a902c3 added. So `CLAUDE_CONFIG_DIR` stays unset, and only a Claude run
+    (`login_keychain`) gets `<home>/Library/Keychains/login.keychain-db` linked to the real file. The
+    directory is the sandbox's, so the rest of the real keychain directory is not reachable through
+    `HOME`. No credential is copied, read, or passed. The link is still an exposure: that Claude run
+    can read the login keychain file through it, the same way a Pi run can read the copied `auth.json`.
     """
     home, agent_dir, tmp = (sandbox / name for name in ("home", "agent", "tmp"))
     for directory in (home, agent_dir, tmp):
@@ -321,12 +343,14 @@ def _isolated_env(base_env: Mapping[str, str], sandbox: Path) -> dict[str, str]:
                 target = agent_dir / name
                 target.write_bytes(source.read_bytes())
                 os.chmod(target, 0o600)
-    # Resolved from the real HOME before the override below replaces it.
-    if real_home:
-        keychains = home / "Library" / "Keychains"
-        keychains.parent.mkdir(mode=0o700, exist_ok=True)
-        if not keychains.is_symlink():
-            keychains.symlink_to(Path(real_home) / "Library" / "Keychains", target_is_directory=True)
+    # Resolved from the real HOME before the override below replaces it. The directory stays ours;
+    # only the login file is a link, so a refresh writes through to the real file and the link remains.
+    if login_keychain and real_home:
+        library = home / "Library"
+        library.mkdir(mode=0o700)
+        keychains = library / "Keychains"
+        keychains.mkdir(mode=0o700)
+        (keychains / "login.keychain-db").symlink_to(Path(real_home) / "Library" / "Keychains" / "login.keychain-db")
     return {
         "HOME": str(home),
         "PI_CODING_AGENT_DIR": str(agent_dir),
@@ -363,7 +387,10 @@ def run_agent(
         with os.fdopen(fd, "w") as sink:
             json.dump(mcp_config, sink)
         argv = tuple(command.argv(config))
-        isolated = _isolated_env(base_env, secret_dir)
+        try:
+            isolated = _isolated_env(base_env, secret_dir, command.login_keychain)
+        except OSError as error:
+            raise AgentSetupError(f"agent sandbox setup failed: {error}") from error
         started = time.perf_counter()
         try:
             stdout, stderr, returncode = _capture(
@@ -402,3 +429,72 @@ def run_agent(
         shutil.rmtree(secret_dir, ignore_errors=True)
         shutil.rmtree(workdir, ignore_errors=True)
         secret_scrub(run_dir, secret)
+
+
+def _usd(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def preflight_detail(run: AgentRunResult) -> str:
+    """The run's status, or the provider error the Pi parser records. Claude's stream never sets that field."""
+    failure = run.trace.result_field("server_error")
+    if isinstance(failure, str) and failure.strip():
+        return failure.splitlines()[0][:160]
+    line = next((stripped for raw in run.stderr.splitlines() if (stripped := raw.strip())), "")
+    return f"{run.status}; {line[:160]}" if line else run.status
+
+
+PREFLIGHT_TIMEOUT_S = 180.0
+"""One prompt to prove the agent can reach its model, before any paid run is booked."""
+
+
+def write_preflight(out: Path, *, cost_usd: float | None, model: str | None) -> None:
+    """Record this preflight's cost where a report can add it. Not a ledger booking, and not a run."""
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "preflight.json").write_text(
+        json.dumps({"total_cost_usd": cost_usd, "model": model}) + "\n",
+        encoding="utf-8",
+    )
+
+
+def run_preflight(
+    argv: Callable[[Path], Sequence[str]],
+    *,
+    base_env: Mapping[str, str],
+    secret: str,
+    mcp_config: Mapping[str, Any],
+    login_keychain: bool,
+    parse: Callable[[Iterable[str]], stream.Trace] | None = None,
+    timeout_s: float = PREFLIGHT_TIMEOUT_S,
+) -> AgentRunResult:
+    """One prompt through `run_agent`'s own env. Raises `AgentPreflightError` when the model was not reached.
+
+    The scratch dir is not the study's `out`, and this writes no ledger. `login_keychain` is true only
+    for Claude; a Pi or third-party-model preflight passes false and gets no keychain path. The yielded
+    workdir is gone by the time this returns: callers use the trace.
+    """
+    from evals.ab.outcomes import reached_model
+
+    scratch = Path(tempfile.mkdtemp(prefix="jev-agent-preflight-"))
+    try:
+        command = AgentCommand(argv=argv, timeout_s=timeout_s, login_keychain=login_keychain)
+        with run_agent(
+            command,
+            mcp_config=mcp_config,
+            base_env=base_env,
+            secret=secret,
+            run_dir=scratch,
+            parse=parse,
+        ) as run:
+            cost = _usd(run.trace.result_field("total_cost_usd"))
+            model = run.trace.model
+            reached = reached_model(run.trace)
+            detail = preflight_detail(run)
+            result = run
+        if not reached:
+            raise AgentPreflightError(detail, cost_usd=cost, model=model)
+        return result
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)

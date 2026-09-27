@@ -7,10 +7,13 @@ that never calls Jev is recorded as "did not call Jev", not a failure (ADR-0036)
 server plus the one-sentence instruction, and a run with no Jev answer fails the use gate.
 
 The bench model is Pi `opencode-go/deepseek-v4.1-flash` at thinking high. One Pi prompt preflights
-that model, and one Claude prompt preflights the Claude agent the same way. A preflight that never
-reaches the model stops the bench before any run is booked, so a dead login cannot spend the run cap.
-The first provider connection, auth, or rate-limit error stops the run. That attempt is
-booked so it is never retried, and it is not an arm result. Only complete triplets are analyzed.
+that model, and one Claude prompt preflights the Claude agent the same way, through the same
+`run_preflight`. A preflight that never reaches the model refuses the bench (exit 2) before any run
+is booked and before any report is published, so a dead login cannot spend the run cap or rewrite
+`bench150`. A bench with nothing left to launch skips the preflight. Its cost is recorded in
+`preflight.json`, not the ledger. The first provider connection, auth, or rate-limit error stops the
+run. That attempt is booked so it is never retried, and it is not an arm result. Only complete triplets
+are analyzed.
 After the first 10 triplets the forced-arm compliance stop and the Jev-spend projection apply. The
 25 USD ceiling applies to Jev spend. Agent model spend is recorded separately from Pi's usage cost
 fields, and marked not measured when those fields are absent.
@@ -32,14 +35,21 @@ import random
 import re
 import shutil
 import sys
-import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from evals.ab import arms, outcomes, stream
-from evals.agent import AgentCommand, AgentRunResult, run_agent
+from evals.ab import arms, stream
+from evals.agent import (
+    AgentCommand,
+    AgentPreflightError,
+    AgentRunResult,
+    AgentSetupError,
+    run_agent,
+    run_preflight,
+    write_preflight,
+)
 from evals.bench import analysis, answer, chart, gate, prompt, spans
 from evals.bench.items import Item, load_items
 from evals.bench.ledger import ARMS, POLICY, TRIPLET
@@ -68,7 +78,6 @@ class AuthRejected(RuntimeError):
 
 
 _AUTH_ERROR = re.compile(r"\b401\b|unauthorized|invalid api key", re.IGNORECASE)
-PREFLIGHT_TIMEOUT_S = 180.0
 
 
 @dataclass(frozen=True)
@@ -90,6 +99,8 @@ class Setup:
     """Stream parser. None uses the Claude stream-json parser."""
     cross_check: Callable[[Sequence[Mapping[str, Any]], stream.Trace], None] | None = None
     """Proxy-vs-stream check for a B or C run. None uses the Claude check."""
+    login_keychain: bool = False
+    """Claude runs only. Pi and the third-party bench model get no keychain path."""
 
     def __post_init__(self) -> None:
         if not self.secret:
@@ -157,6 +168,7 @@ def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) ->
             ),
         ],
         timeout_s=setup.timeout_s,
+        login_keychain=setup.login_keychain,
     )
     with run_agent(
         command,
@@ -416,19 +428,35 @@ def _stop_reason(run_id: str, error: BaseException) -> str | None:
     return None
 
 
+def _load_book(
+    items: Sequence[Item], out: Path, seed: int
+) -> tuple[SpendLedger, list[tuple[Item, tuple[str, str, str]]]]:
+    """The ledger after already-started runs are booked, and the plan those runs came from."""
+    book = SpendLedger.load(out / "ledger.json", POLICY)
+    plan = schedule(items, seed)
+    for item, order in plan:
+        for arm in order:
+            run_id = f"{item.id}.{arm}"
+            if agent_started(out / run_id):
+                book_outcome(book, run_id, out / run_id / "result.json")
+    return book, plan
+
+
+def runs_remain(items: Sequence[Item], out: Path, *, seed: int = SEED) -> bool:
+    """True when a bench call would launch at least one run. A finished bench, or one already stopped, does not."""
+    if _prior_stop(out):
+        return False
+    book, plan = _load_book(items, out, seed)
+    done = set(analysis.complete_triplets(load_records(out)))
+    return any(item.id not in done and f"{item.id}.{arm}" not in book.runs for item, order in plan for arm in order)
+
+
 def run_bench(items: Sequence[Item], setup: Setup, out: Path, *, seed: int = SEED) -> str:
     """Run every triplet not yet recorded, within the caps; returns why it stopped."""
     if prior := _prior_stop(out):
         return prior
-    book = SpendLedger.load(out / "ledger.json", POLICY)
-    plan = schedule(items, seed)
+    book, plan = _load_book(items, out, seed)
     total_runs = TRIPLET * len(plan)
-    for item, order in plan:
-        for arm in order:
-            run_id = f"{item.id}.{arm}"
-            run_dir = out / run_id
-            if agent_started(run_dir):
-                book_outcome(book, run_id, run_dir / "result.json")
     for item, order in plan:
         records = load_records(out)
         triplets = analysis.complete_triplets(records)
@@ -472,7 +500,7 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
     args = parser.parse_args(argv)
     try:
         stop = live(environ, OUT, seed=args.seed, agent=args.agent, allow_draft=args.allow_draft)
-    except BenchRefusedError as refusal:
+    except (BenchRefusedError, AgentSetupError) as refusal:
         sys.stderr.write(f"refused: {refusal}\n")
         return 2
     items = load_items()
@@ -492,75 +520,14 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
     return 0
 
 
-def _preflight_detail(run: AgentRunResult) -> str:
-    """The run's status plus the agent's own first error line, so a stop names the cause."""
-    line = next((stripped for raw in run.stderr.splitlines() if (stripped := raw.strip())), "")
-    return f"{run.status}; {line[:160]}" if line else run.status
+def _preflight_argv(agent: str, binary: str) -> Callable[[Path], Sequence[str]]:
+    if agent == "pi":
+        from evals.bench import pi as pi_mod
 
-
-def claude_preflight(binary: str, base_env: Mapping[str, str], secret: str) -> str:
-    """One prompt through `run_agent`'s own env. Returns the model Claude reported.
-
-    A run that never reaches the model raises ServerUnreachable. The 2026-09-27 batch booked a full
-    cap of Claude runs that died at startup with "Not logged in"; the preflight stops the bench
-    first, and it books nothing.
-    """
-    scratch = Path(tempfile.mkdtemp(prefix="jev-bench-preflight-"))
-    try:
-        command = AgentCommand(
-            argv=lambda config: arms.claude_command(binary, "Reply with the single word ok.", config),
-            timeout_s=PREFLIGHT_TIMEOUT_S,
+        return lambda config: pi_mod.pi_command(
+            binary, "Reply with the single word ok.", config, prompt.BENCH_ADDENDUM, model=pi_mod.BENCH_MODEL
         )
-        with run_agent(
-            command,
-            mcp_config=arms.mcp_config("A", jev_log=scratch / "jev.jsonl", server_env={}),
-            base_env=base_env,
-            secret=secret,
-            run_dir=scratch,
-        ) as run:
-            failure = run.trace.result_field("server_error")
-            if isinstance(failure, str):
-                raise ServerUnreachable(failure.splitlines()[0][:160])
-            if not outcomes.reached_model(run.trace):
-                raise ServerUnreachable(_preflight_detail(run))
-            return run.trace.model or arms.AGENT_MODEL
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
-
-
-def pi_preflight(binary: str, base_env: Mapping[str, str], secret: str) -> str:
-    """One prompt on the bench model. Returns the model id Pi reported.
-
-    A connection, auth, or rate-limit error raises ServerUnreachable. The detail is one short line
-    and does not include the key.
-    """
-    from evals.bench import pi as pi_mod
-
-    scratch = Path(tempfile.mkdtemp(prefix="jev-bench-preflight-"))
-    try:
-        text = "Reply with the single word ok."
-        command = AgentCommand(
-            argv=lambda config: pi_mod.pi_command(
-                binary, text, config, prompt.BENCH_ADDENDUM, model=pi_mod.BENCH_MODEL
-            ),
-            timeout_s=PREFLIGHT_TIMEOUT_S,
-        )
-        with run_agent(
-            command,
-            mcp_config=arms.mcp_config("A", jev_log=scratch / "jev.jsonl", server_env={}),
-            base_env=base_env,
-            secret=secret,
-            run_dir=scratch,
-            parse=pi_mod.parse,
-        ) as run:
-            failure = run.trace.result_field("server_error")
-            if isinstance(failure, str):
-                raise ServerUnreachable(failure.splitlines()[0][:160])
-            if run.status != "ok":
-                raise ServerUnreachable("preflight produced no answer")
-            return run.trace.model or pi_mod.BENCH_MODEL
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+    return lambda config: arms.claude_command(binary, "Reply with the single word ok.", config)
 
 
 def live(
@@ -581,26 +548,21 @@ def live(
     unfrozen = [item.id for item in items if item.status != "frozen"]
     if unfrozen and not allow_draft:
         raise BenchRefusedError(f"{len(unfrozen)} of {len(items)} items are not frozen (first: {unfrozen[0]})")
+    if agent not in ("claude", "pi"):
+        raise BenchRefusedError(f"unknown agent {agent!r}; one of claude, pi")
     base_env = arms.agent_env(environ)
     agent_path = base_env["PATH"]
     server_env = {**arms.jev_env(api_key=key, path=agent_path), "JEV_MCP_LOG_LEVEL": "DEBUG"}
+    binary = shutil.which(agent, path=agent_path)
+    if binary is None:
+        raise BenchRefusedError(f"{agent} not found on PATH")
+    parse = None
     if agent == "pi":
         from evals.bench import pi
 
-        binary = shutil.which("pi", path=agent_path)
-        if binary is None:
-            raise BenchRefusedError("pi not found on PATH")
         if not pi.ADAPTER.is_file():
             raise BenchRefusedError(f"pi MCP adapter not found at {pi.ADAPTER}")
-        try:
-            seen = pi_preflight(binary, base_env, key)
-        except ServerUnreachable as error:
-            out.mkdir(parents=True, exist_ok=True)
-            (out / "preflight.txt").write_text("failed\n", encoding="utf-8")
-            return f"stopped: Pi preflight failed ({error}); not an arm result"
-        out.mkdir(parents=True, exist_ok=True)
-        (out / "model.txt").write_text(seen + "\n", encoding="utf-8")
-        (out / "thinking.txt").write_text(pi.PI_THINKING + "\n", encoding="utf-8")
+        parse = pi.parse
         setup = Setup(
             agent=lambda _item, _arm: [binary],
             server=arms.jev_command(),
@@ -612,24 +574,44 @@ def live(
             cross_check=pi.cross_check,
         )
     else:
-        claude = shutil.which("claude", path=agent_path)
-        if claude is None:
-            raise BenchRefusedError("claude not found on PATH")
-        try:
-            seen = claude_preflight(claude, base_env, key)
-        except ServerUnreachable as error:
-            out.mkdir(parents=True, exist_ok=True)
-            (out / "preflight.txt").write_text("failed\n", encoding="utf-8")
-            return f"stopped: Claude preflight failed ({error}); not an arm result"
-        out.mkdir(parents=True, exist_ok=True)
-        (out / "model.txt").write_text(seen + "\n", encoding="utf-8")
         setup = Setup(
-            agent=lambda _item, _arm: [claude],
+            agent=lambda _item, _arm: [binary],
             server=arms.jev_command(),
             server_env=server_env,
             base_env=base_env,
             secret=key,
+            login_keychain=True,
         )
+    # A finished bench, or one already stopped, has nothing to launch and does not pay for another
+    # preflight. A dead one refuses before run_bench, so main exits 2 and publishes nothing.
+    if runs_remain(items, out, seed=seed):
+        try:
+            result = run_preflight(
+                _preflight_argv(agent, binary),
+                base_env=base_env,
+                secret=key,
+                mcp_config=arms.mcp_config("A", jev_log=Path("unused"), server_env={}),
+                login_keychain=setup.login_keychain,
+                parse=parse,
+            )
+        except AgentPreflightError as error:
+            write_preflight(out, cost_usd=error.cost_usd, model=error.model)
+            raise BenchRefusedError(
+                f"{agent} preflight could not reach its model ({error}); refusing the batch before any run is booked"
+            ) from error
+        model = result.trace.model or "unknown"
+        cost = result.trace.result_field("total_cost_usd")
+        write_preflight(
+            out,
+            cost_usd=None if isinstance(cost, bool) or not isinstance(cost, int | float) else float(cost),
+            model=result.trace.model,
+        )
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "model.txt").write_text(model + "\n", encoding="utf-8")
+        if agent == "pi":
+            from evals.bench import pi
+
+            (out / "thinking.txt").write_text(pi.PI_THINKING + "\n", encoding="utf-8")
     return run_bench(items, setup, out, seed=seed)
 
 

@@ -25,6 +25,7 @@ from tests.evals.booking_cases import (
     seeded_nan_books_the_bound,
     seeded_result_books_the_file_cost,
 )
+from tests.support.agent_stubs import dead_login, reaches_model
 
 PYTHON = sys.executable
 REPO = Path(__file__).resolve().parents[2]
@@ -440,41 +441,6 @@ def test_the_study_refuses_without_its_flag_or_key(tmp_path: Path) -> None:
     assert ab_run.main([], environ={}) == 2
 
 
-def _dead_login() -> str:
-    return "\n".join(
-        [
-            "import sys",
-            'sys.stderr.write("Not logged in · Please run /login\\n")',
-            "raise SystemExit(1)",
-        ]
-    )
-
-
-def _reaches_model(agent: str) -> str:
-    """A stub transcript with one billed assistant turn. Claude and Pi do not share a stream shape."""
-    if agent == "pi":
-        return (
-            "import json\n"
-            "events = [\n"
-            '    {"type": "message_end", "message": {"role": "assistant", "provider": "stub",\n'
-            '        "model": "stub-model", "usage": {"input": 5, "output": 3, "cacheRead": 0,\n'
-            '        "cacheWrite": 0, "totalTokens": 8},\n'
-            '        "content": [{"type": "text", "text": "ok"}], "stopReason": "stop"}},\n'
-            '    {"type": "agent_end", "willRetry": False},\n'
-            "]\n"
-            "for event in events:\n"
-            "    print(json.dumps(event))\n"
-        )
-    return (
-        "import json\n"
-        'print(json.dumps({"type": "system", "subtype": "init", "model": "stub-model", "mcp_servers": []}))\n'
-        'print(json.dumps({"type": "assistant", "message": {"id": "m",\n'
-        '    "usage": {"input_tokens": 5, "output_tokens": 3},\n'
-        '    "content": [{"type": "text", "text": "ok"}]}}))\n'
-        'print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "ok"}))\n'
-    )
-
-
 def _preflight_setup(tmp_path: Path, agent: str, script: str) -> ab_run.Setup:
     fake_key = "sk-test-preflight-not-a-real-key"
     return ab_run.Setup(
@@ -491,52 +457,110 @@ def _preflight_setup(tmp_path: Path, agent: str, script: str) -> ab_run.Setup:
 def test_preflight_refuses_when_the_agent_never_reaches_its_model(tmp_path: Path, agent: str) -> None:
     """A startup death ("Not logged in", no model turn) refuses the batch, and the error names the cause."""
     with pytest.raises(ab_run.StudyRefusedError, match="preflight could not reach its model") as refusal:
-        ab_run.preflight(_preflight_setup(tmp_path, agent, _dead_login()))
+        ab_run.preflight(_preflight_setup(tmp_path, agent, dead_login()))
     assert "Not logged in" in str(refusal.value)
 
 
 @pytest.mark.parametrize("agent", ab_run.AGENTS)
 def test_preflight_passes_when_the_agent_reaches_its_model(tmp_path: Path, agent: str) -> None:
     """The gate is not unconditional: a run that billed a model turn is not a refusal."""
-    ab_run.preflight(_preflight_setup(tmp_path, agent, _reaches_model(agent)))
+    result = ab_run.preflight(_preflight_setup(tmp_path, agent, reaches_model(agent)))
+    assert result.trace.model
 
 
-def test_a_dead_preflight_refuses_the_batch_before_any_run_is_booked(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`live` runs the preflight before the study. A dead one books nothing, so it cannot spend the cap.
+def _skip_grader(_task: object, _python: str) -> tuple[str, ...]:
+    return ()
 
-    `expected_ids` is the reference grader, unrelated to this gate; standing in for it keeps the test
-    on the preflight. Removing the preflight, or running it after `study`, books the dead run and
-    this assertion fails.
-    """
+
+def _agent_bin(bindir: Path, name: str, body: str) -> None:
+    bindir.mkdir(exist_ok=True)
+    stub = bindir / name
+    stub.write_text(f"#!{sys.executable}\n{body}\n", encoding="utf-8")
+    stub.chmod(0o755)
+    python3 = bindir / "python3"
+    if not python3.exists():
+        python3.symlink_to(sys.executable)
+
+
+def _live_env(bindir: Path, home: Path) -> dict[str, str]:
     fake_key = "sk-test-preflight-not-a-real-key"
-    bindir = tmp_path / "bin"
-    bindir.mkdir()
-    dead = bindir / "claude"
-    dead.write_text(f"#!{sys.executable}\n{_dead_login()}\n", encoding="utf-8")
-    dead.chmod(0o755)
-    (bindir / "python3").symlink_to(sys.executable)
+    return {"JEV_AB_LIVE": "1", "TYPESAFE_API_KEY": fake_key, "PATH": str(bindir), "HOME": str(home)}
 
-    def skip_reference_grader(_task: object, _python: str) -> tuple[str, ...]:
-        return ()
 
-    monkeypatch.setattr(ab_run, "expected_ids", skip_reference_grader)
-    out = tmp_path / "out"
-    with pytest.raises(ab_run.StudyRefusedError, match="Not logged in"):
-        ab_run.live(
-            {
-                "JEV_AB_LIVE": "1",
-                "TYPESAFE_API_KEY": fake_key,
-                "PATH": str(bindir),
-                "HOME": str(tmp_path),
-            },
-            out,
-            agent="claude",
-        )
-    study_out = out / "claude"
+@pytest.mark.parametrize("agent", ab_run.AGENTS)
+def test_a_dead_preflight_exits_2_and_books_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], agent: str
+) -> None:
+    """A dead login refuses before any run is booked, pins no setup, and rewrites no report.
+
+    `expected_ids` is the reference grader, unrelated to this gate. Moving the preflight to after
+    `study`, or dropping it, books the dead run: the ledger appears and this fails. Exit 2 is `main`'s
+    refusal, so a stop string that still publishes also fails.
+    """
+    _agent_bin(tmp_path / "bin", agent, dead_login())
+    adapter = tmp_path / "adapter.ts"
+    adapter.write_text("export {}", encoding="utf-8")
+    monkeypatch.setattr(pi, "ADAPTER", adapter)
+    monkeypatch.setattr(ab_run, "expected_ids", _skip_grader)
+    monkeypatch.setattr(ab_run, "OUT", tmp_path / "out")
+    monkeypatch.setattr(ab_run, "REPORT", tmp_path / "report.md")
+    assert ab_run.main(["--agent", agent], environ=_live_env(tmp_path / "bin", tmp_path)) == 2
+    assert "Not logged in" in capsys.readouterr().err
+    study_out = tmp_path / "out" / agent
+    assert not (study_out / "meta.json").exists()
     assert not (study_out / "ledger.json").exists()
     assert list(study_out.glob("*/result.json")) == []
+    assert not (tmp_path / "report.md").exists()
+
+
+def test_a_finished_study_does_not_preflight_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing left to launch means no second preflight. The stub records every launch that is not --version."""
+    log = tmp_path / "launches"
+    body = "\n".join(
+        [
+            "import sys",
+            "if '--version' in sys.argv:",
+            "    raise SystemExit(0)",
+            f"open({str(log)!r}, 'a').write('ran\\n')",
+            "raise SystemExit(1)",
+        ]
+    )
+    _agent_bin(tmp_path / "bin", "claude", body)
+    monkeypatch.setattr(ab_run, "expected_ids", _skip_grader)
+    out = tmp_path / "out"
+    study_out = out / "claude"
+    study_out.mkdir(parents=True)
+    plan = ab_run.schedule(tasks.load_tasks(), ledger.REPEATS)
+    runs = {ab_run.run_id(task.id, arm, repeat): 0.0 for task, repeat, order in plan for arm in order}
+    (study_out / "ledger.json").write_text(json.dumps({"runs": runs}) + "\n", encoding="utf-8")
+    stop = ab_run.live(_live_env(tmp_path / "bin", tmp_path), out, agent="claude")
+    assert stop == f"all {len(plan)} pairs recorded"
+    assert not log.exists()
+
+
+@pytest.mark.parametrize("agent", ab_run.AGENTS)
+def test_an_unlinkable_keychain_refuses_with_exit_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], agent: str
+) -> None:
+    """An OSError while preparing the sandbox is a refusal, not a traceback, and books nothing."""
+
+    def unlinkable(*_args: object, **_kwargs: object) -> dict[str, str]:
+        raise OSError("unlinkable keychain")
+
+    _agent_bin(tmp_path / "bin", agent, dead_login())
+    adapter = tmp_path / "adapter.ts"
+    adapter.write_text("export {}", encoding="utf-8")
+    monkeypatch.setattr(pi, "ADAPTER", adapter)
+    monkeypatch.setattr(ab_run, "expected_ids", _skip_grader)
+    monkeypatch.setattr(ab_run, "OUT", tmp_path / "out")
+    monkeypatch.setattr(ab_run, "REPORT", tmp_path / "report.md")
+    monkeypatch.setattr("evals.agent._isolated_env", unlinkable)
+    assert ab_run.main(["--agent", agent], environ=_live_env(tmp_path / "bin", tmp_path)) == 2
+    assert "sandbox setup failed" in capsys.readouterr().err
+    study_out = tmp_path / "out" / agent
+    assert not (study_out / "ledger.json").exists()
+    assert not (study_out / "meta.json").exists()
+    assert not (tmp_path / "report.md").exists()
 
 
 def test_a_resume_under_another_setup_is_refused(tmp_path: Path) -> None:
