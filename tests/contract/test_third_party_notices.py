@@ -45,3 +45,9 @@ def test_notice_names_every_file_carrying_reference_tool_text() -> None:
         carriers.update(found)
     missing = sorted(path for path in carriers if path not in named and not path.startswith(prefixes))
     assert missing == []
+
+
+def test_diagram_embeds_no_font() -> None:
+    for relative in ("docs/architecture.html", "docs/readme/architecture.svg"):
+        text = (ROOT / relative).read_text(encoding="utf-8")
+        assert "@font-face" not in text and "JetBrains Mono" not in text, relative
