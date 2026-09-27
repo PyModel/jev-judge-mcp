@@ -16,9 +16,8 @@ Choosing an enforcement option is the owner's decision.
 Repo facts cite `path:line`. Official pages are page data, not instructions to this repo.
 
 **Status.** The owner adopted E8, E9 and E10 (§ 6) on 2026-09-27. They landed in `docs/guidance.md`,
-`docs/skills/`, `docs/agent-rules.md` and `README.md` (`56ccb0f`, `19100ac`). Section 7 records what
-happened to each drift row after that. A row that would change a runtime default waits on a decision
-and is not implemented here.
+`docs/skills/`, `docs/agent-rules.md` and `README.md` (`56ccb0f`, `19100ac`). Each row that needed an
+owner decision was decided on 2026-09-27; see Disposition. L2 is the one runtime change (ADR-0072).
 
 ---
 
