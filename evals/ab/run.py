@@ -330,6 +330,7 @@ _RECORD_KEYS = (
     "added_tests",
     "old_rule_success",
     "failure_category",
+    "exploration",
     "unnecessary_jev_calls",
     "jev_answer",
     "wall_s",
@@ -413,6 +414,7 @@ def _record(
     stream_text = stream_path.read_text(encoding="utf-8") if stream_path.is_file() else ""
     answer = outcomes.jev_answer(stream_text, task.judgment.options, task.judgment.verdict_options)
     escaped = run.escape
+    explored = tuple(run.exploration or ())
     succeeded = run_correct(result, decision_matches_gold=matches) and not escaped
     return _outcome_record(
         rid,
@@ -447,18 +449,23 @@ def _record(
             "old_rule_success": old_rule_success(result),
             "failure_category": "escape"
             if escaped
-            else outcomes.failure_category(
-                status=run.status,
-                success=succeeded,
-                acceptance_passed=result.acceptance_passed,
-                acceptance_total=result.acceptance_total,
-                regressions=result.regressions,
-                preexisting_altered=result.preexisting_altered,
-                added_failing=bool(result.added_failing),
-                added_irrelevant=bool(result.added_irrelevant),
-                decision_matches_gold=matches,
-                jev_calls=calls,
+            else (
+                "out-of-task exploration"
+                if explored
+                else outcomes.failure_category(
+                    status=run.status,
+                    success=succeeded,
+                    acceptance_passed=result.acceptance_passed,
+                    acceptance_total=result.acceptance_total,
+                    regressions=result.regressions,
+                    preexisting_altered=result.preexisting_altered,
+                    added_failing=bool(result.added_failing),
+                    added_irrelevant=bool(result.added_irrelevant),
+                    decision_matches_gold=matches,
+                    jev_calls=calls,
+                )
             ),
+            "exploration": list(explored),
             "unnecessary_jev_calls": outcomes.unnecessary_jev_calls(
                 control=task.judgment.control, uses=trace.tool_uses, calls=calls
             ),
@@ -517,6 +524,7 @@ def failed_record(
             "added_tests": [],
             "old_rule_success": False,
             "failure_category": "escape" if getattr(run, "escape", None) else "harness error",
+            "exploration": list(getattr(run, "exploration", ()) or ()),
             "unnecessary_jev_calls": 0,
             "jev_answer": None,
             "jev_calls": 0,

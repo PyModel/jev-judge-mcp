@@ -1159,6 +1159,22 @@ def test_report_defines_unnecessary_calls_and_counts_an_observed_decision_change
     assert "saves 1" in compared
 
 
+def test_the_report_counts_exploration_and_success_without_those_runs() -> None:
+    """Firstmate's D3 telemetry ask: exploration counts per arm and per task, and success with and
+    without the exploring runs, so a confinement relaxation cannot hide in the solved rate."""
+    wanderer = _run("j1", "A", success=False, exploration=["/", "/run/capability.json"])
+    pair = [wanderer, _run("j1", "B", exploration=[])]
+    text = report.render(pair, {})
+    assert "out-of-task exploration (runs; evidence paths)" in text
+    assert "1/1; 2 paths | 0/1; 0 paths" in text
+    assert "tasks solved, exploration runs excluded" in text
+    assert "| j1 | A | 0/1 |" in text
+    assert "| explored |" in text
+    assert "| 1/1 | not recorded |" in text and "| 0/1 | none |" in text  # the per-task explored cells
+    clean = report.render([_run("j1", "A"), _run("j1", "B")], {})
+    assert "out-of-task exploration (runs" not in clean and "| explored |" not in clean
+
+
 def _trace(frontier: int, output: int) -> Trace:
     return Trace(frontier_calls=frontier, output_tokens=output)
 
@@ -1385,6 +1401,50 @@ def test_an_escaped_run_keeps_its_category_on_the_post_processing_failure_path()
     )
     record = ab_run.failed_record("t.A.r1", task, "A", 1, "pi", run, 0.0, KeyError("boom"))
     assert record["failure_category"] == "escape"
+
+
+def test_out_of_task_exploration_records_the_category_and_keeps_the_grade(tmp_path: Path) -> None:
+    """The confined canary decision (ADR-0074): a run whose commands used paths outside /task — the
+    recorded j6-docs-vs-code.A.r2 shape, an agent hunting the answer key across its container and
+    finding nothing — is graded normally and carries `out-of-task exploration` with its evidence
+    paths; it is not an escape, and only the hard stops keep that category."""
+    task = tasks.load_task("j1-refund-window")
+    tree = _tree(tmp_path, task, solution=task.reference)
+    fake_key = "sk-test-exploration-not-a-real-key"
+    setup = ab_run.Setup(
+        agent="pi",
+        binary=["pi"],
+        server_env={},
+        base_env={},
+        secret=fake_key,
+        python3=sys.executable,
+        task_list=[task],
+    )
+    book = SpendLedger.load(tmp_path / "ledger.json", ledger.POLICIES["pi"])
+    run = AgentRunResult(
+        argv=(),
+        workdir=tree,
+        stdout="",
+        stderr="",
+        returncode=0,
+        wall_s=1.0,
+        trace=Trace(
+            frontier_calls=1,
+            result={
+                "result": "Done.\n" + json.dumps({"decision": str(task.judgment.gold)}),
+                "total_cost_usd": 0.01,
+            },
+        ),
+        status="ok",
+        exploration=("/run/capability.json", "/scratch/entrypoint.sh"),
+    )
+    record = ab_run._record(  # pyright: ignore[reportPrivateUsage]
+        "j1-refund-window.A.r1", task, "A", 1, setup, run, book, tmp_path / "jev-calls.jsonl", tmp_path
+    )
+    assert record["success"] is True, "exploration never fails the grade"
+    assert record["failure_category"] == "out-of-task exploration"
+    assert record["exploration"] == ["/run/capability.json", "/scratch/entrypoint.sh"]
+    assert record["old_rule_success"] is True and record["decision_correct"] is True
 
 
 def test_added_tests_are_collected_the_way_the_agent_ran_them(tmp_path: Path) -> None:

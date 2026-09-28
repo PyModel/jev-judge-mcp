@@ -54,7 +54,11 @@ DEFINITIONS = [
     "provider latency from above. **Run wall** is `wall_s`.",
     "**Failure category:** why a failed run failed, first match: timeout, agent error, acceptance miss, "
     "regression, pre-existing test altered, added test failing, wrong decision, Jev error, harness error, "
-    "other. A correct run has none.",
+    "other. A correct run has none — except that a confined run whose commands used any path outside "
+    "its task workdir carries **out-of-task exploration** instead: the evidence paths are recorded, the "
+    "run is still graded, and it never stops the study by itself. Only three things void a confined "
+    "study: a secret-scan hit, host material in a tool result, or a reach for fixture material (task "
+    "metadata, gold, hidden acceptance tests, distractor solutions) outside the task workdir.",
     "**Correct solutions per hour:** successes divided by the summed wall time of every measured run of the "
     "arm, failures included.",
     "**Test cycles:** shell calls that run `unittest` or `pytest`. **Retries:** test cycles after the first.",
@@ -145,7 +149,7 @@ def arm_summary(runs: Sequence[Record]) -> dict[str, str]:
     hours = sum(float(r["wall_s"]) for r in runs) / 3600
     branch_runs = [r for r in runs if r["wrong_branches"] is not None]
     judged = [r for r in runs if r["decision_correct"] is not None]
-    return {
+    summary = {
         "tasks solved": f"{len(solved)}/{len(runs)}",
         "time to a correct solution, s": distribution([float(r["wall_s"]) for r in solved]),
         "correct solutions per hour": f"{len(solved) / hours:.2f}" if hours else "n/a",
@@ -173,6 +177,14 @@ def arm_summary(runs: Sequence[Record]) -> dict[str, str]:
             f"{sum(bool(r['decision_correct']) for r in judged)}/{len(judged)}" if judged else "no gold decision"
         ),
     }
+    if any("exploration" in r for r in runs):
+        explored = [r for r in runs if r.get("exploration")]
+        clean = [r for r in runs if not r.get("exploration")]
+        summary["out-of-task exploration (runs; evidence paths)"] = (
+            f"{len(explored)}/{len(runs)}; {sum(len(r['exploration']) for r in explored)} paths"
+        )
+        summary["tasks solved, exploration runs excluded"] = f"{sum(bool(r['success']) for r in clean)}/{len(clean)}"
+    return summary
 
 
 def paired_lines(measured: Sequence[Pair]) -> list[str]:
@@ -224,9 +236,11 @@ def _invocation(records: Sequence[Record]) -> list[str]:
 
 def _task_table(measured: Sequence[Pair]) -> list[str]:
     """Old-rule and new-rule success, Jev calls, and failure categories, per task and arm."""
+    exploration = any("exploration" in run for pair in measured for run in pair)
+    mid = " explored | " if exploration else " "
     lines = [
-        "| task | arm | new-rule success | old-rule success | Jev calls | unnecessary | failure categories |",
-        "|---|---|---|---|---|---|---|",
+        f"| task | arm | new-rule success | old-rule success | Jev calls | unnecessary |{mid}failure categories |",
+        "|---|" * (8 if exploration else 7),
     ]
     by_task: dict[str, list[Pair]] = {}
     for pair in measured:
@@ -234,10 +248,11 @@ def _task_table(measured: Sequence[Pair]) -> list[str]:
     for task_id in sorted(by_task):
         for index, arm in enumerate(ARMS):
             runs = [pair[index] for pair in by_task[task_id]]
+            cell = f"{sum(1 for r in runs if r.get('exploration'))}/{len(runs)} | " if exploration else ""
             lines.append(
                 f"| {task_id} | {arm} | {sum(bool(r['success']) for r in runs)}/{len(runs)} | "
                 f"{_flag_count(runs, 'old_rule_success')} | {sum(int(r['jev_calls']) for r in runs)} | "
-                f"{sum(int(r.get('unnecessary_jev_calls') or 0) for r in runs)} | {_categories(runs)} |"
+                f"{sum(int(r.get('unnecessary_jev_calls') or 0) for r in runs)} | {cell}{_categories(runs)} |"
             )
     return lines
 
@@ -333,7 +348,7 @@ def agent_section(agent: str, records: Sequence[Record], meta: Mapping[str, Any]
             "",
             "| measure | " + " | ".join(f"{arm}: {ARM_LABELS[arm]}" for arm in ARMS) + " |",
             "|---|" + "---|" * len(ARMS),
-            *(f"| {m} | " + " | ".join(summaries[arm][m] for arm in ARMS) + " |" for m in summaries[ARMS[0]]),
+            *(f"| {m} | " + " | ".join(summaries[arm].get(m, "") for arm in ARMS) + " |" for m in summaries[ARMS[0]]),
             "",
             "### Paired",
             "",

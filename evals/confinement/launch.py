@@ -42,6 +42,7 @@ from evals.agent import (
     capture_output,
     container_boundary,
     escape_scan,
+    exploration_paths,
     run_status,
     secret_scan,
     secret_scrub,
@@ -626,6 +627,7 @@ def run_confined(
             trace=trace,
             status=run_status(returncode, trace, command.timeout_s),
             escape=escape or None,
+            exploration=exploration_paths(stdout, box),
         )
     finally:
         teardown(agent_name=agent_name, broker_name=broker_name, volume=volume)

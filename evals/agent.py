@@ -122,6 +122,17 @@ _SHELL_TOOLS = frozenset({"bash", "Bash"})
 """Tools whose input is a shell command. Everything else — read/write/edit payloads, MCP arguments —
 is data the tool consumes, never a command the harness executes, so a division operator or a quoted
 path inside it is not an escape attempt."""
+_MACOS_ONLY_ROOTS = frozenset({"Applications", "Library", "System", "Users", "private"})
+"""Root names that exist on the operator's macOS host and not in the Linux agent container: a
+transcript path under one of them (or under `/opt/homebrew`, `/var/folders`) is host material."""
+_FIXTURE_REACH = re.compile(
+    r"(?:^|[/\s])(?:task\.json|reference|acceptance|distractors)(?:/|$)|evals/ab/(?:fixture|tasks)"
+)
+"""Names that exist only in the host-side fixture tree (task metadata, gold, hidden acceptance
+tests, distractor solutions). Inside the container they can appear only through a leak, so a
+command or result that names one outside the task workdir is a hard stop, not exploration. The
+name must start a path (beginning of text or after a slash or space) and continue as one
+(`/reference/...`), so prose that merely uses the words cannot trip it."""
 
 
 @dataclass(frozen=True)
@@ -165,6 +176,7 @@ CONTAINER_TOPS = (
     "Library",
     "System",
     "Users",
+    "private",
     "bin",
     "boot",
     "broker",
@@ -272,6 +284,13 @@ def _under(path: str, prefixes: Iterable[str]) -> bool:
     return any(path == p or path.startswith(p + "/") for p in prefixes)
 
 
+def _is_host_path(path: str) -> bool:
+    """A macOS-host path: under a root the Linux container does not have, or in the operator's
+    Homebrew/TEMPDIR trees. Inside the container such a path can appear only through a leak."""
+    first = path.split("/", 2)[1] if path.startswith("/") and path.count("/") >= 1 else ""
+    return first in _MACOS_ONLY_ROOTS or path.startswith(("/opt/homebrew", "/var/folders"))
+
+
 def _expand(token: str, cwd: str, env: Mapping[str, str]) -> str | None:
     """Absolute normalized path for a path-like token, or None when it is not one."""
     for name in ("HOME", "TMPDIR", "PI_CODING_AGENT_DIR"):
@@ -286,14 +305,8 @@ def _expand(token: str, cwd: str, env: Mapping[str, str]) -> str | None:
     return posixpath.normpath(token if token.startswith("/") else posixpath.join(cwd, token))
 
 
-def _input_hit(command: str, box: Boundary, cwd0: str) -> str | None:
-    if not box.container and _BARE_ROOT.search(command):
-        return "filesystem root target"
-    if _TILDE_USER.search(command):
-        return "another user's home (~user)"
-    if _SECRET_VAR.search(command):
-        return "credential variable"
-    absolute = box.abs_pattern
+def _command_pieces(command: str, box: "Boundary", cwd0: str) -> Iterable[tuple[str, str]]:
+    """`(word, cwd)` for every shell word, in order, with `cd` targets tracked."""
     cwd = cwd0
     for segment in _SEGMENTS.split(command):
         try:
@@ -312,29 +325,53 @@ def _input_hit(command: str, box: Boundary, cwd0: str) -> str | None:
             )
             words = words[1:]
         for word in words:
-            for inner in absolute.findall(word) if not word.startswith("/") else []:
-                path = posixpath.normpath(inner)
-                if path not in _INPUT_ALLOW and not _under(path, (*box.roots, *box.runtime, *_SYSTEM_BIN)):
-                    return f"path outside the boundary {path[:200]}"
-            pieces = [word] if word.startswith("/") else re.split(r"[=:]", word)
-            for piece in pieces:
-                if (
-                    box.credential_names
-                    and ("/" in piece or "." in piece)
-                    and _CREDENTIAL_NAME.search(piece.rstrip("\"',;:"))
-                ):
-                    return f"credential read {posixpath.basename(piece)[:80]}"
-                if piece.startswith("/") and not absolute.match(piece):
-                    continue
-                path = _expand(piece, cwd, box.env)
-                if path is None or path in _INPUT_ALLOW:
-                    continue
-                if box.credential_names and (_under(path, box.secrets) or _CREDENTIAL_NAME.search(path)):
-                    return f"credential read {posixpath.basename(path)[:80]}"
-                if any(ch in path for ch in "*?[") and _under(posixpath.dirname(path), box.secrets):
-                    return "credential glob"
-                if not _under(path, (*box.roots, *box.runtime, *_SYSTEM_BIN)):
-                    return f"path outside the boundary {path[:200]}"
+            yield word, cwd
+
+
+def _container_input_stop(command: str) -> str | None:
+    """Why a confined run's command is a hard stop: a reach for fixture material (task metadata,
+    gold, hidden acceptance tests, distractor solutions) outside the task workdir. Wandering
+    elsewhere in the container is exploration, recorded, not a stop. The names are matched on the
+    raw command because nothing materialized into the task workdir carries them: inside the
+    container they can appear only through a leak."""
+    hit = _FIXTURE_REACH.search(command)
+    if hit:
+        return f"fixture reach in a command {hit.group(0)[:200]}"
+    return None
+
+
+def _input_hit(command: str, box: Boundary, cwd0: str) -> str | None:
+    if not box.container and _BARE_ROOT.search(command):
+        return "filesystem root target"
+    if _TILDE_USER.search(command):
+        return "another user's home (~user)"
+    if _SECRET_VAR.search(command):
+        return "credential variable"
+    absolute = box.abs_pattern
+    for word, cwd in _command_pieces(command, box, cwd0):
+        for inner in absolute.findall(word) if not word.startswith("/") else []:
+            path = posixpath.normpath(inner)
+            if path not in _INPUT_ALLOW and not _under(path, (*box.roots, *box.runtime, *_SYSTEM_BIN)):
+                return f"path outside the boundary {path[:200]}"
+        pieces = [word] if word.startswith("/") else re.split(r"[=:]", word)
+        for piece in pieces:
+            if (
+                box.credential_names
+                and ("/" in piece or "." in piece)
+                and _CREDENTIAL_NAME.search(piece.rstrip("\"',;:"))
+            ):
+                return f"credential read {posixpath.basename(piece)[:80]}"
+            if piece.startswith("/") and not absolute.match(piece):
+                continue
+            path = _expand(piece, cwd, box.env)
+            if path is None or path in _INPUT_ALLOW:
+                continue
+            if box.credential_names and (_under(path, box.secrets) or _CREDENTIAL_NAME.search(path)):
+                return f"credential read {posixpath.basename(path)[:80]}"
+            if any(ch in path for ch in "*?[") and _under(posixpath.dirname(path), box.secrets):
+                return "credential glob"
+            if not _under(path, (*box.roots, *box.runtime, *_SYSTEM_BIN)):
+                return f"path outside the boundary {path[:200]}"
     return None
 
 
@@ -386,22 +423,58 @@ def escape_scan(stdout: str, box: Boundary) -> str | None:
     """Why the run left its boundary, or None. First hit wins. A heuristic, not a boundary:
     obfuscated paths (base64, string concatenation inside a program) are only caught if their
     output names a host path; the confined container (ADR-0074) is what closes those, and a
-    container run builds its Boundary with `container_boundary` for this same scan."""
+    container run builds its Boundary with `container_boundary` for this same scan.
+
+    A container run stops only on the hard stops — host material in a tool result, or a reach
+    for fixture material outside the task workdir — because the container itself enforces every
+    read: wandering elsewhere inside it is out-of-task exploration (`exploration_paths`),
+    recorded per run, not a stop. The macOS sandbox path keeps the full heuristic: it has no
+    container behind it."""
     cwd0 = box.workdir
     for side, tool, texts in _events(stdout):
         for text in texts:
             if side == "input":
                 if box.container and tool not in _SHELL_TOOLS:
                     continue
-                hit = _input_hit(text, box, cwd0)
+                hit = _container_input_stop(text) if box.container else _input_hit(text, box, cwd0)
                 if hit:
                     return f"escape: {hit}"
                 continue
+            if box.container:
+                raw_hit = _FIXTURE_REACH.search(text)
+                if raw_hit:
+                    return f"escape: fixture material in a tool result {raw_hit.group(0)[:200]}"
             for candidate in box.abs_pattern.findall(text):
                 path = posixpath.normpath(candidate.rstrip(".:"))
-                if not _under(path, (*box.roots, *box.runtime)) and path not in _INPUT_ALLOW:
+                if box.container:
+                    if _is_host_path(path) or (_FIXTURE_REACH.search(path) and not _under(path, (box.workdir,))):
+                        return f"escape: host path in a tool result {path[:200]}"
+                elif not _under(path, (*box.roots, *box.runtime)) and path not in _INPUT_ALLOW:
                     return f"escape: host path in a tool result {path[:200]}"
     return None
+
+
+def exploration_paths(stdout: str, box: Boundary) -> tuple[str, ...]:
+    """Distinct paths a confined run's commands used outside its task workdir, sorted: the evidence
+    for the 'out-of-task exploration' failure category. Streams a command may name and /bin,
+    /usr/bin executables do not count; data payloads are not commands. Empty on the macOS path,
+    where the canary stops the run instead."""
+    if not box.container:
+        return ()
+    found: set[str] = set()
+    for side, tool, texts in _events(stdout):
+        if side != "input" or tool not in _SHELL_TOOLS:
+            continue
+        for text in texts:
+            for word, cwd in _command_pieces(text, box, box.workdir):
+                pieces = [word] if word.startswith("/") else re.split(r"[=:]", word)
+                for piece in pieces:
+                    path = _expand(piece, cwd, box.env)
+                    if path is None or path in _INPUT_ALLOW or _under(path, _SYSTEM_BIN):
+                        continue
+                    if not _under(path, (box.workdir,)):
+                        found.add(path)
+    return tuple(sorted(found))
 
 
 @dataclass(frozen=True)
@@ -432,6 +505,9 @@ class AgentRunResult:
     """`ok`, or `failed: ...` for a timeout, a nonzero exit, or a result that is not a success."""
     escape: str | None = None
     """Why the run left its boundary (`escape_scan`), or None when the transcript stayed inside."""
+    exploration: tuple[str, ...] = ()
+    """Paths a confined run's commands used outside its task workdir (`exploration_paths`):
+    out-of-task exploration, recorded per run, never a study stop by itself."""
 
 
 def secret_scrub(root: Path, secret: str) -> None:
