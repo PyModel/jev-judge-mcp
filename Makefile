@@ -27,6 +27,7 @@ lint:
 	uv run ruff check
 	uv run ruff format --check
 	uv run python scripts/check_hidden_chars.py
+	uv run python scripts/check_workflows.py
 
 typecheck:
 	uv run pyright

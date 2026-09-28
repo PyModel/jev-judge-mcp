@@ -162,7 +162,7 @@ jobs:
           set -euo pipefail
           assets="$RUNNER_TEMP/assets"
           gh release download "$TAG" --dir "$assets"
-          test "$(ls "$assets"/*.whl "$assets"/*.tar.gz | wc -l)" -eq 2
+          test "$(find "$assets" -maxdepth 1 -type f \( -name '*.whl' -o -name '*.tar.gz' \) -print | wc -l)" -eq 2
       - name: Upload to PyPI through trusted publishing
         # A directory is not a file list: uv publish only uploads the paths it is given.
         run: uv publish --trusted-publishing always --no-attestations "$RUNNER_TEMP"/assets/*.whl "$RUNNER_TEMP"/assets/*.tar.gz

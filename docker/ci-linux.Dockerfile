@@ -35,6 +35,26 @@ RUN case "$TARGETARCH" in \
 	&& rm "node-v24.19.0-linux-${NODEARCH}.tar.xz" SHASUMS256.txt \
 	&& node --version
 
+# actionlint 1.7.12 (sha256-verified per arch, the Node precedent above) plus Debian's shellcheck:
+# make lint's workflow check (scripts/check_workflows.py) runs them here, and this leg is the
+# enforcement point for every push — GitHub's hosted runners do not carry actionlint.
+RUN set -eu; \
+	case "$TARGETARCH" in \
+		amd64) SHA=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 ;; \
+		arm64) SHA=325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6 ;; \
+		*) echo "unsupported arch $TARGETARCH" >&2; exit 1 ;; \
+	esac; \
+	apt-get update \
+	&& apt-get install -y --no-install-recommends shellcheck \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_${TARGETARCH}.tar.gz" \
+	&& echo "${SHA}  actionlint_1.7.12_linux_${TARGETARCH}.tar.gz" | sha256sum -c - \
+	&& tar -xzf "actionlint_1.7.12_linux_${TARGETARCH}.tar.gz" -C /tmp \
+	&& install -m 0755 /tmp/actionlint /usr/local/bin/actionlint \
+	&& rm -rf /tmp/actionlint "actionlint_1.7.12_linux_${TARGETARCH}.tar.gz" \
+	&& [ -x /usr/local/bin/actionlint ] \
+	&& actionlint -version | head -1
+
 # The non-root runner and its uv caches; the managed interpreters (3.10 for the smoke job's
 # old-Python entry guard) download into the mounted volume at check time.
 ENV UV_PYTHON=3.12 \
