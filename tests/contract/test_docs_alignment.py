@@ -519,6 +519,9 @@ def test_wire_arguments_disclose_the_strip_semantics() -> None:
         text = path.read_text(encoding="utf-8")
         assert "additionalProperties: false" in text, path.name
         assert "stripped, not refused" in text, path.name
+    # The behavior half below is deliberately duplicated from tests/unit/test_arguments.py's
+    # strip test (its owner): here it is only the non-vacuity tie that binds the doc sentences to
+    # the real parser, so the pin cannot pass against pages the code no longer honors.
     # The behavior those sentences state, on a real published schema — not a fixture copy.
     screen = next(tool for tool in TOOLS if tool.definition.name == "jev_screen")
     schema = screen.definition.input_schema
