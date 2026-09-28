@@ -42,7 +42,10 @@ scale with what you send (README § Operator notes). That is not a token budget:
 missing cap can still exceed 64k tokens and come back as `provider`, not `input_too_large`. Policy has two tiers only — `auto` and
 `review`; there is no escalate (manifest `policy.verify_action`). An unsupported or contradicted
 claim can carry a `missing_evidence` code (`single_item_no_source`, `needs_diff`, `needs_tests`,
-`needs_before_after`) that names what evidence would settle it.
+`needs_before_after`) that names what evidence would settle it. With exactly one evidence item no
+source question is asked (frozen reference behavior), so rows carry no `evidence_ids` and
+`supporting_evidence` is null — attribution is trivially that item; consumers who need per-item
+attribution should send multiple evidence items or read `missing_evidence`.
 
 **Not for** judging a claim you cannot supply evidence for, or producing analysis text.
 

@@ -527,6 +527,27 @@ def test_wire_arguments_disclose_the_strip_semantics() -> None:
     assert parsed == {"text": "a report"}
 
 
+def test_verify_card_discloses_the_single_evidence_attribution_shape() -> None:
+    """With exactly one evidence item no source question is asked, so rows carry no `evidence_ids`
+    and `supporting_evidence` is null — frozen reference behavior (the replay proves the code;
+    this pins the card to the fixture so the disclosure cannot rot while the shape stays)."""
+    card = _TOOL_CARDS.read_text(encoding="utf-8")
+    assert "source question is asked" in card
+    assert "`supporting_evidence` is null" in card
+    checked = 0
+    for path in sorted((ROOT / "tests" / "parity" / "fixtures" / "classes").rglob("verify-*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for call in data.get("calls", []):
+            if call.get("tool") != "jev_verify" or not isinstance(call.get("arguments", {}).get("evidence"), str):
+                continue
+            rows = json.loads(call["result"]["content"][0]["text"])["results"]
+            for row in rows:
+                assert "evidence_ids" not in row, (path.name, row["id"])
+                assert row["supporting_evidence"] is None, (path.name, row["id"])
+                checked += 1
+    assert checked, "no single-evidence verify fixture found; the pin has nothing to guard"
+
+
 def test_limits_page_says_an_upstream_401_is_auth() -> None:
     """L2 disclosure. The mapping itself is owned by the judge and provider tests."""
     page = _LIMITS_PAGE.read_text(encoding="utf-8")
