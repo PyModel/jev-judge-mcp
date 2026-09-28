@@ -194,6 +194,45 @@ def test_the_container_canary_flags_host_paths_not_container_state() -> None:
     assert escape_scan(transcript("ls /usr/local/lib/node_modules"), box) is None
 
 
+def test_the_recorded_jev_payload_is_data_not_a_command() -> None:
+    """The confined re-run's first attempt (j9-review-patch.B.r1) stopped as an escape on its
+    only run, at $0.00 spent: the Jev review's stringified-JSON arguments embed the task's diff,
+    and the diff's Python division (`total_cents / parts`) read as a bare filesystem-root target.
+    A tool's data arguments are not a command, and the container owns its `/`, so neither the
+    payload nor the same division inside a real command is an escape (ADR-0074)."""
+    box = container_boundary({"HOME": "/scratch/home", "PI_CODING_AGENT_DIR": "/scratch/agent"})
+    recorded = (Path(__file__).parent / "data" / "pi-mcp-jev-review-args.txt").read_text(encoding="utf-8")
+    line = json.dumps(
+        {
+            "type": "tool_execution_start",
+            "toolCallId": "call_00_9qdx8dixa5uki4sp9h3mp00d",
+            "toolName": "mcp",
+            "args": {"tool": "jev_jev_review", "args": recorded},
+        }
+    )
+    assert "total_cents / parts" in recorded  # the trip this regression pins
+    assert escape_scan(line, box) is None
+    pi_bash = '{"type": "tool_execution_start", "toolCallId": "1", "toolName": "bash", "args": {"command": %s}}'
+    assert escape_scan(pi_bash % json.dumps('cd /task && python3 -c "print(round(total_cents / parts))"'), box) is None
+    assert escape_scan(pi_bash % json.dumps("find / -type d -name tests 2>/dev/null | head"), box) is None
+
+
+def test_the_container_canary_still_flags_a_real_outside_read() -> None:
+    """The data-payload relaxation must not blind the canary: a host path in a command or in a
+    tool result is still an escape, whichever tool carries it."""
+    box = container_boundary({"HOME": "/scratch/home", "PI_CODING_AGENT_DIR": "/scratch/agent"})
+    pi_bash = '{"type": "tool_execution_start", "toolCallId": "1", "toolName": "bash", "args": {"command": %s}}'
+    assert escape_scan(pi_bash % json.dumps("cat /Users/panda/.pi/agent/auth.json"), box) is not None
+    recorded = (Path(__file__).parent / "data" / "pi-mcp-jev-review-args.txt").read_text(encoding="utf-8")
+    mcp_result = (
+        '{"type": "tool_execution_end", "toolCallId": "1", "toolName": "mcp", '
+        '"result": {"content": [{"type": "text", "text": %s}]}}'
+    )
+    assert "host path in a tool result" in (
+        escape_scan(mcp_result % json.dumps(f"reviewed: {recorded[:40]} /Users/panda/.pi/agent/auth.json"), box) or ""
+    )
+
+
 def test_secret_scan_names_the_files_that_carry_the_value(tmp_path: Path) -> None:
     (tmp_path / "stream.jsonl").write_text("clean\n", encoding="utf-8")
     hit_dir = tmp_path / "inner"

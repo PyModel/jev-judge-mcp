@@ -118,6 +118,10 @@ _CREDENTIAL_NAME = re.compile(
 )
 _WRITTEN_KEYS = frozenset({"content", "newText", "new_string", "oldText", "old_string", "text"})
 """Write-tool payload keys: file text the agent authored, not a path it touched."""
+_SHELL_TOOLS = frozenset({"bash", "Bash"})
+"""Tools whose input is a shell command. Everything else — read/write/edit payloads, MCP arguments —
+is data the tool consumes, never a command the harness executes, so a division operator or a quoted
+path inside it is not an escape attempt."""
 
 
 @dataclass(frozen=True)
@@ -138,6 +142,10 @@ class Boundary:
     """Whether reading a credential-named file is an escape. A macOS sandbox run holds real
     credentials, so True; a container run holds none (the placeholder is not one), so its canary
     flags boundary escapes, not the placeholder's file name."""
+    container: bool = False
+    """A confined run's canary (ADR-0074). The container itself enforces every read and owns all of
+    its `/`, so only command inputs are policed on the input side and a bare root target is not an
+    escape attempt; host paths in commands and in tool results still are."""
 
     @property
     def abs_pattern(self) -> re.Pattern[str]:
@@ -191,7 +199,9 @@ def container_boundary(env: Mapping[str, str]) -> Boundary:
     """The canary's boundary for a confined run (ADR-0074): the container's fixed mounts are the
     roots, the container's system prefixes are the runtime, and no credential file exists inside —
     the placeholder the agent may read is not one, so `credential_names` is off. What remains for
-    the canary to catch is the escape attempt: a host path in a command or a tool result."""
+    the canary to catch is the escape attempt: a host path in a command or a tool result. The
+    container, not this process, enforces reads, so data payloads (a Jev state, a diff a tool
+    receives) are not scanned as commands and the container's own root is not a target."""
     return Boundary(
         workdir="/task",
         roots=("/task", "/scratch", "/broker", "/run"),
@@ -200,6 +210,7 @@ def container_boundary(env: Mapping[str, str]) -> Boundary:
         env=dict(env),
         tops=CONTAINER_TOPS,
         credential_names=False,
+        container=True,
     )
 
 
@@ -276,7 +287,7 @@ def _expand(token: str, cwd: str, env: Mapping[str, str]) -> str | None:
 
 
 def _input_hit(command: str, box: Boundary, cwd0: str) -> str | None:
-    if _BARE_ROOT.search(command):
+    if not box.container and _BARE_ROOT.search(command):
         return "filesystem root target"
     if _TILDE_USER.search(command):
         return "another user's home (~user)"
@@ -341,8 +352,8 @@ def _strings(value: object, *, skip_written: bool) -> list[str]:
     return []
 
 
-def _events(stdout: str) -> Iterable[tuple[str, list[str]]]:
-    """(`input` | `result`, strings) per tool event, from Claude stream-json and Pi events."""
+def _events(stdout: str) -> Iterable[tuple[str, str, list[str]]]:
+    """(`input` | `result`, tool name, strings) per tool event, from Claude stream-json and Pi events."""
     for raw in stdout.splitlines():
         line = raw.strip()
         if not line.startswith("{"):
@@ -356,9 +367,9 @@ def _events(stdout: str) -> Iterable[tuple[str, list[str]]]:
         payload = cast(dict[str, Any], event)
         kind = payload.get("type")
         if kind == "tool_execution_start":
-            yield "input", _strings(payload.get("args"), skip_written=True)
+            yield "input", str(payload.get("toolName") or ""), _strings(payload.get("args"), skip_written=True)
         elif kind == "tool_execution_end":
-            yield "result", _strings(payload.get("result"), skip_written=False)
+            yield "result", str(payload.get("toolName") or ""), _strings(payload.get("result"), skip_written=False)
         elif kind in ("assistant", "user"):
             wanted = "tool_use" if kind == "assistant" else "tool_result"
             message = cast(dict[str, Any], payload.get("message") or {})
@@ -366,9 +377,9 @@ def _events(stdout: str) -> Iterable[tuple[str, list[str]]]:
                 if isinstance(block, dict) and cast(dict[str, Any], block).get("type") == wanted:
                     body = cast(dict[str, Any], block)
                     if kind == "assistant":
-                        yield "input", _strings(body.get("input"), skip_written=True)
+                        yield "input", str(body.get("name") or ""), _strings(body.get("input"), skip_written=True)
                     else:
-                        yield "result", _strings(body.get("content"), skip_written=False)
+                        yield "result", "", _strings(body.get("content"), skip_written=False)
 
 
 def escape_scan(stdout: str, box: Boundary) -> str | None:
@@ -377,9 +388,11 @@ def escape_scan(stdout: str, box: Boundary) -> str | None:
     output names a host path; the confined container (ADR-0074) is what closes those, and a
     container run builds its Boundary with `container_boundary` for this same scan."""
     cwd0 = box.workdir
-    for side, texts in _events(stdout):
+    for side, tool, texts in _events(stdout):
         for text in texts:
             if side == "input":
+                if box.container and tool not in _SHELL_TOOLS:
+                    continue
                 hit = _input_hit(text, box, cwd0)
                 if hit:
                     return f"escape: {hit}"
