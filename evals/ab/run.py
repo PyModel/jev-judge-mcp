@@ -7,13 +7,15 @@ One agent, both arms, the same tasks. Each task runs `REPEATS` times per arm, in
 order is seeded and random; a pair starts only if the whole pair fits the agent's ledger, and a
 recorded run, failed or not, is never retried, so an interrupted study resumes where it stopped. The
 study refuses to resume when the Jev revision, the fixture, or the agent's pinned setup has changed
-since its first run, so no pair spans two setups. Before the first paid run, one live preflight goes
-through `run_agent`'s own env; a preflight that never reaches the model refuses the batch and books
-nothing, so a dead login cannot spend the run cap. A study with nothing left to launch skips it, and
-the preflight's cost is recorded in `preflight.json`, not the ledger. The TypeSafe key reaches only the
-Jev server's env,
-through the 0600 config file `evals.agent.run_agent` writes and deletes; every kept artifact is
-scrubbed of it. `evals.study_runner` owns the run, the result file, and the booking handler (ADR-0045).
+since its first run, so no pair spans two setups. Live runs execute inside the confinement boundary of
+ADR-0074: a broker sidecar holding the TypeSafe key and the scoped model-provider key, a per-run
+capability, and an agent container with no network and no credential inside (the macOS sandbox path
+remains the offline dry-run shape). Before the first paid run, one confined preflight — a single
+allowlisted provider request through the real broker — refuses the batch and books nothing when the
+boundary is dead, so a broken broker or credential cannot spend the run cap. A study with nothing left
+to launch skips it, and the preflight's cost is recorded in `preflight.json`, not the ledger. Every
+kept artifact is scanned for the key value and scrubbed of it. `evals.study_runner` owns the run, the
+result file, and the booking handler (ADR-0045).
 """
 
 import argparse
@@ -27,9 +29,9 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from evals.ab import arms, ledger, outcomes, report, stream, tasks, unsafe
 from evals.ab.grade import expected_ids, grade, old_rule_success, run_correct
@@ -39,11 +41,22 @@ from evals.agent import (
     AgentPreflightError,
     AgentRunResult,
     AgentSetupError,
+    real_agent_dir,
     run_agent,
     run_preflight,
+    scoped_models,
     write_preflight,
 )
 from evals.bench import pi
+from evals.confinement.launch import (
+    ConfinementError,
+    ConfinementSpec,
+    Upstream,
+    docker_available,
+    image_present,
+    probe_provider,
+    run_confined,
+)
 from evals.spend import SpendLedger, agent_started, book_outcome
 from evals.study_runner import record_row, run_recorded, write_record
 
@@ -82,6 +95,8 @@ class Setup:
     server_python: str = ""
     """The study venv interpreter the sandbox launcher wraps; empty is the offline dry-run shape."""
     timeout_s: float = arms.RUN_TIMEOUT_S
+    confinement: ConfinementSpec | None = None
+    """The broker + container boundary live runs use (ADR-0074); None is the offline dry run."""
     task_list: Sequence[tasks.Task] = field(default_factory=tasks.load_tasks)
 
     def __post_init__(self) -> None:
@@ -102,10 +117,11 @@ def user_prompt(task: tasks.Task) -> str:
     )
 
 
-def argv_tail(agent: str, prompt: str, config: Path, addendum: str) -> list[str]:
-    """Everything after the agent binary. Arms differ only in `addendum` (and the config's contents)."""
+def argv_tail(agent: str, prompt: str, config: Path, addendum: str, adapter: str | None = None) -> list[str]:
+    """Everything after the agent binary. Arms differ only in `addendum` (and the config's contents).
+    Confined runs pass the container-side adapter path."""
     if agent == "pi":
-        return pi.pi_command("pi", prompt, config, addendum)[1:]
+        return pi.pi_command("pi", prompt, config, addendum, adapter=adapter)[1:]
     return arms.claude_command("claude", prompt, config, addendum)[1:]
 
 
@@ -166,37 +182,109 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
     jev_log = run_dir / "jev-calls.jsonl"
     prompt = user_prompt(task)
     addendum = arms.addendum(arm, setup.agent, task.judgment.jev_tool)
-    command = AgentCommand(
-        argv=lambda config: [*setup.binary, *argv_tail(setup.agent, prompt, config, addendum)],
-        timeout_s=setup.timeout_s,
-        login_keychain=setup.agent == "claude",
-    )
-    with run_agent(
-        command,
-        mcp_config=lambda sandbox: arms.mcp_config(
-            arm,
-            sandbox=sandbox,
-            server_env=setup.server_env,
-            api_key=setup.secret if arm == "B" else "",
-            interpreter=setup.server_python or None,
-        ),
-        base_env=setup.base_env,
-        secret=setup.secret,
-        run_dir=run_dir,
-        prepare=lambda workdir: tasks.materialize(task, workdir),
-        parse=parser_for(setup.agent),
-        auth_provider=setup.auth_provider or None,
-    ) as run:
-
-        def failed(error: Exception) -> dict[str, Any]:
-            return failed_record(rid, task, arm, repeat, setup.agent, run, book.policy.run_bound_usd, error)
-
-        record = write_record(
-            run_dir / "result.json",
-            lambda: _record(rid, task, arm, repeat, setup, run, book, jev_log, run_dir),
-            failed,
+    if setup.confinement is not None:
+        spec = setup.confinement
+        adapter = "/scratch/adapter/index.ts" if setup.agent == "pi" else None
+        command = AgentCommand(
+            argv=lambda config: [setup.agent, *argv_tail(setup.agent, prompt, config, addendum, adapter=adapter)],
+            timeout_s=setup.timeout_s,
         )
+        with run_confined(
+            command,
+            spec=spec,
+            mcp_config=lambda scratch: arms.confined_mcp_config(
+                arm,
+                scratch=scratch,
+                server_env=setup.server_env,
+                typesafe_shim_url=spec.shim_url("typesafe"),
+            ),
+            scratch_files=_container_agent_files(spec, setup),
+            secret=setup.secret,
+            run_dir=run_dir,
+            prepare=lambda workdir: tasks.materialize(task, workdir),
+            parse=parser_for(setup.agent),
+        ) as run:
+            record = _record_inside(run_dir, run, rid, task, arm, repeat, setup, book, jev_log)
+    else:
+        command = AgentCommand(
+            argv=lambda config: [*setup.binary, *argv_tail(setup.agent, prompt, config, addendum)],
+            timeout_s=setup.timeout_s,
+            login_keychain=setup.agent == "claude",
+        )
+        with run_agent(
+            command,
+            mcp_config=lambda sandbox: arms.mcp_config(
+                arm,
+                sandbox=sandbox,
+                server_env=setup.server_env,
+                api_key=setup.secret if arm == "B" else "",
+                interpreter=setup.server_python or None,
+            ),
+            base_env=setup.base_env,
+            secret=setup.secret,
+            run_dir=run_dir,
+            prepare=lambda workdir: tasks.materialize(task, workdir),
+            parse=parser_for(setup.agent),
+            auth_provider=setup.auth_provider or None,
+        ) as run:
+            record = _record_inside(run_dir, run, rid, task, arm, repeat, setup, book, jev_log)
     return record
+
+
+def _record_inside(
+    run_dir: Path,
+    run: AgentRunResult,
+    rid: str,
+    task: tasks.Task,
+    arm: str,
+    repeat: int,
+    setup: Setup,
+    book: SpendLedger,
+    jev_log: Path,
+) -> dict[str, Any]:
+    """Grade and write the run's record inside either runner's `with` block, while the workdir
+    still exists. Shared by the macOS sandbox and the confined container path (ADR-0074)."""
+
+    def failed(error: Exception) -> dict[str, Any]:
+        return failed_record(rid, task, arm, repeat, setup.agent, run, book.policy.run_bound_usd, error)
+
+    return write_record(
+        run_dir / "result.json",
+        lambda: _record(rid, task, arm, repeat, setup, run, book, jev_log, run_dir),
+        failed,
+    )
+
+
+def _container_agent_files(spec: ConfinementSpec, setup: Setup) -> Callable[[Path], None]:
+    """The scratch writer for a confined run: the container's placeholder auth.json/models.json,
+    built from the operator's scoped entries with the provider base URL pointed at the shim."""
+
+    def write(scratch: Path) -> None:
+        if setup.agent != "pi" or not setup.auth_provider:
+            return
+        provider = next((u for u in spec.upstreams if u.name != "typesafe"), None)
+        if provider is None:
+            return
+        real = real_agent_dir(setup.base_env)
+        entry: dict[str, Any] = {}
+        try:
+            loaded: object = json.loads((real / "auth.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            loaded = {}
+        if isinstance(loaded, dict):
+            entries = cast(dict[str, Any], loaded)
+            raw_entry: object = entries.get(setup.auth_provider)
+            if isinstance(raw_entry, dict):
+                entry = dict(cast(dict[str, Any], raw_entry))
+        arms.container_agent_files(
+            scratch / "agent",
+            provider=setup.auth_provider,
+            auth_entry=entry,
+            models_bytes=scoped_models(real / "models.json", setup.auth_provider),
+            provider_shim_url=spec.shim_url(provider.name),
+        )
+
+    return write
 
 
 _RECORD_KEYS = (
@@ -520,9 +608,9 @@ def held_constant(agent: str, timeout_s: float) -> dict[str, str]:
         "system addendum (both arms)": arms.SYSTEM_ADDENDUM,
         "Jev (arm B only)": (
             f"`python -m jev_judge_mcp`, `JEV_PROVIDER=typesafe`, `JEV_MCP_MODEL={arms.JEV_MODEL}`; "
-            "the key reaches the server by a 0600 keyfile in the run sandbox, never the agent-readable "
-            "config. Readable until the broker branch: that keyfile (same uid) and any operator file "
-            "holding the key"
+            "the server runs inside the confined agent container and reaches TypeSafe only through "
+            "the broker sidecar over the shared Unix socket — no key, keyfile, or keychain exists "
+            "inside the container, and the model credential crosses the same way (ADR-0074)"
         ),
         "grader": (
             "ADR-0073: hidden acceptance tests, no regressions, pre-existing test content unchanged, "
@@ -580,6 +668,105 @@ def _which(name: str, path: str) -> str:
     return found
 
 
+EVAL_IMAGE = "jev-eval-agent:latest"
+"""The confined agent runtime (docker/eval-agent.Dockerfile): python + the built wheel + node + the
+agent CLIs. Build it with `make confinement-image`."""
+
+
+def _confinement(
+    environ: Mapping[str, str], agent: str, base_env: Mapping[str, str], auth_provider: str, out: Path
+) -> tuple[ConfinementSpec, Path]:
+    """The broker + container boundary live runs use (ADR-0074), plus the scoped provider key
+    file the study must delete when it ends. Refuses (never bypasses) when a piece is missing."""
+    unavailable = docker_available()
+    if unavailable:
+        raise StudyRefusedError(f"live runs are confined (ADR-0074) and need Docker: {unavailable}")
+    image = environ.get("JEV_EVAL_IMAGE", EVAL_IMAGE)
+    if not image_present(image):
+        raise StudyRefusedError(f"the confined agent image {image} is not built; run `make confinement-image`")
+    typesafe_key_file = environ.get("JEV_STUDY_KEY_FILE", "")
+    if not typesafe_key_file or not Path(typesafe_key_file).is_file():
+        raise StudyRefusedError("JEV_STUDY_KEY_FILE must name the study key file for the broker's read-only mount")
+    upstreams: list[Upstream] = [Upstream.typesafe(typesafe_key_file)]
+    scoped_dir = out / "confinement"
+    scoped_dir.mkdir(parents=True, exist_ok=True)
+    provider_key_file = scoped_dir / "provider.key"
+    if agent == "pi":
+        real = real_agent_dir(base_env)
+        models: dict[str, Any] = {}
+        try:
+            loaded_models: object = json.loads((real / "models.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            loaded_models = {}
+        if isinstance(loaded_models, dict):
+            providers = cast(dict[str, Any], loaded_models).get("providers")
+            if isinstance(providers, dict):
+                models = cast(dict[str, Any], providers)
+        entry: object = models.get(auth_provider)
+        base_url = str(cast(dict[str, Any], entry).get("baseUrl") or "") if isinstance(entry, dict) else ""
+        if not base_url.startswith(("http://", "https://")):
+            raise StudyRefusedError(
+                f"the confined pi arm needs a `{auth_provider}` provider entry with a baseUrl in the "
+                f"operator's models.json ({real / 'models.json'}); define it there for the study's model"
+            )
+        key = arms.scoped_provider_key(real / "auth.json", auth_provider)
+        if not key:
+            raise StudyRefusedError(
+                f"the confined pi arm needs an API-key auth.json entry for `{auth_provider}` "
+                "(an OAuth login cannot cross the container boundary)"
+            )
+        provider_key_file.write_text(key + "\n", encoding="utf-8")
+        provider_key_file.chmod(0o600)
+        upstreams.append(
+            Upstream.provider(
+                auth_provider, base_url, str(provider_key_file), api=str(cast(dict[str, Any], entry).get("api", ""))
+            )
+        )
+    else:
+        claude_key = environ.get("JEV_CLAUDE_KEY_FILE", "")
+        if not claude_key or not Path(claude_key).is_file():
+            raise StudyRefusedError(
+                "the Claude arm's macOS keychain login cannot cross the container boundary (ADR-0074); "
+                "set JEV_CLAUDE_KEY_FILE to a file holding the Anthropic API key, or run the pi arm"
+            )
+        provider_key_file.write_text(Path(claude_key).read_text(encoding="utf-8-sig").strip() + "\n", encoding="utf-8")
+        provider_key_file.chmod(0o600)
+        upstreams.append(
+            Upstream.provider(
+                "anthropic",
+                environ.get("JEV_ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+                str(provider_key_file),
+                api="anthropic",
+            )
+        )
+    env: dict[str, str] = {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "HOME": "/scratch/home",
+        "TMPDIR": "/scratch/tmp",
+        "TERM": "dumb",
+    }
+    if agent == "pi":
+        env["PI_CODING_AGENT_DIR"] = "/scratch/agent"
+    else:
+        env.update(
+            {
+                "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080",
+                "ANTHROPIC_API_KEY": arms.PLACEHOLDER_KEY,
+                "CLAUDE_CONFIG_DIR": "/scratch/claude",
+            }
+        )
+    spec = ConfinementSpec(
+        agent_image=image,
+        upstreams=tuple(upstreams),
+        timeout_s=arms.RUN_TIMEOUT_S,
+        env=env,
+        adapter_source=str(pi.adapter_path()) if agent == "pi" else "",
+        uid=os.getuid(),
+        gid=os.getgid(),
+    )
+    return spec, scoped_dir
+
+
 def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = ledger.REPEATS) -> str:
     if environ.get(LIVE_FLAG) != "1":
         raise StudyRefusedError(f"the study calls paid providers; set {LIVE_FLAG}=1 to run it")
@@ -603,6 +790,7 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
     version = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False).stdout.strip()
     agent_out = out / agent
     interpreter = arms.study_venv(Path(tempfile.gettempdir()) / f"jev-study-{_git_head()[:12]}", arms.ensure_wheel())
+    auth_provider = pi.PI_MODEL.split("/")[0] if agent == "pi" else ""
     setup = Setup(
         agent=agent,
         binary=[binary],
@@ -610,16 +798,34 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
         base_env=base_env,
         secret=key,
         python3=python3,
-        auth_provider=(pi.PI_MODEL.split("/")[0] if agent == "pi" else ""),
+        auth_provider=auth_provider,
         server_python=str(interpreter),
     )
-    # Preflight before pin_meta: a dead login must not pin a setup that has no runs, or the next
-    # resume is refused for an agent_version that never recorded anything. A finished study has
-    # nothing left to launch, so it does not pay for another preflight.
-    if runs_remain(setup, agent_out, repeats=repeats):
-        preflight(setup, agent_out)
-    pin_meta(agent_out, meta_for(agent, version, arms.RUN_TIMEOUT_S))
-    return study(setup, agent_out, repeats=repeats)
+    # A finished study has nothing left to launch: it pins and re-renders with no boundary built,
+    # so a resume or a report pass never needs Docker.
+    if not runs_remain(setup, agent_out, repeats=repeats):
+        pin_meta(agent_out, meta_for(agent, version, arms.RUN_TIMEOUT_S))
+        return study(setup, agent_out, repeats=repeats)
+    # The confinement boundary is how live runs execute (ADR-0074); the macOS sandbox path stays
+    # the offline dry-run shape only.
+    spec, scoped_dir = _confinement(environ, agent, base_env, auth_provider, out)
+    setup = replace(setup, confinement=spec)
+    try:
+        # Preflight before pin_meta: a dead path must not pin a setup that has no runs, or the next
+        # resume is refused for an agent_version that never recorded anything. Confined, the
+        # preflight is one allowlisted provider request through the real boundary — no spend, no
+        # agent run — so a dead broker, image, or credential refuses before anything is booked.
+        detail = probe_provider(spec)
+        if detail is not None:
+            write_preflight(agent_out, cost_usd=None, model=None)
+            raise StudyRefusedError(
+                f"confined preflight could not reach the model provider through the broker ({detail}); "
+                "refusing the batch before any run is booked"
+            )
+        pin_meta(agent_out, meta_for(agent, version, arms.RUN_TIMEOUT_S))
+        return study(setup, agent_out, repeats=repeats)
+    finally:
+        shutil.rmtree(scoped_dir, ignore_errors=True)
 
 
 def write_report(out: Path, path: Path = REPORT) -> str:
@@ -639,7 +845,7 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
             stop = live(environ, OUT, agent=args.agent, repeats=args.repeats)
             sys.stderr.write(f"{stop}\n")
         write_report(OUT)
-    except (StudyRefusedError, AgentSetupError) as refusal:
+    except (StudyRefusedError, AgentSetupError, ConfinementError) as refusal:
         sys.stderr.write(f"refused: {refusal}\n")
         return 2
     sys.stderr.write(f"report: {REPORT}\n")

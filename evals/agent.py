@@ -99,6 +99,76 @@ class Boundary:
     """Prefixes a tool result may name: the agent's own interpreter and runtime installs."""
     env: Mapping[str, str]
     """The agent's HOME/TMPDIR/PI_CODING_AGENT_DIR, for `$VAR` and `~` expansion."""
+    tops: tuple[str, ...] = ()
+    """Root names whose absolute paths the canary parses; empty means this host's `/` (the
+    module's `_TOP`), a container run names the container's own roots plus the host's (ADR-0074)."""
+    credential_names: bool = True
+    """Whether reading a credential-named file is an escape. A macOS sandbox run holds real
+    credentials, so True; a container run holds none (the placeholder is not one), so its canary
+    flags boundary escapes, not the placeholder's file name."""
+
+    @property
+    def abs_pattern(self) -> re.Pattern[str]:
+        """The absolute-path recognizer for this boundary's filesystem roots."""
+        return _abs_pattern(self.tops)
+
+
+def _abs_pattern(tops: tuple[str, ...]) -> re.Pattern[str]:
+    if not tops:
+        return _ABS
+    joined = "|".join(re.escape(name) for name in sorted(set(tops)) if name.strip())
+    return re.compile(rf"(?<![\w.$~*])/(?:{joined})(?:/[^\s\"'`;|&<>(){{}}\[\],]*)?(?![\w.-])")
+
+
+CONTAINER_TOPS = (
+    "Applications",
+    "Library",
+    "System",
+    "Users",
+    "bin",
+    "boot",
+    "broker",
+    "dev",
+    "etc",
+    "home",
+    "lib",
+    "lib64",
+    "media",
+    "mnt",
+    "opt",
+    "proc",
+    "root",
+    "run",
+    "sbin",
+    "scratch",
+    "srv",
+    "sys",
+    "task",
+    "tmp",
+    "usr",
+    "var",
+)
+"""This host's root names plus the confined container's: a container transcript can name either,
+and the canary must parse both — `/Users/panda/...` is an escape attempt, `/task/...` is the work."""
+
+CONTAINER_RUNTIME = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt", "/proc", "/sys", "/dev")
+"""The container's own system prefixes. Nothing host-side lives under any of them (ADR-0074)."""
+
+
+def container_boundary(env: Mapping[str, str]) -> Boundary:
+    """The canary's boundary for a confined run (ADR-0074): the container's fixed mounts are the
+    roots, the container's system prefixes are the runtime, and no credential file exists inside —
+    the placeholder the agent may read is not one, so `credential_names` is off. What remains for
+    the canary to catch is the escape attempt: a host path in a command or a tool result."""
+    return Boundary(
+        workdir="/task",
+        roots=("/task", "/scratch", "/broker", "/run"),
+        secrets=(),
+        runtime=CONTAINER_RUNTIME,
+        env=dict(env),
+        tops=CONTAINER_TOPS,
+        credential_names=False,
+    )
 
 
 def _both(path: str) -> tuple[str, ...]:
@@ -175,6 +245,7 @@ def _input_hit(command: str, box: Boundary, cwd0: str) -> str | None:
         return "another user's home (~user)"
     if _SECRET_VAR.search(command):
         return "credential variable"
+    absolute = box.abs_pattern
     cwd = cwd0
     for segment in _SEGMENTS.split(command):
         try:
@@ -193,20 +264,24 @@ def _input_hit(command: str, box: Boundary, cwd0: str) -> str | None:
             )
             words = words[1:]
         for word in words:
-            for inner in _ABS.findall(word) if not word.startswith("/") else []:
+            for inner in absolute.findall(word) if not word.startswith("/") else []:
                 path = posixpath.normpath(inner)
                 if path not in _INPUT_ALLOW and not _under(path, (*box.roots, *box.runtime, *_SYSTEM_BIN)):
                     return f"path outside the boundary {path[:200]}"
             pieces = [word] if word.startswith("/") else re.split(r"[=:]", word)
             for piece in pieces:
-                if ("/" in piece or "." in piece) and _CREDENTIAL_NAME.search(piece.rstrip("\"',;:")):
+                if (
+                    box.credential_names
+                    and ("/" in piece or "." in piece)
+                    and _CREDENTIAL_NAME.search(piece.rstrip("\"',;:"))
+                ):
                     return f"credential read {posixpath.basename(piece)[:80]}"
-                if piece.startswith("/") and not _ABS.match(piece):
+                if piece.startswith("/") and not absolute.match(piece):
                     continue
                 path = _expand(piece, cwd, box.env)
                 if path is None or path in _INPUT_ALLOW:
                     continue
-                if _under(path, box.secrets) or _CREDENTIAL_NAME.search(path):
+                if box.credential_names and (_under(path, box.secrets) or _CREDENTIAL_NAME.search(path)):
                     return f"credential read {posixpath.basename(path)[:80]}"
                 if any(ch in path for ch in "*?[") and _under(posixpath.dirname(path), box.secrets):
                     return "credential glob"
@@ -262,7 +337,8 @@ def _events(stdout: str) -> Iterable[tuple[str, list[str]]]:
 def escape_scan(stdout: str, box: Boundary) -> str | None:
     """Why the run left its boundary, or None. First hit wins. A heuristic, not a boundary:
     obfuscated paths (base64, string concatenation inside a program) are only caught if their
-    output names a host path; the confinement branch is what closes those."""
+    output names a host path; the confined container (ADR-0074) is what closes those, and a
+    container run builds its Boundary with `container_boundary` for this same scan."""
     cwd0 = box.workdir
     for side, texts in _events(stdout):
         for text in texts:
@@ -271,7 +347,7 @@ def escape_scan(stdout: str, box: Boundary) -> str | None:
                 if hit:
                     return f"escape: {hit}"
                 continue
-            for candidate in _ABS.findall(text):
+            for candidate in box.abs_pattern.findall(text):
                 path = posixpath.normpath(candidate.rstrip(".:"))
                 if not _under(path, (*box.roots, *box.runtime)) and path not in _INPUT_ALLOW:
                     return f"escape: host path in a tool result {path[:200]}"
@@ -319,11 +395,29 @@ def secret_scrub(root: Path, secret: str) -> None:
                 path.write_bytes(data.replace(needle, REDACTED))
 
 
+def secret_scan(root: Path, secret: str) -> tuple[str, ...]:
+    """Relative paths of every file under `root` whose bytes contain `secret`.
+
+    The after-run check (ADR-0074): a hit fails the run — the caller records it as an escape —
+    and the scrub that follows still removes the value from the kept records.
+    """
+    if not secret:
+        raise ValueError("the secret to scan for must be non-empty")
+    needle = secret.encode()
+    hits: list[str] = []
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            data = path.read_bytes()
+            if needle in data:
+                hits.append(str(path.relative_to(root)))
+    return tuple(hits)
+
+
 def _text(output: str | bytes | None) -> str:
     return output.decode(errors="replace") if isinstance(output, bytes) else (output or "")
 
 
-def _status(returncode: int | None, trace: stream.Trace, timeout_s: float) -> str:
+def run_status(returncode: int | None, trace: stream.Trace, timeout_s: float) -> str:
     if returncode is None:
         return f"failed: timeout after {timeout_s}s"
     if returncode != 0 or trace.result_field("subtype") != "success" or trace.result_field("is_error"):
@@ -397,7 +491,7 @@ def _kill_group(proc: subprocess.Popen[bytes]) -> None:
             time.sleep(0.01)
 
 
-def _write_logs(run_dir: Path, stdout: str, stderr: str) -> None:
+def write_run_logs(run_dir: Path, stdout: str, stderr: str) -> None:
     (run_dir / "stream.jsonl").write_text(stdout, encoding="utf-8")
     (run_dir / "claude.stderr").write_text(stderr, encoding="utf-8")
 
@@ -445,7 +539,7 @@ def _read_pipe(
         discarding = True
 
 
-def _capture(
+def capture_output(
     argv: Sequence[str],
     *,
     cwd: Path,
@@ -534,7 +628,7 @@ def _capture(
     return stdout, stderr, proc.returncode
 
 
-def _scoped_models(source: Path, provider: str) -> bytes | None:
+def scoped_models(source: Path, provider: str) -> bytes | None:
     """`models.json` reduced to the arm's provider entry, or None when there is nothing to copy.
 
     The real models.json can carry literal api keys per provider (the D3 diagnosis recorded two on
@@ -552,7 +646,7 @@ def _scoped_models(source: Path, provider: str) -> bytes | None:
     return json.dumps(scoped, indent=2).encode() + b"\n"
 
 
-def _scoped_auth(source: Path, provider: str) -> bytes | None:
+def scoped_auth(source: Path, provider: str) -> bytes | None:
     """`auth.json` reduced to the one provider entry, or None when there is nothing to copy.
 
     The real auth.json holds every provider the operator has ever logged in to. A run needs one.
@@ -604,7 +698,7 @@ def _isolated_env(
             target = agent_dir / name
             if name in ("auth.json", "models.json"):
                 scoped = (
-                    (_scoped_auth if name == "auth.json" else _scoped_models)(source, auth_provider)
+                    (scoped_auth if name == "auth.json" else scoped_models)(source, auth_provider)
                     if auth_provider
                     else None
                 )
@@ -627,6 +721,14 @@ def _isolated_env(
         "PI_CODING_AGENT_DIR": str(agent_dir),
         "TMPDIR": str(tmp),
     }
+
+
+def real_agent_dir(base_env: Mapping[str, str]) -> Path:
+    """The operator's real pi agent dir, resolved before any run isolates HOME. Empty Path when
+    neither `PI_CODING_AGENT_DIR` nor `HOME` is set; callers refuse that."""
+    real_home = base_env.get("HOME")
+    raw = base_env.get("PI_CODING_AGENT_DIR") or (str(Path(real_home) / ".pi" / "agent") if real_home else "")
+    return Path(raw)
 
 
 @contextmanager
@@ -682,7 +784,7 @@ def run_agent(
         )
         started = time.perf_counter()
         try:
-            stdout, stderr, returncode = _capture(
+            stdout, stderr, returncode = capture_output(
                 argv,
                 cwd=workdir,
                 env={**base_env, **command.env, **isolated},
@@ -692,13 +794,13 @@ def run_agent(
         except _StdoutCapExceeded as exceeded:
             # Persist before the raise so the finally scrub still sees the secret on this path.
             shutil.rmtree(secret_dir, ignore_errors=True)
-            _write_logs(run_dir, exceeded.captured_stdout, exceeded.captured_stderr)
+            write_run_logs(run_dir, exceeded.captured_stdout, exceeded.captured_stderr)
             raise
         except _IncompleteTranscript as incomplete:
             # Same contract: persist what was read, then fail loudly. A silently partial
             # transcript would book an agent verdict on missing evidence.
             shutil.rmtree(secret_dir, ignore_errors=True)
-            _write_logs(run_dir, incomplete.captured_stdout, incomplete.captured_stderr)
+            write_run_logs(run_dir, incomplete.captured_stdout, incomplete.captured_stderr)
             raise
         wall = time.perf_counter() - started
         for name in (RELAY_LOG, str(Path(RELAY_LOG).with_suffix(".stderr"))):
@@ -706,7 +808,12 @@ def run_agent(
             if relay.is_file():
                 shutil.copyfile(relay, run_dir / name)
         shutil.rmtree(secret_dir, ignore_errors=True)
-        _write_logs(run_dir, stdout, stderr)
+        write_run_logs(run_dir, stdout, stderr)
+        scan_hit = secret_scan(run_dir, secret)
+        escape = escape_scan(stdout, box)
+        if scan_hit:
+            prefix = f"{escape}; " if escape else ""
+            escape = f"{prefix}secret scan: key value found in {', '.join(scan_hit)}"
         trace = (parse or stream.parse)(stdout.splitlines())
         yield AgentRunResult(
             argv=argv,
@@ -716,8 +823,8 @@ def run_agent(
             returncode=returncode,
             wall_s=wall,
             trace=trace,
-            status=_status(returncode, trace, command.timeout_s),
-            escape=escape_scan(stdout, box),
+            status=run_status(returncode, trace, command.timeout_s),
+            escape=escape or None,
         )
     finally:
         shutil.rmtree(secret_dir, ignore_errors=True)

@@ -15,7 +15,8 @@ neither lives here.
 | `JEV_EVAL_LIVE=1 python -m evals.runners.live MANIFEST OUT [--repeats N]` | **live, paid** | Calls the tools through the configured provider and records outputs |
 | `JEV_EVAL_LIVE=1 python -m evals.calibration.order` | **live, paid** | Order-sensitivity probe (A2): one 20-claim jev_verify batch sent forward, reversed, and a same-order control; per-claim verdict stability and a determinism reading; exactly 3 requests |
 | `python -m evals.external.jevbench <checkout>` | none | A8: reads a JevBench checkout's public items as data (sha256-pinned, never executed) and writes `datasets/jevbench-public.jsonl` + its manifest; see § External benchmark |
-| `JEV_AB_LIVE=1 make ab AGENT=claude\|pi` | **live, paid** | L4 agent outcome study (below); writes `reports/agent-outcomes.md`. `python -m evals.ab.run --report-only` re-renders it offline |
+| `JEV_AB_LIVE=1 make ab AGENT=claude\|pi` | **live, paid** | L4 agent outcome study (below); writes `reports/agent-outcomes.md`. Runs confined (ADR-0074): broker sidecar + `--network none` agent container, no credential inside. `python -m evals.ab.run --report-only` re-renders it offline |
+| `make confinement-adversarial` | none (fake upstreams) | ADR-0074's Docker-marked adversarial suite and confined stub-agent workflow; skips cleanly without a Docker daemon |
 | `JEV_BENCH_LIVE=1 python -m evals.bench.run` | **live, paid** | The 150-question before/after bench (below). Not wired to any make target; refuses while any item label is not `frozen` |
 
 The live runner refuses to start unless `JEV_EVAL_LIVE=1` is in its environment, when the server's
@@ -196,12 +197,21 @@ call's round trip.
 | `ab/ledger.py` | One `SpendPolicy` per agent: 18 runs (3 tasks x 2 arms x 3 repeats), 25 USD, checked per pair. Pi's worst case is its Jev headroom only |
 | `ab/run.py`, `ab/report.py` | Seeded pair schedule, the runner and its refusals, the pinned-setup guard, and the markdown report |
 
-The study refuses without `JEV_AB_LIVE=1` (no make target or CI job sets it), without `TYPESAFE_API_KEY`,
+The study refuses without `JEV_AB_LIVE=1` (no make target or CI job sets it), with `TYPESAFE_API_KEY` set,
 without the agent binary (and, for Pi, the MCP adapter at `PI_MCP_ADAPTER`), and when `reports/agent-outcomes/<agent>/meta.json`
 records a different Jev revision, fixture hash, agent version, held-constant setup, or hardware: pairs
-never span two setups. Every run goes through `evals/agent.py`'s `run_agent`: a fresh sandbox, a minimal env
-with no provider keys, the key only in the Jev server's env through a 0600 config file, a timeout, cleanup,
-and secret scrubbing. Raw runs land in `reports/agent-outcomes/<agent>/` (gitignored); the report in
+never span two setups. Live runs execute inside the confinement boundary of ADR-0074:
+`evals/confinement/` starts a broker sidecar (the only holder of the TypeSafe key and the scoped
+model-provider key) and runs the agent in a `--network none` container whose only mounts are the task
+workdir, its scratch, the broker's Unix socket, and its per-run capability — no credential, keychain, or
+operator file exists inside, the agent config carries only a placeholder, and every egress is the
+broker's allowlist (`POST /v1/systemone` on TypeSafe; the provider host). The Claude arm needs
+`JEV_CLAUDE_KEY_FILE` (its macOS keychain login cannot cross); the pi arm needs the model's provider
+entry in the operator's `models.json`. Build the image with `make confinement-image`; the boundary's
+offline tests run under `make eval`, and `make confinement-adversarial` (Docker; skips without a daemon)
+runs the in-container adversarial suite. The offline dry-run keeps `evals/agent.py`'s macOS sandbox
+`run_agent`: a fresh sandbox, a minimal env with no provider keys, a timeout, cleanup, and secret
+scrubbing; both paths scan the run's records for the key value and fail the run on a hit. Raw runs land in `reports/agent-outcomes/<agent>/` (gitignored); the report in
 `reports/agent-outcomes.md` is tracked once it holds live data, and the durable record — rendered reports
 plus the minimal raw records needed to re-render offline — lives in
 [`docs/evals/`](../docs/evals/README.md). A report from stub data is never committed. Offline tests:

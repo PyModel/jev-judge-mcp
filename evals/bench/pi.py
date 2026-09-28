@@ -56,8 +56,16 @@ def adapter_path() -> Path:
 _CONTEXT_KEYS = ("input", "cacheRead", "cacheWrite")
 
 
-def pi_command(pi: str, prompt_text: str, mcp_config_path: Path, addendum: str, model: str = PI_MODEL) -> list[str]:
-    """The Pi arm's argv. `--` keeps a prompt that starts with `-` from being read as a flag."""
+def pi_command(
+    pi: str,
+    prompt_text: str,
+    mcp_config_path: Path,
+    addendum: str,
+    model: str = PI_MODEL,
+    adapter: str | None = None,
+) -> list[str]:
+    """The Pi arm's argv. `--` keeps a prompt that starts with `-` from being read as a flag.
+    `adapter` names the adapter file; the confined runs pass the container-side copy."""
     return [
         pi,
         "--print",
@@ -69,7 +77,7 @@ def pi_command(pi: str, prompt_text: str, mcp_config_path: Path, addendum: str, 
         PI_THINKING,
         "--no-extensions",
         "-e",
-        str(adapter_path()),
+        adapter if adapter is not None else str(adapter_path()),
         "--mcp-config",
         str(mcp_config_path),
         "--no-session",

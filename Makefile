@@ -3,7 +3,7 @@
 # in the same commit that adds its tests.
 PYTEST := uv run pytest
 
-.PHONY: ci lint typecheck unit property policy-coverage contract parity security build smoke eval eval-live security-live ab load load_canary hooks ci-linux
+.PHONY: ci lint typecheck unit property policy-coverage contract parity security build smoke eval eval-live security-live ab load load_canary hooks ci-linux confinement-adversarial confinement-image
 
 ci: sync lint typecheck unit property policy-coverage contract parity policy-replay security build smoke eval load_canary
 
@@ -88,6 +88,18 @@ load_canary:
 # ROADMAP P7: offline eval scorer and calibration tests. No network, no API key.
 eval:
 	$(PYTEST) tests/evals
+
+# ADR-0074: the confinement boundary's adversarial integration tests (marker `docker`). Needs a
+# Docker daemon (OrbStack locally); every test skips cleanly without one, which is the Linux CI
+# shape. Fake key, fake upstreams, no spend.
+confinement-adversarial:
+	$(PYTEST) tests/evals -m docker
+
+# The confined agent runtime image (ADR-0074): python + this checkout's wheel + node + the pinned
+# agent CLIs. Live studies refuse to run without it.
+confinement-image:
+	uv build --wheel
+	docker build -f docker/eval-agent.Dockerfile -t jev-eval-agent:latest .
 
 # Live L3 smoke against TypeSafe (paid, bounded; evals/README.md). Fails without TYPESAFE_API_KEY.
 eval-live:

@@ -265,6 +265,22 @@ def test_config_is_private_argv_carries_its_path_and_the_run_succeeds(tmp_path: 
     assert KEY not in _kept(tmp_path) and "leaked [REDACTED]" in _kept(tmp_path)
 
 
+def test_a_run_whose_records_carry_the_secret_fails_the_after_run_scan(tmp_path: Path) -> None:
+    """The after-run scan (ADR-0074): a kept artifact carrying the key value fails the run as an
+    escape, and the scrub that follows still removes the value from the records."""
+    with run_agent(_stub(), mcp_config={}, base_env={}, secret=KEY, run_dir=tmp_path) as agent:
+        assert agent.escape is not None
+        assert "secret scan" in agent.escape and "stream.jsonl" in agent.escape
+    assert KEY not in _kept(tmp_path) and "leaked [REDACTED]" in _kept(tmp_path)
+
+
+def test_a_clean_run_reports_no_scan_hit(tmp_path: Path) -> None:
+    command = AgentCommand(argv=lambda _config: [sys.executable, "-c", "print('{}')"], timeout_s=30)
+    with run_agent(command, mcp_config={}, base_env={}, secret=KEY, run_dir=tmp_path) as agent:
+        assert agent.escape is None, agent.escape
+    assert KEY not in _kept(tmp_path)
+
+
 def test_timeout_has_no_return_code_and_is_scrubbed(tmp_path: Path) -> None:
     with run_agent(_stub(30, timeout_s=1), mcp_config={}, base_env={}, secret=KEY, run_dir=tmp_path) as agent:
         assert (agent.status, agent.returncode) == ("failed: timeout after 1s", None)

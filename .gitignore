@@ -2,6 +2,9 @@
 __pycache__/
 .venv/
 dist/
+
+# The adversarial test image build context: the wheel is copied in at test time.
+tests/evals/adversarial-image/
 .coverage
 coverage.xml
 .pytest_cache/

@@ -6,12 +6,13 @@ recording proxy, and one sentence to the system addendum telling the agent to us
 for the judgment the task hinges on. Nothing else differs (`tests/evals/test_ab_harness.py` checks).
 """
 
+import json
 import shutil
 import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from evals.agent import RELAY_LOG
 
@@ -28,6 +29,10 @@ RUN_BUDGET_USD = 2.00
 RUN_TIMEOUT_S = 900
 
 JEV_MODEL = "jev-1.13.0"
+
+PLACEHOLDER_KEY = "confined-placeholder-the-broker-holds-the-real-key"
+"""The only credential-shaped value the container config ever carries (ADR-0074): the shim strips
+it and the broker injects the real key, so a leak of this string carries nothing."""
 
 SYSTEM_ADDENDUM = (
     "You are working in a small Python repository. Complete the task in the user's message, run the test "
@@ -130,8 +135,8 @@ def study_key(environ: Mapping[str, str]) -> str:
     The harness process must not carry the key in its exec-time environment: `ps eww` of a
     same-uid child shows that block, arm A included, for the whole study. So `TYPESAFE_API_KEY` in
     the environment is a refusal (launch the study with it unset), and the key file is the only
-    source. Until the broker branch lands, the run's sandbox still holds a readable copy for the
-    Jev server (same uid); only the confinement boundary hides that.
+    source. Live, the file is mounted read-only into the broker sidecar alone (ADR-0074): this
+    value only ever feeds the after-run scan and the scrub of kept records, never a container.
     """
     if environ.get("TYPESAFE_API_KEY"):
         raise ValueError("launch the study with TYPESAFE_API_KEY unset; pass JEV_STUDY_KEY_FILE instead")
@@ -150,9 +155,10 @@ def keyfile_env(sandbox: Path, api_key: str) -> dict[str, str]:
 
     The key must never sit in the MCP config the agent can read: in the D3 study the agents read
     that config's env and echoed the key to the model provider in 29 of 33 with-Jev runs. The
-    server reads `JEV_MCP_KEY_FILE` (ADR-0046). What stays readable until the broker branch: this
-    0600 file is inside the run sandbox, same uid as the agent, so a determined run can still read
-    it by path. The canary flags reads of its name; only the confinement boundary fully hides it.
+    server reads `JEV_MCP_KEY_FILE` (ADR-0046). This is the macOS-sandbox (offline dry-run) shape:
+    the 0600 file is inside the run sandbox, same uid as the agent. Live runs never call it — they
+    are confined (ADR-0074), the server reaches TypeSafe through the broker, and no key file exists
+    anywhere the agent can read.
     """
     path = sandbox / "typesafe.key"
     path.write_text(api_key + "\n", encoding="utf-8")
@@ -201,6 +207,105 @@ def mcp_config(
             "toolPrefix": "none",
         }
     return {"mcpServers": servers_doc}
+
+
+def confined_mcp_config(
+    arm: str,
+    *,
+    scratch: Path,
+    server_env: Mapping[str, str],
+    typesafe_shim_url: str,
+) -> dict[str, Any]:
+    """The confined `--mcp-config` document, built against the run's scratch as the container
+    sees it (`/scratch`).
+
+    Same shape as `mcp_config` with the container differences (ADR-0074): the interpreter is the
+    image's `python3` (the wheel-installed server), the server and proxy code are the copies in
+    the scratch, and the TypeSafe provider reaches only the in-container shim — the placeholder
+    key rides the config because the real key never enters the container.
+    """
+    from evals.confinement.launch import AGENT_SCRATCH
+
+    copy_servers(scratch, "ab")
+    harness = {
+        "type": "stdio",
+        "command": "python3",
+        "args": [f"{AGENT_SCRATCH}/servers/harness_server.py"],
+    }
+    servers_doc: dict[str, Any] = {"harness": harness}
+    if arm != "A":
+        if not typesafe_shim_url:
+            raise ValueError("the confined config needs the TypeSafe shim URL")
+        env = {**dict(server_env), "PYTHONPATH": f"{AGENT_SCRATCH}/servers"}
+        env.update({"TYPESAFE_BASE_URL": typesafe_shim_url, "TYPESAFE_API_KEY": PLACEHOLDER_KEY})
+        servers_doc["jev"] = {
+            "type": "stdio",
+            "command": "python3",
+            "args": [
+                "-m",
+                "evals.ab.proxy",
+                f"{AGENT_SCRATCH}/{RELAY_LOG}",
+                "--",
+                "python3",
+                "-m",
+                "jev_judge_mcp",
+            ],
+            "env": env,
+            "lifecycle": "eager",
+            "directTools": True,
+            "toolPrefix": "none",
+        }
+    return {"mcpServers": servers_doc}
+
+
+def container_agent_files(
+    scratch_agent: Path,
+    *,
+    provider: str,
+    auth_entry: Mapping[str, Any],
+    models_bytes: bytes | None,
+    provider_shim_url: str,
+) -> None:
+    """Write the container's auth.json and models.json: the one scoped provider entry with the
+    placeholder key, and the scoped models entry with its base URL pointed at the provider shim
+    (ADR-0074). The real provider key never crosses; the broker injects it."""
+    scratch_agent.mkdir(parents=True, exist_ok=True)
+    entry = dict(auth_entry)
+    if "key" in entry:
+        entry["key"] = PLACEHOLDER_KEY
+    (scratch_agent / "auth.json").write_text(json.dumps({provider: entry}, indent=2) + "\n", encoding="utf-8")
+    if models_bytes is None:
+        return
+    parsed: object = json.loads(models_bytes)
+    document = cast(dict[str, Any], parsed) if isinstance(parsed, dict) else {}
+    raw_providers: object = document.get("providers")
+    providers = cast(dict[str, Any], raw_providers) if isinstance(raw_providers, dict) else {}
+    raw_scoped: object = providers.get(provider)
+    if isinstance(raw_scoped, dict):
+        scoped = cast(dict[str, Any], raw_scoped)
+        if scoped.get("baseUrl"):
+            scoped["baseUrl"] = provider_shim_url
+        if scoped.get("apiKey"):
+            scoped["apiKey"] = PLACEHOLDER_KEY
+        providers[provider] = scoped
+    (scratch_agent / "models.json").write_text(
+        json.dumps({**document, "providers": providers}, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def scoped_provider_key(source: Path, provider: str) -> str:
+    """The one provider entry's key value from the operator's auth.json, or "" when absent.
+
+    The broker injects exactly this value; the file written from it is the scoped credential
+    mount ADR-0074 condition 1 names — the one entry, never the operator's whole auth.json."""
+    try:
+        entries: object = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    if not isinstance(entries, dict) or provider not in entries:
+        return ""
+    key = cast(dict[str, Any], cast(dict[str, Any], entries)[provider]).get("key")
+    return key if isinstance(key, str) and key else ""
 
 
 def claude_command(claude: str, prompt: str, mcp_config_path: Path, addendum: str = SYSTEM_ADDENDUM) -> list[str]:

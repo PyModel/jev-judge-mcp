@@ -775,25 +775,72 @@ def _live_env(bindir: Path, home: Path) -> dict[str, str]:
     return {"JEV_AB_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key_file), "PATH": str(bindir), "HOME": str(home)}
 
 
+def _confined_env(bindir: Path, home: Path, agent: str) -> dict[str, str]:
+    """A live env whose operator files pass the confinement gate: the scoped provider entries the
+    broker needs, the adapter, and (claude only) the key file that stands in for the keychain."""
+    env = _live_env(bindir, home)
+    agent_dir = home / ".pi" / "agent"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    provider = ab_run.pi.PI_MODEL.split("/")[0] if agent == "pi" else "anthropic"
+    (agent_dir / "auth.json").write_text(
+        json.dumps({provider: {"type": "api_key", "key": "sk-test-provider-entry-not-real"}}), encoding="utf-8"
+    )
+    (agent_dir / "models.json").write_text(
+        json.dumps(
+            {"providers": {provider: {"baseUrl": "https://provider.invalid/example", "api": "openai-completions"}}}
+        ),
+        encoding="utf-8",
+    )
+    if agent == "pi":
+        adapter = home / "adapter.ts"
+        adapter.write_text("export {}", encoding="utf-8")
+        env["PI_MCP_ADAPTER"] = str(adapter)
+    else:
+        claude_key = home / "claude.key"
+        claude_key.write_text("sk-test-claude-key-file-not-a-real-one\n", encoding="utf-8")
+        env["JEV_CLAUDE_KEY_FILE"] = str(claude_key)
+    return env
+
+
+def _docker_answers() -> None:
+    return None
+
+
+def _image_exists(_image: str) -> bool:
+    return True
+
+
+def _dead_probe(_spec: object) -> str:
+    return "upstream unreachable: ConnectionRefused"
+
+
+def _stub_the_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The docker gate answers without a daemon; no image build, no probe containers."""
+    monkeypatch.setattr(ab_run, "docker_available", _docker_answers)
+    monkeypatch.setattr(ab_run, "image_present", _image_exists)
+
+
 @pytest.mark.parametrize("agent", ab_run.AGENTS)
 def test_a_dead_preflight_exits_2_and_books_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], agent: str
 ) -> None:
-    """A dead login refuses before any run is booked, pins no setup, and rewrites no report.
+    """A dead boundary refuses before any run is booked, pins no setup, and rewrites no report.
 
-    `expected_ids` is the reference grader, unrelated to this gate. Moving the preflight to after
-    `study`, or dropping it, books the dead run: the ledger appears and this fails. Exit 2 is `main`'s
-    refusal, so a stop string that still publishes also fails.
+    Live preflight is the confined probe (ADR-0074): a probe that cannot reach the model provider
+    through the broker refuses the batch. `expected_ids` is the reference grader, unrelated to this
+    gate. Moving the preflight to after `study`, or dropping it, books the dead run: the ledger
+    appears and this fails. Exit 2 is `main`'s refusal, so a stop string that still publishes also
+    fails.
     """
     _agent_bin(tmp_path / "bin", agent, dead_login())
-    adapter = tmp_path / "adapter.ts"
-    adapter.write_text("export {}", encoding="utf-8")
-    monkeypatch.setenv("PI_MCP_ADAPTER", str(adapter))
+    _stub_the_boundary(monkeypatch)
+    monkeypatch.setenv("PI_MCP_ADAPTER", str(tmp_path / "adapter.ts"))
+    monkeypatch.setattr(ab_run, "probe_provider", _dead_probe)
     monkeypatch.setattr(ab_run, "expected_ids", _skip_grader)
     monkeypatch.setattr(ab_run, "OUT", tmp_path / "out")
     monkeypatch.setattr(ab_run, "REPORT", tmp_path / "report.md")
-    assert ab_run.main(["--agent", agent], environ=_live_env(tmp_path / "bin", tmp_path)) == 2
-    assert "Not logged in" in capsys.readouterr().err
+    assert ab_run.main(["--agent", agent], environ=_confined_env(tmp_path / "bin", tmp_path, agent)) == 2
+    assert "confined preflight could not reach the model provider" in capsys.readouterr().err
     study_out = tmp_path / "out" / agent
     assert not (study_out / "meta.json").exists()
     assert not (study_out / "ledger.json").exists()
@@ -827,24 +874,28 @@ def test_a_finished_study_does_not_preflight_again(tmp_path: Path, monkeypatch: 
 
 
 @pytest.mark.parametrize("agent", ab_run.AGENTS)
-def test_an_unlinkable_keychain_refuses_with_exit_2(
+def test_a_broken_confinement_setup_refuses_with_exit_2(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], agent: str
 ) -> None:
-    """An OSError while preparing the sandbox is a refusal, not a traceback, and books nothing."""
+    """A failure while building the boundary is a refusal, not a traceback, and books nothing.
 
-    def unlinkable(*_args: object, **_kwargs: object) -> dict[str, str]:
-        raise OSError("unlinkable keychain")
+    The macOS-sandbox predecessor (an OSError inside `_isolated_env`) is the offline dry-run path;
+    a live run's setup failure is the confinement build (ADR-0074), and `main` must catch it the
+    same way: exit 2, nothing pinned, nothing booked, no report rewritten.
+    """
+
+    def unlinkable(*_args: object, **_kwargs: object) -> tuple[object, Path]:
+        raise ab_run.ConfinementError("unlinkable broker volume")
 
     _agent_bin(tmp_path / "bin", agent, dead_login())
-    adapter = tmp_path / "adapter.ts"
-    adapter.write_text("export {}", encoding="utf-8")
-    monkeypatch.setenv("PI_MCP_ADAPTER", str(adapter))
+    _stub_the_boundary(monkeypatch)
+    monkeypatch.setenv("PI_MCP_ADAPTER", str(tmp_path / "adapter.ts"))
     monkeypatch.setattr(ab_run, "expected_ids", _skip_grader)
     monkeypatch.setattr(ab_run, "OUT", tmp_path / "out")
     monkeypatch.setattr(ab_run, "REPORT", tmp_path / "report.md")
-    monkeypatch.setattr("evals.agent._isolated_env", unlinkable)
-    assert ab_run.main(["--agent", agent], environ=_live_env(tmp_path / "bin", tmp_path)) == 2
-    assert "sandbox setup failed" in capsys.readouterr().err
+    monkeypatch.setattr(ab_run, "_confinement", unlinkable)
+    assert ab_run.main(["--agent", agent], environ=_confined_env(tmp_path / "bin", tmp_path, agent)) == 2
+    assert "unlinkable broker volume" in capsys.readouterr().err
     study_out = tmp_path / "out" / agent
     assert not (study_out / "ledger.json").exists()
     assert not (study_out / "meta.json").exists()
