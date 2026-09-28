@@ -102,6 +102,10 @@ _Avoid_: option (wire-level term), document, hit
 A hard size bound on an input; exceeding it either rejects the call or truncates, depending on the field.
 _Avoid_: limit, quota
 
+**Wire Arguments**:
+The parsed arguments of one `tools/call`. Unknown keys are stripped, not refused, although every published schema says `additionalProperties: false` — the reference's zod strip, kept on purpose (ADR-0022). A missing or ill-typed declared key is the typed `invalid_arguments` refusal.
+_Avoid_: strict validation, schema enforcement (the schema advertises stricter than the runtime parses, by parity)
+
 ### Providers and parity
 
 **Provider**:

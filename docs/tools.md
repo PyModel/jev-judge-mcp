@@ -22,6 +22,10 @@ caller on TypeSafe cannot see which version answered (ADR-0001 parity). UTF-16 c
 window (64k tokens per request, 32k for state plus the longest question). An input inside every cap
 can still exceed that window and come back as `provider`, not `input_too_large`.
 
+Every tool's schema advertises `additionalProperties: false`; the runtime keeps the reference's
+zod strip: unknown keys are stripped, not refused — a missing or ill-typed declared key is refused
+typed `invalid_arguments` (ADR-0022).
+
 ---
 
 ## jev_verify — claims against evidence

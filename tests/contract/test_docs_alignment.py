@@ -509,6 +509,24 @@ def test_uncapped_inputs_disclose_the_token_window() -> None:
         assert needle in text, path.name
 
 
+def test_wire_arguments_disclose_the_strip_semantics() -> None:
+    """Every published schema says `additionalProperties: false`; the runtime strips unknown keys,
+    the reference's zod behavior (ADR-0022). A reader-facing page that lets that read as a refusal
+    is a lie, so the pages and the parser move in one change."""
+    from jev_judge_mcp.tools.arguments import parse_arguments
+
+    for path in (_TOOL_CARDS, ROOT / "docs" / "CONTEXT.md"):
+        text = path.read_text(encoding="utf-8")
+        assert "additionalProperties: false" in text, path.name
+        assert "stripped, not refused" in text, path.name
+    # The behavior those sentences state, on a real published schema — not a fixture copy.
+    screen = next(tool for tool in TOOLS if tool.definition.name == "jev_screen")
+    schema = screen.definition.input_schema
+    assert schema.get("additionalProperties") is False
+    parsed = parse_arguments("jev_screen", schema, {"text": "a report", "concerns": "noise"})
+    assert parsed == {"text": "a report"}
+
+
 def test_limits_page_says_an_upstream_401_is_auth() -> None:
     """L2 disclosure. The mapping itself is owned by the judge and provider tests."""
     page = _LIMITS_PAGE.read_text(encoding="utf-8")
