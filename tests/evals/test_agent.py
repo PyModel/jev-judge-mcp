@@ -816,3 +816,35 @@ def test_the_redacted_d3_corpus_replay_matches_the_diagnosis() -> None:
     assert clean_a == 33
     assert {"j6-docs-vs-code.B.r3", "j7-find-line.B.r3"} <= set(flagged_b)
     assert clean_b == ["j5-screen-injection.B.r2"]
+
+
+def test_models_json_is_scoped_to_the_arms_provider(tmp_path: Path) -> None:
+    """models.json can carry literal api keys per provider; only the arm's entry crosses."""
+    real_home = tmp_path / "real-home"
+    real_agent = real_home / ".pi" / "agent"
+    real_agent.mkdir(parents=True)
+    (real_agent / "models.json").write_text(
+        json.dumps({"providers": {"opencode-go": {"models": ["m"], "apiKey": "k1"}, "ds4": {"apiKey": "k2"}}}),
+        encoding="utf-8",
+    )
+    probe = (
+        "import json, os\n"
+        "path = os.path.join(os.environ['PI_CODING_AGENT_DIR'], 'models.json')\n"
+        "doc = json.load(open(path)) if os.path.exists(path) else None\n"
+        "result = {'models': doc}\n"
+        "import json as j\n"
+        "print(j.dumps({'type': 'system', 'subtype': 'init', 'model': 'stub', 'mcp_servers': []}), flush=True)\n"
+        "print(j.dumps({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': j.dumps(result)}))\n"
+    )
+    command = AgentCommand(argv=lambda _config: [sys.executable, "-c", probe], timeout_s=30, env={"STUB_SECRET": KEY})
+    with run_agent(
+        command,
+        mcp_config={},
+        base_env={"HOME": str(real_home), "PATH": "/usr/bin:/bin"},
+        secret=KEY,
+        run_dir=tmp_path / "records",
+        auth_provider="opencode-go",
+    ) as agent:
+        seen = json.loads(agent.trace.result_field("result"))
+    assert list(seen["models"]["providers"]) == ["opencode-go"]
+    assert seen["models"]["providers"]["opencode-go"]["apiKey"] == "k1"

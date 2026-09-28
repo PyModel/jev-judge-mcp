@@ -463,7 +463,7 @@ def test_cost_of_is_the_agent_cost_plus_the_priced_jev_tokens(tmp_path: Path) ->
 
 def test_arms_configs_differ_only_in_the_jev_server(tmp_path: Path) -> None:
     api_key = "sk-test-arm-a-must-not-see-this"
-    server_env = {"JEV_PROVIDER": "typesafe", "TYPESAFE_API_KEY": api_key}
+    server_env = {"JEV_PROVIDER": "typesafe", "JEV_NOTES": "arm-b"}
     sandboxes = {arm: tmp_path / arm for arm in arms.ARMS}
     configs = {
         arm: arms.mcp_config(arm, sandbox=sandbox, server_env=server_env if arm == "B" else {})
@@ -480,7 +480,9 @@ def test_arms_configs_differ_only_in_the_jev_server(tmp_path: Path) -> None:
     assert jev["env"]["PYTHONPATH"] == str(sandboxes["B"] / "servers")
     assert jev["args"][0:3] == ["-m", "evals.ab.proxy", str(sandboxes["B"] / "jev-calls.jsonl")]
     assert jev["args"][-2:] == ["-m", "jev_judge_mcp"]
-    assert jev["env"]["TYPESAFE_API_KEY"] == api_key
+    assert "TYPESAFE_API_KEY" not in jev["env"]
+    with pytest.raises(ValueError, match="TYPESAFE_API_KEY"):
+        arms.mcp_config("B", sandbox=tmp_path / "leak", server_env={"TYPESAFE_API_KEY": api_key})
 
 
 def test_the_mcp_config_names_no_host_path(tmp_path: Path) -> None:
@@ -545,7 +547,9 @@ def test_the_typesafe_key_never_rides_in_the_config(tmp_path: Path) -> None:
     echoed the key to the model provider in 29 of 33 with-Jev runs."""
     key = "sk-test-keyfile-not-a-real-key"
     sandbox = tmp_path / "box"
-    doc = arms.mcp_config("B", sandbox=sandbox, server_env={"TYPESAFE_API_KEY": key}, api_key=key)
+    with pytest.raises(ValueError, match="TYPESAFE_API_KEY"):
+        arms.mcp_config("B", sandbox=sandbox / "leak", server_env={"TYPESAFE_API_KEY": key})
+    doc = arms.mcp_config("B", sandbox=sandbox, server_env={}, api_key=key)
     text = json.dumps(doc)
     assert key not in text
     key_file = sandbox / "typesafe.key"
@@ -989,7 +993,9 @@ def test_jev_answer_on_the_redacted_real_streams() -> None:
     document's answer field, mapped by its own task's verdict options, selects the gold option."""
     fixture = json.loads((REPO / "tests" / "evals" / "data" / "jev-answer-fixture.json").read_text(encoding="utf-8"))
     expected = {
-        "j7-find-line.B.r1": ("j7-find-line", "refunds-return"),
+        # j7's recorded run predates its redesign (the refunds-return candidate no longer exists),
+        # so its find result names no current option and correctly parses to None.
+        "j7-find-line.B.r1": ("j7-find-line", None),
         "j10-control-spec.B.r2": ("j10-control-spec", "use-spec"),
         "j6-docs-vs-code.B.r2": ("j6-docs-vs-code", "doc-governs"),
     }

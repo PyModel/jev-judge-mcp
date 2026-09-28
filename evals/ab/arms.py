@@ -178,9 +178,10 @@ def mcp_config(
     }
     servers_doc: dict[str, Any] = {"harness": harness}
     if arm != "A":
+        if "TYPESAFE_API_KEY" in server_env:
+            raise ValueError("TYPESAFE_API_KEY never rides in the config; pass api_key (the keyfile)")
         env = {**dict(server_env), "PYTHONPATH": str(servers)}
         if api_key:
-            env = {k: v for k, v in env.items() if k != "TYPESAFE_API_KEY"}
             env.update(keyfile_env(sandbox, api_key))
         servers_doc["jev"] = {
             "type": "stdio",

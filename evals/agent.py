@@ -534,6 +534,24 @@ def _capture(
     return stdout, stderr, proc.returncode
 
 
+def _scoped_models(source: Path, provider: str) -> bytes | None:
+    """`models.json` reduced to the arm's provider entry, or None when there is nothing to copy.
+
+    The real models.json can carry literal api keys per provider (the D3 diagnosis recorded two on
+    this host), so it is scoped exactly like auth.json: one provider crosses, or nothing."""
+    try:
+        parsed: object = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    providers = cast(dict[str, Any], parsed).get("providers")
+    if not isinstance(providers, dict) or provider not in providers:
+        return None
+    scoped = {**cast(dict[str, Any], parsed), "providers": {provider: cast(dict[str, Any], providers)[provider]}}
+    return json.dumps(scoped, indent=2).encode() + b"\n"
+
+
 def _scoped_auth(source: Path, provider: str) -> bytes | None:
     """`auth.json` reduced to the one provider entry, or None when there is nothing to copy.
 
@@ -584,8 +602,12 @@ def _isolated_env(
             if not source.is_file():
                 continue
             target = agent_dir / name
-            if name == "auth.json":
-                scoped = _scoped_auth(source, auth_provider) if auth_provider else None
+            if name in ("auth.json", "models.json"):
+                scoped = (
+                    (_scoped_auth if name == "auth.json" else _scoped_models)(source, auth_provider)
+                    if auth_provider
+                    else None
+                )
                 if scoped is None:
                     continue
                 target.write_bytes(scoped)
