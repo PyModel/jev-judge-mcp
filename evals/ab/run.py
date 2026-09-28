@@ -195,6 +195,15 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
 
 
+def arm_spec(spec: ConfinementSpec, arm: str) -> ConfinementSpec:
+    """The run's boundary, per arm: the without-Jev arm gets no TypeSafe upstream at all, so no
+    in-container TypeSafe shim starts and its broker has no route to answer one — treatment
+    isolation is enforced by the boundary, not only by the MCP config the agent sees."""
+    if arm != "A":
+        return spec
+    return replace(spec, upstreams=tuple(upstream for upstream in spec.upstreams if upstream.name != "typesafe"))
+
+
 def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLedger, out: Path) -> dict[str, Any]:
     rid = run_id(task.id, arm, repeat)
     run_dir = out / rid
@@ -202,7 +211,7 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
     prompt = user_prompt(task)
     addendum = arms.addendum(arm, setup.agent, task.judgment.jev_tool)
     if setup.confinement is not None:
-        spec = setup.confinement
+        spec = arm_spec(setup.confinement, arm)
         adapter = CONTAINER_ADAPTER if setup.agent == "pi" else None
         model_args = {"model": setup.model} if (setup.agent == "pi" and setup.model) else {}
         command = AgentCommand(

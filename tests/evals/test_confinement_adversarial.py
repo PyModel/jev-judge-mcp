@@ -683,6 +683,60 @@ def test_sigterm_tears_the_boundary_down_and_the_reaper_sweeps_leftovers(image: 
     shutil.rmtree(stale, ignore_errors=True)
 
 
+@DOCKER
+def test_the_without_jev_arm_has_no_typesafe_channel(boundary_stack: Any, tmp_path: Path) -> None:
+    """F8 (2026-09-28 critique): arm A's boundary carries no TypeSafe upstream, so the in-container
+    TypeSafe shim never starts and the broker holds no route: a direct call from inside arm A's
+    container must fail, the model provider must still answer through the same boundary, and no
+    TypeSafe request may reach the upstream."""
+    from evals.ab.run import arm_spec
+    from evals.agent import AgentCommand
+    from evals.bench import pi
+
+    spec = arm_spec(boundary_stack["spec"], "A")
+    assert [upstream.name for upstream in spec.upstreams] == ["model-provider"]
+    stub = "\n".join(
+        [
+            "import json, urllib.request",
+            "refused = None",
+            "try:",
+            "    urllib.request.urlopen("
+            '        urllib.request.Request("http://127.0.0.1:8079/v1/systemone", data=b"{}",'
+            '        headers={"Content-Type": "application/json"}), timeout=30)',
+            "except Exception as error:",
+            "    refused = repr(error)",
+            "assert refused, 'the TypeSafe channel answered inside the without-Jev arm'",
+            'request = urllib.request.Request("http://127.0.0.1:8080/chat/completions", data=b"{}",',
+            '    headers={"Content-Type": "application/json", "Authorization": "Bearer confined-placeholder"})',
+            "with urllib.request.urlopen(request, timeout=60) as response:",
+            "    assert response.status == 200, response.status",
+            'print(json.dumps({"type": "message_end", "message": {"role": "assistant", "provider": "stub",',
+            '    "model": "stub-model", "usage": {"input": 5, "output": 3, "cacheRead": 0, "cacheWrite": 0,'
+            '    "totalTokens": 8, "cost": {"total": 0.01}}, "content": [{"type": "text", "text": refused}],'
+            '    "stopReason": "stop"}}), flush=True)',
+            'print(json.dumps({"type": "agent_end", "willRetry": False}), flush=True)',
+        ]
+    )
+    run_dir = tmp_path / "records-a-arm"
+
+    def scratch_files(scratch: Path) -> None:
+        (scratch / "stub_agent.py").write_text(stub, encoding="utf-8")
+
+    with launch.run_confined(
+        AgentCommand(argv=lambda config: ["python3", "/scratch/stub_agent.py"], timeout_s=120.0),
+        spec=spec,
+        mcp_config={},
+        secret=KEY,
+        run_dir=run_dir,
+        prepare=_materialize,
+        parse=pi.parse,
+        scratch_files=scratch_files,
+    ) as run:
+        assert run.status == "ok", (run.status, run.stderr[-500:])
+        assert run.escape is None, run.escape
+    assert not _Upstream.seen, f"arm A reached the TypeSafe upstream: {_Upstream.seen}"
+
+
 def _materialize(workdir: Path) -> None:
     (workdir / "task.txt").write_text("materialized", encoding="utf-8")
 
