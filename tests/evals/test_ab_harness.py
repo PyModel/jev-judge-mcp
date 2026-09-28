@@ -669,7 +669,9 @@ def test_the_study_refuses_without_its_flag_or_key(tmp_path: Path) -> None:
         ab_run.live({"JEV_AB_LIVE": "1"}, tmp_path, agent="claude")
     with pytest.raises(ab_run.StudyRefusedError, match="TYPESAFE_API_KEY unset"):
         ab_run.live(
-            {"JEV_AB_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key), "TYPESAFE_API_KEY": "x"}, tmp_path, agent="claude"
+            {"JEV_AB_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key), "TYPESAFE_API_KEY": "sk-test-refusal-not-a-real-key"},
+            tmp_path,
+            agent="claude",
         )
     with pytest.raises(ab_run.StudyRefusedError, match="claude not found"):
         ab_run.live({"JEV_AB_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key), "PATH": ""}, tmp_path, agent="claude")
@@ -682,7 +684,7 @@ def test_the_harness_reads_the_key_from_the_operator_named_file(tmp_path: Path) 
     key = _key_file(tmp_path, "sk-test-from-file-not-a-real-key")
     assert arms.study_key({"JEV_STUDY_KEY_FILE": str(key)}) == "sk-test-from-file-not-a-real-key"
     with pytest.raises(ValueError, match="TYPESAFE_API_KEY unset"):
-        arms.study_key({"JEV_STUDY_KEY_FILE": str(key), "TYPESAFE_API_KEY": "x"})
+        arms.study_key({"JEV_STUDY_KEY_FILE": str(key), "TYPESAFE_API_KEY": "sk-test-refusal-not-a-real-key"})
     with pytest.raises(ValueError, match="JEV_STUDY_KEY_FILE"):
         arms.study_key({})
     empty = tmp_path / "empty.key"
@@ -713,7 +715,9 @@ def test_ps_eww_shows_a_child_env_until_the_broker_branch(tmp_path: Path) -> Non
         child.terminate()
         child.wait(timeout=10)
     with pytest.raises(ValueError, match="TYPESAFE_API_KEY unset"):
-        arms.study_key({"JEV_STUDY_KEY_FILE": str(_key_file(tmp_path)), "TYPESAFE_API_KEY": "x"})
+        arms.study_key(
+            {"JEV_STUDY_KEY_FILE": str(_key_file(tmp_path)), "TYPESAFE_API_KEY": "sk-test-refusal-not-a-real-key"}
+        )
 
 
 def _preflight_setup(tmp_path: Path, agent: str, script: str) -> ab_run.Setup:

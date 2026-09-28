@@ -635,7 +635,14 @@ def test_live_run_refuses_without_flag_key_or_frozen_labels(tmp_path: Path) -> N
     with pytest.raises(run.BenchRefusedError, match="JEV_STUDY_KEY_FILE"):
         run.live({"JEV_BENCH_LIVE": "1"}, tmp_path)
     with pytest.raises(run.BenchRefusedError, match="TYPESAFE_API_KEY unset"):
-        run.live({"JEV_BENCH_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key_file), "TYPESAFE_API_KEY": "x"}, tmp_path)
+        run.live(
+            {
+                "JEV_BENCH_LIVE": "1",
+                "JEV_STUDY_KEY_FILE": str(key_file),
+                "TYPESAFE_API_KEY": "sk-test-refusal-not-a-real-key",
+            },
+            tmp_path,
+        )
     with pytest.raises(run.BenchRefusedError, match="150 of 150 items are not frozen"):
         run.live({"JEV_BENCH_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key_file)}, tmp_path)
     assert run.main([], environ={}) == 2

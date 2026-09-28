@@ -789,7 +789,9 @@ _CFG = re.compile(r"(/(?:private/)?var/folders/[^\s\"';]*?/T/jev-agent-cfg-[A-Za
 @pytest.mark.skipif(not CORPUS.is_dir(), reason="the redacted D3 corpus is operator-local")
 def test_the_redacted_d3_corpus_replay_matches_the_diagnosis() -> None:
     """A runs stay clean; the with-Jev runs flag, including the two `find /` runs the diagnosis lists."""
-    clean_a, flagged_b, clean_b = 0, [], []
+    clean_a = 0
+    flagged_b: list[str] = []
+    clean_b: list[str] = []
     for directory in sorted(CORPUS.iterdir()):
         stream = directory / "stream.jsonl"
         if not stream.is_file():
@@ -824,7 +826,14 @@ def test_models_json_is_scoped_to_the_arms_provider(tmp_path: Path) -> None:
     real_agent = real_home / ".pi" / "agent"
     real_agent.mkdir(parents=True)
     (real_agent / "models.json").write_text(
-        json.dumps({"providers": {"opencode-go": {"models": ["m"], "apiKey": "k1"}, "ds4": {"apiKey": "k2"}}}),
+        json.dumps(
+            {
+                "providers": {
+                    "opencode-go": {"models": ["m"], "apiKey": "sk-test-models-one-not-real"},
+                    "ds4": {"apiKey": "sk-test-models-two-not-real"},
+                }
+            }
+        ),
         encoding="utf-8",
     )
     probe = (
@@ -847,4 +856,4 @@ def test_models_json_is_scoped_to_the_arms_provider(tmp_path: Path) -> None:
     ) as agent:
         seen = json.loads(agent.trace.result_field("result"))
     assert list(seen["models"]["providers"]) == ["opencode-go"]
-    assert seen["models"]["providers"]["opencode-go"]["apiKey"] == "k1"
+    assert seen["models"]["providers"]["opencode-go"]["apiKey"] == "sk-test-models-one-not-real"
