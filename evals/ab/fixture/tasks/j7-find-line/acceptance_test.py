@@ -18,6 +18,6 @@ class FindLineAcceptance(unittest.TestCase):
         from pathlib import Path
 
         text = Path("refunds.py").read_text(encoding="utf-8")
-        self.assertIn('if delivered < ordered or requested < delivered:', text)
+        self.assertIn("if delivered < ordered or requested < delivered:", text)
         self.assertIn("window = REFUND_WINDOW_DAYS", text)
         self.assertNotIn("(requested - ordered)", text)

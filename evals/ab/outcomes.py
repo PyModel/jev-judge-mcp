@@ -289,9 +289,9 @@ def jev_answer(stream: str, options: Mapping[str, str], verdicts: Mapping[str, s
                     continue
                 block = cast(dict[str, Any], raw_item)
                 if block.get("type") == "tool_result" and block.get("is_error") is not True:
-                        match = jev_answer_from_result(block.get("content"), options, verdict_map)
-                        if match is not None:
-                            last = match
+                    match = jev_answer_from_result(block.get("content"), options, verdict_map)
+                    if match is not None:
+                        last = match
     return last
 
 
