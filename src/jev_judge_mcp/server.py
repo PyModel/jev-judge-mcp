@@ -151,7 +151,7 @@ def provider_not_runnable_message() -> str:
 
 
 def ensure_provider_runnable(settings: Settings) -> None:
-    """Refuse to serve with a provider that cannot answer any call (the ADR-0050 shape).
+    """Refuse to serve with a provider that cannot answer any call (ADR-0075, the ADR-0050 shape).
 
     A bare `uvx --from <checkout> jev-judge-mcp` without the `typesafe` extra starts, lists
     tools, serves skills, and then fails every judgment call typed `provider` — the
