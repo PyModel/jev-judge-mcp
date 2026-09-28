@@ -316,7 +316,12 @@ def _record(
             "jev_tool_called": bool(outcomes.jev_rows(calls)),
             "jev_gate": outcomes.jev_gate(calls) if arm == "B" else None,
             "measurement": outcomes.measurement(
-                arm, status=run.status, reached=reached, calls=calls, mcp_servers=trace.mcp_servers
+                arm,
+                status=run.status,
+                reached=reached,
+                calls=calls,
+                mcp_servers=trace.mcp_servers,
+                control=task.judgment.control,
             ),
             "success": succeeded,
             "final_tests_passed": result.test_pass_rate == 1.0,

@@ -199,6 +199,28 @@ def paired_lines(measured: Sequence[Pair]) -> list[str]:
     return lines
 
 
+def _invocation(records: Sequence[Record]) -> list[str]:
+    """Jev invocation over EVERY reached with-Jev run, not only measured pairs.
+
+    Voided non-callers made the old rate tautologically 100%: a run was only measured when it had
+    called. The control-task change (a non-calling control B run is measured) keeps the pair, and
+    this line carries the restraint signal for every reached run.
+    """
+    reached_b = [
+        r
+        for r in records
+        if r["arm"] == "B" and r.get("measurement") not in ("never reached the model", "harness error")
+    ]
+    if not reached_b:
+        return []
+    called = [r for r in reached_b if r.get("jev_tool_called")]
+    return [
+        f"- Jev invocation over all {len(reached_b)} reached with-Jev runs: {len(called)} called "
+        f"({len(reached_b) - len(called)} did not); "
+        f"{sum(int(r.get('unnecessary_jev_calls') or 0) for r in reached_b)} unnecessary calls."
+    ]
+
+
 def _task_table(measured: Sequence[Pair]) -> list[str]:
     """Old-rule and new-rule success, Jev calls, and failure categories, per task and arm."""
     lines = [
@@ -315,6 +337,8 @@ def agent_section(agent: str, records: Sequence[Record], meta: Mapping[str, Any]
             "### Paired",
             "",
             *paired_lines(measured),
+            "",
+            *_invocation(records),
             "",
             "### Per task",
             "",

@@ -120,8 +120,14 @@ def decision_correct(chosen: str | None, judgment: Judgment) -> bool | None:
     return None if judgment.gold is None else chosen == judgment.gold
 
 
+_MCPSCRIPT_CALL = re.compile(r'tools\.call\(\s*["\'](jev_[a-z]+)["\']')
+
+
 def exposed_jev_tool(use: ToolUse) -> str | None:
-    """The Jev tool a stream use invoked, or None for gateway chatter."""
+    """The Jev tool a stream use invoked, or None for gateway chatter.
+
+    Pi also reaches the server through `mcpScript`, whose code calls `tools.call("jev_find", ...)`;
+    a recorded run used exactly that, so the code is searched for the tool name."""
     name = use.name
     exposed: object = None
     if name in JEV_TOOLS:
@@ -130,6 +136,11 @@ def exposed_jev_tool(use: ToolUse) -> str | None:
         exposed = use.input.get("tool")
     elif name.startswith("mcp__jev__"):
         exposed = name.removeprefix("mcp__jev__")
+    elif name == "mcpScript":
+        code = use.input.get("code")
+        if isinstance(code, str) and (match := _MCPSCRIPT_CALL.search(code)):
+            return match.group(1)
+        return None
     if not isinstance(exposed, str):
         return None
     if exposed in JEV_TOOLS:
@@ -335,10 +346,19 @@ def tokens(trace: Trace) -> dict[str, int]:
 
 
 def measurement(
-    arm: str, *, status: str, reached: bool, calls: Sequence[Mapping[str, Any]], mcp_servers: Mapping[str, str]
+    arm: str,
+    *,
+    status: str,
+    reached: bool,
+    calls: Sequence[Mapping[str, Any]],
+    mcp_servers: Mapping[str, str],
+    control: bool = False,
 ) -> str | None:
     """None when the run is a measurement, else why it is not. A run that reached the model and then
-    failed (timeout, wrong fix) is a measured failure; only harness faults and an unused Jev drop it."""
+    failed (timeout, wrong fix) is a measured failure; only harness faults and an unused Jev drop it.
+
+    A control task's with-Jev run that never called Jev is MEASURED: restraint on a task whose
+    answer the code already settles is the outcome the control exists to observe, not a void."""
     if status.startswith("failed: post-processing raised"):
         return "harness error"
     if not reached:
@@ -347,5 +367,7 @@ def measurement(
         return "Jev tool called in the without-Jev arm" if jev_rows(calls) else None
     if mcp_servers and mcp_servers.get("jev") != "connected":
         return f"jev server {mcp_servers.get('jev')}"
+    if control and not jev_rows(calls):
+        return None
     gate = jev_gate(calls)
     return None if gate is None else f"Jev not used: {gate}"

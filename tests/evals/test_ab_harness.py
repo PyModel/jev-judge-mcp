@@ -1382,3 +1382,47 @@ def test_the_ast_rule_catches_every_weakening_and_allows_the_additions(tmp_path:
         result = grade(tree, task, PYTHON)
         path.write_text(keep, encoding="utf-8")
         assert not result.correct and result.preexisting_altered == ("tests/test_refunds.py",), name
+
+
+def test_a_control_b_run_without_a_jev_call_is_measured_not_voided() -> None:
+    """Restraint on a control is the outcome the control exists to observe."""
+    servers = {"jev": "connected"}
+    answered = [{"tool": "jev_verify", "is_error": False, "model": arms.JEV_MODEL}]
+    for calls in ([], answered):
+        assert (
+            outcomes.measurement("B", status="ok", reached=True, calls=calls, mcp_servers=servers, control=True)
+            is None
+        )
+    # A non-control B run with no call is still voided, and the server-down check still fires.
+    assert (
+        outcomes.measurement("B", status="ok", reached=True, calls=[], mcp_servers=servers, control=False)
+        == "Jev not used: no Jev call"
+    )
+    assert (
+        outcomes.measurement("B", status="ok", reached=True, calls=[], mcp_servers={"jev": "failed"}, control=True)
+        == "jev server failed"
+    )
+
+
+def test_the_report_states_invocation_over_all_reached_with_jev_runs() -> None:
+    records = [
+        _run("j1", "A"),
+        _run("j1", "B"),
+        _run("c1", "A"),
+        _run(
+        "c1", "B", measurement="Jev not used: no Jev call", jev_calls=0, jev_tool_called=False
+    ),
+        _run("c2", "A", measurement="never reached the model"),
+        _run("c2", "B", measurement="never reached the model"),
+    ]
+    text = report.render(records, {})
+    assert "Jev invocation over all 2 reached with-Jev runs: 1 called (1 did not); 0 unnecessary calls." in text
+
+
+def test_an_mcpscript_call_counts_for_repeats() -> None:
+    """A recorded run reached Jev through mcpScript's tools.call; repeat counting must see it."""
+    code = 'const r = await tools.call("jev_find", {query: "q"});'
+    assert outcomes.exposed_jev_tool(ToolUse("mcpScript", {"code": code})) == "jev_find"
+    calls = [{"tool": "jev_find", "is_error": False}, {"tool": "jev_find", "is_error": False}]
+    uses = [ToolUse("mcpScript", {"code": code}), ToolUse("mcpScript", {"code": code})]
+    assert outcomes.unnecessary_jev_calls(control=False, uses=uses, calls=calls) == 1
