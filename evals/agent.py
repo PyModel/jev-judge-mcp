@@ -26,7 +26,9 @@ environment below that boundary.
 
 import json
 import os
+import posixpath
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -36,6 +38,7 @@ import time
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 
@@ -63,88 +66,215 @@ STDERR_TRUNCATED_LINE = "[stderr truncated]"
 
 _PIPE_READ = 65_536
 
-_HOST_PATH = re.compile(r"(?<![\w./])/(?:Users|home|Volumes|opt|private|tmp|var)/[^\s\"'\\)\],}]*")
+_TOP = "|".join(re.escape(name) for name in sorted(os.listdir("/")) if name.strip())
+_ABS = re.compile(rf"(?<![\w.$~*])/(?:{_TOP})(?:/[^\s\"'`;|&<>(){{}}\[\],]*)?(?![\w.-])")
+"""An absolute path whose first segment exists at `/` on this host: `/Users/..`, `/etc/..`, `/Library`.
+Floor division, `a/n`, and glob fragments are not paths. Built at import, so a container's own `/`
+defines its own list."""
+_TILDE_USER = re.compile(r"(?:^|[\s=:])~[A-Za-z_][\w.-]*")
+_BARE_ROOT = re.compile(r"(?:^|[\s;&|(])/\*?(?=$|[\s;&|)])")
+_SECRET_VAR = re.compile(r"\$\{?(?:JEV_MCP_KEY_FILE|TYPESAFE_API_KEY)\b")
+_SEGMENTS = re.compile(r"&&|\|\||;|\||\n")
+_INPUT_ALLOW = ("/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/tty")
+"""Streams a command may name."""
+_SYSTEM_BIN = ("/bin", "/usr/bin")
+"""Executables an agent may name (`/usr/bin/env python3`); nothing user-specific lives there."""
 _CREDENTIAL_NAME = re.compile(
-    r"(?:/|^)(?:auth\.json|id_rsa|id_ed25519|\.env|credentials(?:\.json)?|login\.keychain-db)$",
+    r"(?:^|/)(?:auth\.json|models\.json|typesafe\.key|id_rsa|id_ed25519|\.env|credentials(?:\.json)?"
+    r"|login\.keychain-db|\.netrc|\.pypirc)$",
     re.IGNORECASE,
 )
+_WRITTEN_KEYS = frozenset({"content", "newText", "new_string", "oldText", "old_string", "text"})
+"""Write-tool payload keys: file text the agent authored, not a path it touched."""
 
 
-def _walk_strings(value: object) -> list[str]:
+@dataclass(frozen=True)
+class Boundary:
+    workdir: str
+    roots: tuple[str, ...]
+    """workdir and sandbox, each in its created and resolved spelling."""
+    secrets: tuple[str, ...]
+    """Paths inside the sandbox that hold credentials: the agent dir and the keyfile."""
+    runtime: tuple[str, ...]
+    """Prefixes a tool result may name: the agent's own interpreter and runtime installs."""
+    env: Mapping[str, str]
+    """The agent's HOME/TMPDIR/PI_CODING_AGENT_DIR, for `$VAR` and `~` expansion."""
+
+
+def _both(path: str) -> tuple[str, ...]:
+    """Every spelling of one directory: as created, resolved, and without macOS's /private prefix."""
+    spellings = {path.rstrip("/"), os.path.realpath(path).rstrip("/")}
+    spellings |= {s.removeprefix("/private") for s in spellings if s.startswith("/private/")}
+    return tuple(sorted(spellings))
+
+
+def boundary(workdir: str, sandbox: str, env: Mapping[str, str], runtime: Sequence[str]) -> Boundary:
+    """Build once per run, BEFORE the sandbox is deleted (realpath needs it to exist)."""
+    secrets = [p for base in _both(sandbox) for p in (f"{base}/agent", f"{base}/typesafe.key")]
+    return Boundary(
+        workdir=os.path.realpath(workdir),
+        roots=(*_both(workdir), *_both(sandbox)),
+        secrets=tuple(secrets),
+        runtime=tuple(runtime),
+        env=dict(env),
+    )
+
+
+@lru_cache(maxsize=4)
+def runtime_prefixes(path_env: str) -> tuple[str, ...]:
+    """The interpreter's prefixes and the dirs of python3/node/pi on the agent PATH.
+
+    A tool result may name these without being an escape: a stdlib traceback, `which python3`, a
+    node stack trace. Cached, so one probe subprocess per study, not per run.
+    """
+    if not path_env:
+        return ()
+    found: list[str] = []
+    python = shutil.which("python3", path=path_env)
+    if python:
+        try:
+            out = subprocess.run(
+                [python, "-I", "-c", "import sys;print(sys.base_prefix);print(sys.prefix)"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=30,
+            ).stdout.split()
+            found += out
+        except (subprocess.SubprocessError, OSError):
+            pass
+    for name in ("python3", "node", "pi"):
+        where = shutil.which(name, path=path_env)
+        if where:
+            found += [os.path.dirname(where), os.path.dirname(os.path.dirname(os.path.realpath(where)))]
+    return tuple(sorted({p.rstrip("/") for p in found if p and p != "/"}))
+
+
+def _under(path: str, prefixes: Iterable[str]) -> bool:
+    return any(path == p or path.startswith(p + "/") for p in prefixes)
+
+
+def _expand(token: str, cwd: str, env: Mapping[str, str]) -> str | None:
+    """Absolute normalized path for a path-like token, or None when it is not one."""
+    for name in ("HOME", "TMPDIR", "PI_CODING_AGENT_DIR"):
+        value = env.get(name)
+        if value:
+            token = token.replace("${" + name + "}", value).replace("$" + name, value)
+    tilde = "~"
+    if token == tilde or token.startswith(tilde + "/"):
+        token = env.get("HOME", "/nonexistent-home") + token[1:]
+    if not (token.startswith("/") or token.startswith(".") or "/" in token):
+        return None
+    return posixpath.normpath(token if token.startswith("/") else posixpath.join(cwd, token))
+
+
+def _input_hit(command: str, box: Boundary, cwd0: str) -> str | None:
+    if _BARE_ROOT.search(command):
+        return "filesystem root target"
+    if _TILDE_USER.search(command):
+        return "another user's home (~user)"
+    if _SECRET_VAR.search(command):
+        return "credential variable"
+    cwd = cwd0
+    for segment in _SEGMENTS.split(command):
+        try:
+            words = shlex.split(segment, posix=True)
+        except ValueError:
+            words = segment.split()
+        if words[:1] == ["cd"]:
+            target = words[1] if len(words) > 1 else "~"
+            cwd = (
+                _expand(
+                    target if "/" in target or target.startswith(("~", "$", ".")) else "./" + target,
+                    cwd,
+                    box.env,
+                )
+                or cwd
+            )
+            words = words[1:]
+        for word in words:
+            for inner in _ABS.findall(word) if not word.startswith("/") else []:
+                path = posixpath.normpath(inner)
+                if path not in _INPUT_ALLOW and not _under(path, (*box.roots, *box.runtime, *_SYSTEM_BIN)):
+                    return f"path outside the boundary {path[:200]}"
+            pieces = [word] if word.startswith("/") else re.split(r"[=:]", word)
+            for piece in pieces:
+                if ("/" in piece or "." in piece) and _CREDENTIAL_NAME.search(piece.rstrip("\"',;:")):
+                    return f"credential read {posixpath.basename(piece)[:80]}"
+                if piece.startswith("/") and not _ABS.match(piece):
+                    continue
+                path = _expand(piece, cwd, box.env)
+                if path is None or path in _INPUT_ALLOW:
+                    continue
+                if _under(path, box.secrets) or _CREDENTIAL_NAME.search(path):
+                    return f"credential read {posixpath.basename(path)[:80]}"
+                if any(ch in path for ch in "*?[") and _under(posixpath.dirname(path), box.secrets):
+                    return "credential glob"
+                if not _under(path, (*box.roots, *box.runtime, *_SYSTEM_BIN)):
+                    return f"path outside the boundary {path[:200]}"
+    return None
+
+
+def _strings(value: object, *, skip_written: bool) -> list[str]:
     if isinstance(value, str):
         return [value]
     if isinstance(value, dict):
         out: list[str] = []
-        for item in cast(dict[str, object], value).values():
-            out.extend(_walk_strings(item))
+        for key, item in cast(dict[str, object], value).items():
+            if not (skip_written and key in _WRITTEN_KEYS):
+                out += _strings(item, skip_written=skip_written)
         return out
     if isinstance(value, list):
-        out = []
-        for item in cast(list[object], value):
-            out.extend(_walk_strings(item))
-        return out
+        return [s for item in cast(list[object], value) for s in _strings(item, skip_written=skip_written)]
     return []
 
 
-def _escaped_path(candidate: str, *, workdir: str, sandbox: str) -> bool:
-    resolved = candidate.rstrip("*.")
-    for root in (workdir, sandbox):
-        if resolved == root or resolved.startswith(root.rstrip("/") + "/"):
-            return False
-    return True
-
-
-def escape_scan(stdout: str, *, workdir: str, sandbox: str) -> str | None:
-    """Why the run left its boundary, or None when every tool input and result stayed inside it.
-
-    The D3 study's agents read the operator's configs, other worktrees, and the harness sources, and
-    the model provider saw all of it as tool output. This canary reads the same transcript the study
-    keeps: tool inputs (what the agent chose to read or run) and tool results (what reached the
-    model) from both stream shapes, Claude stream-json and Pi events. Two rules, first hit wins: an
-    absolute path outside `workdir` and `sandbox`, or any credential file's name.
-    """
+def _events(stdout: str) -> Iterable[tuple[str, list[str]]]:
+    """(`input` | `result`, strings) per tool event, from Claude stream-json and Pi events."""
     for raw in stdout.splitlines():
         line = raw.strip()
         if not line.startswith("{"):
             continue
         try:
-            event = json.loads(line)
+            event: object = json.loads(line)
         except json.JSONDecodeError:
             continue
         if not isinstance(event, dict):
             continue
-        payload: dict[str, Any] = cast(dict[str, Any], event)
+        payload = cast(dict[str, Any], event)
         kind = payload.get("type")
-        texts: list[str] = []
-        if kind == "assistant":
-            message = cast(dict[str, Any], payload.get("message") or {})
-            for raw_block in cast(list[object], message.get("content") or []):
-                if not isinstance(raw_block, dict):
-                    continue
-                block = cast(dict[str, Any], raw_block)
-                if block.get("type") == "tool_use":
-                    texts.extend(_walk_strings(block.get("input")))
-        elif kind == "tool_execution_start":
-            texts.extend(_walk_strings(payload.get("args")))
-        elif kind == "user":
-            message = cast(dict[str, Any], payload.get("message") or {})
-            for raw_block in cast(list[object], message.get("content") or []):
-                if not isinstance(raw_block, dict):
-                    continue
-                block = cast(dict[str, Any], raw_block)
-                if block.get("type") == "tool_result":
-                    texts.extend(_walk_strings(block.get("content")))
+        if kind == "tool_execution_start":
+            yield "input", _strings(payload.get("args"), skip_written=True)
         elif kind == "tool_execution_end":
-            texts.extend(_walk_strings(payload.get("result")))
-        else:
-            continue
+            yield "result", _strings(payload.get("result"), skip_written=False)
+        elif kind in ("assistant", "user"):
+            wanted = "tool_use" if kind == "assistant" else "tool_result"
+            message = cast(dict[str, Any], payload.get("message") or {})
+            for block in cast(list[object], message.get("content") or []):
+                if isinstance(block, dict) and cast(dict[str, Any], block).get("type") == wanted:
+                    body = cast(dict[str, Any], block)
+                    if kind == "assistant":
+                        yield "input", _strings(body.get("input"), skip_written=True)
+                    else:
+                        yield "result", _strings(body.get("content"), skip_written=False)
+
+
+def escape_scan(stdout: str, box: Boundary) -> str | None:
+    """Why the run left its boundary, or None. First hit wins. A heuristic, not a boundary:
+    obfuscated paths (base64, string concatenation inside a program) are only caught if their
+    output names a host path; the confinement branch is what closes those."""
+    cwd0 = box.workdir
+    for side, texts in _events(stdout):
         for text in texts:
-            for candidate in _HOST_PATH.findall(text):
-                if _escaped_path(candidate, workdir=workdir, sandbox=sandbox):
-                    return f"escape: host path {candidate[:200]}"
-            for candidate in text.split():
-                if _CREDENTIAL_NAME.search(candidate.rstrip('",;:')):
-                    return f"escape: credential file {Path(candidate).name[:80]}"
+            if side == "input":
+                hit = _input_hit(text, box, cwd0)
+                if hit:
+                    return f"escape: {hit}"
+                continue
+            for candidate in _ABS.findall(text):
+                path = posixpath.normpath(candidate.rstrip(".:"))
+                if not _under(path, (*box.roots, *box.runtime)) and path not in _INPUT_ALLOW:
+                    return f"escape: host path in a tool result {path[:200]}"
     return None
 
 
@@ -488,6 +618,7 @@ def run_agent(
     prepare: Callable[[Path], None] | None = None,
     parse: Callable[[Iterable[str]], stream.Trace] | None = None,
     auth_provider: str | None = None,
+    runtime: Sequence[str] = (),
 ) -> Generator[AgentRunResult]:
     """Run the agent once; yields its result while the workdir exists. Writes `stream.jsonl` and
     `claude.stderr` to `run_dir`. Stdout past the cap raises `OSError` after those files are written
@@ -498,7 +629,8 @@ def run_agent(
     `mcp_config` may be a callable of the run's private sandbox directory, so a study can place
     sandbox-only paths (the relay log, a scoped key file, copied server entry points) in the config
     the agent can read. `auth_provider` scopes the copied auth.json to that one provider's entry;
-    None copies no auth.json at all.
+    None copies no auth.json at all. `runtime` is the agent runtime's path prefixes for the escape
+    canary; empty computes them from `base_env`'s PATH (cached per study).
     """
     if not secret:
         raise ValueError("run_agent needs the non-empty secret to scrub")
@@ -518,6 +650,14 @@ def run_agent(
             isolated = _isolated_env(base_env, secret_dir, command.login_keychain, auth_provider)
         except OSError as error:
             raise AgentSetupError(f"agent sandbox setup failed: {error}") from error
+        # Before anything deletes the sandbox: the canary needs every spelling of both roots while
+        # they still resolve.
+        box = boundary(
+            str(workdir),
+            str(secret_dir),
+            {**base_env, **command.env, **isolated},
+            runtime or runtime_prefixes(base_env.get("PATH", "")),
+        )
         started = time.perf_counter()
         try:
             stdout, stderr, returncode = _capture(
@@ -555,7 +695,7 @@ def run_agent(
             wall_s=wall,
             trace=trace,
             status=_status(returncode, trace, command.timeout_s),
-            escape=escape_scan(stdout, workdir=str(workdir), sandbox=str(secret_dir)),
+            escape=escape_scan(stdout, box),
         )
     finally:
         shutil.rmtree(secret_dir, ignore_errors=True)
