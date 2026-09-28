@@ -1,5 +1,8 @@
 # VOID — the paired comparison recorded here is not evidence
 
+**Superseded 2026-09-28 by [`d3-paired-confined.md`](d3-paired-confined.md), the confined re-run;
+this notice and the reasons below stand as recorded.**
+
 **Void 2026-09-27.** The numbers that were in this file came from a study whose boundary leaked, and
 one run read the gold answer. Do not cite them as an agent-outcome or grader result. Do not rewrite
 history over them: the records stay as they were recorded.

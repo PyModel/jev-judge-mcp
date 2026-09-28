@@ -240,7 +240,7 @@ def _task_table(measured: Sequence[Pair]) -> list[str]:
     mid = " explored | " if exploration else " "
     lines = [
         f"| task | arm | new-rule success | old-rule success | Jev calls | unnecessary |{mid}failure categories |",
-        "|---|" * (8 if exploration else 7),
+        "|" + "---|" * (8 if exploration else 7),
     ]
     by_task: dict[str, list[Pair]] = {}
     for pair in measured:
