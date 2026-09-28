@@ -11,7 +11,8 @@ What disqualifies the study (full evidence in the operator's diagnosis at
    operator's `~/.pi/agent` configs (including the whole copied `auth.json`), `~/.claude.json`,
    other treehouse worktrees, the primary checkout, and this repo's harness sources, and ran
    filesystem-wide `find`s. Real provider keys reached the model provider as tool output in 7
-   transcripts; the operator rotated them.
+   transcripts (an operator count); the operator rotated them. The TypeSafe key rode in the
+   agent-readable `mcp.json` env: 29 of 33 with-Jev runs read that file.
 2. **Gold contamination.** `j9-review-patch.B.r1` read the repo's
    `evals/ab/fixture/tasks/j9-review-patch/task.json`, which carries the gold option.
 3. **The with-Jev arm never engaged.** Only 3 of 33 with-Jev runs produced a Jev call, because the
