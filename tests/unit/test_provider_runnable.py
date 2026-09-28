@@ -5,6 +5,10 @@ the `[typesafe]` extra — started, listed tools, served skills, and failed ever
 typed `provider` with "install jev-judge-mcp[typesafe]". `ensure_provider_runnable` moves that
 refusal to startup, one stderr line, exit 1. Provider *configuration* errors stay per-call
 (ADR-0008); another provider selected imports nothing extra.
+
+The in-process tests patch `jev_judge_mcp.server.sdk_importable`, the binding the gate consults —
+never `sys.modules`, which only simulates a missing module in a process that never imported it
+(and a full single-process suite does). The subprocess test owns the real missing-SDK boundary.
 """
 
 import subprocess
@@ -21,23 +25,29 @@ from jev_judge_mcp.settings import Settings
 def test_a_selected_typesafe_provider_without_the_sdk_exits_at_startup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The bare-install shape: neither the SDK nor its httpx2 is importable, and the key is set."""
-    monkeypatch.setattr(sys, "modules", {**sys.modules, "typesafe_sdk": None, "httpx2": None})
+    """The bare-install shape: the probe reports the SDK missing, and the key selects typesafe."""
     monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key-0001")
+    monkeypatch.setattr("jev_judge_mcp.server.sdk_importable", lambda: False)
     with pytest.raises(SystemExit) as exited:
         ensure_provider_runnable(Settings())
     assert str(exited.value) == provider_not_runnable_message()
     assert "jev-judge-mcp[typesafe]" in str(exited.value)
 
 
-def test_another_provider_selected_neither_exits_nor_imports_the_sdk(
+def test_another_provider_selected_neither_exits_nor_consults_the_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The canary fails the test if the compatible path ever consults the probe: another
+    provider selected must not pay for — or depend on — the SDK's presence."""
+
+    def boom() -> bool:
+        raise AssertionError("a non-typesafe provider must not consult the SDK probe")
+
     monkeypatch.setenv("JEV_PROVIDER", "compatible")
     monkeypatch.setenv("JEV_API_KEY", "compatible-test-key-0001")
     monkeypatch.setenv("JEV_API_BASE_URL", "http://127.0.0.1:9/v1/systemone")
+    monkeypatch.setattr("jev_judge_mcp.server.sdk_importable", boom)
     ensure_provider_runnable(Settings())
-    assert "typesafe_sdk" not in sys.modules, "a non-typesafe provider must not pay the SDK import"
 
 
 def test_missing_credentials_stay_a_per_call_error(monkeypatch: pytest.MonkeyPatch) -> None:
