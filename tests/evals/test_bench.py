@@ -628,12 +628,16 @@ def test_early_stops_on_compliance_and_projected_cost() -> None:
 
 
 def test_live_run_refuses_without_flag_key_or_frozen_labels(tmp_path: Path) -> None:
+    key_file = tmp_path.parent / f"{tmp_path.name}-study.key"
+    key_file.write_text(BENCH_FAKE_API_KEY + "\n", encoding="utf-8")
     with pytest.raises(run.BenchRefusedError, match="JEV_BENCH_LIVE=1"):
-        run.live({"TYPESAFE_API_KEY": BENCH_FAKE_API_KEY}, tmp_path)
-    with pytest.raises(run.BenchRefusedError, match="TYPESAFE_API_KEY"):
+        run.live({"JEV_STUDY_KEY_FILE": str(key_file)}, tmp_path)
+    with pytest.raises(run.BenchRefusedError, match="JEV_STUDY_KEY_FILE"):
         run.live({"JEV_BENCH_LIVE": "1"}, tmp_path)
+    with pytest.raises(run.BenchRefusedError, match="TYPESAFE_API_KEY unset"):
+        run.live({"JEV_BENCH_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key_file), "TYPESAFE_API_KEY": "x"}, tmp_path)
     with pytest.raises(run.BenchRefusedError, match="150 of 150 items are not frozen"):
-        run.live({"JEV_BENCH_LIVE": "1", "TYPESAFE_API_KEY": BENCH_FAKE_API_KEY}, tmp_path)
+        run.live({"JEV_BENCH_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key_file)}, tmp_path)
     assert run.main([], environ={}) == 2
     assert not list(tmp_path.iterdir()), "a refused run writes nothing"
 
@@ -673,9 +677,11 @@ def _agent_bin(bindir: Path, name: str, body: str) -> None:
 
 
 def _bench_env(bindir: Path, home: Path) -> dict[str, str]:
+    key_file = home / "study.key"
+    key_file.write_text(BENCH_FAKE_API_KEY + "\n", encoding="utf-8")
     return {
         "JEV_BENCH_LIVE": "1",
-        "TYPESAFE_API_KEY": BENCH_FAKE_API_KEY,
+        "JEV_STUDY_KEY_FILE": str(key_file),
         "PATH": str(bindir),
         "HOME": str(home),
     }

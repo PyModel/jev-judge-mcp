@@ -124,14 +124,35 @@ def copy_servers(sandbox: Path, proxy_package: str) -> Path:
     return servers
 
 
+def study_key(environ: Mapping[str, str]) -> str:
+    """The study's TypeSafe key, read from the operator-named `JEV_STUDY_KEY_FILE`.
+
+    The harness process must not carry the key in its exec-time environment: `ps eww` of a
+    same-uid child shows that block, arm A included, for the whole study. So `TYPESAFE_API_KEY` in
+    the environment is a refusal (launch the study with it unset), and the key file is the only
+    source. Until the broker branch lands, the run's sandbox still holds a readable copy for the
+    Jev server (same uid); only the confinement boundary hides that.
+    """
+    if environ.get("TYPESAFE_API_KEY"):
+        raise ValueError("launch the study with TYPESAFE_API_KEY unset; pass JEV_STUDY_KEY_FILE instead")
+    path = environ.get("JEV_STUDY_KEY_FILE")
+    if not path:
+        raise ValueError("JEV_STUDY_KEY_FILE is not set: the operator-named file holding the study key")
+    value = Path(path).read_text(encoding="utf-8-sig").strip()
+    if not value:
+        raise ValueError(f"JEV_STUDY_KEY_FILE ({path}) is empty")
+    return value
+
+
 def keyfile_env(sandbox: Path, api_key: str) -> dict[str, str]:
     """Write the TypeSafe key as a 0600 file inside the sandbox and return the env that points the
     server at it.
 
     The key must never sit in the MCP config the agent can read: in the D3 study the agents read
     that config's env and echoed the key to the model provider in 29 of 33 with-Jev runs. The
-    server reads `JEV_MCP_KEY_FILE` (ADR-0046). The file is still inside the sandbox the agent can
-    read; only the confinement boundary fully hides it.
+    server reads `JEV_MCP_KEY_FILE` (ADR-0046). What stays readable until the broker branch: this
+    0600 file is inside the run sandbox, same uid as the agent, so a determined run can still read
+    it by path. The canary flags reads of its name; only the confinement boundary fully hides it.
     """
     path = sandbox / "typesafe.key"
     path.write_text(api_key + "\n", encoding="utf-8")

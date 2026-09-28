@@ -514,7 +514,9 @@ def held_constant(agent: str, timeout_s: float) -> dict[str, str]:
         "system addendum (both arms)": arms.SYSTEM_ADDENDUM,
         "Jev (arm B only)": (
             f"`python -m jev_judge_mcp`, `JEV_PROVIDER=typesafe`, `JEV_MCP_MODEL={arms.JEV_MODEL}`; "
-            "the key reaches the server by a 0600 keyfile in the run sandbox, never the agent-readable config"
+            "the key reaches the server by a 0600 keyfile in the run sandbox, never the agent-readable "
+            "config. Readable until the broker branch: that keyfile (same uid) and any operator file "
+            "holding the key"
         ),
         "grader": (
             "ADR-0073: hidden acceptance tests, no regressions, pre-existing test content unchanged, "
@@ -575,9 +577,10 @@ def _which(name: str, path: str) -> str:
 def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = ledger.REPEATS) -> str:
     if environ.get(LIVE_FLAG) != "1":
         raise StudyRefusedError(f"the study calls paid providers; set {LIVE_FLAG}=1 to run it")
-    key = environ.get("TYPESAFE_API_KEY")
-    if not key:
-        raise StudyRefusedError("TYPESAFE_API_KEY is not set")
+    try:
+        key = arms.study_key(environ)
+    except ValueError as error:
+        raise StudyRefusedError(str(error)) from error
     if agent not in AGENTS:
         raise StudyRefusedError(f"unknown agent {agent!r}; one of {', '.join(AGENTS)}")
     base_env = arms.agent_env(environ)

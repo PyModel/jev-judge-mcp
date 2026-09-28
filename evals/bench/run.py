@@ -563,9 +563,10 @@ def live(
 ) -> str:
     if environ.get(LIVE_FLAG) != "1":
         raise BenchRefusedError(f"the bench calls paid providers; set {LIVE_FLAG}=1 to run it")
-    key = environ.get("TYPESAFE_API_KEY")
-    if not key:
-        raise BenchRefusedError("TYPESAFE_API_KEY is not set")
+    try:
+        key = arms.study_key(environ)
+    except ValueError as error:
+        raise BenchRefusedError(str(error)) from error
     items = load_items() if items is None else items
     unfrozen = [item.id for item in items if item.status != "frozen"]
     if unfrozen and not allow_draft:

@@ -3,10 +3,12 @@ measures, report, refusal. Nothing here calls a model or a provider; the live st
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -623,17 +625,65 @@ def test_schedule_is_seeded_and_pairs_every_task_and_repeat() -> None:
 # --- refusals -----------------------------------------------------------------------------------------
 
 
+def _key_file(tmp_path: Path, value: str = "sk-test-ab-keyfile-not-a-real-key") -> Path:
+    path = tmp_path / "study.key"
+    path.write_text(value + "\n", encoding="utf-8")
+    return path
+
+
 def test_the_study_refuses_without_its_flag_or_key(tmp_path: Path) -> None:
-    fake_key = "sk-test-ab-refusal-not-a-real-key"
+    key = _key_file(tmp_path)
     with pytest.raises(ab_run.StudyRefusedError, match="JEV_AB_LIVE=1"):
-        ab_run.live({"TYPESAFE_API_KEY": fake_key}, tmp_path, agent="claude")
-    with pytest.raises(ab_run.StudyRefusedError, match="TYPESAFE_API_KEY"):
+        ab_run.live({"JEV_STUDY_KEY_FILE": str(key)}, tmp_path, agent="claude")
+    with pytest.raises(ab_run.StudyRefusedError, match="JEV_STUDY_KEY_FILE"):
         ab_run.live({"JEV_AB_LIVE": "1"}, tmp_path, agent="claude")
+    with pytest.raises(ab_run.StudyRefusedError, match="TYPESAFE_API_KEY unset"):
+        ab_run.live(
+            {"JEV_AB_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key), "TYPESAFE_API_KEY": "x"}, tmp_path, agent="claude"
+        )
     with pytest.raises(ab_run.StudyRefusedError, match="claude not found"):
-        ab_run.live({"JEV_AB_LIVE": "1", "TYPESAFE_API_KEY": fake_key, "PATH": ""}, tmp_path, agent="claude")
+        ab_run.live({"JEV_AB_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key), "PATH": ""}, tmp_path, agent="claude")
     with pytest.raises(ab_run.StudyRefusedError, match="pi not found"):
-        ab_run.live({"JEV_AB_LIVE": "1", "TYPESAFE_API_KEY": fake_key, "PATH": ""}, tmp_path, agent="pi")
+        ab_run.live({"JEV_AB_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key), "PATH": ""}, tmp_path, agent="pi")
     assert ab_run.main([], environ={}) == 2
+
+
+def test_the_harness_reads_the_key_from_the_operator_named_file(tmp_path: Path) -> None:
+    key = _key_file(tmp_path, "sk-test-from-file-not-a-real-key")
+    assert arms.study_key({"JEV_STUDY_KEY_FILE": str(key)}) == "sk-test-from-file-not-a-real-key"
+    with pytest.raises(ValueError, match="TYPESAFE_API_KEY unset"):
+        arms.study_key({"JEV_STUDY_KEY_FILE": str(key), "TYPESAFE_API_KEY": "x"})
+    with pytest.raises(ValueError, match="JEV_STUDY_KEY_FILE"):
+        arms.study_key({})
+    empty = tmp_path / "empty.key"
+    empty.write_text(" \n", encoding="utf-8")
+    with pytest.raises(ValueError, match="empty"):
+        arms.study_key({"JEV_STUDY_KEY_FILE": str(empty)})
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="ps eww env disclosure is a macOS mechanism")
+def test_ps_eww_shows_a_child_env_until_the_broker_branch(tmp_path: Path) -> None:
+    """The mechanism, on a dummy variable: a same-uid child's environment is readable from the
+    process table for as long as it lives. That is why live() refuses an exported key and reads
+    JEV_STUDY_KEY_FILE instead - the harness process itself must never hold the key."""
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(6)"],
+        env={**os.environ, "MARKER_D3_KEY": "dummy-not-a-real-key"},
+    )
+    try:
+        seen = ""
+        for _ in range(40):
+            ps = subprocess.run(["ps", "eww", "-p", str(child.pid)], capture_output=True, text=True, check=False)
+            seen = ps.stdout
+            if "MARKER_D3_KEY" in seen:
+                break
+            time.sleep(0.1)
+        assert "MARKER_D3_KEY" in seen, "the mechanism must be demonstrated, not assumed"
+    finally:
+        child.terminate()
+        child.wait(timeout=10)
+    with pytest.raises(ValueError, match="TYPESAFE_API_KEY unset"):
+        arms.study_key({"JEV_STUDY_KEY_FILE": str(_key_file(tmp_path)), "TYPESAFE_API_KEY": "x"})
 
 
 def _preflight_setup(tmp_path: Path, agent: str, script: str) -> ab_run.Setup:
@@ -686,8 +736,9 @@ def _agent_bin(bindir: Path, name: str, body: str) -> None:
 
 
 def _live_env(bindir: Path, home: Path) -> dict[str, str]:
-    fake_key = "sk-test-preflight-not-a-real-key"
-    return {"JEV_AB_LIVE": "1", "TYPESAFE_API_KEY": fake_key, "PATH": str(bindir), "HOME": str(home)}
+    key_file = home / "study.key"
+    key_file.write_text("sk-test-preflight-not-a-real-key\n", encoding="utf-8")
+    return {"JEV_AB_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key_file), "PATH": str(bindir), "HOME": str(home)}
 
 
 @pytest.mark.parametrize("agent", ab_run.AGENTS)
