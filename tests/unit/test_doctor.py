@@ -109,6 +109,20 @@ def test_extra_arguments_are_usage(capsys: pytest.CaptureFixture[str]) -> None:
     assert MARKER not in captured.err
 
 
+def test_help_is_an_argparse_page_not_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+    """`doctor --help` must match `setup --help`/`install --help`: a real page, exit 0.
+
+    The regression: the catch-all usage refusal answered `--help` itself with one line and
+    exit 2, so doctor was the one subcommand whose help was an error."""
+    assert main(["--help"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out.startswith("usage: jev-judge-mcp doctor [-h]")
+    assert "options:" in captured.out
+    assert "show this help message and exit" in captured.out
+    assert "Offline configuration check" in captured.out
+
+
 def test_marker_key_is_absent_and_no_http_is_sent(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

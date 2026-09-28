@@ -8,6 +8,7 @@ command reads those files and does not write them. It does not call a provider. 
 a credential value. There is no live probe.
 """
 
+import argparse
 import json
 import sys
 from collections.abc import Sequence
@@ -38,7 +39,6 @@ from jev_judge_mcp.providers import JevProvider, ProviderConfigError, resolve_pr
 from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.tools import TOOLS
 
-_USAGE = "jev-judge-mcp doctor: usage: jev-judge-mcp doctor\n"
 _BARE_SERVER = "mcp__jev"
 _UNSET = "(unset)"
 
@@ -62,9 +62,21 @@ _KNOWN_EXPLICIT = frozenset({"typesafe", "openrouter", "cloudflare", "compatible
 
 def main(argv: Sequence[str] | None = None, *, home: Path | None = None, cwd: Path | None = None) -> int:
     """Print the configuration report. Exit 0 when a provider resolves, 1 when it does not, 2 on usage."""
-    if list(argv or []):
-        sys.stderr.write(_USAGE)
-        return 2
+    parser = argparse.ArgumentParser(
+        prog="jev-judge-mcp doctor",
+        description=(
+            "Offline configuration check: the resolved provider, how it was chosen, the credential "
+            "variable names that are set, the policy defaults, and the mcp__jev__* allow rules the "
+            "Claude settings files already carry. Reads those files and writes nothing; calls no "
+            "provider; prints no credential value."
+        ),
+    )
+    try:
+        parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+    except SystemExit as parse_exit:
+        # `--help` is a help page (exit 0), the same argparse shape `setup` and `install` print;
+        # a stray argument is the usage error (exit 2).
+        return int(parse_exit.code or 0)
     settings = load_settings()
     root = Path.home() if home is None else home
     work = Path.cwd() if cwd is None else cwd
