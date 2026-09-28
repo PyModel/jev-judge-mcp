@@ -6,7 +6,9 @@ signatures of the wrong options. Gold is the option the hidden acceptance tests 
 model's opinion; `gold_verification` says so. A `control` task is one whose answer the code or tests
 already determine, so a Jev call on it is unnecessary. It stays in the harness: the agent under test
 only ever sees a fresh copy of `fixture/snapshot` (plus the task's overlay) in a temporary directory
-outside this repo, so it cannot read the gold or the grader.
+outside this repo. That keeps the gold and the grader out of the workdir, not out of reach: until a
+read boundary lands, a determined agent can still walk the host to the fixture (the voided D3 study
+did exactly that), which the escape canary detects and the confinement branch closes.
 """
 
 import hashlib
@@ -53,7 +55,7 @@ TEST_COMMAND = "python3 -m unittest discover -s tests"
 @dataclass(frozen=True)
 class Judgment:
     kind: str
-    """What the task hinges on: `boundary`, `classification`, or `patch choice`."""
+    """What the task hinges on; one of `JUDGMENT_KINDS`."""
     jev_tool: str
     """The Jev tool the with-Jev arm is told to use for this judgment."""
     question: str

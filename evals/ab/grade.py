@@ -38,7 +38,7 @@ class Result(unittest.TestResult):
     def addSubTest(self, test, subtest, err):
         if err is not None: out[test.id()] = "fail"
     def addSkip(self, test, reason): out[test.id()] = "skip"
-sys.path.insert(0, ".")
+sys.path.append(".")  # stdlib first: a root-level module must not shadow it
 unittest.defaultTestLoader.discover("tests", top_level_dir=".").run(Result())
 sys.stdout.write(json.dumps(out))
 """

@@ -710,9 +710,9 @@ def _stream(command: str, result: str | None = None, tool: str = "bash") -> str:
 
 
 EVASIONS = {
-    "relative ../ climb": "cat ../../../../../../Users/panda/.treehouse/x/task.json",
-    "cd / then relative": "cd / && cat Users/panda/x",
-    "~user": "cat ~panda/.treehouse/x/task.json",
+    "relative ../ climb": "cat ../../../../../../home/user/.treehouse/x/task.json",
+    "cd / then relative": "cd / && cat home/user/x",
+    "~user": "cat ~user/.treehouse/x/task.json",
     "$TMPDIR climb": "ls $TMPDIR/../..",
     "agent-dir glob": "cat $PI_CODING_AGENT_DIR/auth*",
     "sandbox keyfile": "cat " + _S + "/typesafe.key",
@@ -723,8 +723,8 @@ EVASIONS = {
     "parent temp listing": "ls -la ..",
     "symlink relative climb": "ln -s ../../../../../.. up",
     "agent dir models": "cat $PI_CODING_AGENT_DIR/models.json",
-    "python open abs": "python3 -c \"print(open('/Users/panda/.pi/agent/auth.json').read())\"",
-    "other user home": "ls /Users/other",
+    "python open abs": "python3 -c \"print(open('/home/user/.pi/agent/auth.json').read())\"",
+    "other user home": "ls /home/other",
 }
 
 

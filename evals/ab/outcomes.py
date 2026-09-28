@@ -311,7 +311,10 @@ def failure_category(
     """Why a failed run failed. First match wins. A correct run has no category.
 
     Order: timeout, agent error, acceptance miss, regression, pre-existing test altered,
-    added test failing, added test irrelevant, wrong decision, Jev error, harness error, other.
+    added test failing, added test irrelevant, no decision, wrong decision. The unreachable tail
+    the critique found is gone: `run_correct` already folded Jev errors into acceptance failures
+    and harness errors into the escape/harness paths, so no category claims a cause the record
+    path never produces.
     """
     if success:
         return None
@@ -330,13 +333,10 @@ def failure_category(
         return "added test failing"
     if added_irrelevant:
         return "irrelevant added test"
+    if decision_matches_gold is None:
+        return "no decision"
     if decision_matches_gold is False:
         return "wrong decision"
-    if any(call.get("is_error") or call.get("unanswered") for call in jev_rows(jev_calls)):
-        return "Jev error"
-    if "post-processing" in lowered:
-        return "harness error"
-    return "other"
 
 
 def tokens(trace: Trace) -> dict[str, int]:
