@@ -37,8 +37,9 @@ DEFINITIONS = [
     "Records graded before ADR-0073 store only the old rule in `success`. **Final tests passed:** "
     "every pristine graded test passed; added tests are separate.",
     "**Added tests:** count, file, name, pass/fail, and relevance. Relevant means the added test's file "
-    "imports the task's `target_module`. An irrelevant added test is recorded and does not fail the run. "
-    "A failing added test does.",
+    "imports the task's `target_module`. A failing or irrelevant added test fails the run (its own "
+    "failure category); relevance is the ask's own requirement, and in the recorded D3 runs every "
+    "added test was relevant (52 of 52), so the clause changed no grade there.",
     "**Unnecessary Jev call:** every proxy-logged Jev call on a control task (the code or tests already "
     "determine the answer), or a later call of the same tool with the same arguments as an earlier call "
     "in that run. The repeat count cannot exceed the proxy log.",

@@ -345,6 +345,7 @@ def _record(
                 regressions=result.regressions,
                 preexisting_altered=result.preexisting_altered,
                 added_failing=bool(result.added_failing),
+                added_irrelevant=bool(result.added_irrelevant),
                 decision_matches_gold=matches,
                 jev_calls=calls,
             ),

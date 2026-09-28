@@ -304,13 +304,14 @@ def failure_category(
     regressions: Sequence[str],
     preexisting_altered: Sequence[str],
     added_failing: bool,
-    decision_matches_gold: bool | None,
-    jev_calls: Sequence[Mapping[str, Any]],
+    added_irrelevant: bool = False,
+    decision_matches_gold: bool | None = None,
+    jev_calls: Sequence[Mapping[str, Any]] = (),
 ) -> str | None:
     """Why a failed run failed. First match wins. A correct run has no category.
 
     Order: timeout, agent error, acceptance miss, regression, pre-existing test altered,
-    added test failing, wrong decision, Jev error, harness error, other.
+    added test failing, added test irrelevant, wrong decision, Jev error, harness error, other.
     """
     if success:
         return None
@@ -327,6 +328,8 @@ def failure_category(
         return "pre-existing test altered"
     if added_failing:
         return "added test failing"
+    if added_irrelevant:
+        return "irrelevant added test"
     if decision_matches_gold is False:
         return "wrong decision"
     if any(call.get("is_error") or call.get("unanswered") for call in jev_rows(jev_calls)):

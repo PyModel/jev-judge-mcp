@@ -73,13 +73,19 @@ class Grade:
         return tuple(item for item in self.added_tests if item.outcome != "pass")
 
     @property
+    def added_irrelevant(self) -> tuple[AddedTest, ...]:
+        return tuple(item for item in self.added_tests if not item.relevant)
+
+    @property
     def correct(self) -> bool:
-        """Tree verdict: acceptance, no regressions, pre-existing tests intact, added tests passing."""
+        """Tree verdict: acceptance, no regressions, pre-existing tests intact, added tests passing
+        and relevant. Relevance is the ask's own word: an added test must remain relevant to the task."""
         return (
             self.acceptance_passed == self.acceptance_total
             and not self.regressions
             and not self.preexisting_altered
             and not self.added_failing
+            and not self.added_irrelevant
         )
 
     @property

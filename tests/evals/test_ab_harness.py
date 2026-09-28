@@ -155,7 +155,9 @@ def test_a_correct_fix_plus_an_added_test_method_is_correct(tmp_path: Path) -> N
     assert added[0].outcome == "pass" and added[0].relevant
 
 
-def test_a_failing_added_test_fails_the_run_and_an_irrelevant_one_does_not(tmp_path: Path) -> None:
+def test_a_failing_or_irrelevant_added_test_fails_the_run(tmp_path: Path) -> None:
+    """The ask says added tests must remain relevant: a failing addition fails the run, and so does
+    an irrelevant one, each with its own category."""
     task = tasks.load_task("j1-refund-window")
     tree = _tree(tmp_path, task, solution=task.reference)
     notes = (
@@ -166,15 +168,38 @@ def test_a_failing_added_test_fails_the_run_and_an_irrelevant_one_does_not(tmp_p
     )
     (tree / "tests" / "test_notes.py").write_text(notes, encoding="utf-8")
     irrelevant = grade(tree, task, PYTHON)
-    assert irrelevant.correct
+    assert not irrelevant.correct
     assert irrelevant.added_tests[0].relevant is False and irrelevant.added_tests[0].outcome == "pass"
+    assert irrelevant.added_irrelevant
+    relevant = (
+        "import unittest\nfrom datetime import date\n\nfrom refunds import refund_allowed\n\n\n"
+        "class RefundExtra(unittest.TestCase):\n"
+        "    def test_extra(self) -> None:\n"
+        "        self.assertTrue(refund_allowed(date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3)))\n"
+    )
+    (tree / "tests" / "test_notes.py").write_text(relevant, encoding="utf-8")
+    ok = grade(tree, task, PYTHON)
+    assert ok.correct and ok.added_tests[0].relevant
     (tree / "tests" / "test_notes.py").write_text(
-        notes.replace("self.assertTrue(True)", "self.fail('added')"),
+        relevant.replace("self.assertTrue", "self.fail"),
         encoding="utf-8",
     )
     failing = grade(tree, task, PYTHON)
     assert not failing.correct
     assert failing.added_tests[0].outcome == "fail"
+    assert (
+        outcomes.failure_category(
+            status="ok",
+            success=False,
+            acceptance_passed=3,
+            acceptance_total=3,
+            regressions=(),
+            preexisting_altered=(),
+            added_failing=False,
+            added_irrelevant=True,
+        )
+        == "irrelevant added test"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1294,10 +1319,13 @@ def test_added_tests_are_collected_the_way_the_agent_ran_them(tmp_path: Path) ->
         "    assert refund_allowed is not None\n"
     )
     (tree / "tests" / "test_style.py").write_text(style, encoding="utf-8")
-    (tree / "tests" / "fees_test.py").write_text(
-        "import unittest\n\n\nclass Fees(unittest.TestCase):\n    def test_fee(self):\n        self.assertTrue(True)\n",
-        encoding="utf-8",
+    fees = (
+        "import unittest\n\nfrom refunds import REFUND_WINDOW_DAYS\n\n\n"
+        "class Fees(unittest.TestCase):\n"
+        "    def test_fee(self):\n"
+        "        self.assertEqual(REFUND_WINDOW_DAYS, 30)\n"
     )
+    (tree / "tests" / "fees_test.py").write_text(fees, encoding="utf-8")
     result = grade(tree, task, PYTHON)
     assert result.correct, result.added_tests
     names = {(item.file, item.name) for item in result.added_tests}
@@ -1307,7 +1335,10 @@ def test_added_tests_are_collected_the_way_the_agent_ran_them(tmp_path: Path) ->
     sub = tree / "tests" / "sub"
     sub.mkdir()
     (sub / "test_deep.py").write_text(
-        "import unittest\n\n\nclass Deep(unittest.TestCase):\n    def test_deep(self):\n        self.fail('deep')\n",
+        "import unittest\n\nfrom refunds import REFUND_WINDOW_DAYS\n\n\n"
+        "class Deep(unittest.TestCase):\n"
+        "    def test_deep(self):\n"
+        "        self.fail('deep')\n",
         encoding="utf-8",
     )
     failing = grade(tree, task, PYTHON)
@@ -1390,8 +1421,7 @@ def test_a_control_b_run_without_a_jev_call_is_measured_not_voided() -> None:
     answered = [{"tool": "jev_verify", "is_error": False, "model": arms.JEV_MODEL}]
     for calls in ([], answered):
         assert (
-            outcomes.measurement("B", status="ok", reached=True, calls=calls, mcp_servers=servers, control=True)
-            is None
+            outcomes.measurement("B", status="ok", reached=True, calls=calls, mcp_servers=servers, control=True) is None
         )
     # A non-control B run with no call is still voided, and the server-down check still fires.
     assert (
@@ -1409,9 +1439,7 @@ def test_the_report_states_invocation_over_all_reached_with_jev_runs() -> None:
         _run("j1", "A"),
         _run("j1", "B"),
         _run("c1", "A"),
-        _run(
-        "c1", "B", measurement="Jev not used: no Jev call", jev_calls=0, jev_tool_called=False
-    ),
+        _run("c1", "B", measurement="Jev not used: no Jev call", jev_calls=0, jev_tool_called=False),
         _run("c2", "A", measurement="never reached the model"),
         _run("c2", "B", measurement="never reached the model"),
     ]
