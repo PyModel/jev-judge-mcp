@@ -1,5 +1,9 @@
 """Render the architecture diagram from docs/architecture.json.
 
+Viewer source: the installed Archify at ~/.agents/skills/archify — Archify
+2.17.0-dev.1 plus local commits 12527a1 and 7c3ae9a (toolbar clearance), not
+on upstream. The generator tag alone cannot tell these builds apart.
+
 Archify embeds JetBrains Mono (SIL OFL-1.1). This repo ships no font, so the one
 licence notice for the diagram stays Archify's MIT text (THIRD_PARTY_NOTICES.md).
 
