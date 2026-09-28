@@ -13,7 +13,15 @@
   "gold_verification": "The gold option is the one the hidden acceptance tests accept. It is not a model's opinion. REQUIRED is already in the file; a Jev call cannot add a fact the code does not already state.",
   "gold_source": "labels.py sets REQUIRED to shipped and label still returns a different fixed string.",
   "wrong_branch_signatures": {
-    "keep-pending": ["return\\s+[\"']pending[\"']"],
-    "use-cancelled": ["return\\s+[\"']cancelled[\"']"]
+    "keep-pending": [
+      "return\\s+[\"']pending[\"']"
+    ],
+    "use-cancelled": [
+      "return\\s+[\"']cancelled[\"']"
+    ]
+  },
+  "jev_verdict_options": {
+    "verified": "use-required",
+    "contradicted": "keep-pending"
   }
 }

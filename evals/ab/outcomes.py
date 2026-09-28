@@ -177,37 +177,82 @@ def unnecessary_jev_calls(*, control: bool, uses: Sequence[ToolUse], calls: Sequ
     return min(repeats, logged)
 
 
-def _option_in(value: object, options: frozenset[str]) -> str | None:
-    found: str | None = None
-    if isinstance(value, str) and value in options:
-        return value
-    if isinstance(value, Mapping):
-        for item in cast(Mapping[str, object], value).values():
-            match = _option_in(item, options)
-            if match is not None:
-                found = match
-    elif isinstance(value, list):
-        for item in cast(list[object], value):
-            match = _option_in(item, options)
-            if match is not None:
-                found = match
-    return found
+def _first(value: object, key: str) -> object:
+    """`value[0][key]` for list-of-object shapes (top, results); None for anything else."""
+    if isinstance(value, list) and value and isinstance(value[0], dict):
+        return cast(dict[str, Any], value[0]).get(key)
+    return None
 
 
-def _as_dict(value: object) -> dict[str, Any]:
-    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+def _holder(value: object, key: str) -> object:
+    """`value[key]` for object shapes (recommendation, overall); None for anything else."""
+    return cast(dict[str, Any], value).get(key) if isinstance(value, dict) else None
 
 
-def jev_answer(stream: str, options: Mapping[str, str]) -> str | None:
-    """The last task option id in a non-error Jev tool result, or None when the result names none.
+def _answer_field(doc: dict[str, Any]) -> object:
+    """The one field of a Jev result document that names its answer, by tool."""
+    tool = str(doc.get("tool"))
+    if tool == "jev_find":
+        return None if doc.get("exists") is False else _first(doc.get("top"), "id")
+    if tool == "jev_decide":
+        return _holder(doc.get("recommendation"), "selected")
+    if tool in ("jev_classify", "jev_verify"):
+        return _first(doc.get("results"), "verdict" if tool == "jev_verify" else "class")
+    if tool == "jev_compare":
+        return _holder(doc.get("overall"), "relation")
+    if tool == "jev_screen":
+        return _holder(doc.get("recommendation"), "action")
+    if tool in ("jev_gate", "jev_review"):
+        return doc.get("action")
+    return None
 
-    The proxy does not keep result text. This reads the agent stream's tool-result payloads only,
-    so the agent's own final decision line cannot count as Jev's answer.
+
+def _documents(result: object) -> list[dict[str, Any]]:
+    """Every JSON object the MCP server returned as text (Pi `result`, Claude `content[].text`)."""
+    raw_blocks: object
+    if isinstance(result, dict):
+        raw_blocks = cast(dict[str, Any], result).get("content")
+    else:
+        raw_blocks = result
+    blocks = cast(list[object], raw_blocks) if isinstance(raw_blocks, list) else [raw_blocks]
+    docs: list[dict[str, Any]] = []
+    for raw_block in blocks:
+        text: object = cast(dict[str, Any], raw_block).get("text") if isinstance(raw_block, dict) else raw_block
+        if isinstance(text, str):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                docs.append(cast(dict[str, Any], parsed))
+    return docs
+
+
+def jev_answer_from_result(result: object, options: Mapping[str, str], verdicts: Mapping[str, str]) -> str | None:
+    """The task option Jev's result selects, or None. `verdicts` maps a verdict word to an option id
+    for the verdict-word tools (verify, compare, screen, gate, review); find, decide, and classify
+    answer with an option id directly. A document that names neither is not an answer."""
+    for doc in _documents(result):
+        value = _answer_field(doc)
+        if isinstance(value, str):
+            if value in options:
+                return value
+            if value in verdicts:
+                return verdicts[value]
+    return None
+
+
+def jev_answer(stream: str, options: Mapping[str, str], verdicts: Mapping[str, str] | None = None) -> str | None:
+    """The last task option a Jev result selected in the agent's stream, or None.
+
+    The proxy does not keep result text, so this reads the stream's tool-result payloads only: the
+    agent's own decision line is not Jev's answer. The comparison it feeds is a B-versus-paired-A
+    proxy, not within-run causality.
     """
     option_ids = frozenset(options)
+    verdict_map = verdicts or {}
     if not option_ids or not stream:
         return None
-    pending: dict[str, str] = {}
     last: str | None = None
     for raw in stream.splitlines():
         line = raw.strip()
@@ -221,52 +266,21 @@ def jev_answer(stream: str, options: Mapping[str, str]) -> str | None:
             continue
         payload = cast(dict[str, Any], event)
         kind = payload.get("type")
-        if kind == "tool_execution_start":
-            name = str(payload.get("toolName") or "")
-            tool = exposed_jev_tool(ToolUse(name, _as_dict(payload.get("args"))))
-            call_id = str(payload.get("toolCallId") or "")
-            if tool is not None and call_id:
-                pending[call_id] = tool
-        elif kind == "tool_execution_end":
-            call_id = str(payload.get("toolCallId") or "")
-            if call_id not in pending:
-                name = str(payload.get("toolName") or "")
-                if exposed_jev_tool(ToolUse(name, {})) is None:
-                    continue
-            if payload.get("isError") is True:
-                pending.pop(call_id, None)
-                continue
-            match = _option_in(payload.get("result"), option_ids)
-            if match is not None:
-                last = match
-            pending.pop(call_id, None)
-        elif kind in ("assistant", "user"):
-            message = _as_dict(payload.get("message"))
-            raw_content = message.get("content") if message else payload.get("content")
-            blocks: list[dict[str, Any]] = []
-            if isinstance(raw_content, list):
-                for item in cast(list[object], raw_content):
-                    if isinstance(item, dict):
-                        blocks.append(cast(dict[str, Any], item))
-            wanted = "tool_use" if kind == "assistant" else "tool_result"
-            for block in blocks:
-                if block.get("type") != wanted:
-                    continue
-                if kind == "assistant":
-                    name = str(block.get("name") or "")
-                    tool = exposed_jev_tool(ToolUse(name, _as_dict(block.get("input"))))
-                    block_id = str(block.get("id") or "")
-                    if tool is not None and block_id:
-                        pending[block_id] = tool
-                    continue
-                block_id = str(block.get("tool_use_id") or "")
-                if block_id not in pending or block.get("is_error") is True:
-                    pending.pop(block_id, None)
-                    continue
-                match = _option_in(block.get("content"), option_ids)
+        if kind == "tool_execution_end":
+            if payload.get("isError") is not True:
+                match = jev_answer_from_result(payload.get("result"), options, verdict_map)
                 if match is not None:
                     last = match
-                pending.pop(block_id, None)
+        elif kind == "user":
+            message = cast(dict[str, Any], payload.get("message") or {})
+            for raw_item in cast(list[object], message.get("content") or []):
+                if not isinstance(raw_item, dict):
+                    continue
+                block = cast(dict[str, Any], raw_item)
+                if block.get("type") == "tool_result" and block.get("is_error") is not True:
+                        match = jev_answer_from_result(block.get("content"), options, verdict_map)
+                        if match is not None:
+                            last = match
     return last
 
 

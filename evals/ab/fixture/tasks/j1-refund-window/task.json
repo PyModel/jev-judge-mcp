@@ -19,5 +19,10 @@
     "delivery-date-exclusive": [
       "\\(requested\\s*-\\s*delivered\\)\\.days\\s*<\\s*(REFUND_WINDOW_DAYS|30)\\b(?!\\s*\\+)"
     ]
+  },
+  "jev_verdict_options": {
+    "verified": "delivery-date-inclusive",
+    "contradicted": "delivery-date-exclusive",
+    "unsupported": "order-date-exclusive"
   }
 }

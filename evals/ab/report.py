@@ -43,9 +43,12 @@ DEFINITIONS = [
     "determine the answer), or a later call of the same tool with the same arguments as an earlier call "
     "in that run. The repeat count cannot exceed the proxy log.",
     "**Jev changed the decision:** the with-Jev run's final decision differs from its paired without-Jev "
-    "run and equals the option id in Jev's last non-error tool result. If that result names no task "
-    "option, the change is not observed: the proxy does not keep result text, and the agent's own "
-    "decision line is not Jev's answer. **The change was correct** when that final decision equals gold.",
+    "run and equals the option Jev's last non-error result selects — the one answer field of the tool's "
+    "JSON document (`top[0].id` for find, `results[0].verdict` for verify, and so on), mapped to an option "
+    "id by `task.json`'s `jev_verdict_options` where the tool answers with a verdict word. If that field "
+    "names no task option, the change is not observed. The paired comparison is a **B-versus-paired-A "
+    "proxy**, not within-run causality: the two arms are independent stochastic trajectories. **The "
+    "change was correct** when that final decision equals gold.",
     "**Jev round trip:** the proxy's per-call `ms`, which includes the server's local work and so bounds "
     "provider latency from above. **Run wall** is `wall_s`.",
     "**Failure category:** why a failed run failed, first match: timeout, agent error, acceptance miss, "

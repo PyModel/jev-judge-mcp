@@ -15,7 +15,7 @@ import os
 import shutil
 import subprocess
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 FIXTURE = Path(__file__).parent / "fixture"
@@ -45,6 +45,8 @@ JUDGMENT_KINDS = (
     "review",
     "control",
 )
+VERDICT_TOOLS = ("jev_verify", "jev_compare", "jev_screen", "jev_gate", "jev_review")
+"""Tools whose answer is a verdict word, not an option id; a task using one must ship the map."""
 TEST_COMMAND = "python3 -m unittest discover -s tests"
 
 
@@ -64,6 +66,9 @@ class Judgment:
     wrong options leave no distinctive trace; such a task reports no wrong-branch count."""
     control: bool = False
     """True when the code or tests already determine the answer, so a Jev call adds nothing."""
+    verdict_options: Mapping[str, str] = field(default_factory=dict[str, str])
+    """Verdict word to option id, for the verdict-word tools (`VERDICT_TOOLS`). Set by the task's
+    own logic: how the task's crux claim maps onto its options."""
 
 
 @dataclass(frozen=True)
@@ -97,9 +102,14 @@ def load_task(task_id: str) -> Task:
         gold=spec.get("gold"),
         wrong_branch_signatures={k: tuple(v) for k, v in spec.get("wrong_branch_signatures", {}).items()},
         control=bool(spec.get("control", False)),
+        verdict_options=dict(spec.get("jev_verdict_options", {})),
     )
     if judgment.kind not in JUDGMENT_KINDS:
         raise ValueError(f"{task_id}: unknown judgment {judgment.kind!r}")
+    if judgment.jev_tool in VERDICT_TOOLS and not judgment.verdict_options:
+        raise ValueError(
+            f"{task_id}: {judgment.jev_tool} answers with a verdict word; task.json needs jev_verdict_options"
+        )
     if judgment.gold is not None and judgment.gold not in judgment.options:
         raise ValueError(f"{task_id}: gold {judgment.gold!r} is not an option")
     if unknown := set(judgment.wrong_branch_signatures) - set(judgment.options):

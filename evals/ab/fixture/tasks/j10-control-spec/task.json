@@ -13,7 +13,15 @@
   "gold_verification": "The gold option is the one the hidden acceptance tests accept. It is not a model's opinion. SPEC_RATE is already in the file the tests import; a Jev call cannot add a fact the code does not already state.",
   "gold_source": "specfee.py defines SPEC_RATE = 15 and says fee must charge that percent. The function still multiplies by RATE.",
   "wrong_branch_signatures": {
-    "keep-rate": ["price_cents\\s*\\*\\s*RATE\\b"],
-    "hardcode-20": ["\\*\\s*20\\s*//\\s*100"]
+    "keep-rate": [
+      "price_cents\\s*\\*\\s*RATE\\b"
+    ],
+    "hardcode-20": [
+      "\\*\\s*20\\s*//\\s*100"
+    ]
+  },
+  "jev_verdict_options": {
+    "verified": "use-spec",
+    "contradicted": "keep-rate"
   }
 }

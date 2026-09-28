@@ -13,6 +13,13 @@
   "gold_verification": "The gold option is the one the hidden acceptance tests accept. It is not a model's opinion. Applying the patch or leaving split unchanged both fail those tests.",
   "gold_source": "docs/installments.md requires an exact total, no two installments more than one cent apart, and the larger ones first. proposed.diff puts the entire remainder on the last installment.",
   "wrong_branch_signatures": {
-    "approve": ["\\[base\\]\\s*\\*\\s*\\(parts\\s*-\\s*1\\)\\s*\\+\\s*\\["]
+    "approve": [
+      "\\[base\\]\\s*\\*\\s*\\(parts\\s*-\\s*1\\)\\s*\\+\\s*\\["
+    ]
+  },
+  "jev_verdict_options": {
+    "auto": "approve",
+    "review": "request-changes",
+    "escalate": "request-changes"
   }
 }

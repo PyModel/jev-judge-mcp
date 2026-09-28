@@ -1,0 +1,153 @@
+{
+ "j7-find-line.B.r1": [
+  {
+   "type": "tool_execution_end",
+   "toolCallId": "call_00_uvktl5c7auj6imma99lejxvu",
+   "toolName": "mcp",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "{\n  \"tool\": \"jev_find\",\n  \"model\": \"jev-1.13.0\",\n  \"provider\": \"typesafe\",\n  \"query\": \"A bug makes the refund_allowed function violate the refund policy. docs/refunds.md says a refund may be requested within 30 days of delivery; the window starts on the delivery date, not the order date; the delivery date is day 0, a request on day 30 is on time and day 31 is late. Which candidate line is that refund bug?\",\n  \"exists\": 0.99,\n  \"exists_verdict\": \"answered\",\n  \"top\": [\n    {\n      \"id\": \"refunds-return\",\n      \"probability\": 1,\n      \"text\": \"refunds.py line 12, the return in refund_allowed: `return (requested - ordered).days <= REFUND_WINDOW_DAYS`. The function signature is refund_allowed(ordered: date, delivered: date, requested: date). It measures the window from the order date `ordered`, so slow shipping eats the customer's window: an order delivered 2026-03-05 may be refunded only through 2026-03-31, and a request on 2026-04-04 (day 30 after delivery) is refused. docs/refunds.md: a customer may request a refund within 30 days of delivery; the window starts on the delivery date, not the order date; delivery date is day 0; request on day 30 is on time, day 31 is late. This line is directly in refund_allowed and changes whether refunds are allowed.\"\n    },\n    {\n      \"id\": \"routing-rules\",\n      \"probability\": 0,\n      \"text\": \"routing.py line 5, the RULES table: tuples for billing (charge, refund, invoice, payment), then shipping (package, delivery, tracking, courier), then security (password, phishing). In route(), the first matching rule wins, so a ticket naming both a charge and a password goes to billing. docs/routing.md: security first; a ticket reporting unauthorized access goes to security whatever else it mentions, including a charge or refund. This line governs ticket routing, not refund eligibility or refund_allowed.\"\n    },\n    {\n      \"id\": \"installments-round\",\n      \"probability\": 0,\n      \"text\": \"installments.py line 10, the round call in split: `return [round(total_cents / parts)] * parts`. rounding total/parts to the nearest cent and repeating it does not make the parts add up to the total (e.g. 100 cents into 3 gives 33+33+33=99) and does not order larger parts first. docs/installments.md: installments add up to the order total exactly; no two differ by more than one cent; when they differ the larger installments come first. This line governs installment splitting, not refund eligibility or refund_allowed.\"\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 1093,\n    \"output_tokens\": 64\n  },\n  \"request_id\": \"req_01a0e483cd0a7397b0d24d85d74f4270\"\n}"
+     }
+    ],
+    "details": {
+     "mode": "call",
+     "mcpResult": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\n  \"tool\": \"jev_find\",\n  \"model\": \"jev-1.13.0\",\n  \"provider\": \"typesafe\",\n  \"query\": \"A bug makes the refund_allowed function violate the refund policy. docs/refunds.md says a refund may be requested within 30 days of delivery; the window starts on the delivery date, not the order date; the delivery date is day 0, a request on day 30 is on time and day 31 is late. Which candidate line is that refund bug?\",\n  \"exists\": 0.99,\n  \"exists_verdict\": \"answered\",\n  \"top\": [\n    {\n      \"id\": \"refunds-return\",\n      \"probability\": 1,\n      \"text\": \"refunds.py line 12, the return in refund_allowed: `return (requested - ordered).days <= REFUND_WINDOW_DAYS`. The function signature is refund_allowed(ordered: date, delivered: date, requested: date). It measures the window from the order date `ordered`, so slow shipping eats the customer's window: an order delivered 2026-03-05 may be refunded only through 2026-03-31, and a request on 2026-04-04 (day 30 after delivery) is refused. docs/refunds.md: a customer may request a refund within 30 days of delivery; the window starts on the delivery date, not the order date; delivery date is day 0; request on day 30 is on time, day 31 is late. This line is directly in refund_allowed and changes whether refunds are allowed.\"\n    },\n    {\n      \"id\": \"routing-rules\",\n      \"probability\": 0,\n      \"text\": \"routing.py line 5, the RULES table: tuples for billing (charge, refund, invoice, payment), then shipping (package, delivery, tracking, courier), then security (password, phishing). In route(), the first matching rule wins, so a ticket naming both a charge and a password goes to billing. docs/routing.md: security first; a ticket reporting unauthorized access goes to security whatever else it mentions, including a charge or refund. This line governs ticket routing, not refund eligibility or refund_allowed.\"\n    },\n    {\n      \"id\": \"installments-round\",\n      \"probability\": 0,\n      \"text\": \"installments.py line 10, the round call in split: `return [round(total_cents / parts)] * parts`. rounding total/parts to the nearest cent and repeating it does not make the parts add up to the total (e.g. 100 cents into 3 gives 33+33+33=99) and does not order larger parts first. docs/installments.md: installments add up to the order total exactly; no two differ by more than one cent; when they differ the larger installments come first. This line governs installment splitting, not refund eligibility or refund_allowed.\"\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 1093,\n    \"output_tokens\": 64\n  },\n  \"request_id\": \"req_01a0e483cd0a7397b0d24d85d74f4270\"\n}"
+       }
+      ],
+      "isError": false
+     },
+     "server": "jev",
+     "tool": "jev_find",
+     "canonicalTool": "jev_find"
+    }
+   },
+   "isError": false
+  }
+ ],
+ "j10-control-spec.B.r2": [
+  {
+   "type": "tool_execution_end",
+   "toolCallId": "call_00_1ei26gw9g7ux77723o5hr611",
+   "toolName": "mcp",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "{\n  \"tool\": \"jev_verify\",\n  \"model\": \"jev-1.13.0\",\n  \"provider\": \"typesafe\",\n  \"auto_accept\": 0.8,\n  \"summary\": {\n    \"verified\": 1,\n    \"contradicted\": 0,\n    \"unsupported\": 0,\n    \"needs_review\": 0,\n    \"by_verdict\": {\n      \"verified\": 1\n    },\n    \"by_action\": {\n      \"auto\": 1\n    }\n  },\n  \"results\": [\n    {\n      \"id\": \"claim0\",\n      \"claim\": \"In specfee.py, the function `fee` must compute the restocking fee using SPEC_RATE (the specification rate, defined as 15), not the legacy RATE (defined as 10), because the task says fee must use SPEC_RATE and the function's docstring says to charge SPEC_RATE percent and calls RATE the legacy figure, not the specification.\",\n      \"verdict\": \"verified\",\n      \"probabilities\": {\n        \"supports\": 0.92,\n        \"says_nothing\": 0,\n        \"contradicts\": 0.08\n      },\n      \"confidence\": 0.88,\n      \"action\": \"auto\",\n      \"supporting_evidence\": \"specfee.py\",\n      \"stands\": true,\n      \"evidence_ids\": [\n        \"specfee.py\"\n      ],\n      \"excerpt\": \"\\\"\\\"\\\"Restocking fee as a percent of price.\\\"\\\"\\\"\",\n      \"missing_evidence\": null\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 1023,\n    \"output_tokens\": 87\n  },\n  \"request_id\": \"req_01a0e49433347fa8bc3ed35f68116cdd\"\n}"
+     }
+    ],
+    "details": {
+     "mode": "call",
+     "mcpResult": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\n  \"tool\": \"jev_verify\",\n  \"model\": \"jev-1.13.0\",\n  \"provider\": \"typesafe\",\n  \"auto_accept\": 0.8,\n  \"summary\": {\n    \"verified\": 1,\n    \"contradicted\": 0,\n    \"unsupported\": 0,\n    \"needs_review\": 0,\n    \"by_verdict\": {\n      \"verified\": 1\n    },\n    \"by_action\": {\n      \"auto\": 1\n    }\n  },\n  \"results\": [\n    {\n      \"id\": \"claim0\",\n      \"claim\": \"In specfee.py, the function `fee` must compute the restocking fee using SPEC_RATE (the specification rate, defined as 15), not the legacy RATE (defined as 10), because the task says fee must use SPEC_RATE and the function's docstring says to charge SPEC_RATE percent and calls RATE the legacy figure, not the specification.\",\n      \"verdict\": \"verified\",\n      \"probabilities\": {\n        \"supports\": 0.92,\n        \"says_nothing\": 0,\n        \"contradicts\": 0.08\n      },\n      \"confidence\": 0.88,\n      \"action\": \"auto\",\n      \"supporting_evidence\": \"specfee.py\",\n      \"stands\": true,\n      \"evidence_ids\": [\n        \"specfee.py\"\n      ],\n      \"excerpt\": \"\\\"\\\"\\\"Restocking fee as a percent of price.\\\"\\\"\\\"\",\n      \"missing_evidence\": null\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 1023,\n    \"output_tokens\": 87\n  },\n  \"request_id\": \"req_01a0e49433347fa8bc3ed35f68116cdd\"\n}"
+       }
+      ],
+      "isError": false
+     },
+     "server": "jev",
+     "tool": "jev_verify",
+     "canonicalTool": "jev_verify"
+    }
+   },
+   "isError": false
+  },
+  {
+   "type": "tool_execution_end",
+   "toolCallId": "call_00_kpybwioaba3xt4zyl85s54hz",
+   "toolName": "mcp",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "{\n  \"tool\": \"jev_verify\",\n  \"model\": \"jev-1.13.0\",\n  \"provider\": \"typesafe\",\n  \"auto_accept\": 0.8,\n  \"summary\": {\n    \"verified\": 1,\n    \"contradicted\": 0,\n    \"unsupported\": 0,\n    \"needs_review\": 0,\n    \"by_verdict\": {\n      \"verified\": 1\n    },\n    \"by_action\": {\n      \"auto\": 1\n    }\n  },\n  \"results\": [\n    {\n      \"id\": \"claim0\",\n      \"claim\": \"In specfee.py, the function `fee` must compute the restocking fee using SPEC_RATE (the specification rate, defined as 15), not the legacy RATE (defined as 10), because the task says fee must use SPEC_RATE and the function's docstring says to charge SPEC_RATE percent and calls RATE the legacy figure, not the specification.\",\n      \"verdict\": \"verified\",\n      \"probabilities\": {\n        \"supports\": 0.91,\n        \"contradicts\": 0.09,\n        \"says_nothing\": 0\n      },\n      \"confidence\": 0.86,\n      \"action\": \"auto\",\n      \"supporting_evidence\": \"specfee.py\",\n      \"stands\": true,\n      \"evidence_ids\": [\n        \"specfee.py\"\n      ],\n      \"excerpt\": \"\\\"\\\"\\\"Restocking fee as a percent of price.\\\"\\\"\\\"\",\n      \"missing_evidence\": null\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 1023,\n    \"output_tokens\": 87\n  },\n  \"request_id\": \"req_01a0e4964c65785a9eef1f31649c3365\"\n}"
+     }
+    ],
+    "details": {
+     "mode": "call",
+     "mcpResult": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\n  \"tool\": \"jev_verify\",\n  \"model\": \"jev-1.13.0\",\n  \"provider\": \"typesafe\",\n  \"auto_accept\": 0.8,\n  \"summary\": {\n    \"verified\": 1,\n    \"contradicted\": 0,\n    \"unsupported\": 0,\n    \"needs_review\": 0,\n    \"by_verdict\": {\n      \"verified\": 1\n    },\n    \"by_action\": {\n      \"auto\": 1\n    }\n  },\n  \"results\": [\n    {\n      \"id\": \"claim0\",\n      \"claim\": \"In specfee.py, the function `fee` must compute the restocking fee using SPEC_RATE (the specification rate, defined as 15), not the legacy RATE (defined as 10), because the task says fee must use SPEC_RATE and the function's docstring says to charge SPEC_RATE percent and calls RATE the legacy figure, not the specification.\",\n      \"verdict\": \"verified\",\n      \"probabilities\": {\n        \"supports\": 0.91,\n        \"contradicts\": 0.09,\n        \"says_nothing\": 0\n      },\n      \"confidence\": 0.86,\n      \"action\": \"auto\",\n      \"supporting_evidence\": \"specfee.py\",\n      \"stands\": true,\n      \"evidence_ids\": [\n        \"specfee.py\"\n      ],\n      \"excerpt\": \"\\\"\\\"\\\"Restocking fee as a percent of price.\\\"\\\"\\\"\",\n      \"missing_evidence\": null\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 1023,\n    \"output_tokens\": 87\n  },\n  \"request_id\": \"req_01a0e4964c65785a9eef1f31649c3365\"\n}"
+       }
+      ],
+      "isError": false
+     },
+     "server": "jev",
+     "tool": "jev_verify",
+     "canonicalTool": "jev_verify"
+    }
+   },
+   "isError": false
+  }
+ ],
+ "j6-docs-vs-code.B.r2": [
+  {
+   "type": "tool_execution_end",
+   "toolCallId": "call_00_fn3at3n69x23cjgsywavnmx7",
+   "toolName": "mcp",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "{\n  \"tool\": \"jev_compare\",\n  \"model\": \"jev-1.13.0\",\n  \"provider\": \"typesafe\",\n  \"overall\": {\n    \"relation\": \"contradicts\",\n    \"probabilities\": {\n      \"same_fact\": 0,\n      \"contradicts\": 1,\n      \"different_facts\": 0\n    },\n    \"confidence\": 1,\n    \"margin\": 1,\n    \"decision\": \"auto\"\n  },\n  \"aspects\": [\n    {\n      \"aspect\": \"fee rate\",\n      \"relation\": \"contradicts\",\n      \"probabilities\": {\n        \"same_fact\": 0,\n        \"contradicts\": 0.99,\n        \"different_facts\": 0.01\n      },\n      \"confidence\": 0.98,\n      \"margin\": 0.98,\n      \"decision\": \"auto\"\n    },\n    {\n      \"aspect\": \"7-day waiver\",\n      \"relation\": \"contradicts\",\n      \"probabilities\": {\n        \"same_fact\": 0,\n        \"contradicts\": 0.99,\n        \"different_facts\": 0.01\n      },\n      \"confidence\": 0.98,\n      \"margin\": 0.98,\n      \"decision\": \"auto\"\n    },\n    {\n      \"aspect\": \"governing authority\",\n      \"relation\": \"different_facts\",\n      \"probabilities\": {\n        \"same_fact\": 0.01,\n        \"contradicts\": 0.1,\n        \"different_facts\": 0.89\n      },\n      \"confidence\": 0.83,\n      \"margin\": 0.79,\n      \"decision\": \"auto\"\n    }\n  ],\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"usage\": {\n    \"input_tokens\": 960,\n    \"output_tokens\": 177\n  },\n  \"request_id\": \"req_01a0e49ce142778fa78bef12b5b67a4e\"\n}"
+     }
+    ],
+    "details": {
+     "mode": "call",
+     "mcpResult": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\n  \"tool\": \"jev_compare\",\n  \"model\": \"jev-1.13.0\",\n  \"provider\": \"typesafe\",\n  \"overall\": {\n    \"relation\": \"contradicts\",\n    \"probabilities\": {\n      \"same_fact\": 0,\n      \"contradicts\": 1,\n      \"different_facts\": 0\n    },\n    \"confidence\": 1,\n    \"margin\": 1,\n    \"decision\": \"auto\"\n  },\n  \"aspects\": [\n    {\n      \"aspect\": \"fee rate\",\n      \"relation\": \"contradicts\",\n      \"probabilities\": {\n        \"same_fact\": 0,\n        \"contradicts\": 0.99,\n        \"different_facts\": 0.01\n      },\n      \"confidence\": 0.98,\n      \"margin\": 0.98,\n      \"decision\": \"auto\"\n    },\n    {\n      \"aspect\": \"7-day waiver\",\n      \"relation\": \"contradicts\",\n      \"probabilities\": {\n        \"same_fact\": 0,\n        \"contradicts\": 0.99,\n        \"different_facts\": 0.01\n      },\n      \"confidence\": 0.98,\n      \"margin\": 0.98,\n      \"decision\": \"auto\"\n    },\n    {\n      \"aspect\": \"governing authority\",\n      \"relation\": \"different_facts\",\n      \"probabilities\": {\n        \"same_fact\": 0.01,\n        \"contradicts\": 0.1,\n        \"different_facts\": 0.89\n      },\n      \"confidence\": 0.83,\n      \"margin\": 0.79,\n      \"decision\": \"auto\"\n    }\n  ],\n  \"thresholds\": {\n    \"auto_accept\": 0.85,\n    \"minimum_margin\": 0.5\n  },\n  \"usage\": {\n    \"input_tokens\": 960,\n    \"output_tokens\": 177\n  },\n  \"request_id\": \"req_01a0e49ce142778fa78bef12b5b67a4e\"\n}"
+       }
+      ],
+      "isError": false
+     },
+     "server": "jev",
+     "tool": "jev_compare",
+     "canonicalTool": "jev_compare"
+    }
+   },
+   "isError": false
+  },
+  {
+   "type": "tool_execution_end",
+   "toolCallId": "call_00_uqskcgjw1ph1qi9pu1lube8y",
+   "toolName": "mcp",
+   "result": {
+    "content": [
+     {
+      "type": "text",
+      "text": "{\n  \"tool\": \"jev_gate\",\n  \"model\": \"jev-1.13.0\",\n  \"provider\": \"typesafe\",\n  \"truncated\": false,\n  \"action\": \"escalate\",\n  \"reason_codes\": [\n    \"review_escalated\"\n  ],\n  \"next_checks\": [\n    \"Stop. Read action, not verdict.\"\n  ],\n  \"review\": {\n    \"safe_to_apply\": 0.69,\n    \"scores\": {\n      \"correctness\": {\n        \"score\": 1.62,\n        \"confidence\": 0.43,\n        \"level\": 2\n      },\n      \"spec_match\": {\n        \"score\": 1.87,\n        \"confidence\": 0.8,\n        \"level\": 2\n      },\n      \"test_gap\": {\n        \"score\": 0.88,\n        \"confidence\": 0,\n        \"level\": 1\n      },\n      \"blast_radius\": {\n        \"score\": 0.88,\n        \"confidence\": 0,\n        \"level\": 1\n      }\n    },\n    \"weights\": {\n      \"correctness\": 0.4,\n      \"spec_match\": 0.3,\n      \"test_gap\": 0.15,\n      \"blast_radius\": 0.15\n    },\n    \"score_scale\": [\n      0,\n      2\n    ],\n    \"thresholds\": {\n      \"auto_accept\": 0.8,\n      \"review_at\": 0.5,\n      \"composite_floor\": 0.7\n    },\n    \"action\": \"escalate\",\n    \"composite\": 0.7725,\n    \"score_file\": \"fees.py\",\n    \"reviewed_files\": [\n      \"fees.py\",\n      \"tests/test_fees.py\"\n    ],\n    \"file_actions\": {\n      \"fees.py\": \"escalate\",\n      \"tests/test_fees.py\": \"escalate\"\n    },\n    \"tests_weight\": \"self_reported\"\n  },\n  \"verification\": {\n    \"action\": \"auto\",\n    \"summary\": {\n      \"verified\": 4,\n      \"contradicted\": 0,\n      \"unsupported\": 0,\n      \"needs_review\": 0,\n      \"invalid_response\": 0,\n      \"by_verdict\": {\n        \"verified\": 4\n      },\n      \"by_action\": {\n        \"auto\": 4\n      }\n    },\n    \"thresholds\": {\n      \"auto_accept\": 0.8,\n      \"review_at\": 0.5\n    },\n    \"results\": [\n      {\n        \"claim\": \"docs/fees.md governs over fees.py, matching the repository convention that docs/ policy documents are the source of truth.\",\n        \"verdict\": \"verified\",\n        \"confidence\": 0.98,\n        \"probabilities\": {\n          \"unsupported\": 0.01,\n          \"contradicted\": 0,\n          \"verified\": 0.99\n        },\n        \"action\": \"auto\",\n        \"id\": \"claim0\",\n        \"stands\": true,\n        \"evidence_ids\": [\n          \"fees-doc\"\n        ],\n        \"excerpt\": \"docs/fees.md: Source of truth for the restocking fee. Last reviewed 2026-08-14. Where fees.py disagrees with this document, this document applies. 1. No fee when the refund is requested within 7 days \",\n        \"missing_evidence\": null,\n        \"supporting_evidence\": \"fees-doc\"\n      },\n      {\n        \"claim\": \"restocking_fee returns 0 when days_since_delivery is 7 or fewer.\",\n        \"verdict\": \"verified\",\n        \"confidence\": 1,\n        \"probabilities\": {\n          \"unsupported\": 0,\n          \"contradicted\": 0,\n          \"verified\": 1\n        },\n        \"action\": \"auto\",\n        \"id\": \"claim1\",\n        \"stands\": true,\n        \"evidence_ids\": [\n          \"new-fees\"\n        ],\n        \"excerpt\": \"fees.py now defines WAIVER_DAYS = 7; FEE_PERCENT = 15; def restocking_fee(price_cents, days_since_delivery): if days_since_delivery <= WAIVER_DAYS: return 0; return (price_cents * FEE_PERCENT + 50) //\",\n        \"missing_evidence\": null,\n        \"supporting_evidence\": \"new-fees\"\n      },\n      {\n        \"claim\": \"restocking_fee otherwise returns 15 percent of price_cents rounded half up to the cent.\",\n        \"verdict\": \"verified\",\n        \"confidence\": 0.99,\n        \"probabilities\": {\n          \"unsupported\": 0.01,\n          \"contradicted\": 0,\n          \"verified\": 0.99\n        },\n        \"action\": \"auto\",\n        \"id\": \"claim2\",\n        \"stands\": true,\n        \"evidence_ids\": [\n          \"new-fees\"\n        ],\n        \"excerpt\": \"fees.py now defines WAIVER_DAYS = 7; FEE_PERCENT = 15; def restocking_fee(price_cents, days_since_delivery): if days_since_delivery <= WAIVER_DAYS: return 0; return (price_cents * FEE_PERCENT + 50) //\",\n        \"missing_evidence\": null,\n        \"supporting_evidence\": \"new-fees\"\n      },\n      {\n        \"claim\": \"The full test suite passes.\",\n        \"verdict\": \"verified\",\n        \"confidence\": 0.91,\n        \"probabilities\": {\n          \"unsupported\": 0.06,\n          \"contradicted\": 0,\n          \"verified\": 0.94\n        },\n        \"action\": \"auto\",\n        \"id\": \"claim3\",\n        \"stands\": true,\n        \"evidence_ids\": [\n          \"tests\"\n        ],\n        \"excerpt\": \"Ran 17 tests in 0.000s\",\n        \"missing_evidence\": null,\n        \"supporting_evidence\": \"tests\"\n      }\n    ]\n  },\n  \"partial\": false,\n  \"unreviewed_files\": [],\n  \"usage\": {\n    \"input_tokens\": 4644,\n    \"output_tokens\": 674\n  },\n  \"request_id\": \"req_01a0e49d6d987fd1b6ad9aff08477b75\"\n}"
+     }
+    ],
+    "details": {
+     "mode": "call",
+     "mcpResult": {
+      "content": [
+       {
+        "type": "text",
+        "text": "{\n  \"tool\": \"jev_gate\",\n  \"model\": \"jev-1.13.0\",\n  \"provider\": \"typesafe\",\n  \"truncated\": false,\n  \"action\": \"escalate\",\n  \"reason_codes\": [\n    \"review_escalated\"\n  ],\n  \"next_checks\": [\n    \"Stop. Read action, not verdict.\"\n  ],\n  \"review\": {\n    \"safe_to_apply\": 0.69,\n    \"scores\": {\n      \"correctness\": {\n        \"score\": 1.62,\n        \"confidence\": 0.43,\n        \"level\": 2\n      },\n      \"spec_match\": {\n        \"score\": 1.87,\n        \"confidence\": 0.8,\n        \"level\": 2\n      },\n      \"test_gap\": {\n        \"score\": 0.88,\n        \"confidence\": 0,\n        \"level\": 1\n      },\n      \"blast_radius\": {\n        \"score\": 0.88,\n        \"confidence\": 0,\n        \"level\": 1\n      }\n    },\n    \"weights\": {\n      \"correctness\": 0.4,\n      \"spec_match\": 0.3,\n      \"test_gap\": 0.15,\n      \"blast_radius\": 0.15\n    },\n    \"score_scale\": [\n      0,\n      2\n    ],\n    \"thresholds\": {\n      \"auto_accept\": 0.8,\n      \"review_at\": 0.5,\n      \"composite_floor\": 0.7\n    },\n    \"action\": \"escalate\",\n    \"composite\": 0.7725,\n    \"score_file\": \"fees.py\",\n    \"reviewed_files\": [\n      \"fees.py\",\n      \"tests/test_fees.py\"\n    ],\n    \"file_actions\": {\n      \"fees.py\": \"escalate\",\n      \"tests/test_fees.py\": \"escalate\"\n    },\n    \"tests_weight\": \"self_reported\"\n  },\n  \"verification\": {\n    \"action\": \"auto\",\n    \"summary\": {\n      \"verified\": 4,\n      \"contradicted\": 0,\n      \"unsupported\": 0,\n      \"needs_review\": 0,\n      \"invalid_response\": 0,\n      \"by_verdict\": {\n        \"verified\": 4\n      },\n      \"by_action\": {\n        \"auto\": 4\n      }\n    },\n    \"thresholds\": {\n      \"auto_accept\": 0.8,\n      \"review_at\": 0.5\n    },\n    \"results\": [\n      {\n        \"claim\": \"docs/fees.md governs over fees.py, matching the repository convention that docs/ policy documents are the source of truth.\",\n        \"verdict\": \"verified\",\n        \"confidence\": 0.98,\n        \"probabilities\": {\n          \"unsupported\": 0.01,\n          \"contradicted\": 0,\n          \"verified\": 0.99\n        },\n        \"action\": \"auto\",\n        \"id\": \"claim0\",\n        \"stands\": true,\n        \"evidence_ids\": [\n          \"fees-doc\"\n        ],\n        \"excerpt\": \"docs/fees.md: Source of truth for the restocking fee. Last reviewed 2026-08-14. Where fees.py disagrees with this document, this document applies. 1. No fee when the refund is requested within 7 days \",\n        \"missing_evidence\": null,\n        \"supporting_evidence\": \"fees-doc\"\n      },\n      {\n        \"claim\": \"restocking_fee returns 0 when days_since_delivery is 7 or fewer.\",\n        \"verdict\": \"verified\",\n        \"confidence\": 1,\n        \"probabilities\": {\n          \"unsupported\": 0,\n          \"contradicted\": 0,\n          \"verified\": 1\n        },\n        \"action\": \"auto\",\n        \"id\": \"claim1\",\n        \"stands\": true,\n        \"evidence_ids\": [\n          \"new-fees\"\n        ],\n        \"excerpt\": \"fees.py now defines WAIVER_DAYS = 7; FEE_PERCENT = 15; def restocking_fee(price_cents, days_since_delivery): if days_since_delivery <= WAIVER_DAYS: return 0; return (price_cents * FEE_PERCENT + 50) //\",\n        \"missing_evidence\": null,\n        \"supporting_evidence\": \"new-fees\"\n      },\n      {\n        \"claim\": \"restocking_fee otherwise returns 15 percent of price_cents rounded half up to the cent.\",\n        \"verdict\": \"verified\",\n        \"confidence\": 0.99,\n        \"probabilities\": {\n          \"unsupported\": 0.01,\n          \"contradicted\": 0,\n          \"verified\": 0.99\n        },\n        \"action\": \"auto\",\n        \"id\": \"claim2\",\n        \"stands\": true,\n        \"evidence_ids\": [\n          \"new-fees\"\n        ],\n        \"excerpt\": \"fees.py now defines WAIVER_DAYS = 7; FEE_PERCENT = 15; def restocking_fee(price_cents, days_since_delivery): if days_since_delivery <= WAIVER_DAYS: return 0; return (price_cents * FEE_PERCENT + 50) //\",\n        \"missing_evidence\": null,\n        \"supporting_evidence\": \"new-fees\"\n      },\n      {\n        \"claim\": \"The full test suite passes.\",\n        \"verdict\": \"verified\",\n        \"confidence\": 0.91,\n        \"probabilities\": {\n          \"unsupported\": 0.06,\n          \"contradicted\": 0,\n          \"verified\": 0.94\n        },\n        \"action\": \"auto\",\n        \"id\": \"claim3\",\n        \"stands\": true,\n        \"evidence_ids\": [\n          \"tests\"\n        ],\n        \"excerpt\": \"Ran 17 tests in 0.000s\",\n        \"missing_evidence\": null,\n        \"supporting_evidence\": \"tests\"\n      }\n    ]\n  },\n  \"partial\": false,\n  \"unreviewed_files\": [],\n  \"usage\": {\n    \"input_tokens\": 4644,\n    \"output_tokens\": 674\n  },\n  \"request_id\": \"req_01a0e49d6d987fd1b6ad9aff08477b75\"\n}"
+       }
+      ],
+      "isError": false
+     },
+     "server": "jev",
+     "tool": "jev_gate",
+     "canonicalTool": "jev_gate"
+    }
+   },
+   "isError": false
+  }
+ ]
+}

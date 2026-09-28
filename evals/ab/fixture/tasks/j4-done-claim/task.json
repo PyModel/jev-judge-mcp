@@ -12,5 +12,10 @@
   "target_module": "refunds",
   "gold_verification": "The gold option is the one the hidden acceptance tests accept. It is not a model's opinion. claim-stands and claim-unverifiable leave the snapshot implementation, which the acceptance tests reject.",
   "gold_source": "CLAIM.md says refund handling already follows docs/refunds.md. The snapshot refunds.py still counts from the order date, so the claim is false until the code matches that document.",
-  "wrong_branch_signatures": {}
+  "wrong_branch_signatures": {},
+  "jev_verdict_options": {
+    "auto": "claim-stands",
+    "review": "claim-unverifiable",
+    "escalate": "claim-false"
+  }
 }

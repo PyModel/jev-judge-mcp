@@ -13,6 +13,13 @@
   "gold_verification": "The gold option is the one the hidden acceptance tests accept. It is not a model's opinion. code-governs and rate-only fail the waiver or the percent check.",
   "gold_source": "docs/fees.md says it is the source of truth: no fee within 7 days of delivery, otherwise 15 percent rounded half up to the cent.",
   "wrong_branch_signatures": {
-    "code-governs": ["price_cents\\s*//\\s*10"]
+    "code-governs": [
+      "price_cents\\s*//\\s*10"
+    ]
+  },
+  "jev_verdict_options": {
+    "contradicts": "doc-governs",
+    "same_fact": "code-governs",
+    "different_facts": "rate-only"
   }
 }

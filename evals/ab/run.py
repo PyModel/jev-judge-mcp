@@ -301,7 +301,7 @@ def _record(
     matches = outcomes.decision_correct(chosen, task.judgment)
     stream_path = run_dir / "stream.jsonl"
     stream_text = stream_path.read_text(encoding="utf-8") if stream_path.is_file() else ""
-    answer = outcomes.jev_answer(stream_text, task.judgment.options)
+    answer = outcomes.jev_answer(stream_text, task.judgment.options, task.judgment.verdict_options)
     escaped = run.escape
     succeeded = run_correct(result, decision_matches_gold=matches) and not escaped
     return _outcome_record(

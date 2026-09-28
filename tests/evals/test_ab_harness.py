@@ -881,25 +881,75 @@ def test_a_control_task_marks_every_jev_call_unnecessary_and_a_repeat_marks_the_
 
 
 def test_jev_answer_reads_a_tool_result_and_not_the_agents_decision_line() -> None:
+    """A synthetic gate result in the shape the server actually emits, plus the agent's own decision
+    line, which is never Jev's answer."""
     options = {"claim-false": "fix", "claim-stands": "leave"}
+    verdicts = {"escalate": "claim-false", "auto": "claim-stands"}
     stream = "\n".join(
         [
-            json.dumps({"type": "tool_execution_start", "toolCallId": "c1", "toolName": "jev_gate", "args": {}}),
+            json.dumps({"type": "tool_execution_start", "toolCallId": "c1", "toolName": "mcp", "args": {}}),
             json.dumps(
                 {
                     "type": "tool_execution_end",
                     "toolCallId": "c1",
-                    "toolName": "jev_gate",
+                    "toolName": "mcp",
                     "isError": False,
-                    "result": {"choice": "claim-false"},
+                    "result": {
+                        "content": [{"type": "text", "text": json.dumps({"tool": "jev_gate", "action": "escalate"})}]
+                    },
                 }
             ),
             json.dumps({"type": "agent_end", "result": '{"decision": "claim-stands"}'}),
         ]
     )
-    assert outcomes.jev_answer(stream, options) == "claim-false"
+    assert outcomes.jev_answer(stream, options, verdicts) == "claim-false"
     errored = stream.replace('"isError": false', '"isError": true')
-    assert outcomes.jev_answer(errored, options) is None
+    assert outcomes.jev_answer(errored, options, verdicts) is None
+
+
+def test_jev_answer_on_the_redacted_real_streams() -> None:
+    """The three real with-Jev runs of the voided D3 study, replayed through the parser: each result
+    document's answer field, mapped by its own task's verdict options, selects the gold option."""
+    fixture = json.loads((REPO / "tests" / "evals" / "data" / "jev-answer-fixture.json").read_text(encoding="utf-8"))
+    expected = {
+        "j7-find-line.B.r1": ("j7-find-line", "refunds-return"),
+        "j10-control-spec.B.r2": ("j10-control-spec", "use-spec"),
+        "j6-docs-vs-code.B.r2": ("j6-docs-vs-code", "doc-governs"),
+    }
+    for run, events in fixture.items():
+        task_id, want = expected[run]
+        task = tasks.load_task(task_id)
+        stream = "\n".join(json.dumps(event) for event in events)
+        assert outcomes.jev_answer(stream, task.judgment.options, task.judgment.verdict_options) == want, run
+
+
+def test_a_verdict_tool_task_without_its_map_is_refused(tmp_path: Path) -> None:
+    root = tmp_path / "tasks" / "t1"
+    (root / "reference").mkdir(parents=True)
+    (root / "reference" / "refunds.py").write_text("x = 1\n", encoding="utf-8")
+    (root / "prompt.md").write_text("p\n", encoding="utf-8")
+    (root / "acceptance_test.py").write_text("import unittest\n", encoding="utf-8")
+    (root / "task.json").write_text(
+        json.dumps(
+            {
+                "judgment": "boundary",
+                "jev_tool": "jev_verify",
+                "question": "q",
+                "options": {"a": "a"},
+                "gold": "a",
+                "target_module": "refunds",
+                "gold_verification": "the acceptance tests settle gold",
+            }
+        ),
+        encoding="utf-8",
+    )
+    saved = tasks.FIXTURE
+    tasks.FIXTURE = tmp_path
+    try:
+        with pytest.raises(ValueError, match="jev_verdict_options"):
+            tasks.load_task("t1")
+    finally:
+        tasks.FIXTURE = saved
 
 
 def _category(
