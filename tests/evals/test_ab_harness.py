@@ -451,6 +451,46 @@ def test_jev_ab_max_usd_lowers_the_cap_and_a_pair_that_no_longer_fits_refuses(tm
             ledger.capped(ledger.POLICIES["pi"], {ledger.MAX_USD_ENV: bad})
 
 
+def test_the_lowered_cap_persists_and_a_resume_cannot_raise_it(tmp_path: Path) -> None:
+    """F9: JEV_AB_MAX_USD is per invocation, so a resume without it must not silently return to
+    the policy ceiling: the effective cap rides in ledger.json and the load takes the minimum."""
+    lowered = SpendLedger.load(
+        tmp_path / "ledger.json", ledger.capped(ledger.POLICIES["pi"], {ledger.MAX_USD_ENV: "1.91"})
+    )
+    lowered.record("r0", 1.50)
+    assert json.loads((tmp_path / "ledger.json").read_text(encoding="utf-8"))["max_usd"] == 1.91
+    resumed = SpendLedger.load(tmp_path / "ledger.json", ledger.POLICIES["pi"])  # no env value
+    assert resumed.policy.max_usd == 1.91 and resumed.blocker(ledger.PAIR) is not None
+    raised = SpendLedger.load(
+        tmp_path / "ledger.json",
+        ledger.capped(ledger.POLICIES["pi"], {ledger.MAX_USD_ENV: "5.00"}),
+    )
+    assert raised.policy.max_usd == 1.91, "a new invocation can only lower what the file records"
+    with pytest.raises(ValueError, match="stored max_usd"):
+        (tmp_path / "corrupt.json").write_text('{"max_usd": -1, "runs": {}}', encoding="utf-8")
+        SpendLedger.load(tmp_path / "corrupt.json", ledger.POLICIES["pi"])
+
+
+def test_a_paid_remote_pi_model_refuses_without_an_explicit_run_bound() -> None:
+    """F10: the Jev-headroom worst case assumes the local loopback model. A paid remote model
+    spends on every turn, so its per-run ceiling must be named, and it bounds the pair check."""
+    remote = "opencode-go/deepseek-v4.1-flash"
+    with pytest.raises(ValueError, match=ledger.RUN_BOUND_ENV):
+        ledger.live_policy("pi", {}, model=remote, default_model="ds4/glm-5.3-flash")
+    policy = ledger.live_policy(
+        "pi",
+        {ledger.RUN_BOUND_ENV: "0.10", ledger.MAX_USD_ENV: "2.00"},
+        model=remote,
+        default_model="ds4/glm-5.3-flash",
+    )
+    assert (policy.run_bound_usd, policy.max_batch_usd, policy.max_usd) == (0.10, ledger.PAIR * 0.10, 2.00)
+    for bad in ("0", "-1", "cheap", "NaN"):
+        with pytest.raises(ValueError, match=ledger.RUN_BOUND_ENV):
+            ledger.live_policy("pi", {ledger.RUN_BOUND_ENV: bad}, model=remote, default_model="ds4/glm-5.3-flash")
+    local = ledger.live_policy("pi", {}, model="ds4/glm-5.3-flash", default_model="ds4/glm-5.3-flash")
+    assert local.run_bound_usd == ledger.JEV_RUN_BOUND_USD
+
+
 def test_pi_is_charged_only_for_jev(tmp_path: Path) -> None:
     claude, local = ledger.POLICIES["claude"], ledger.POLICIES["pi"]
     assert (claude.max_usd, local.max_usd) == (25.00, 25.00) and claude.max_runs == local.max_runs

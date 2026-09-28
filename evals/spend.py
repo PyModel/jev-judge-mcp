@@ -10,7 +10,7 @@ import json
 import math
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -53,8 +53,23 @@ class SpendLedger:
 
     @classmethod
     def load(cls, path: Path, policy: SpendPolicy) -> "SpendLedger":
+        """Load the ledger, never above a cap the file itself records: an operator's lowered cap
+        (`JEV_AB_MAX_USD`) is persisted with the runs, so a resume without it — or with a higher
+        value — cannot silently return to the policy's ceiling. A stored cap that is not a finite
+        number >= 0 refuses rather than being ignored."""
         _acquire(path)
-        runs: dict[str, float] = json.loads(path.read_text(encoding="utf-8"))["runs"] if path.exists() else {}
+        runs: dict[str, float] = {}
+        stored_cap: float | None = None
+        if path.exists():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            runs = payload.get("runs") or {}
+            cap = payload.get("max_usd")
+            if cap is not None:
+                if isinstance(cap, bool) or not isinstance(cap, int | float) or not math.isfinite(cap) or cap < 0:
+                    raise ValueError(f"{path}: stored max_usd {cap!r} must be a finite number >= 0")
+                stored_cap = float(cap)
+        if stored_cap is not None and stored_cap < policy.max_usd:
+            policy = replace(policy, max_usd=stored_cap)
         return cls(policy, path, runs)
 
     @property
@@ -96,7 +111,7 @@ class SpendLedger:
         if not math.isfinite(cost_usd) or cost_usd < 0:
             raise ValueError(f"{run_id} cost must be finite and >= 0")
         updated = {**self.runs, run_id: cost_usd}
-        _persist(self.path, updated)
+        _persist(self.path, updated, self.policy.max_usd)
         self.runs[run_id] = cost_usd
 
 
@@ -164,10 +179,11 @@ def _acquire(path: Path) -> None:
     _LOCKS[key] = fd
 
 
-def _persist(path: Path, runs: dict[str, float]) -> None:
-    """Write the ledger via a temp file and `os.replace`, while this process holds the flock."""
+def _persist(path: Path, runs: dict[str, float], max_usd: float) -> None:
+    """Write the ledger via a temp file and `os.replace`, while this process holds the flock.
+    The cap rides along so a resume loads the ceiling the runs were booked under."""
     _acquire(path)
-    payload = json.dumps({"runs": runs}, indent=2, allow_nan=False) + "\n"
+    payload = json.dumps({"max_usd": max_usd, "runs": runs}, indent=2, allow_nan=False) + "\n"
     temporary = path.parent / f".{path.name}.{os.getpid()}.tmp"
     temporary.write_text(payload, encoding="utf-8")
     try:

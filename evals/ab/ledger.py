@@ -43,6 +43,34 @@ MAX_USD_ENV = "JEV_AB_MAX_USD"
 """Lowers the dollar cap for one invocation, so an operator can bound a re-run's spend."""
 
 
+RUN_BOUND_ENV = "JEV_AB_RUN_BOUND_USD"
+"""A paid remote pi model has no implicit worst case: the per-run spend ceiling an operator must
+name before the study will book a pair. The local loopback default keeps the Jev headroom bound."""
+
+
+def live_policy(agent: str, environ: Mapping[str, str], *, model: str = "", default_model: str = "") -> SpendPolicy:
+    """The live study's policy: the stock one, with a paid remote pi model's explicit per-run
+    ceiling applied first, then the lowering-only `JEV_AB_MAX_USD`. Reading it is the first thing
+    `live` does, so a bad value refuses the invocation before anything is built or booked."""
+    policy = POLICIES[agent]
+    if agent == "pi" and model and default_model and model != default_model:
+        raw = environ.get(RUN_BOUND_ENV, "")
+        if not raw:
+            raise ValueError(
+                f"the paid remote pi model {model!r} has no implicit worst case; set "
+                f"{RUN_BOUND_ENV} to its per-run spend ceiling (the stock bound is the local "
+                "model's Jev headroom alone)"
+            )
+        try:
+            bound = float(raw)
+        except ValueError:
+            raise ValueError(f"{RUN_BOUND_ENV}={raw!r} is not a number") from None
+        if not isfinite(bound) or bound <= 0:
+            raise ValueError(f"{RUN_BOUND_ENV}={raw!r} must be a finite number > 0")
+        policy = replace(policy, run_bound_usd=bound, max_batch_usd=PAIR * bound)
+    return capped(policy, environ)
+
+
 def capped(policy: SpendPolicy, environ: Mapping[str, str]) -> SpendPolicy:
     """The policy with `JEV_AB_MAX_USD` applied: lowering-only, so the effective cap is
     `min(policy.max_usd, env value)` and a value above the policy's cap changes nothing. An

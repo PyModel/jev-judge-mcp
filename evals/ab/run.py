@@ -844,10 +844,12 @@ def _confinement(
 def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = ledger.REPEATS) -> str:
     if environ.get(LIVE_FLAG) != "1":
         raise StudyRefusedError(f"the study calls paid providers; set {LIVE_FLAG}=1 to run it")
+    # The policy is read before anything is built or booked: a paid remote pi model without an
+    # explicit run ceiling, or a bad JEV_AB_MAX_USD, refuses the whole invocation, and the lowered
+    # cap is what every later can_start checks against and what the ledger persists.
+    model = environ.get("JEV_AB_MODEL", pi.PI_MODEL)
     try:
-        # The cap is read before anything is built or booked: a bad JEV_AB_MAX_USD refuses the
-        # whole invocation, and the lowered cap is what every later can_start checks against.
-        policy = ledger.capped(ledger.POLICIES[agent], environ)
+        policy = ledger.live_policy(agent, environ, model=model, default_model=pi.PI_MODEL)
     except ValueError as error:
         raise StudyRefusedError(str(error)) from error
     try:
@@ -868,9 +870,6 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
     version = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False).stdout.strip()
     agent_out = out / agent
     interpreter = arms.study_venv(Path(tempfile.gettempdir()) / f"jev-study-{_git_head()[:12]}", arms.ensure_wheel())
-    # JEV_AB_MODEL selects the study's pi model (the D3 re-run pins opencode-go/deepseek-v4.1-flash
-    # instead of the host-loopback ds4 default); the provider entry is derived from it.
-    model = environ.get("JEV_AB_MODEL", pi.PI_MODEL)
     auth_provider = model.split("/")[0] if agent == "pi" else ""
     setup = Setup(
         agent=agent,
