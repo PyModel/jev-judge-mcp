@@ -2,8 +2,9 @@
 
 Prints the resolved provider, how it was chosen, which credential variable names are set, whether
 the key file ``jev-judge-mcp setup`` writes is present (the environment always wins, ADR-0046),
-the policy defaults from ``policy/thresholds.py``, and which of the ``mcp__jev__*`` allow rules
-the three Claude settings files already carry. A bare ``mcp__jev`` rule covers every tool. The
+whether the typesafe SDK is importable (the one line ADR-0075's startup refusal guards), the
+policy defaults from ``policy/thresholds.py``, and which of the ``mcp__jev__*`` allow rules the
+three Claude settings files already carry. A bare ``mcp__jev`` rule covers every tool. The
 command reads those files and does not write them. It does not call a provider. It never prints
 a credential value. There is no live probe.
 """
@@ -36,6 +37,7 @@ from jev_judge_mcp.policy.thresholds import (
     SCREEN_SUBSTANCE_SKIP_BELOW,
 )
 from jev_judge_mcp.providers import JevProvider, ProviderConfigError, resolve_provider
+from jev_judge_mcp.providers.typesafe import sdk_importable
 from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.tools import TOOLS
 
@@ -106,6 +108,10 @@ def _report(settings: Settings, home: Path, cwd: Path, name: str | None, failure
         _line("via", _via(settings, name)),
         _line("key", " ".join(keys) if keys else _UNSET),
         _line("key file", f"{'present' if stored else 'absent'} at {stored_key_path(settings)} (env wins)"),
+        _line(
+            "sdk",
+            "typesafe-sdk importable" if sdk_importable() else "typesafe-sdk missing (install jev-judge-mcp[typesafe])",
+        ),
     ]
     if failure is not None:
         lines.append(_line("error", failure))

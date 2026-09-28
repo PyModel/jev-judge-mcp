@@ -188,6 +188,23 @@ def test_key_file_line_reports_presence_without_the_value(
     assert calls == []
 
 
+def test_sdk_line_reports_importability_without_calling_anything(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """ADR-0075's failure class is doctor-visible: one line, both arms, no HTTP, no exit on it."""
+    calls = _spy(monkeypatch)
+    monkeypatch.setenv("TYPESAFE_API_KEY", MARKER)
+    assert main([]) == 0
+    out = capsys.readouterr().out
+    assert _field(out, "sdk") == "typesafe-sdk importable"
+
+    monkeypatch.setattr("jev_judge_mcp.doctor.sdk_importable", lambda: False)
+    assert main([]) == 0, "doctor reports a missing SDK; it never exits on it"
+    out = capsys.readouterr().out
+    assert _field(out, "sdk") == "typesafe-sdk missing (install jev-judge-mcp[typesafe])"
+    assert calls == []
+
+
 def test_policy_line_uses_threshold_constants(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
