@@ -30,6 +30,8 @@ from jev_judge_mcp.errors import RedactingFilter, Redactor
 from jev_judge_mcp.http_auth import BearerTokenMiddleware, ensure_http_access_control
 from jev_judge_mcp.identity import reported_version
 from jev_judge_mcp.instructions import server_instructions
+from jev_judge_mcp.providers import ProviderConfigError, resolve_provider
+from jev_judge_mcp.providers.typesafe import sdk_importable
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import LogLevel, Settings, load_settings
 from jev_judge_mcp.skills import attach as attach_skills
@@ -137,6 +139,32 @@ HTTP_BIND_BUDGET_S = 2.0
 def http_port_in_use_message(port: int) -> str:
     """The one line a taken Streamable HTTP port exits with (ADR-0055)."""
     return f"JEV_MCP_HTTP_PORT={port} is already in use; set JEV_MCP_HTTP_PORT to a free port"
+
+
+def provider_not_runnable_message() -> str:
+    """The one line a selected but uninstallable typesafe provider exits with."""
+    return (
+        "the typesafe provider is selected, but the typesafe-sdk package is missing: "
+        "install jev-judge-mcp[typesafe] (a uvx spec needs --from 'jev-judge-mcp[typesafe]' "
+        "or '<path>[typesafe]')"
+    )
+
+
+def ensure_provider_runnable(settings: Settings) -> None:
+    """Refuse to serve with a provider that cannot answer any call (the ADR-0050 shape).
+
+    A bare `uvx --from <checkout> jev-judge-mcp` without the `typesafe` extra starts, lists
+    tools, serves skills, and then fails every judgment call typed `provider` — the
+    hand-registration trap. When settings select typesafe and the SDK is not importable,
+    one stderr line and exit 1 instead. Provider *configuration* errors stay per-call
+    (ADR-0008, `provider.ts:35-77`), and another provider selected imports nothing extra.
+    """
+    try:
+        provider = resolve_provider(settings)
+    except ProviderConfigError:
+        return
+    if provider.name == "typesafe" and not sdk_importable():
+        raise SystemExit(provider_not_runnable_message()) from None
 
 
 def ensure_http_port_free(
@@ -471,6 +499,7 @@ def main() -> None:
     ensure_secrets_redactable(settings)
     ensure_http_access_control(settings)
     ensure_http_port_free(settings)
+    ensure_provider_runnable(settings)
     configure_logging(settings.log_level, settings.secret_values())
     server = build_server(settings)
     # One line, the same identity `initialize` will report (ADR-0054). Not logged by `--version`.

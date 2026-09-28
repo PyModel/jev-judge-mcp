@@ -38,6 +38,24 @@ if TYPE_CHECKING:
 _response_headers: ContextVar[Mapping[str, str] | None] = ContextVar("typesafe_response_headers", default=None)
 
 
+def sdk_importable() -> bool:
+    """Whether the `typesafe` extra's imports resolve in this process.
+
+    The startup gate (`server.ensure_provider_runnable`) probes a *selected* typesafe provider
+    with this before serving, so a bare install without the extra refuses at startup instead of
+    failing every judgment call. It imports exactly what `_sdk_client` imports, so a pass here
+    holds there; another provider selected leaves both untouched.
+    """
+    try:
+        import httpx2
+        from typesafe_sdk import AsyncTypeSafeClient
+
+        del httpx2, AsyncTypeSafeClient
+    except ImportError:
+        return False
+    return True
+
+
 async def _remember_headers(response: "httpx2.Response") -> None:
     """The SDK returns the body only. Keep this response's headers for ``request_id_of``."""
     _response_headers.set(response.headers)

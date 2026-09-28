@@ -71,7 +71,7 @@ Terminal agents get a reference to `TYPESAFE_API_KEY`, never the key itself. Des
 <details>
 <summary><b>Register the server by hand</b></summary>
 
-`<uvx>` is the absolute path of `uvx`. `<spec>` is `jev-judge-mcp[typesafe]==<version>` (the version-pinned PyPI package, what `install` writes by default) or your checkout's absolute path plus `[typesafe]`, for example `/home/me/jev-judge-mcp[typesafe]`. `--python '>=3.12'` is what `install` derives from the package metadata; keep it when you register by hand.
+`<uvx>` is the absolute path of `uvx`. `<spec>` is `jev-judge-mcp[typesafe]==<version>` (the version-pinned PyPI package, what `install` writes by default) or your checkout's absolute path plus `[typesafe]`, for example `/home/me/jev-judge-mcp[typesafe]`. Keep the `[typesafe]` suffix: without it the package's TypeSafe SDK is missing, and a server started with a TypeSafe key present refuses to run with a one-line message instead of serving calls that all fail. `--python '>=3.12'` is what `install` derives from the package metadata; keep it when you register by hand.
 
 Claude Code (`~/.claude.json`), omp (`~/.omp/agent/mcp.json`), Cursor (`~/.cursor/mcp.json`), and Pi (`~/.pi/agent/mcp.json`) use the same shape. Claude Code and omp also add `"type": "stdio"`. Pi also adds the three exposure keys below; without them `pi-mcp-adapter` keeps the server lazy and proxy-only and the tools stay out of the model's initial list (ADR-0036).
 
