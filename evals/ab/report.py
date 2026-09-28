@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from evals.ab.arms import ARM_LABELS, ARMS
+from evals.ab.outcomes import CATEGORY_ORDER
 
 Record = Mapping[str, Any]
 Pair = tuple[Record, Record]
@@ -52,13 +53,13 @@ DEFINITIONS = [
     "change was correct** when that final decision equals gold.",
     "**Jev round trip:** the proxy's per-call `ms`, which includes the server's local work and so bounds "
     "provider latency from above. **Run wall** is `wall_s`.",
-    "**Failure category:** why a failed run failed, first match: timeout, agent error, acceptance miss, "
-    "regression, pre-existing test altered, added test failing, wrong decision, Jev error, harness error, "
-    "other. A correct run has none — except that a confined run whose commands used any path outside "
-    "its task workdir carries **out-of-task exploration** instead: the evidence paths are recorded, the "
-    "run is still graded, and it never stops the study by itself. Only three things void a confined "
-    "study: a secret-scan hit, host material in a tool result, or a reach for fixture material (task "
-    "metadata, gold, hidden acceptance tests, distractor solutions) outside the task workdir.",
+    f"**Failure category:** why a failed run failed, first match: {', '.join(CATEGORY_ORDER)}. "
+    "A correct run has none. **Out-of-task exploration** is not a failure category but its own "
+    "field: the distinct paths a confined run's commands used outside its task workdir, recorded as "
+    "evidence with no effect on the grade. Only three things void a confined study: a secret-scan "
+    "hit, host material in a tool result, or a normalized path outside the task workdir naming "
+    "hidden fixture material (`task.json`, `acceptance_test.py`, `reference`, `distractors`), by "
+    "any tool.",
     "**Correct solutions per hour:** successes divided by the summed wall time of every measured run of the "
     "arm, failures included.",
     "**Test cycles:** shell calls that run `unittest` or `pytest`. **Retries:** test cycles after the first.",

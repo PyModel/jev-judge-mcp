@@ -1442,7 +1442,7 @@ def test_out_of_task_exploration_records_the_category_and_keeps_the_grade(tmp_pa
         "j1-refund-window.A.r1", task, "A", 1, setup, run, book, tmp_path / "jev-calls.jsonl", tmp_path
     )
     assert record["success"] is True, "exploration never fails the grade"
-    assert record["failure_category"] == "out-of-task exploration"
+    assert record["failure_category"] is None, "exploration is its own field, never the category"
     assert record["exploration"] == ["/run/capability.json", "/scratch/entrypoint.sh"]
     assert record["old_rule_success"] is True and record["decision_correct"] is True
 

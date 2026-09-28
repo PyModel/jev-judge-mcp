@@ -295,6 +295,21 @@ def jev_answer(stream: str, options: Mapping[str, str], verdicts: Mapping[str, s
     return last
 
 
+CATEGORY_ORDER = (
+    "timeout",
+    "agent error",
+    "acceptance miss",
+    "regression",
+    "pre-existing test altered",
+    "added test failing",
+    "irrelevant added test",
+    "no decision",
+    "wrong decision",
+)
+"""Why a failed run failed, first match wins. One owner for the chain and for the report's
+definition of it: the docstring order and the rendered list can no longer drift apart."""
+
+
 def failure_category(
     *,
     status: str,
@@ -308,14 +323,10 @@ def failure_category(
     decision_matches_gold: bool | None = None,
     jev_calls: Sequence[Mapping[str, Any]] = (),
 ) -> str | None:
-    """Why a failed run failed. First match wins. A correct run has no category.
-
-    Order: timeout, agent error, acceptance miss, regression, pre-existing test altered,
-    added test failing, added test irrelevant, no decision, wrong decision. The unreachable tail
-    the critique found is gone: `run_correct` already folded Jev errors into acceptance failures
-    and harness errors into the escape/harness paths, so no category claims a cause the record
-    path never produces.
-    """
+    """Why a failed run failed. First match wins (`CATEGORY_ORDER`). A correct run has no category.
+    The unreachable tail the critique found is gone: `run_correct` already folded Jev errors into
+    acceptance failures and harness errors into the escape/harness paths, so no category claims a
+    cause the record path never produces."""
     if success:
         return None
     lowered = status.lower()

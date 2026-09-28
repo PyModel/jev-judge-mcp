@@ -41,6 +41,8 @@ from evals.agent import (
     AgentPreflightError,
     AgentRunResult,
     AgentSetupError,
+    container_boundary,
+    exploration_paths,
     real_agent_dir,
     run_agent,
     run_preflight,
@@ -449,22 +451,19 @@ def _record(
             "old_rule_success": old_rule_success(result),
             "failure_category": "escape"
             if escaped
-            else (
-                "out-of-task exploration"
-                if explored
-                else outcomes.failure_category(
-                    status=run.status,
-                    success=succeeded,
-                    acceptance_passed=result.acceptance_passed,
-                    acceptance_total=result.acceptance_total,
-                    regressions=result.regressions,
-                    preexisting_altered=result.preexisting_altered,
-                    added_failing=bool(result.added_failing),
-                    added_irrelevant=bool(result.added_irrelevant),
-                    decision_matches_gold=matches,
-                    jev_calls=calls,
-                )
+            else outcomes.failure_category(
+                status=run.status,
+                success=succeeded,
+                acceptance_passed=result.acceptance_passed,
+                acceptance_total=result.acceptance_total,
+                regressions=result.regressions,
+                preexisting_altered=result.preexisting_altered,
+                added_failing=bool(result.added_failing),
+                added_irrelevant=bool(result.added_irrelevant),
+                decision_matches_gold=matches,
+                jev_calls=calls,
             ),
+            # Exploration is orthogonal to the grade: its own field, never the failure category.
             "exploration": list(explored),
             "unnecessary_jev_calls": outcomes.unnecessary_jev_calls(
                 control=task.judgment.control, uses=trace.tool_uses, calls=calls
@@ -605,6 +604,63 @@ def study(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int =
             if isinstance(record, Mapping) and record.get("failure_category") == "escape":
                 return f"stopped: sandbox escape on {rid}"
     return f"all {len(plan)} pairs recorded"
+
+
+def container_env(agent: str) -> dict[str, str]:
+    """The confined agent container's env (ADR-0074), one spelling for the spec and the canary."""
+    env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/scratch/home", "TMPDIR": "/scratch/tmp", "TERM": "dumb"}
+    if agent == "pi":
+        env["PI_CODING_AGENT_DIR"] = "/scratch/agent"
+    else:
+        env.update(
+            {
+                "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080",
+                "ANTHROPIC_API_KEY": arms.PLACEHOLDER_KEY,
+                "CLAUDE_CONFIG_DIR": "/scratch/claude",
+            }
+        )
+    return env
+
+
+def derived_records(out: Path) -> list[dict[str, Any]]:
+    """The records with the failure category and the exploration evidence derived from the kept
+    grade fields and streams, not as stored: a canary fix re-renders a finished study without a
+    rerun, and the category keeps one owner (`outcomes.failure_category`). An escape stays an
+    escape — that is the voided-study stop, not a derived value."""
+    box = container_boundary(container_env(_meta_agent(out)))
+    stored = {str(record.get("run_id")): record for record in load_records(out)}
+    derived: list[dict[str, Any]] = []
+    for result_path in sorted(out.glob("*/*/result.json")):
+        record = stored.get(result_path.parent.name)
+        if record is None:
+            continue
+        row = dict(record)
+        if row.get("failure_category") != "escape":
+            added = cast(list[Mapping[str, Any]], row.get("added_tests") or [])
+            row["failure_category"] = outcomes.failure_category(
+                status=str(row.get("status") or "ok"),
+                success=bool(row.get("success")),
+                acceptance_passed=int(row.get("acceptance_passed") or 0),
+                acceptance_total=int(row.get("acceptance_total") or 0),
+                regressions=cast(Sequence[str], row.get("regressions") or ()),
+                preexisting_altered=cast(Sequence[str], row.get("preexisting_altered") or ()),
+                added_failing=any(item.get("outcome") != "pass" for item in added),
+                added_irrelevant=any(not item.get("relevant") for item in added),
+                decision_matches_gold=cast(bool | None, row.get("decision_correct")),
+            )
+        stream = result_path.parent / "stream.jsonl"
+        if stream.is_file():
+            row["exploration"] = list(exploration_paths(stream.read_text(encoding="utf-8"), box))
+        derived.append(row)
+    return derived
+
+
+def _meta_agent(out: Path) -> str:
+    """The agent a study's meta was pinned for; `pi` when there is no meta to read."""
+    try:
+        return next(iter(load_meta(out)))
+    except (OSError, json.JSONDecodeError, StopIteration):
+        return "pi"
 
 
 def load_records(out: Path) -> list[dict[str, Any]]:
@@ -773,22 +829,7 @@ def _confinement(
                 api="anthropic",
             )
         )
-    env: dict[str, str] = {
-        "PATH": "/usr/local/bin:/usr/bin:/bin",
-        "HOME": "/scratch/home",
-        "TMPDIR": "/scratch/tmp",
-        "TERM": "dumb",
-    }
-    if agent == "pi":
-        env["PI_CODING_AGENT_DIR"] = "/scratch/agent"
-    else:
-        env.update(
-            {
-                "ANTHROPIC_BASE_URL": "http://127.0.0.1:8080",
-                "ANTHROPIC_API_KEY": arms.PLACEHOLDER_KEY,
-                "CLAUDE_CONFIG_DIR": "/scratch/claude",
-            }
-        )
+    env = container_env(agent)
     spec = ConfinementSpec(
         agent_image=image,
         upstreams=tuple(upstreams),
@@ -876,7 +917,7 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
 
 
 def write_report(out: Path, path: Path = REPORT) -> str:
-    text = report.render(load_records(out), load_meta(out))
+    text = report.render(derived_records(out), load_meta(out))
     path.write_text(text, encoding="utf-8")
     return text
 
