@@ -1195,8 +1195,9 @@ def test_report_defines_unnecessary_calls_and_counts_an_observed_decision_change
     assert "Jev changed the decision: 1 observed changes; 1 of those equal gold" in rendered
     assert report.jev_changed_decision(without, with_jev) is True
     assert report.jev_changed_decision(without, {**with_jev, "jev_answer": None}) is None
-    verdict_pair = _run("j1-refund-window", "A", decision="keep-rate"), _run(
-        "j1-refund-window", "B", decision="use-spec", jev_answer="use-spec"
+    verdict_pair = (
+        _run("j1-refund-window", "A", decision="keep-rate"),
+        _run("j1-refund-window", "B", decision="use-spec", jev_answer="use-spec"),
     )
     assert report.jev_changed_decision(*verdict_pair) is None, "a verdict-word task is not interpretable"
     assert "not interpretable" in report.render(list(verdict_pair), {})
@@ -1359,7 +1360,9 @@ def test_outcomes_use_measured_runs_and_count_failures_in_the_time() -> None:
     assert a["correct solutions per hour"] == f"{2 / (600 / 3600):.2f}"
     assert b["correct solutions per hour"] == f"{2 / (1020 / 3600):.2f}"
     assert a["wrong branches (runs with one / runs on tasks with signatures; total)"] == "1/2; 1"
-    assert a["tool calls per solved task"] == "15.0" and a["tokens per solved task (context + output; solved runs only)"] == "1000"  # 2 solved x 1000, the failed run no longer inflates it
+    # 2 solved x 1000 tokens: the failed run no longer inflates the solved-task figure
+    assert a["tool calls per solved task"] == "15.0"
+    assert a["tokens per solved task (context + output; solved runs only)"] == "1000"
     assert a["judge accuracy (decision = gold)"] == "1/2"
     assert (a["retries (total)"], a["Jev calls (total; runs with one)"]) == ("3", "0; 0/3")
     none_solved = report.arm_summary([_run("j1", "A", success=False)])

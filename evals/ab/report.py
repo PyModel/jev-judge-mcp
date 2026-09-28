@@ -9,8 +9,8 @@ evaluator, not the agent.
 
 import statistics
 from collections import Counter
-from functools import lru_cache
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 from typing import Any, cast
 
 from evals.ab import tasks
@@ -161,7 +161,7 @@ def _round_trip(runs: Sequence[Record]) -> str:
 
 
 def _answered_split(runs: Sequence[Record]) -> str:
-    if not any("jev_call_log" in run for run in runs):
+    if not any(run.get("jev_call_log") for run in runs):
         return "not recorded"
     calls = [call for run in runs for call in cast(Sequence[Mapping[str, Any]], run.get("jev_call_log") or [])]
     answered = sum(1 for call in calls if not call.get("is_error"))

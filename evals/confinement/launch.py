@@ -534,6 +534,7 @@ def run_confined(
     if not secret:
         raise ValueError("run_confined needs the non-empty secret to scrub")
     secrets = [secret, *[value for value in extra_secrets if value]]
+    capability: Capability | None = None
     for key, value in spec.env.items():
         if any(one in value for one in secrets):
             raise ConfinementError(f"the secret value must not ride in the container env ({key})")
@@ -635,8 +636,8 @@ def run_confined(
         shutil.rmtree(workdir, ignore_errors=True)
         # The capability token is scrubbed, never scanned: an agent reading its own
         # /run/capability.json is exploration, not a void, but the TTL-bounded token still does
-        # not belong in the kept records (F11).
-        for value in (*secrets, capability.token):
+        # not belong in the kept records (F11). A run that died before minting one has none.
+        for value in (*secrets, capability.token) if capability is not None else secrets:
             secret_scrub(run_dir, value)
 
 
