@@ -722,19 +722,58 @@ def test_the_without_jev_arm_has_no_typesafe_channel(boundary_stack: Any, tmp_pa
     def scratch_files(scratch: Path) -> None:
         (scratch / "stub_agent.py").write_text(stub, encoding="utf-8")
 
-    with launch.run_confined(
-        AgentCommand(argv=lambda config: ["python3", "/scratch/stub_agent.py"], timeout_s=120.0),
-        spec=spec,
-        mcp_config={},
-        secret=KEY,
-        run_dir=run_dir,
-        prepare=_materialize,
-        parse=pi.parse,
-        scratch_files=scratch_files,
-    ) as run:
-        assert run.status == "ok", (run.status, run.stderr[-500:])
-        assert run.escape is None, run.escape
+    grant = "\n".join(
+        [
+            "try:",
+            "    grant_text = open('/run/capability.json').read()",
+            "except OSError:",
+            "    grant_text = 'no grant file'",
+            'print(json.dumps({"type": "message_end", "message": {"role": "assistant", "provider": "stub",',
+            '    "model": "stub-model", "usage": {"input": 5, "output": 3, "cacheRead": 0, "cacheWrite": 0,'
+            '    "totalTokens": 8, "cost": {"total": 0.01}}, "content": [{"type": "text", "text": grant_text}],'
+            '    "stopReason": "stop"}}), flush=True)',
+        ]
+    )
+    stub = stub.replace(
+        'print(json.dumps({"type": "message_end"',
+        grant + '\nprint(json.dumps({"type": "message_end"',
+        1,
+    )
+    real_mint = launch.mint_capability
+
+    def mint(grants_dir: Path, ttl_s: float) -> Any:
+        """A known token, so the scrub assertion needs no peeking at the run's own secret."""
+        import hashlib
+        from dataclasses import replace as _replace
+
+        cap = real_mint(grants_dir, ttl_s)
+        known = "tok-f11-known-fake-not-a-real-credential"
+        path = grants_dir / (hashlib.sha256(known.encode()).hexdigest() + ".json")
+        path.write_text(json.dumps({"token": known, "expires": cap.expires}), encoding="utf-8")
+        cap.grant_path.unlink()
+        return _replace(cap, token=known, grant_path=path)
+
+    original_mint = launch.mint_capability
+    launch.mint_capability = mint
+    try:
+        with launch.run_confined(
+            AgentCommand(argv=lambda config: ["python3", "/scratch/stub_agent.py"], timeout_s=120.0),
+            spec=spec,
+            mcp_config={},
+            secret=KEY,
+            run_dir=run_dir,
+            prepare=_materialize,
+            parse=pi.parse,
+            scratch_files=scratch_files,
+        ) as run:
+            assert run.status == "ok", (run.status, run.stderr[-500:])
+            # Reading its own grant is exploration at most, never a secret-scan void (F11).
+            assert run.escape is None, run.escape
+    finally:
+        launch.mint_capability = original_mint
     assert not _Upstream.seen, f"arm A reached the TypeSafe upstream: {_Upstream.seen}"
+    kept = "".join(p.read_text(encoding="utf-8", errors="replace") for p in run_dir.rglob("*") if p.is_file())
+    assert "tok-f11-known-fake-not-a-real-credential" not in kept, "the token survived the scrub"
 
 
 def _materialize(workdir: Path) -> None:

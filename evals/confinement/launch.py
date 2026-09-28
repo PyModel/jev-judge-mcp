@@ -633,7 +633,10 @@ def run_confined(
         teardown(agent_name=agent_name, broker_name=broker_name, volume=volume)
         shutil.rmtree(root, ignore_errors=True)
         shutil.rmtree(workdir, ignore_errors=True)
-        for value in secrets:
+        # The capability token is scrubbed, never scanned: an agent reading its own
+        # /run/capability.json is exploration, not a void, but the TTL-bounded token still does
+        # not belong in the kept records (F11).
+        for value in (*secrets, capability.token):
             secret_scrub(run_dir, value)
 
 
