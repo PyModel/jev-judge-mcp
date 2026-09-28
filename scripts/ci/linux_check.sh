@@ -56,7 +56,7 @@ cleanup() {
 	if [ -n "$CID" ]; then
 		docker rm -f "$CID" >/dev/null 2>&1
 	fi
-	rm -f "$RUNNER" "$LOG"
+	rm -f "$RUNNER" "$RUNNER.onecpu" "$LOG"
 	if [ -n "$COPY_DIR" ]; then
 		rm -rf "$COPY_DIR"
 	fi

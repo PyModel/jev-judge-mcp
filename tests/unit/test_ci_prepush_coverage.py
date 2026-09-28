@@ -12,7 +12,7 @@ tests hold three contracts:
    config; the native leg, its time bound, the pushed-commit clone, and the image-tag rule
    run the real scripts against stubs.
 3. Money and cleanup: no paid stage or live flag in the machinery, no unbounded stage, no
-   leftover clone or container.
+   leftover clone, container, or temp file.
 
 `make hooks` enables the gate by installing forwarders outside the tracked tree (see
 scripts/ci/install_hooks.sh); every client-side hook in githooks(5) is offered there except
@@ -681,6 +681,54 @@ def test_the_linux_image_tag_follows_the_dockerfile_content(tmp_path: Path) -> N
     log.write_text("", encoding="utf-8")
     second = build_tag()
     assert first != second, "a changed Dockerfile must produce a different image tag"
+
+
+@pytest.mark.parametrize("stages_status", [0, 3], ids=["stages-pass", "stages-fail"])
+def test_the_linux_leg_removes_its_temp_files_on_every_exit(tmp_path: Path, stages_status: int) -> None:
+    """ADR-0056: the leg's temp files are removed on every exit path.
+
+    The regression: the one-CPU stage script written next to the stage runner
+    ("$RUNNER.onecpu") joined neither the runner nor the log in the cleanup trap, so every
+    pre-push since that stage landed left one file in $TMPDIR. The leg runs here against a
+    docker stub with a TMPDIR of its own, so the assertion sees only this run's files —
+    never a concurrent pre-push's — and fails whenever any temp file the leg creates misses
+    the one EXIT-trap cleanup that the success, failure, and signal exits all route through.
+    The success path is the one that creates every temp file, one-cpu script included; the
+    failure path pins the same cleanup on a nonzero container exit."""
+    repo = _temp_gate_repo(tmp_path, with_docker=True)
+    case = tmp_path / "case"
+    case.mkdir()
+    stub_dir = tmp_path / "docker-stub"
+    stub_dir.mkdir()
+    stub = stub_dir / "docker"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$1" in\n'
+        "  info) exit 0 ;;\n"
+        "  image) exit 1 ;;\n"
+        "  create) echo fakecid; exit 0 ;;\n"
+        f"  start) exit {stages_status} ;;\n"
+        "  *) exit 0 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    env = {**repo.env, "PATH": f"{stub_dir}:{repo.env['PATH']}", "TMPDIR": str(case)}
+    proc = repo.run(
+        ("bash", repo.root / "scripts" / "ci" / "linux_check.sh", str(repo.root), "leak-probe"),
+        env_extra=env,
+    )
+    combined = proc.stdout + proc.stderr
+    if stages_status == 0:
+        assert proc.returncode == 0, combined.decode()[-800:]
+        assert b"security-one-cpu ok" in combined, (
+            "the leg must reach the one-CPU stage, whose script is the temp file that once leaked"
+        )
+    else:
+        assert proc.returncode == stages_status, "a failing container exit must fail the leg with its own status"
+        assert b"check 'linux' failed" in combined, "the failure must name the check and rerun command"
+    leftovers = sorted(p.name for p in case.iterdir())
+    assert leftovers == [], f"the leg left temp files behind: {leftovers}"
 
 
 def test_the_docker_leg_fails_closed_without_a_daemon(tmp_path: Path) -> None:
