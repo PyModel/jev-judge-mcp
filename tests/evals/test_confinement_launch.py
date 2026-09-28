@@ -284,6 +284,11 @@ def test_out_of_task_exploration_records_the_evidence_paths() -> None:
         "cd /task && python3 -m unittest discover -s tests -v 2>&1 | tail -20",
         "/usr/bin/env python3 -m unittest",
         "true >/dev/null",
+        # F1 regressions, from the r3 false explorations: inline programs and heredoc bodies are
+        # data, and a redirection target is never glued onto a path.
+        'cd /task && python3 -c "\nbase = total // parts\n"',
+        "cd /task && python3 <<'EOF'\nx = a // b\nEOF",
+        "ls /task/x 2>/dev/null",
     ]
     innocent = "\n".join(
         json.dumps(

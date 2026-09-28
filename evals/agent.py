@@ -106,7 +106,9 @@ defines its own list."""
 _TILDE_USER = re.compile(r"(?:^|[\s=:])~[A-Za-z_][\w.-]*")
 _BARE_ROOT = re.compile(r"(?:^|[\s;&|(])/\*?(?=$|[\s;&|)])")
 _SECRET_VAR = re.compile(r"\$\{?(?:JEV_MCP_KEY_FILE|TYPESAFE_API_KEY)\b")
-_SEGMENTS = re.compile(r"&&|\|\||;|\||\n")
+_HEREDOC = re.compile(r"<<-?[ \t]*(['\"])([A-Za-z_]\w*)\1")
+_OPERATOR_CHARS = frozenset(";&|()\n")
+_REDIRECT = frozenset({"<", ">", ">>", "<<<", ">&", "<&", "&>", ">|"})
 _INPUT_ALLOW = ("/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/tty")
 """Streams a command may name."""
 _SYSTEM_BIN = ("/bin", "/usr/bin")
@@ -305,14 +307,46 @@ def _expand(token: str, cwd: str, env: Mapping[str, str]) -> str | None:
     return posixpath.normpath(token if token.startswith("/") else posixpath.join(cwd, token))
 
 
+def _drop_heredoc_bodies(command: str) -> str:
+    """The command with every heredoc body removed: a body is stdin data (often a program), never
+    shell words, so `total // parts` inside `python3 <<'EOF'` is not a path argument."""
+    out: list[str] = []
+    rest = command
+    while match := _HEREDOC.search(rest):
+        line_end = rest.find("\n", match.end())
+        if line_end < 0:
+            break
+        out.append(rest[: match.start()] + rest[match.end() : line_end + 1])
+        closer = re.compile(r"^[ \t]*" + re.escape(match.group(2)) + r"[ \t]*$", re.M)
+        end = closer.search(rest, line_end + 1)
+        rest = rest[end.end() :] if end else ""
+    return "".join(out) + rest
+
+
+def _simple_commands(command: str) -> list[list[str]]:
+    """Word lists of the shell's simple commands: quotes honored across newlines, control
+    operators (`;`, `&&`, `|`, newline) end a command, and redirection operators are split off
+    their targets (`2>/dev/null` is `2`, `>`, `/dev/null`), never glued onto a path."""
+    lexer = shlex.shlex(_drop_heredoc_bodies(command), posix=True, punctuation_chars=";&|()<>\n")
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        tokens = command.split()
+    commands: list[list[str]] = [[]]
+    for token in tokens:
+        if token and set(token) <= _OPERATOR_CHARS:
+            commands.append([])
+        elif token not in _REDIRECT:
+            commands[-1].append(token)
+    return [words for words in commands if words]
+
+
 def _command_pieces(command: str, box: "Boundary", cwd0: str) -> Iterable[tuple[str, str]]:
     """`(word, cwd)` for every shell word, in order, with `cd` targets tracked."""
     cwd = cwd0
-    for segment in _SEGMENTS.split(command):
-        try:
-            words = shlex.split(segment, posix=True)
-        except ValueError:
-            words = segment.split()
+    for words in _simple_commands(command):
         if words[:1] == ["cd"]:
             target = words[1] if len(words) > 1 else "~"
             cwd = (
