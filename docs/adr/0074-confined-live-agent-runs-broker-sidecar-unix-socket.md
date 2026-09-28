@@ -154,3 +154,32 @@ and the broker, and as a bonus the macOS harness process never holds the key in 
   "openai-completions"}` — plus an API-key `auth.json` entry; the base path and exact endpoints
   ride the broker allowlist.
 - Rotating the provider keys and the niblet token remains a separate credential step, unchanged.
+
+
+## Amendment 2026-09-28: the canary polices outcomes, not wandering
+
+The confined D3 re-run put the canary to work and settled its semantics (the 2026-09-28 critique's
+F1/F2/F5/F6/F8-F10, landed on `fm/jev-eval-d3-rerun`):
+
+- **In a confined run, three events void the study** (the hard stops, in `escape_scan`'s container
+  branch): a `secret_scan` hit; host material in a tool result (a macOS-only root — Applications,
+  Library, System, Users, private, Volumes — or `/opt/homebrew`, `/var/folders`); and a normalized
+  path outside the task workdir that names hidden fixture material (`task.json`,
+  `acceptance_test.py`, `reference`, `distractors` — read from the fixture tree, checked over
+  shell words and file tools' path arguments, by any tool). The capability token is scrubbed from
+  the kept records but never scanned: reading one's own grant is exploration, not a void.
+- **Any other path a command uses outside `/task` is `exploration` evidence on the run** — its own
+  record field and report rows, with no effect on the grade or on the failure category, which
+  stays derived from the grade fields alone. Shell commands are parsed by one tokenizer
+  (quote-aware across newlines, heredoc bodies dropped, redirections split): inline programs are
+  data, so Python's `//` and glued redirections are not paths. A tool's data arguments (a Jev
+  state, a diff) are never scanned as commands.
+- **Treatment isolation is enforced by the boundary, not the config**: the without-Jev arm's spec
+  carries no TypeSafe upstream, so no in-container TypeSafe shim starts and its broker has no
+  route; a direct call from inside arm A fails (Docker-marked adversarial test).
+- **`JEV_AB_MAX_USD` may only lower the study's dollar cap.** The effective cap is persisted in
+  `ledger.json` and a resume — or a higher value — cannot raise it. A paid remote pi model has no
+  implicit worst case (the stock bound is the local loopback model's Jev headroom alone) and
+  refuses without `JEV_AB_RUN_BOUND_USD`, its per-run ceiling.
+- Residual, named: a bare filename after a `cd` outside `/task` resolves only when it carries a
+  slash; paths built at runtime inside programs are covered by the wall, not the canary.
