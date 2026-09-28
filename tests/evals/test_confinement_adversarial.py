@@ -17,7 +17,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -595,7 +594,9 @@ def test_grading_runs_inside_the_image_and_trusts_nothing_host_side(image: str, 
 
 
 @DOCKER
-def test_sigterm_tears_the_boundary_down_and_the_reaper_sweeps_leftovers(image: str, tmp_path: Path) -> None:
+def test_sigterm_tears_the_boundary_down_and_the_reaper_sweeps_leftovers(
+    image: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """F5: SIGTERM unwinds teardown (containers, volume, temp root gone), and whatever a killed
     run still left behind is removed by the owner-label reaper on the next start."""
 
@@ -668,7 +669,9 @@ def test_sigterm_tears_the_boundary_down_and_the_reaper_sweeps_leftovers(image: 
     launch.docker_run(
         ["docker", "volume", "create", "--label", launch.OWNER_LABEL, "jev-eval-sock-orphan"], check=False
     )
-    stale = Path(tempfile.gettempdir()) / "jev-confined-orphan"
+    stale = tmp_path / "jev-confined-orphan"  # the reaper's tempdir is redirected below, so the
+    # forged stale root lives and dies inside this test's tmp_path, never the shared one.
+    monkeypatch.setattr(launch.tempfile, "gettempdir", lambda: str(tmp_path))
     stale.mkdir(exist_ok=True)
     os.utime(stale, (0, 0))
     removed = launch.reap()

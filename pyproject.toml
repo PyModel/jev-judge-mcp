@@ -107,6 +107,8 @@ known-first-party = ["evals"]
 # S108: literal /tmp paths name fake credential files that never exist.
 "evals/ab/**" = ["S603", "S607", "S311"]
 "tests/evals/test_confinement_launch.py" = ["S108"]
+# S108: the hermeticity guard must name the fixed shared temp roots it watches.
+"tests/conftest.py" = ["S108"]
 "evals/agent.py" = ["S603"]
 # The confinement launcher drives docker on purpose (ADR-0074); the broker/shim run in containers.
 "evals/confinement/**" = ["S603", "S607"]

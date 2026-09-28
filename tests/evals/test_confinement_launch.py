@@ -134,11 +134,11 @@ def test_the_entrypoint_starts_one_shim_per_upstream_and_holds_no_secret(tmp_pat
 
 
 @pytest.mark.parametrize("shim_ports", [(8079,), (8079, 8080), (8079, 8080, 8081)])
-def test_the_shim_readiness_wait_is_valid_python_and_fatal(shim_ports: tuple[int, ...]) -> None:
+def test_the_shim_readiness_wait_is_valid_python_and_fatal(tmp_path: Path, shim_ports: tuple[int, ...]) -> None:
     """F4: the generated wait compiles for any port count, ends fatally (`|| exit 97`), and never
     emits the doubled-comma tuple literal that made the suite flaky."""
     spec = _spec(
-        Path("/tmp"),
+        tmp_path,
         upstreams=tuple(
             launch.Upstream(f"u{i}", "https", f"h{i}", 443, ("POST",), ("/x",), "/tmp/k", shim_port=port)
             for i, port in enumerate(shim_ports)
