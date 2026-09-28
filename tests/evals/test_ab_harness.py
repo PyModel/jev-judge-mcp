@@ -1283,3 +1283,55 @@ def test_an_escaped_run_keeps_its_category_on_the_post_processing_failure_path()
     )
     record = ab_run.failed_record("t.A.r1", task, "A", 1, "pi", run, 0.0, KeyError("boom"))
     assert record["failure_category"] == "escape"
+
+
+def test_added_tests_are_collected_the_way_the_agent_ran_them(tmp_path: Path) -> None:
+    """Pytest-style functions, `*_test.py` modules, and subpackages are all graded: the D2 rule must
+    not fail a passing pytest-style addition or miss a failing test in a `tests/sub/` package."""
+    task = tasks.load_task("j1-refund-window")
+    tree = _tree(tmp_path, task, solution=task.reference)
+    style = (
+        "from refunds import refund_allowed\n\n\n"
+        "def test_window_runs_from_delivery():\n"
+        "    assert refund_allowed is not None\n"
+    )
+    (tree / "tests" / "test_style.py").write_text(style, encoding="utf-8")
+    (tree / "tests" / "fees_test.py").write_text(
+        "import unittest\n\n\nclass Fees(unittest.TestCase):\n    def test_fee(self):\n        self.assertTrue(True)\n",
+        encoding="utf-8",
+    )
+    result = grade(tree, task, PYTHON)
+    assert result.correct, result.added_tests
+    names = {(item.file, item.name) for item in result.added_tests}
+    assert ("tests/test_style.py", "test_window_runs_from_delivery") in names
+    assert ("tests/fees_test.py", "Fees.test_fee") in names
+
+    sub = tree / "tests" / "sub"
+    sub.mkdir()
+    (sub / "test_deep.py").write_text(
+        "import unittest\n\n\nclass Deep(unittest.TestCase):\n    def test_deep(self):\n        self.fail('deep')\n",
+        encoding="utf-8",
+    )
+    failing = grade(tree, task, PYTHON)
+    assert not failing.correct
+    deep = [item for item in failing.added_tests if item.name == "Deep.test_deep"]
+    assert deep and deep[0].outcome == "fail"
+
+
+def test_a_hung_added_test_is_a_recorded_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A suite that never finishes is an outcome of the agent's tree: every added test records
+    `timeout` and the run fails, instead of the grader raising a harness exception."""
+    task = tasks.load_task("j1-refund-window")
+    tree = _tree(tmp_path, task, solution=task.reference)
+    _add_day_30_method(tree)
+    real = subprocess.run
+
+    def hang_pytest(argv: list[str], **kwargs: object) -> object:
+        if "pytest" in argv:
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=1)
+        return real(argv, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("evals.ab.grade.subprocess.run", hang_pytest)
+    result = grade(tree, task, PYTHON)
+    assert not result.correct
+    assert all(item.outcome == "timeout" for item in result.added_tests)

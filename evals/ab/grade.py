@@ -17,8 +17,11 @@ import json
 import shutil
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from evals.ab.tasks import SNAPSHOT, Task, protected_files
 
@@ -191,7 +194,7 @@ def _test_edits(tree: Path, task: Task, python: str) -> tuple[tuple[str, ...], t
     tests_root = tree / "tests"
     if tests_root.is_dir():
         known = set(protected_files())
-        for path in sorted(tests_root.glob("*.py")):
+        for path in sorted(tests_root.rglob("*.py")):
             rel = path.relative_to(tree).as_posix()
             if rel in known:
                 continue
@@ -199,22 +202,76 @@ def _test_edits(tree: Path, task: Task, python: str) -> tuple[tuple[str, ...], t
             try:
                 names = [name for name in _functions(source) if name.split(".")[-1].startswith("test_")]
             except SyntaxError:
-                names = []
-            if not names:
-                pending.append((rel, "(module)", False))
+                pending.append((rel, "(collect)", False))
                 continue
             relevant = _relevant(source, task.target_module)
             pending.extend((rel, name, relevant) for name in names)
-    outcomes = _agent_outcomes(tree, python) if pending else {}
-    added = tuple(AddedTest(file, name, _match(file, name, outcomes), relevant) for file, name, relevant in pending)
+    outcomes = agent_outcomes(tree, python) if pending else {}
+    added = tuple(AddedTest(file, name, _outcome(file, name, outcomes), relevant) for file, name, relevant in pending)
     return tuple(altered), added
 
 
-def _agent_outcomes(tree: Path, python: str) -> dict[str, str]:
-    """The agent's own suite, not the pristine replacement. Added tests have to pass here."""
-    with tempfile.TemporaryDirectory(prefix="jev-ab-added-") as scratch:
-        work = Path(scratch) / "tree"
-        shutil.copytree(tree, work, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+def _has_pytest(python: str) -> bool:
+    done = subprocess.run([python, "-I", "-c", "import pytest"], capture_output=True, check=False)
+    return done.returncode == 0
+
+
+def _junit_outcomes(tree: Path, work: Path, python: str) -> dict[str, str] | None:
+    """The agent's own suite under pytest with a JUnit report, so unittest classes, pytest-style
+    functions, `*_test.py`, and subpackages are all collected the way the agent ran them."""
+    report = work / "junit.xml"
+    try:
+        subprocess.run(
+            [
+                python,
+                "-I",
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "-o",
+                "addopts=",
+                "-c",
+                "/dev/null",
+                f"--junitxml={report}",
+                "--rootdir",
+                str(work),
+                "tests",
+            ],
+            cwd=work,
+            capture_output=True,
+            text=True,
+            timeout=GRADE_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    if not report.is_file():
+        return {}
+    outcomes: dict[str, str] = {}
+    # The report is pytest's own JUnit writer output for this run's tests, not agent-authored XML.
+    root = ET.parse(report).getroot()  # noqa: S314 - bounded, local, tool-generated
+    for case in root.iter("testcase"):
+        name = case.get("name") or ""
+        classname = (case.get("classname") or "").split(".")
+        qual = f"{classname[-1]}.{name}" if classname else name
+        kind = "pass"
+        for tag, outcome in (("failure", "fail"), ("error", "error"), ("skipped", "skip")):
+            if case.find(tag) is not None:
+                kind = outcome
+        # The report carries no file attribute on this pytest, so a qualname collision across
+        # files merges to the worst outcome: conservative, and it fails the run when either fails.
+        if outcomes.get(qual) == "pass":
+            outcomes[qual] = kind
+        else:
+            outcomes.setdefault(qual, kind)
+    return outcomes
+
+
+def _unittest_outcomes(work: Path, python: str) -> dict[str, str] | None:
+    """The unittest fallback for a grader interpreter without pytest: id-keyed outcomes."""
+    try:
         done = subprocess.run(
             [python, "-I", "-c", _RUNNER],
             cwd=work,
@@ -223,21 +280,39 @@ def _agent_outcomes(tree: Path, python: str) -> dict[str, str]:
             timeout=GRADE_TIMEOUT_S,
             check=False,
         )
+    except subprocess.TimeoutExpired:
+        return None
     try:
-        outcomes: dict[str, str] = json.loads(done.stdout)
+        return dict(cast(dict[str, str], json.loads(done.stdout)))
     except json.JSONDecodeError:
         return {}
-    return outcomes
 
 
-def _match(file: str, qualname: str, outcomes: dict[str, str]) -> str:
-    stem = Path(file).stem
-    if qualname == "(module)":
-        hits = [outcome for test_id, outcome in outcomes.items() if stem in test_id.split(".")]
-        if any(item != "pass" for item in hits):
-            return next(item for item in hits if item != "pass")
-        return "pass" if outcomes else "error"
-    hits = [outcome for test_id, outcome in outcomes.items() if test_id.endswith("." + qualname) or test_id == qualname]
+def agent_outcomes(tree: Path, python: str) -> dict[str, str] | None:
+    """`{file::qualname: outcome}` for the agent's own suite, or None when it did not finish.
+
+    The suite runs the way the agent ran it: pytest with a JUnit report when the grader
+    interpreter has pytest, else unittest discovery. None (a hang) is a recorded outcome, not an
+    exception: the caller records every pending test as `timeout`, which fails the run.
+    """
+    with tempfile.TemporaryDirectory(prefix="jev-ab-added-") as scratch:
+        work = Path(scratch) / "tree"
+        shutil.copytree(tree, work, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        if _has_pytest(python):
+            return _junit_outcomes(tree, work, python)
+        return _unittest_outcomes(work, python)
+
+
+def _outcome(file: str, qualname: str, outcomes: Mapping[str, str] | None) -> str:
+    del file  # the JUnit report on this pytest carries no file attribute; the qualname is the key
+    if qualname == "(collect)":
+        return "error"
+    if outcomes is None:
+        return "timeout"
+    hit = outcomes.get(qualname)
+    if hit is not None:
+        return hit
+    hits = [value for key, value in outcomes.items() if key.endswith("." + qualname)]
     if not hits:
         return "error"
     return next((item for item in hits if item != "pass"), "pass")
