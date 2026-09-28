@@ -194,7 +194,7 @@ call's round trip.
 | `ab/proxy.py` | Recorder on `evals/relay.py`: per `tools/call` round-trip ms, isError, `usage.input_tokens`, action, headline Action, model. Never logs arguments, text, or error messages |
 | `ab/review_server.py` | `request_human_review`, in both arms |
 | `ab/unsafe.py`, `ab/stream.py` | Unsafe-action rules over tool calls; Claude stream-json to frontier calls, context and output tokens (Pi's parser is `bench/pi.py`) |
-| `ab/ledger.py` | One `SpendPolicy` per agent: 18 runs (3 tasks x 2 arms x 3 repeats), 25 USD, checked per pair. Pi's worst case is its Jev headroom only |
+| `ab/ledger.py` | One `SpendPolicy` per agent: 18 runs (3 tasks x 2 arms x 3 repeats), 25 USD, checked per pair. Pi's worst case is its Jev headroom only. `JEV_AB_MAX_USD` lowers the 25 USD for one invocation (min of the two; a value that is not a finite number >= 0 refuses the run) |
 | `ab/run.py`, `ab/report.py` | Seeded pair schedule, the runner and its refusals, the pinned-setup guard, and the markdown report |
 
 `JEV_AB_MODEL` selects the pi arm's model (the confined D3 re-run pins

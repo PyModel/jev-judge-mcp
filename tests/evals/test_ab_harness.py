@@ -434,6 +434,23 @@ def test_a_pair_starts_only_if_both_worst_cases_fit(tmp_path: Path) -> None:
     assert str(book.blocker(ledger.PAIR)).startswith("dollar cap")
 
 
+def test_jev_ab_max_usd_lowers_the_cap_and_a_pair_that_no_longer_fits_refuses(tmp_path: Path) -> None:
+    lowered = SpendLedger.load(
+        tmp_path / "ledger.json", ledger.capped(ledger.POLICIES["pi"], {ledger.MAX_USD_ENV: "1.91"})
+    )
+    lowered.record("r0", 1.50)
+    assert (
+        lowered.blocker(ledger.PAIR) == f"dollar cap: 1.50 spent + {2 * ledger.JEV_RUN_BOUND_USD:.2f} worst case > 1.91"
+    )
+    stock = SpendLedger.load(tmp_path / "stock.json", ledger.capped(ledger.POLICIES["pi"], {}))
+    stock.record("r0", 1.50)
+    assert stock.can_start(ledger.PAIR)  # the same spend fits the policy's own cap
+    assert ledger.capped(ledger.POLICIES["pi"], {ledger.MAX_USD_ENV: "99"}).max_usd == 25.00  # never raises
+    for bad in ("-1", "cheap", "NaN", "inf"):
+        with pytest.raises(ValueError, match=ledger.MAX_USD_ENV):
+            ledger.capped(ledger.POLICIES["pi"], {ledger.MAX_USD_ENV: bad})
+
+
 def test_pi_is_charged_only_for_jev(tmp_path: Path) -> None:
     claude, local = ledger.POLICIES["claude"], ledger.POLICIES["pi"]
     assert (claude.max_usd, local.max_usd) == (25.00, 25.00) and claude.max_runs == local.max_runs

@@ -106,6 +106,8 @@ class Setup:
     provider_secret: str = ""
     """The scoped provider key value, scanned and scrubbed alongside the TypeSafe key (F10)."""
     task_list: Sequence[tasks.Task] = field(default_factory=tasks.load_tasks)
+    policy: ledger.SpendPolicy | None = None
+    """The agent's spend policy with `JEV_AB_MAX_USD` applied (live); None uses the stock policy."""
 
     def __post_init__(self) -> None:
         if self.agent not in AGENTS:
@@ -550,7 +552,7 @@ def _load_book(
     setup: Setup, out: Path, *, repeats: int, seed: int
 ) -> tuple[SpendLedger, list[tuple[tasks.Task, int, tuple[str, ...]]]]:
     """The ledger after already-started runs are booked, and the plan those runs came from."""
-    book = SpendLedger.load(out / "ledger.json", ledger.POLICIES[setup.agent])
+    book = SpendLedger.load(out / "ledger.json", setup.policy or ledger.POLICIES[setup.agent])
     plan = schedule(setup.task_list, repeats, seed)
     for task, repeat, order in plan:
         for arm in order:
@@ -794,6 +796,12 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
     if environ.get(LIVE_FLAG) != "1":
         raise StudyRefusedError(f"the study calls paid providers; set {LIVE_FLAG}=1 to run it")
     try:
+        # The cap is read before anything is built or booked: a bad JEV_AB_MAX_USD refuses the
+        # whole invocation, and the lowered cap is what every later can_start checks against.
+        policy = ledger.capped(ledger.POLICIES[agent], environ)
+    except ValueError as error:
+        raise StudyRefusedError(str(error)) from error
+    try:
         key = arms.study_key(environ)
     except ValueError as error:
         raise StudyRefusedError(str(error)) from error
@@ -825,6 +833,7 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
         auth_provider=auth_provider,
         server_python=str(interpreter),
         model=model,
+        policy=policy,
     )
     # A finished study has nothing left to launch: it pins and re-renders with no boundary built,
     # so a resume or a report pass never needs Docker.

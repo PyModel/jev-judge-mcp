@@ -7,6 +7,10 @@ its Jev calls are paid and its worst case is the Jev headroom alone. The bench h
 (`evals.bench.ledger`).
 """
 
+from collections.abc import Mapping
+from dataclasses import replace
+from math import isfinite
+
 from evals.ab.arms import ARMS, RUN_BUDGET_USD
 from evals.ab.tasks import TASK_IDS
 from evals.spend import JEV_PUBLISHED_USD_PER_MTOK_INPUT, SpendPolicy
@@ -34,3 +38,23 @@ def _policy(run_bound_usd: float) -> SpendPolicy:
 
 POLICIES = {"claude": _policy(RUN_BOUND_USD), "pi": _policy(JEV_RUN_BOUND_USD)}
 POLICY = POLICIES["claude"]
+
+MAX_USD_ENV = "JEV_AB_MAX_USD"
+"""Lowers the dollar cap for one invocation, so an operator can bound a re-run's spend."""
+
+
+def capped(policy: SpendPolicy, environ: Mapping[str, str]) -> SpendPolicy:
+    """The policy with `JEV_AB_MAX_USD` applied: lowering-only, so the effective cap is
+    `min(policy.max_usd, env value)` and a value above the policy's cap changes nothing. An
+    unset or empty value keeps the policy. A value that is not a finite number >= 0 refuses
+    (raises) rather than being ignored: a money cap never fails open."""
+    raw = environ.get(MAX_USD_ENV, "")
+    if not raw:
+        return policy
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(f"{MAX_USD_ENV}={raw!r} is not a number") from None
+    if not isfinite(value) or value < 0:
+        raise ValueError(f"{MAX_USD_ENV}={raw!r} must be a finite number >= 0")
+    return replace(policy, max_usd=min(policy.max_usd, value))
