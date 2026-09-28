@@ -185,7 +185,7 @@ def _test_edits(tree: Path, task: Task, python: str) -> tuple[tuple[str, ...], t
         if not after.is_file():
             altered.append(rel)
             continue
-        changed, names = _compare_source((SNAPSHOT / rel).read_text(encoding="utf-8"), _read(after))
+        changed, names = compare_source((SNAPSHOT / rel).read_text(encoding="utf-8"), _read(after))
         if changed:
             altered.append(rel)
         source = _read(after)
@@ -200,7 +200,7 @@ def _test_edits(tree: Path, task: Task, python: str) -> tuple[tuple[str, ...], t
                 continue
             source = _read(path)
             try:
-                names = [name for name in _functions(source) if name.split(".")[-1].startswith("test_")]
+                names = sorted(name for name in _test_functions(source) if name.split(".")[-1].startswith("test_"))
             except SyntaxError:
                 pending.append((rel, "(collect)", False))
                 continue
@@ -334,89 +334,93 @@ def _relevant(source: str, target_module: str) -> bool:
     return False
 
 
-def _compare_source(old: str, new: str) -> tuple[bool, list[str]]:
-    """Whether pre-existing test content changed, and the qualnames of added test functions."""
+def _bound(node: ast.Import | ast.ImportFrom) -> set[str]:
+    return {(alias.asname or alias.name).split(".")[0] for alias in node.names}
+
+
+def _names(module: ast.Module) -> set[str]:
+    """Every name the snapshot module binds at top level."""
+    names: set[str] = set()
+    for node in module.body:
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            names |= _bound(node)
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names |= {target.id for target in node.targets if isinstance(target, ast.Name)}
+    return names
+
+
+def _function_names(body: list[ast.stmt]) -> set[str]:
+    return {node.name for node in body if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)}
+
+
+def _test_functions(source: str) -> set[str]:
+    """Qualnames (Class.method or function) of every `test_*` function in a source file."""
+    found: set[str] = set()
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            found.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            found |= {f"{node.name}.{name}" for name in _function_names(node.body)}
+    return found
+
+
+def _strip_added(new: ast.Module, old: ast.Module) -> tuple[ast.Module, list[str]]:
+    """`new` without the additions ADR-0073 allows, and the qualnames of the added tests.
+
+    Allowed: new `test_*` functions (module level or inside a pre-existing class) and imports that
+    bind only fresh names. Everything else — formatting and comments aside — must match the
+    snapshot's AST exactly.
+    """
+    added: list[str] = []
+    old_top = _function_names(old.body)
+    old_classes = {node.name: _function_names(node.body) for node in old.body if isinstance(node, ast.ClassDef)}
+    taken = _names(old)
+    body: list[ast.stmt] = []
+    for node in new.body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            if node.name.startswith("test_") and node.name not in old_top:
+                added.append(node.name)
+                continue
+        elif isinstance(node, ast.Import | ast.ImportFrom) and not (_bound(node) & taken):
+            taken |= _bound(node)
+            continue
+        elif isinstance(node, ast.ClassDef) and node.name in old_classes:
+            kept: list[ast.stmt] = []
+            for child in node.body:
+                is_fn = isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef)
+                if is_fn and child.name.startswith("test_") and child.name not in old_classes[node.name]:
+                    added.append(f"{node.name}.{child.name}")
+                    continue
+                kept.append(child)
+            node = ast.ClassDef(
+                name=node.name,
+                bases=node.bases,
+                keywords=node.keywords,
+                body=kept,
+                decorator_list=node.decorator_list,
+                type_params=getattr(node, "type_params", []),
+            )
+        body.append(node)
+    return ast.Module(body=body, type_ignores=[]), sorted(added)
+
+
+def compare_source(old: str, new: str) -> tuple[bool, list[str]]:
+    """Whether pre-existing test content changed, and the qualnames of added test functions.
+
+    One rule: strip what ADR-0073 allows adding, then the module must be the same AST as the
+    snapshot's. Formatting and comments do not count; every other edit does — a class-level skip,
+    an added setUp/tearDown, load_tests, a base-class change, a rebinding import, a module
+    statement, or any change inside a pre-existing function.
+    """
     try:
-        old_fns, new_fns = _functions(old), _functions(new)
-        old_classes, new_classes = _class_statements(old), _class_statements(new)
+        old_tree, new_tree = ast.parse(old), ast.parse(new)
     except SyntaxError:
         return True, []
-    altered = any(new_fns.get(name) != text for name, text in old_fns.items())
-    altered = altered or not _subsequence(_imports(old), _imports(new))
-    altered = altered or _fixed_statements(old) != _fixed_statements(new)
-    altered = altered or any(name not in new_classes or new_classes[name] != text for name, text in old_classes.items())
-    added = sorted(name for name in new_fns if name not in old_fns and name.split(".")[-1].startswith("test_"))
-    return altered, added
+    stripped, added = _strip_added(new_tree, old_tree)
+    return ast.dump(stripped) != ast.dump(old_tree), added
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
-
-
-def _start(node: ast.AST) -> int | None:
-    lineno = getattr(node, "lineno", None)
-    if not isinstance(lineno, int):
-        return None
-    decos = getattr(node, "decorator_list", [])
-    deco_lines = [deco.lineno for deco in decos if isinstance(getattr(deco, "lineno", None), int)]
-    return min([lineno, *deco_lines])
-
-
-def _slice(lines: list[str], node: ast.AST) -> str:
-    start = _start(node)
-    end = getattr(node, "end_lineno", None)
-    if not isinstance(start, int) or not isinstance(end, int):
-        return ""
-    return "\n".join(lines[start - 1 : end])
-
-
-def _functions(source: str) -> dict[str, str]:
-    lines = source.splitlines()
-    found: dict[str, str] = {}
-
-    def walk(body: list[ast.stmt], prefix: str) -> None:
-        for node in body:
-            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-                found[f"{prefix}{node.name}"] = _slice(lines, node)
-            elif isinstance(node, ast.ClassDef):
-                walk(node.body, f"{prefix}{node.name}.")
-
-    walk(ast.parse(source).body, "")
-    return found
-
-
-def _imports(source: str) -> list[str]:
-    lines = source.splitlines()
-    return [_slice(lines, node) for node in ast.parse(source).body if isinstance(node, ast.Import | ast.ImportFrom)]
-
-
-def _fixed_statements(source: str) -> list[str]:
-    """Module-level statements that are not imports, functions, or classes. Inserting one is a change."""
-    lines = source.splitlines()
-    return [
-        _slice(lines, node)
-        for node in ast.parse(source).body
-        if not isinstance(node, ast.Import | ast.ImportFrom | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
-    ]
-
-
-def _class_statements(source: str) -> dict[str, list[str]]:
-    """Non-function statements of each class. A new test method is not one of these."""
-    lines = source.splitlines()
-    found: dict[str, list[str]] = {}
-    for node in ast.parse(source).body:
-        if isinstance(node, ast.ClassDef):
-            found[node.name] = [
-                _slice(lines, child)
-                for child in node.body
-                if not isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef)
-            ]
-    return found
-
-
-def _subsequence(old: list[str], new: list[str]) -> bool:
-    index = 0
-    for item in new:
-        if index < len(old) and item == old[index]:
-            index += 1
-    return index == len(old)
