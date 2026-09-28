@@ -124,17 +124,22 @@ _SHELL_TOOLS = frozenset({"bash", "Bash"})
 """Tools whose input is a shell command. Everything else — read/write/edit payloads, MCP arguments —
 is data the tool consumes, never a command the harness executes, so a division operator or a quoted
 path inside it is not an escape attempt."""
-_MACOS_ONLY_ROOTS = frozenset({"Applications", "Library", "System", "Users", "private"})
+_MACOS_ONLY_ROOTS = frozenset({"Applications", "Library", "System", "Users", "private", "Volumes"})
 """Root names that exist on the operator's macOS host and not in the Linux agent container: a
 transcript path under one of them (or under `/opt/homebrew`, `/var/folders`) is host material."""
-_FIXTURE_REACH = re.compile(
-    r"(?:^|[/\s])(?:task\.json|reference|acceptance|distractors)(?:/|$)|evals/ab/(?:fixture|tasks)"
+_FIXTURE_NAMES = frozenset(
+    name
+    for task in (Path(__file__).resolve().parent / "ab" / "fixture" / "tasks").iterdir()
+    if task.is_dir()
+    for name in (part.name for part in task.iterdir())
+    if name not in ("overlay", "prompt.md")
 )
-"""Names that exist only in the host-side fixture tree (task metadata, gold, hidden acceptance
-tests, distractor solutions). Inside the container they can appear only through a leak, so a
-command or result that names one outside the task workdir is a hard stop, not exploration. The
-name must start a path (beginning of text or after a slash or space) and continue as one
-(`/reference/...`), so prose that merely uses the words cannot trip it."""
+"""The hidden fixture's own top-level names (`task.json`, `acceptance_test.py`, `reference`,
+`distractors`), read from the fixture tree so a renamed file cannot drift out of the canary.
+`overlay/` and `prompt.md` are materialized into the task workdir, so they are not secret."""
+_FILE_TOOL_PATH_KEYS = ("path", "file_path", "filePath")
+"""Where the agent CLIs put a file tool's target. r3 shows Pi's read/edit/write use `path`; the
+other two spellings cover Claude's Read/Edit."""
 
 
 @dataclass(frozen=True)
@@ -362,16 +367,30 @@ def _command_pieces(command: str, box: "Boundary", cwd0: str) -> Iterable[tuple[
             yield word, cwd
 
 
-def _container_input_stop(command: str) -> str | None:
-    """Why a confined run's command is a hard stop: a reach for fixture material (task metadata,
-    gold, hidden acceptance tests, distractor solutions) outside the task workdir. Wandering
-    elsewhere in the container is exploration, recorded, not a stop. The names are matched on the
-    raw command because nothing materialized into the task workdir carries them: inside the
-    container they can appear only through a leak."""
-    hit = _FIXTURE_REACH.search(command)
-    if hit:
-        return f"fixture reach in a command {hit.group(0)[:200]}"
-    return None
+def _fixture_reach(path: str, box: "Boundary") -> bool:
+    """A normalized path outside the task workdir that names hidden fixture material."""
+    return not _under(path, (box.workdir,)) and any(part in _FIXTURE_NAMES for part in path.split("/"))
+
+
+def _container_input_stop(tool: str, args: object, box: "Boundary") -> str | None:
+    """Why a confined run's tool call is a hard stop: a reach for hidden fixture material outside
+    the task workdir, by a shell word or by a file tool's path argument. Wandering elsewhere in
+    the container is exploration, recorded, not a stop."""
+    paths: list[str] = []
+    if tool in _SHELL_TOOLS and isinstance(args, dict):
+        command = str(cast(dict[str, Any], args).get("command") or "")
+        for word, cwd in _command_pieces(command, box, box.workdir):
+            for piece in [word] if word.startswith("/") else re.split(r"[=:]", word):
+                resolved = _expand(piece, cwd, box.env)
+                if resolved:
+                    paths.append(resolved)
+    elif isinstance(args, dict):
+        for key in _FILE_TOOL_PATH_KEYS:
+            value = cast(dict[str, Any], args).get(key)
+            if isinstance(value, str):
+                paths.append(posixpath.normpath(posixpath.join(box.workdir, value)))
+    hit = next((p for p in paths if _fixture_reach(p, box)), None)
+    return f"fixture reach {hit[:200]}" if hit else None
 
 
 def _input_hit(command: str, box: Boundary, cwd0: str) -> str | None:
@@ -423,8 +442,10 @@ def _strings(value: object, *, skip_written: bool) -> list[str]:
     return []
 
 
-def _events(stdout: str) -> Iterable[tuple[str, str, list[str]]]:
-    """(`input` | `result`, tool name, strings) per tool event, from Claude stream-json and Pi events."""
+def _events(stdout: str) -> Iterable[tuple[str, str, list[str], object]]:
+    """(`input` | `result`, tool name, strings, raw args) per tool event, from Claude stream-json
+    and Pi events. `raw args` is the input event's arguments object (None on the result side):
+    the path check reads a file tool's `path` argument, not only its stringification."""
     for raw in stdout.splitlines():
         line = raw.strip()
         if not line.startswith("{"):
@@ -438,9 +459,15 @@ def _events(stdout: str) -> Iterable[tuple[str, str, list[str]]]:
         payload = cast(dict[str, Any], event)
         kind = payload.get("type")
         if kind == "tool_execution_start":
-            yield "input", str(payload.get("toolName") or ""), _strings(payload.get("args"), skip_written=True)
+            args = payload.get("args")
+            yield "input", str(payload.get("toolName") or ""), _strings(args, skip_written=True), args
         elif kind == "tool_execution_end":
-            yield "result", str(payload.get("toolName") or ""), _strings(payload.get("result"), skip_written=False)
+            yield (
+                "result",
+                str(payload.get("toolName") or ""),
+                _strings(payload.get("result"), skip_written=False),
+                None,
+            )
         elif kind in ("assistant", "user"):
             wanted = "tool_use" if kind == "assistant" else "tool_result"
             message = cast(dict[str, Any], payload.get("message") or {})
@@ -448,9 +475,15 @@ def _events(stdout: str) -> Iterable[tuple[str, str, list[str]]]:
                 if isinstance(block, dict) and cast(dict[str, Any], block).get("type") == wanted:
                     body = cast(dict[str, Any], block)
                     if kind == "assistant":
-                        yield "input", str(body.get("name") or ""), _strings(body.get("input"), skip_written=True)
+                        tool_input = body.get("input")
+                        yield (
+                            "input",
+                            str(body.get("name") or ""),
+                            _strings(tool_input, skip_written=True),
+                            tool_input,
+                        )
                     else:
-                        yield "result", "", _strings(body.get("content"), skip_written=False)
+                        yield "result", "", _strings(body.get("content"), skip_written=False), None
 
 
 def escape_scan(stdout: str, box: Boundary) -> str | None:
@@ -464,25 +497,23 @@ def escape_scan(stdout: str, box: Boundary) -> str | None:
     read: wandering elsewhere inside it is out-of-task exploration (`exploration_paths`),
     recorded per run, not a stop. The macOS sandbox path keeps the full heuristic: it has no
     container behind it."""
-    cwd0 = box.workdir
-    for side, tool, texts in _events(stdout):
+    for side, tool, texts, args in _events(stdout):
         for text in texts:
             if side == "input":
-                if box.container and tool not in _SHELL_TOOLS:
-                    continue
-                hit = _container_input_stop(text) if box.container else _input_hit(text, box, cwd0)
+                if box.container:
+                    hit = _container_input_stop(tool, args, box)
+                else:
+                    hit = _input_hit(text, box, box.workdir)
                 if hit:
                     return f"escape: {hit}"
                 continue
-            if box.container:
-                raw_hit = _FIXTURE_REACH.search(text)
-                if raw_hit:
-                    return f"escape: fixture material in a tool result {raw_hit.group(0)[:200]}"
             for candidate in box.abs_pattern.findall(text):
                 path = posixpath.normpath(candidate.rstrip(".:"))
                 if box.container:
-                    if _is_host_path(path) or (_FIXTURE_REACH.search(path) and not _under(path, (box.workdir,))):
+                    if _is_host_path(path):
                         return f"escape: host path in a tool result {path[:200]}"
+                    if _fixture_reach(path, box):
+                        return f"escape: fixture material in a tool result {path[:200]}"
                 elif not _under(path, (*box.roots, *box.runtime)) and path not in _INPUT_ALLOW:
                     return f"escape: host path in a tool result {path[:200]}"
     return None
@@ -496,7 +527,7 @@ def exploration_paths(stdout: str, box: Boundary) -> tuple[str, ...]:
     if not box.container:
         return ()
     found: set[str] = set()
-    for side, tool, texts in _events(stdout):
+    for side, tool, texts, _args in _events(stdout):
         if side != "input" or tool not in _SHELL_TOOLS:
             continue
         for text in texts:
