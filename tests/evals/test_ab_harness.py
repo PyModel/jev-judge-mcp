@@ -18,6 +18,7 @@ from evals.ab import arms, ledger, outcomes, report, stream, tasks, unsafe
 from evals.ab import run as ab_run
 from evals.ab.grade import changed_protected, expected_ids, grade, old_rule_success, run_tests
 from evals.ab.stream import ToolUse, Trace
+from evals.agent import AgentRunResult
 from evals.bench import pi
 from evals.spend import JEV_PUBLISHED_USD_PER_MTOK_INPUT, SpendLedger
 from tests.evals.booking_cases import (
@@ -1243,3 +1244,42 @@ def test_resume_books_a_seeded_result_cost_not_the_bound(tmp_path: Path, monkeyp
 
 def test_resume_books_the_bound_when_the_seeded_cost_is_nan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seeded_nan_books_the_bound(ab_loop(tmp_path, monkeypatch))
+
+
+def test_a_grading_timeout_fails_every_test_instead_of_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hung suite (agent or pristine) is a measured failure: every expected id counts as not
+    passed, and the study keeps its record instead of dying in post-processing."""
+    task = tasks.load_task("j1-refund-window")
+    tree = _tree(tmp_path, task, solution=task.reference)
+
+    expected = expected_ids(task, PYTHON)
+
+    def hang(*_args: object, **_kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(cmd=["python"], timeout=1)
+
+    monkeypatch.setattr("evals.ab.grade.subprocess.run", hang)
+    outcomes = run_tests(tree, task, PYTHON)
+    assert outcomes == {"<grading>": "timeout"}
+    # Every expected id then counts as not passed, so the graded run is a measured failure.
+    assert all(outcomes.get(test_id) != "pass" for test_id in expected)
+
+
+def test_an_escaped_run_keeps_its_category_on_the_post_processing_failure_path() -> None:
+    """When grading raises after an escape, the failed record still says escape, so the study
+    stops instead of recording a harness error and carrying on."""
+    task = tasks.load_task("j1-refund-window")
+    run = AgentRunResult(
+        argv=(),
+        workdir=Path("."),
+        stdout="",
+        stderr="",
+        returncode=0,
+        wall_s=1.0,
+        trace=Trace(),
+        status="ok",
+        escape="escape: credential read auth.json",
+    )
+    record = ab_run.failed_record("t.A.r1", task, "A", 1, "pi", run, 0.0, KeyError("boom"))
+    assert record["failure_category"] == "escape"

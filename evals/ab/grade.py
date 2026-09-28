@@ -110,14 +110,19 @@ def run_tests(tree: Path, task: Task, python: str) -> dict[str, str]:
         shutil.rmtree(work / "tests", ignore_errors=True)
         shutil.copytree(SNAPSHOT / "tests", work / "tests", ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copyfile(task.acceptance, work / "tests" / f"{ACCEPTANCE_MODULE}.py")
-        done = subprocess.run(
-            [python, "-I", "-c", _RUNNER],
-            cwd=work,
-            capture_output=True,
-            text=True,
-            timeout=GRADE_TIMEOUT_S,
-            check=False,
-        )
+        try:
+            done = subprocess.run(
+                [python, "-I", "-c", _RUNNER],
+                cwd=work,
+                capture_output=True,
+                text=True,
+                timeout=GRADE_TIMEOUT_S,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            # A hung suite is an outcome of the agent's tree, not a harness exception: every
+            # expected id then counts as not passed, so the run is a measured failure.
+            return {"<grading>": "timeout"}
     try:
         outcomes: dict[str, str] = json.loads(done.stdout)
     except json.JSONDecodeError:

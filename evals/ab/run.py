@@ -400,7 +400,7 @@ def failed_record(
             "preexisting_altered": [],
             "added_tests": [],
             "old_rule_success": False,
-            "failure_category": "harness error",
+            "failure_category": "escape" if getattr(run, "escape", None) else "harness error",
             "unnecessary_jev_calls": 0,
             "jev_answer": None,
             "jev_calls": 0,
