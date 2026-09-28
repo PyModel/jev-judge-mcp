@@ -200,7 +200,7 @@ def _holder(value: object, key: str) -> object:
     return cast(dict[str, Any], value).get(key) if isinstance(value, dict) else None
 
 
-def _answer_field(doc: dict[str, Any]) -> object:
+def answer_field(doc: dict[str, Any]) -> object:
     """The one field of a Jev result document that names its answer, by tool."""
     tool = str(doc.get("tool"))
     if tool == "jev_find":
@@ -244,7 +244,7 @@ def jev_answer_from_result(result: object, options: Mapping[str, str], verdicts:
     for the verdict-word tools (verify, compare, screen, gate, review); find, decide, and classify
     answer with an option id directly. A document that names neither is not an answer."""
     for doc in _documents(result):
-        value = _answer_field(doc)
+        value = answer_field(doc)
         if isinstance(value, str):
             if value in options:
                 return value

@@ -15,6 +15,7 @@ from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
+from evals.ab.outcomes import answer_field
 from evals.bench import analysis
 from evals.bench.stats import percentile
 
@@ -395,14 +396,16 @@ def _fmt(value: object) -> str:
 def _bench_telemetry(records: Sequence[analysis.Record], *, labeled_items: int) -> str:
     """D3 fields that do not need gold. Correctness of a Jev-changed decision is never claimed here."""
     reached = [run for run in records if _reached(run) and not run.get("server_failure")]
-    calls: list[dict[str, Any]] = [
-        cast(dict[str, Any], call)
-        for run in reached
-        for call in cast(list[object], run.get("jev_calls") or [])
-        if isinstance(call, dict)
-    ]
+    calls_per_run: list[list[dict[str, Any]]] = []
+    for run in reached:
+        row: list[dict[str, Any]] = []
+        for call in cast(list[object], run.get("jev_calls") or []):
+            if isinstance(call, dict):
+                row.append(cast(dict[str, Any], call))
+        calls_per_run.append(row)
+    calls = [call for calls in calls_per_run for call in calls]
     with_call = sum(bool(run.get("jev_calls")) for run in reached)
-    unnecessary = _unnecessary_bench_calls(calls)
+    unnecessary = _unnecessary_bench_calls(calls_per_run)
     changed = _bench_decision_changes(records)
     categories = _bench_failure_categories(records)
     correct = (
@@ -426,23 +429,30 @@ def _bench_telemetry(records: Sequence[analysis.Record], *, labeled_items: int) 
     )
 
 
-def _unnecessary_bench_calls(calls: Sequence[Mapping[str, Any]]) -> str:
-    if not calls:
+def _unnecessary_bench_calls(calls_per_run: Sequence[Sequence[Mapping[str, Any]]]) -> str:
+    """Repeats within one run only: the same tool with the same arguments twice in that run. Calls
+    of different arms on the same item are not repeats of each other."""
+    rows = [call for calls in calls_per_run for call in calls]
+    if not rows:
         return "0"
-    if not any("arguments" in call for call in calls):
+    if not any("arguments" in call for call in rows):
         return "not recorded (call arguments are not in these rows)"
-    seen: set[str] = set()
     repeats = 0
-    for call in calls:
-        key = str(call.get("tool")) + "\0" + json.dumps(call.get("arguments"), sort_keys=True, default=str)
-        if key in seen:
-            repeats += 1
-        else:
-            seen.add(key)
+    for calls in calls_per_run:
+        seen: set[str] = set()
+        for call in calls:
+            key = str(call.get("tool")) + "\0" + json.dumps(call.get("arguments"), sort_keys=True, default=str)
+            if key in seen:
+                repeats += 1
+            else:
+                seen.add(key)
     return str(repeats)
 
 
 def _bench_decision_changes(records: Sequence[analysis.Record]) -> str:
+    """Observed when Jev's result document carries an answer in its one answer field that equals the
+    arm's answer; changed when that answer differs from the direct arm's. The old substring test
+    matched any label anywhere in a result's probability distribution."""
     triplets = analysis.complete_triplets(records)
     observed = 0
     changed = 0
@@ -450,18 +460,29 @@ def _bench_decision_changes(records: Sequence[analysis.Record]) -> str:
         direct, automatic, forced = triplet
         for run in (automatic, forced):
             answer = run.get("answer")
-            texts = [
-                cast(dict[str, Any], call).get("text")
-                for call in cast(list[object], run.get("jev_calls") or [])
-                if isinstance(call, dict)
-            ]
-            if not isinstance(answer, str) or not any(isinstance(text, str) and answer in text for text in texts):
+            if not isinstance(answer, str):
+                continue
+            found = None
+            for call in cast(list[object], run.get("jev_calls") or []):
+                if not isinstance(call, dict):
+                    continue
+                text = cast(dict[str, Any], call).get("text")
+                if not isinstance(text, str):
+                    continue
+                try:
+                    doc = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(doc, dict) and answer_field(cast(dict[str, Any], doc)) == answer:
+                    found = answer
+                    break
+            if found is None:
                 continue
             observed += 1
             if answer != direct.get("answer"):
                 changed += 1
     if observed == 0:
-        return "not observed (no Jev result text named the arm's answer)"
+        return "not observed (no Jev result document named the arm's answer in its answer field)"
     return f"{changed} of {observed} observed"
 
 
