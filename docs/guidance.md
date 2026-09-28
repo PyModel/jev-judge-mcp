@@ -5,7 +5,7 @@ the measured guidance, so every call an agent writes gets the benefit without re
 way. It complements [`docs/skills/jev-mcp/SKILL.md`](skills/jev-mcp/SKILL.md) (which tool fits which
 step) and [`docs/reference/limits.md`](reference/limits.md) (the frozen caps and defaults).
 [`src/jev_judge_mcp/skills/jev/SKILL.md`](../src/jev_judge_mcp/skills/jev/SKILL.md) is the other skill: building an app on the Jev API.
-Its cookbook thresholds are not this server's defaults; see [`src/jev_judge_mcp/skills/jev/PROVENANCE.md`](../src/jev_judge_mcp/skills/jev/PROVENANCE.md).
+Its cookbook thresholds are not this server's defaults; [`docs/reference/limits.md`](reference/limits.md) is.
 
 **Where the guidance comes from.** Official pages, cited by URL and not copied here:
 [how to build](https://docs.typesafe.ai/concepts/how-to-build-with-system-one.md),

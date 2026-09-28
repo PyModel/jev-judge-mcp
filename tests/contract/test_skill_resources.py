@@ -3,6 +3,7 @@
 The owner is the stdio wire. The wheel path is the uvx smoke test.
 """
 
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -66,6 +67,22 @@ def test_the_package_ships_only_the_allowlist() -> None:
     assert _disk_rels() == set(packaged_rels())
     assert "jev/PROVENANCE.md" not in _disk_rels()
     assert "jev/agents/openai.yaml" not in _disk_rels()
+
+
+def test_every_jev_skill_uri_named_in_served_text_resolves() -> None:
+    """Every jev-skill:// URI a connecting agent can read must be a served resource.
+
+    The regression: 56ccb0f removed jev/PROVENANCE.md from the allowlist while the routing
+    skill's sentence naming `jev-skill://jev/PROVENANCE.md` stayed, so every client was sent
+    to a URI resources/list does not serve. The allowlist test above cannot see text.
+    """
+    served = {uri_for(rel) for rel in packaged_rels()}
+    texts = [server_instructions([tool.name for tool in TOOLS])]
+    texts += [PACKAGED.joinpath(rel).read_text(encoding="utf-8") for rel in packaged_rels()]
+    for text in texts:
+        for uri in re.findall(r"jev-skill://\S+", text):
+            uri = uri.rstrip("`.,:;)")
+            assert uri in served, f"served text names {uri!r}, which resources/list does not serve"
 
 
 def test_packaged_skill_descriptions_fit_the_agent_skills_limit() -> None:

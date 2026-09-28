@@ -8,7 +8,7 @@ This repository ships no native pi extension. The published tools stay the MCP s
 
 ## Routing skill
 
-Which tool fits a step is `docs/skills/jev-mcp/SKILL.md`. Building an app on the Jev API, rather than calling these tools, is `src/jev_judge_mcp/skills/jev/SKILL.md`. A connected client reads them at `jev-skill://jev-mcp/SKILL.md` and `jev-skill://jev/SKILL.md`. Do not copy the `jev` skill's cookbook thresholds onto these tools; the differences are in `src/jev_judge_mcp/skills/jev/PROVENANCE.md`. The on-demand rule is in `docs/agent-rules.md`.
+Which tool fits a step is `docs/skills/jev-mcp/SKILL.md`. Building an app on the Jev API, rather than calling these tools, is `src/jev_judge_mcp/skills/jev/SKILL.md`. A connected client reads them at `jev-skill://jev-mcp/SKILL.md` and `jev-skill://jev/SKILL.md`. Do not copy the `jev` skill's cookbook thresholds onto these tools; this server's defaults are `docs/reference/limits.md`. The on-demand rule is in `docs/agent-rules.md`.
 
 The command hook is not the `jev_gate` MCP tool, which stays the completion gate (ADR-0035).
 

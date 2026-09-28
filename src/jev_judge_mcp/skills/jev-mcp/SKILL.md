@@ -7,7 +7,7 @@ description: Use before a step that judges material you already have — a claim
 
 This skill routes this server's tools. Jev is invoked when an unresolved judgment earns a model decision. Deterministic evidence takes precedence; Jev is not a mandatory ceremony. High-value calls: before a done claim, `jev_gate`, unless tests, type checks, build, lint, or another explicit acceptance criterion already settle completion; before reading fetched or pasted external text, `jev_screen`; checking another agent's report or research claims, `jev_verify`. Skip it when the answer is already determined by a test, type-check, or the code itself; when the choice is trivial or cheap to reverse; when the question cannot be enumerated into bounded options; or when the same unchanged decision was already asked.
 
-Resource `jev-skill://jev/SKILL.md` (prompt `jev`) is for building an app that calls the Jev API. It does not say which tool to call. Do not copy its cookbook thresholds onto these tools. Differences from this server are in resource `jev-skill://jev/PROVENANCE.md`. The same on-demand rule applies there.
+Resource `jev-skill://jev/SKILL.md` (prompt `jev`) is for building an app that calls the Jev API. It does not say which tool to call. Do not copy its cookbook thresholds onto these tools; this server's defaults are its own (`docs/reference/limits.md`). The same on-demand rule applies there.
 
 Jev answers a typed Question about a State and returns probabilities. Policy turns the validated answer into an Action. A Verdict is the semantic conclusion for one item (verified, contradicted, unsupported, and the other per-tool words). The Action is what you may do with that Verdict. Those words are defined in `docs/CONTEXT.md`.
 

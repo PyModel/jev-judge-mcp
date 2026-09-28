@@ -32,7 +32,7 @@ Headless runs need an allow-rule. `acceptEdits` covers file edits. Add the publi
 
 ## Routing skill
 
-Which tool fits a step is `docs/skills/jev-mcp/SKILL.md`. Building an app on the Jev API, rather than calling these tools, is `src/jev_judge_mcp/skills/jev/SKILL.md`. A connected client reads them at `jev-skill://jev-mcp/SKILL.md` and `jev-skill://jev/SKILL.md`. Do not copy the `jev` skill's cookbook thresholds onto these tools; the differences are in `src/jev_judge_mcp/skills/jev/PROVENANCE.md`. The on-demand rule is in `docs/agent-rules.md`. This repository ships no plugin manifest. A plugin entry is appropriate only when it points at one of those skills and embeds no machine path and no key.
+Which tool fits a step is `docs/skills/jev-mcp/SKILL.md`. Building an app on the Jev API, rather than calling these tools, is `src/jev_judge_mcp/skills/jev/SKILL.md`. A connected client reads them at `jev-skill://jev-mcp/SKILL.md` and `jev-skill://jev/SKILL.md`. Do not copy the `jev` skill's cookbook thresholds onto these tools; this server's defaults are `docs/reference/limits.md`. The on-demand rule is in `docs/agent-rules.md`. This repository ships no plugin manifest. A plugin entry is appropriate only when it points at one of those skills and embeds no machine path and no key.
 
 ## Reading deduplicated ids
 

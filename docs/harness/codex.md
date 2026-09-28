@@ -6,7 +6,7 @@ The command hook is not the `jev_gate` MCP tool, which stays the completion gate
 
 ## Routing skill
 
-Codex has no skill package. Paste `docs/skills/jev-mcp/SKILL.md` into the project's `AGENTS.md` for tool routing. Paste `src/jev_judge_mcp/skills/jev/SKILL.md` only when the task is building an app on the Jev API, and read `src/jev_judge_mcp/skills/jev/PROVENANCE.md` first so its cookbook thresholds are not applied to these tools. A connected client can read both at `jev-skill://jev-mcp/SKILL.md` and `jev-skill://jev/SKILL.md` instead of pasting. The on-demand rule is in `docs/agent-rules.md`.
+Codex has no skill package. Paste `docs/skills/jev-mcp/SKILL.md` into the project's `AGENTS.md` for tool routing. Paste `src/jev_judge_mcp/skills/jev/SKILL.md` only when the task is building an app on the Jev API; its cookbook thresholds are not this server's defaults (`docs/reference/limits.md`). A connected client can read both at `jev-skill://jev-mcp/SKILL.md` and `jev-skill://jev/SKILL.md` instead of pasting. The on-demand rule is in `docs/agent-rules.md`.
 
 ## Reading deduplicated ids
 
