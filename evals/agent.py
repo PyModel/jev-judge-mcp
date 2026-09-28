@@ -66,7 +66,39 @@ STDERR_TRUNCATED_LINE = "[stderr truncated]"
 
 _PIPE_READ = 65_536
 
-_TOP = "|".join(re.escape(name) for name in sorted(os.listdir("/")) if name.strip())
+HOST_ROOTS = (
+    "Applications",
+    "Library",
+    "System",
+    "System/Volumes",
+    "Users",
+    "Volumes",
+    "bin",
+    "boot",
+    "cores",
+    "dev",
+    "etc",
+    "home",
+    "lib",
+    "lib64",
+    "media",
+    "mnt",
+    "opt",
+    "private",
+    "proc",
+    "root",
+    "run",
+    "sbin",
+    "srv",
+    "sys",
+    "tmp",
+    "usr",
+    "var",
+)
+"""The root names of macOS AND Linux, not `os.listdir` of the building host: the canary parses
+transcripts recorded under either (a Linux CI leg must flag `/Library/...` in a probe exactly like
+macOS does), and a name that exists on neither is not a path the canary can vouch for."""
+_TOP = "|".join(re.escape(name) for name in HOST_ROOTS)
 _ABS = re.compile(rf"(?<![\w.$~*])/(?:{_TOP})(?:/[^\s\"'`;|&<>(){{}}\[\],]*)?(?![\w.-])")
 """An absolute path whose first segment exists at `/` on this host: `/Users/..`, `/etc/..`, `/Library`.
 Floor division, `a/n`, and glob fragments are not paths. Built at import, so a container's own `/`
@@ -172,8 +204,13 @@ def container_boundary(env: Mapping[str, str]) -> Boundary:
 
 
 def _both(path: str) -> tuple[str, ...]:
-    """Every spelling of one directory: as created, resolved, and without macOS's /private prefix."""
+    """Every spelling of one directory: as created, resolved, with and without macOS's /private
+    prefix. Both prefixes are always included, because the canary's root names are the
+    macOS+Linux union (HOST_ROOTS): a transcript recorded on macOS may name the /private
+    spelling while a Linux leg builds the boundary without it, and vice versa."""
     spellings = {path.rstrip("/"), os.path.realpath(path).rstrip("/")}
+    prefixed = {"/private" + s for s in spellings if not s.startswith("/private/")}
+    spellings |= prefixed
     spellings |= {s.removeprefix("/private") for s in spellings if s.startswith("/private/")}
     return tuple(sorted(spellings))
 

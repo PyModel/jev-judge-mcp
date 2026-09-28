@@ -24,6 +24,9 @@ is a misbehaving client, and the refusal is the cap, not a crash."""
 CREDENTIAL_REQUEST_HEADERS = frozenset({"authorization", "proxy-authorization", "x-api-key", "api-key", "cookie"})
 """Headers the shim strips from every client request. The real credential is injected broker-side."""
 
+METHOD_OVERRIDE_HEADERS = frozenset({"x-http-method-override", "x-method-override", "x-http-method"})
+"""Never forwarded in either direction (F6): the allowlisted method is the only method."""
+
 HOP_BY_HOP_HEADERS = frozenset(
     {
         "connection",

@@ -22,6 +22,7 @@ import os
 import secrets as _secrets
 import shlex
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -54,6 +55,10 @@ so the sidecar needs nothing but a Python interpreter."""
 CAPABILITY_MARGIN_S = 120.0
 """Grant TTL past the run timeout: a run may be booked and torn down late, never refused early."""
 
+BROKER_LIFE_MARGIN_S = 300.0
+"""Broker self-deadline past the run/probe timeout (F5): teardown slack for a slow container
+stop, then the sidecar exits and its key mounts go away even if the harness died."""
+
 BROKER_READY_TIMEOUT_S = 30.0
 
 CONTAINER_CODE = "/code"
@@ -68,6 +73,9 @@ AGENT_SCRATCH = "/scratch"
 AGENT_CONFIG = f"{AGENT_SCRATCH}/agent-cfg/mcp.json"
 """Fixed container paths. The agent-visible config and argv name only these."""
 
+CONTAINER_ADAPTER = "/usr/local/lib/node_modules/pi-mcp-adapter/index.ts"
+"""The adapter ships inside the image (F2), so the confined argv names this fixed path."""
+
 MODULES = ("protocol.py", "broker.py", "shim.py")
 """The stdlib-only confinement modules copied into both containers at run time."""
 
@@ -77,6 +85,12 @@ CLOCK = time.time
 
 class ConfinementError(RuntimeError):
     """The confinement boundary could not be built or verified. Not a run: nothing is booked."""
+
+
+OPENAI_ENDPOINTS = ("/chat/completions", "/models")
+"""An openai-completions provider's whole API surface (F3): the chat endpoint and the model list."""
+ANTHROPIC_ENDPOINTS = ("/v1/messages", "/v1/messages/count_tokens", "/v1/models")
+"""Claude's whole API surface: messages, token counting, and the model list."""
 
 
 @dataclass(frozen=True)
@@ -89,7 +103,10 @@ class Upstream:
     port: int
     methods: tuple[str, ...]
     paths: tuple[str, ...]
-    credential_file: str
+    """Exact origin-form endpoint paths, joined onto `base_path` when forwarding (no wildcards)."""
+    base_path: str = ""
+    """The provider base URL's path (`/zen/go/v1`), kept and prepended to every forwarded path."""
+    credential_file: str = ""
     """Host path, bind-mounted read-only into the broker container only."""
     credential_header: str = "Authorization"
     credential_scheme: str = "Bearer "
@@ -106,6 +123,7 @@ class Upstream:
             port=443,
             methods=("POST",),
             paths=("/v1/systemone",),
+            base_path="",
             credential_file=credential_file,
             shim_port=shim_port,
         )
@@ -114,18 +132,24 @@ class Upstream:
     def provider(
         cls, name: str, base_url: str, credential_file: str, api: str = "", shim_port: int = 8080
     ) -> "Upstream":
-        """The agent's model provider: the host is pinned, the paths are its own (`"*"`)."""
+        """The agent's model provider: host, base path, and its exact endpoint list (F3).
+
+        The base URL's path prefix (e.g. `/zen/go/v1`) is kept and prepended to every forwarded
+        path, and the endpoint list replaces the old `*`: the broker forwards only the paths the
+        provider's API family defines, each with its real method."""
         parts = urlsplit(base_url if "://" in base_url else f"https://{base_url}")
         if not parts.hostname:
             raise ConfinementError(f"provider base URL has no host: {base_url}")
         anthropic = "anthropic" in api.lower()
+        endpoints = ANTHROPIC_ENDPOINTS if anthropic else OPENAI_ENDPOINTS
         return cls(
             name=name,
             scheme=parts.scheme or "https",
             host=parts.hostname,
             port=parts.port or (80 if parts.scheme == "http" else 443),
             methods=("POST", "GET"),
-            paths=("*",),
+            paths=endpoints,
+            base_path=parts.path.rstrip("/"),
             credential_file=credential_file,
             credential_header="x-api-key" if anthropic else "Authorization",
             credential_scheme="" if anthropic else "Bearer ",
@@ -135,6 +159,10 @@ class Upstream:
     @property
     def url(self) -> str:
         return f"{self.scheme}://{self.host}:{self.port}"
+
+    def full_path(self, path: str) -> str:
+        """The forwarded path: base path plus the origin-form endpoint path."""
+        return f"{self.base_path}{path}"
 
 
 @dataclass(frozen=True)
@@ -218,11 +246,19 @@ def image_present(image: str) -> bool:
     return probe.returncode == 0
 
 
-def broker_config(upstreams: Sequence[Upstream], *, secret_mounts: Mapping[str, str]) -> dict[str, Any]:
-    """The broker container's config document. `secret_mounts` maps upstream name → container path."""
+def broker_config(
+    upstreams: Sequence[Upstream],
+    *,
+    secret_mounts: Mapping[str, str],
+    max_life_s: float = 4 * 3600.0,
+) -> dict[str, Any]:
+    """The broker container's config document. `secret_mounts` maps upstream name → container path;
+    `max_life_s` is the sidecar's self-bound deadline (F5), long enough for a full study, short
+    enough that a killed run's key mounts cannot outlive the day."""
     return {
         "listen": CONTAINER_SOCKET,
         "grants_dir": CONTAINER_GRANTS,
+        "max_lifetime_s": max_life_s,
         "upstreams": [
             {
                 "name": upstream.name,
@@ -231,6 +267,7 @@ def broker_config(upstreams: Sequence[Upstream], *, secret_mounts: Mapping[str, 
                 "port": upstream.port,
                 "methods": list(upstream.methods),
                 "paths": list(upstream.paths),
+                "base_path": upstream.base_path,
                 "credential_file": secret_mounts[upstream.name],
                 "credential_header": upstream.credential_header,
                 "credential_scheme": upstream.credential_scheme,
@@ -338,17 +375,18 @@ def entrypoint_text(spec: ConfinementSpec, agent_argv_inside: Sequence[str]) -> 
                 f" --cap-file {AGENT_GRANT_MOUNT} &"
             ]
     if ports:
-        ports_literal = ", ".join(f"{port}," for port in ports)
+        # F4: repr(tuple) is a valid tuple literal for any port count, and a shim that never
+        # listens is fatal — the agent must not start against an unbound loopback.
         lines += [
             "python3 -c 'import socket, time, sys",
-            f"for port in ({ports_literal}):",
+            f"for port in {tuple(ports)!r}:",
             "    for _ in range(200):",
             "        try:",
             '            s = socket.create_connection(("127.0.0.1", port), 0.5); s.close(); break',
             "        except OSError:",
             "            time.sleep(0.05)",
             "    else:",
-            '        sys.exit(f"shim on {port} never listened")\'',
+            '            sys.exit(f"shim on {port} never listened")\' || exit 97',
         ]
     lines.append(f"exec {shlex.join(list(agent_argv_inside))}")
     return "\n".join(lines) + "\n"
@@ -387,6 +425,72 @@ def teardown(*, agent_name: str, broker_name: str, volume: str) -> None:
     docker_run(["docker", "volume", "rm", volume], check=False)
 
 
+OWNER_LABEL = "jev-eval"
+"""Every container and volume the boundary creates carries this label; the reaper matches it."""
+
+REAP_STALE_S = 2 * 3600.0
+"""A temp dir younger than this may belong to a live run, so the reaper leaves it alone. Runs are
+bounded by the study timeout; only orphans of a killed harness outlive this."""
+
+
+def exit_on_sigterm() -> None:
+    """SIGTERM raises SystemExit, so `finally` blocks and context managers unwind (F5): teardown
+    runs instead of the default terminate-on-the-spot, which leaked every container and mount."""
+    import signal
+
+    def handler(signum: int, _frame: Any) -> None:
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, handler)
+
+
+def reap() -> dict[str, list[str]]:
+    """Remove a killed run's leftovers (F5): labeled containers and volumes, and stale run temp
+    dirs. Called before a confined study starts; returns what it removed."""
+    removed: dict[str, list[str]] = {"containers": [], "volumes": [], "dirs": []}
+    if not shutil.which("docker"):
+        return removed  # no docker CLI: no containers or volumes can exist to reap
+    for name in docker_run(["docker", "ps", "-aq", "--filter", f"label={OWNER_LABEL}"], check=False).stdout.split():
+        if docker_run(["docker", "rm", "-f", name], check=False).returncode == 0:
+            removed["containers"].append(name)
+    for name in docker_run(
+        ["docker", "volume", "ls", "-q", "--filter", f"label={OWNER_LABEL}"], check=False
+    ).stdout.split():
+        if docker_run(["docker", "volume", "rm", name], check=False).returncode == 0:
+            removed["volumes"].append(name)
+    now = time.time()
+    for prefix in ("jev-confined-", "jev-probe-", "jev-ab-secrets-", "jev-agent-work-", "jev-grade-"):
+        for directory in Path(tempfile.gettempdir()).glob(f"{prefix}*"):
+            try:
+                if directory.is_dir() and now - directory.stat().st_mtime > REAP_STALE_S:
+                    shutil.rmtree(directory, ignore_errors=True)
+                    removed["dirs"].append(directory.name)
+            except OSError:
+                continue
+    return removed
+
+
+def copy_regular_nofollow(source: Path, target: Path) -> bool:
+    """Copy `source` to `target` only if it is a regular file reached without following a symlink
+    (F1): an agent-writable tree cannot make the host read anything but the file it named."""
+    try:
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return False
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return False
+        with os.fdopen(fd, "rb") as reader:
+            fd = -1
+            with open(target, "wb") as writer:
+                while chunk := reader.read(65_536):
+                    writer.write(chunk)
+        return True
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def _copy_modules(target: Path) -> None:
     target.mkdir(parents=True, exist_ok=True)
     source = Path(__file__).resolve().parent
@@ -394,21 +498,12 @@ def _copy_modules(target: Path) -> None:
         shutil.copyfile(source / module, target / module)
 
 
-def _materialize_secrets(spec: ConfinementSpec, secrets_dir: Path) -> dict[str, Path]:
-    """Readable copies of the credential files, one per upstream, inside the run's temp root.
-
-    The copies exist only to give both containers one stable mount source with no operator
-    directory mounted (ADR-0074, condition 1: single read-only files, never a directory). For the
-    TypeSafe key the copy is byte-identical to the operator's file; for the model provider the
-    harness wrote a scoped file holding only the arm's one key value before building the spec.
-    """
-    secrets_dir.mkdir(parents=True, exist_ok=True)
-    files: dict[str, Path] = {}
-    for upstream in spec.upstreams:
-        target = secrets_dir / f"{upstream.name}.key"
-        target.write_text(Path(upstream.credential_file).read_text(encoding="utf-8-sig"), encoding="utf-8")
-        files[upstream.name] = target
-    return files
+def credential_files(spec: ConfinementSpec) -> dict[str, Path]:
+    """The operator's own credential files, mounted read-only into the broker container exactly
+    as they stand (F10): no copy is made, so no copy can linger at the wrong mode or outlive the
+    run. The provider file is scoped before the spec is built (one provider's key, never the
+    operator's whole auth.json)."""
+    return {upstream.name: Path(upstream.credential_file) for upstream in spec.upstreams}
 
 
 @contextmanager
@@ -422,6 +517,7 @@ def run_confined(
     prepare: Callable[[Path], None] | None = None,
     parse: Callable[[Sequence[str]], stream.Trace] | None = None,
     scratch_files: Callable[[Path], None] | None = None,
+    extra_secrets: Sequence[str] = (),
 ) -> Generator[AgentRunResult, None, None]:
     """Run the agent once inside the container boundary; yields the result while the workdir exists.
 
@@ -436,8 +532,9 @@ def run_confined(
     """
     if not secret:
         raise ValueError("run_confined needs the non-empty secret to scrub")
+    secrets = [secret, *[value for value in extra_secrets if value]]
     for key, value in spec.env.items():
-        if secret in value:
+        if any(one in value for one in secrets):
             raise ConfinementError(f"the secret value must not ride in the container env ({key})")
     run_dir.mkdir(parents=True, exist_ok=True)
     workdir = Path(tempfile.mkdtemp(prefix="jev-agent-work-"))
@@ -461,21 +558,34 @@ def run_confined(
         config.write_text(json.dumps(document), encoding="utf-8")
         config.chmod(0o600)
         if spec.adapter_source:
+            source = Path(spec.adapter_source)
             adapter = scratch / "adapter"
-            adapter.mkdir(exist_ok=True)
-            shutil.copyfile(spec.adapter_source, adapter / "index.ts")
+            if source.is_dir():
+                # F2: the adapter is a package (index.ts imports siblings); the whole directory
+                # crosses read-only-mounted at runtime, never a lone entry file.
+                shutil.copytree(
+                    source, adapter, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__", "node_modules")
+                )
+            else:
+                adapter.mkdir(exist_ok=True)
+                shutil.copyfile(source, adapter / "index.ts")
         _copy_modules(code := root / "code")
         _copy_modules(scratch / "code")
-        credential_files = _materialize_secrets(spec, root / "secrets")
+        credentials = credential_files(spec)
         mounts = {upstream.name: f"{CONTAINER_SECRETS}/{upstream.name}.key" for upstream in spec.upstreams}
         config_path = root / "broker-config.json"
-        config_path.write_text(json.dumps(broker_config(spec.upstreams, secret_mounts=mounts)), encoding="utf-8")
+        config_path.write_text(
+            json.dumps(
+                broker_config(spec.upstreams, secret_mounts=mounts, max_life_s=spec.timeout_s + BROKER_LIFE_MARGIN_S)
+            ),
+            encoding="utf-8",
+        )
         capability = mint_capability(grants, spec.timeout_s + CAPABILITY_MARGIN_S)
         (scratch / "entrypoint.sh").write_text(
             entrypoint_text(spec, command.argv(Path(AGENT_CONFIG))), encoding="utf-8"
         )
         (scratch / "entrypoint.sh").chmod(0o755)
-        docker_run(["docker", "volume", "create", volume])
+        docker_run(["docker", "volume", "create", "--label", OWNER_LABEL, volume])
         docker_run(
             broker_argv(
                 spec,
@@ -484,7 +594,7 @@ def run_confined(
                 grants_dir=grants,
                 config_path=config_path,
                 code_dir=code,
-                credential_files=credential_files,
+                credential_files=credentials,
             )
         )
         wait_for_broker(broker_name)
@@ -498,16 +608,14 @@ def run_confined(
         )
         wall = time.perf_counter() - started
         for name in ("jev-calls.jsonl", "jev-calls.stderr"):
-            relay = scratch / name
-            if relay.is_file():
-                shutil.copyfile(relay, run_dir / name)
+            copy_regular_nofollow(scratch / name, run_dir / name)
         write_run_logs(run_dir, stdout, stderr)
         trace = (parse or stream.parse)(stdout.splitlines())
         escape = escape_scan(stdout, box)
-        hit = secret_scan(run_dir, secret)
-        if hit:
+        hits = sorted({name for value in secrets for name in secret_scan(run_dir, value)})
+        if hits:
             prefix = f"{escape}; " if escape else ""
-            escape = f"{prefix}secret scan: key value found in {', '.join(hit)}"
+            escape = f"{prefix}secret scan: key value found in {', '.join(hits)}"
         yield AgentRunResult(
             argv=tuple(argv),
             workdir=workdir,
@@ -523,7 +631,8 @@ def run_confined(
         teardown(agent_name=agent_name, broker_name=broker_name, volume=volume)
         shutil.rmtree(root, ignore_errors=True)
         shutil.rmtree(workdir, ignore_errors=True)
-        secret_scrub(run_dir, secret)
+        for value in secrets:
+            secret_scrub(run_dir, value)
 
 
 def probe_provider(spec: ConfinementSpec, *, timeout_s: float = 60.0) -> str | None:
@@ -543,20 +652,27 @@ def probe_provider(spec: ConfinementSpec, *, timeout_s: float = 60.0) -> str | N
         code = root / "code"
         _copy_modules(code)
         capability = mint_capability(grants, timeout_s)
-        credential_files = _materialize_secrets(spec, root / "secrets")
+        credentials = credential_files(spec)
         mounts = {upstream.name: f"{CONTAINER_SECRETS}/{upstream.name}.key" for upstream in spec.upstreams}
         config_path = root / "broker-config.json"
-        config_path.write_text(json.dumps(broker_config(spec.upstreams, secret_mounts=mounts)), encoding="utf-8")
+        config_path.write_text(
+            json.dumps(
+                broker_config(spec.upstreams, secret_mounts=mounts, max_life_s=timeout_s + BROKER_LIFE_MARGIN_S)
+            ),
+            encoding="utf-8",
+        )
         tag = uuid.uuid4().hex[:12]
         volume = f"jev-eval-sock-{tag}"
         broker_name = f"jev-eval-broker-{tag}"
         probe_name = f"jev-eval-probe-{tag}"
         probe = root / "probe.py"
+        models_path = next((path for path in provider.paths if path.endswith("/models")), provider.paths[0])
         probe.write_text(
-            _PROBE_SCRIPT.format(scheme=provider.scheme, host=provider.host, port=provider.port), encoding="utf-8"
+            _PROBE_SCRIPT.format(scheme=provider.scheme, host=provider.host, port=provider.port, path=models_path),
+            encoding="utf-8",
         )
         try:
-            docker_run(["docker", "volume", "create", volume])
+            docker_run(["docker", "volume", "create", "--label", OWNER_LABEL, volume])
             docker_run(
                 broker_argv(
                     spec,
@@ -565,7 +681,7 @@ def probe_provider(spec: ConfinementSpec, *, timeout_s: float = 60.0) -> str | N
                     grants_dir=grants,
                     config_path=config_path,
                     code_dir=code,
-                    credential_files=credential_files,
+                    credential_files=credentials,
                 )
             )
             wait_for_broker(broker_name)
@@ -619,13 +735,184 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             "scheme": "{scheme}",
             "host": "{host}",
             "port": {port},
-            "path": "/",
+            "path": "{path}",
             "headers": [],
         }},
         b"",
     )
     header, _body = protocol.recv_frame(sock)
 if "error" in header:
-    sys.stderr.write(str(header.get("detail", "refused")) + "\n")
+    sys.stderr.write(str(header.get("detail", "refused")) + "\\n")
+    raise SystemExit(1)
+status = int(header.get("status", 0))
+if status >= 500:
+    sys.stderr.write(f"provider unhappy (HTTP {{status}})\\n")
+    raise SystemExit(1)
+if status in (401, 403):
+    sys.stderr.write(f"credential refused (HTTP {{status}})\\n")
+    raise SystemExit(1)
+if status == 404:
+    sys.stderr.write("probe endpoint {path!r} not found (HTTP 404): the entry base URL or API family is wrong\\n")
+    raise SystemExit(1)
+if status >= 400:
+    sys.stderr.write(f"provider refused the probe (HTTP {{status}})\\n")
     raise SystemExit(1)
 """
+
+GRADE_CODE = ("__init__.py", "grade.py", "tasks.py")
+"""The grading slice of evals.ab, copied read-only into the grading container with the fixture."""
+
+
+def _copy_grade_code(target: Path) -> None:
+    """`evals.ab`'s grading modules plus the fixture, so the container grades with the repo's own
+    code and its own fixture paths (tasks.py resolves the fixture next to itself)."""
+    package = Path(__file__).resolve().parents[1] / "ab"
+    (target / "evals").mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(package.parent / "__init__.py", target / "evals" / "__init__.py")
+    ab = target / "evals" / "ab"
+    ab.mkdir(exist_ok=True)
+    for name in GRADE_CODE:
+        shutil.copyfile(package / name, ab / name)
+    shutil.copytree(
+        package / "fixture", ab / "fixture", dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__")
+    )
+
+
+_GRADE_DRIVER = """
+import json, os, subprocess, sys
+from dataclasses import asdict
+from pathlib import Path
+
+sys.path.insert(0, "/code")
+from evals.ab import tasks
+from evals.ab.grade import grade, expected_ids
+
+# Hostile-tree-safe git (F1): no config files, no fsmonitor, no hooks, no protocol helpers.
+GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
+
+
+def git(*args):
+    return subprocess.run(
+        ["git", "-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "core.hooksPath=", *args],
+        cwd="/tree", env=GIT_ENV, capture_output=True, text=True, check=False,
+    )
+
+
+mode, argument = sys.argv[1], sys.argv[2]
+if mode == "reference":
+    task = tasks.load_task(argument)
+    ids = expected_ids(task, sys.executable)
+    Path("/out/reference.json").write_text(json.dumps({"task": task.id, "ids": list(ids)}))
+    raise SystemExit(0)
+
+task = tasks.load_task(argument)
+if (Path("/tree") / ".git").exists():
+    git("add", "-A")
+    Path("/out/diff.patch").write_text(git("diff", "--cached").stdout, encoding="utf-8")
+else:
+    Path("/out/diff.patch").write_text("", encoding="utf-8")
+result = grade(Path("/tree"), task, sys.executable)
+Path("/out/grade.json").write_text(json.dumps(asdict(result)))
+"""
+
+
+def _grade_container(
+    image: str,
+    *,
+    mode: str,
+    argument: str,
+    tree: Path | None,
+    timeout_s: float,
+) -> dict[str, Any]:
+    """Run the grading driver once inside the agent image (F1): `--network none`,
+    `--cap-drop ALL`, only the tree copy, the grading code, and an output dir mounted. Returns
+    the files the driver wrote."""
+    import tempfile
+    import uuid
+
+    root = Path(tempfile.mkdtemp(prefix="jev-grade-"))
+    out = root / "out"
+    out.mkdir()
+    _copy_modules(root / "code")
+    _copy_grade_code(root / "code")
+    (root / "code" / "grade_driver.py").write_text(_GRADE_DRIVER, encoding="utf-8")
+    argv = [
+        "docker",
+        "run",
+        "--rm",
+        "--name",
+        f"jev-eval-grade-{uuid.uuid4().hex[:12]}",
+        "--label",
+        OWNER_LABEL,
+        "--network",
+        "none",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "-v",
+        f"{root / 'code'}:/code:ro",
+        "-v",
+        f"{out}:/out",
+    ]
+    if tree is not None:
+        # The tree copy is mounted writable: `git add` updates the snapshot repo the tree carries,
+        # and any write the graded code makes lands in this throwaway copy, never on the host.
+        argv += ["-v", f"{tree}:/tree"]
+    argv += [image, "python3", "/code/grade_driver.py", mode, argument]
+    try:
+        done = docker_run(argv, check=False, timeout=timeout_s)
+        if done.returncode != 0:
+            raise ConfinementError(f"grading container failed: {(done.stderr or '')[-300:]}")
+        written: dict[str, Any] = {}
+        for name in ("diff.patch", "grade.json", "reference.json"):
+            path = out / name
+            if path.is_file():
+                written[name] = path.read_text(encoding="utf-8")
+        if not written:
+            raise ConfinementError("grading container wrote no output")
+        return written
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def confined_postprocess(image: str, workdir: Path, task_id: str, *, timeout_s: float = 600.0) -> tuple[str, Any]:
+    """The confined path's post-run step (F1): diff and grade the agent's tree INSIDE the image,
+    never on the host. The tree crosses as a symlink-preserving copy; nothing in it executes with
+    host privileges. Returns `(patch_text, Grade)`.
+    """
+    import tempfile
+
+    from evals.ab.grade import AddedTest, Grade
+
+    root = Path(tempfile.mkdtemp(prefix="jev-grade-"))
+    try:
+        tree = root / "tree"
+        shutil.copytree(workdir, tree, symlinks=True, ignore=shutil.ignore_patterns("__pycache__"))
+        written = _grade_container(image, mode="grade", argument=task_id, tree=tree, timeout_s=timeout_s)
+        payload = json.loads(written["grade.json"])
+        added = tuple(
+            AddedTest(file=item["file"], name=item["name"], outcome=item["outcome"], relevant=item["relevant"])
+            for item in payload["added_tests"]
+        )
+        grade_result = Grade(
+            acceptance_passed=payload["acceptance_passed"],
+            acceptance_total=payload["acceptance_total"],
+            original_passed=payload["original_passed"],
+            original_total=payload["original_total"],
+            regressions=tuple(payload["regressions"]),
+            protected_changed=tuple(payload["protected_changed"]),
+            preexisting_altered=tuple(payload["preexisting_altered"]),
+            added_tests=added,
+        )
+        return written.get("diff.patch", ""), grade_result
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def confined_reference(image: str, task_id: str, *, timeout_s: float = 600.0) -> tuple[str, ...]:
+    """Reference grading on the same interpreter the agent runs on (F1): the task's reference
+    solution graded inside the image. Raises when the reference does not pass, exactly like the
+    host-side `expected_ids` it replaces for confined studies."""
+    written = _grade_container(image, mode="reference", argument=task_id, tree=None, timeout_s=timeout_s)
+    return tuple(json.loads(written["reference.json"])["ids"])

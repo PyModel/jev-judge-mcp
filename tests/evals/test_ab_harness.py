@@ -755,7 +755,8 @@ def test_preflight_passes_when_the_agent_reaches_its_model(
     assert result.trace.model
 
 
-def _skip_grader(_task: object, _python: str) -> tuple[str, ...]:
+def _skip_grader(_image: object, _task_id: object) -> tuple[str, ...]:
+    """Stands in for the confined reference grader: no container, no real reference run."""
     return ()
 
 
@@ -827,7 +828,7 @@ def test_a_dead_preflight_exits_2_and_books_nothing(
     """A dead boundary refuses before any run is booked, pins no setup, and rewrites no report.
 
     Live preflight is the confined probe (ADR-0074): a probe that cannot reach the model provider
-    through the broker refuses the batch. `expected_ids` is the reference grader, unrelated to this
+    through the broker refuses the batch. `confined_reference` is the reference grader, unrelated to this
     gate. Moving the preflight to after `study`, or dropping it, books the dead run: the ledger
     appears and this fails. Exit 2 is `main`'s refusal, so a stop string that still publishes also
     fails.
@@ -836,7 +837,7 @@ def test_a_dead_preflight_exits_2_and_books_nothing(
     _stub_the_boundary(monkeypatch)
     monkeypatch.setenv("PI_MCP_ADAPTER", str(tmp_path / "adapter.ts"))
     monkeypatch.setattr(ab_run, "probe_provider", _dead_probe)
-    monkeypatch.setattr(ab_run, "expected_ids", _skip_grader)
+    monkeypatch.setattr(ab_run, "confined_reference", _skip_grader)
     monkeypatch.setattr(ab_run, "OUT", tmp_path / "out")
     monkeypatch.setattr(ab_run, "REPORT", tmp_path / "report.md")
     assert ab_run.main(["--agent", agent], environ=_confined_env(tmp_path / "bin", tmp_path, agent)) == 2
@@ -861,7 +862,7 @@ def test_a_finished_study_does_not_preflight_again(tmp_path: Path, monkeypatch: 
         ]
     )
     _agent_bin(tmp_path / "bin", "claude", body)
-    monkeypatch.setattr(ab_run, "expected_ids", _skip_grader)
+    monkeypatch.setattr(ab_run, "confined_reference", _skip_grader)
     out = tmp_path / "out"
     study_out = out / "claude"
     study_out.mkdir(parents=True)
@@ -890,7 +891,7 @@ def test_a_broken_confinement_setup_refuses_with_exit_2(
     _agent_bin(tmp_path / "bin", agent, dead_login())
     _stub_the_boundary(monkeypatch)
     monkeypatch.setenv("PI_MCP_ADAPTER", str(tmp_path / "adapter.ts"))
-    monkeypatch.setattr(ab_run, "expected_ids", _skip_grader)
+    monkeypatch.setattr(ab_run, "confined_reference", _skip_grader)
     monkeypatch.setattr(ab_run, "OUT", tmp_path / "out")
     monkeypatch.setattr(ab_run, "REPORT", tmp_path / "report.md")
     monkeypatch.setattr(ab_run, "_confinement", unlinkable)

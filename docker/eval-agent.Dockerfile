@@ -26,13 +26,16 @@ RUN case "$TARGETARCH" in \
 	&& rm "node-v24.19.0-linux-${NODEARCH}.tar.xz" SHASUMS256.txt \
 	&& node --version
 
-# The agent CLIs, pinned so a study's agent_version means one binary. The pi MCP adapter is
-# NOT installed here: the harness copies the operator's PI_MCP_ADAPTER file into the run's
-# scratch so the adapter version follows the study, not the image.
+# The agent CLIs, pinned so a study's agent_version means one binary. The pi MCP adapter ships
+# here too (F2): it is a package with its own dependency tree, and the arm loads it from this
+# fixed path — a lone index.ts copy cannot resolve its siblings or its node_modules.
 ARG PI_VERSION=0.87.1
 ARG CLAUDE_VERSION=2.1.283
-RUN npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}" "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
-	&& pi --version && claude --version
+ARG ADAPTER_VERSION=2.6.1
+RUN npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}" "@anthropic-ai/claude-code@${CLAUDE_VERSION}" "pi-mcp-adapter@${ADAPTER_VERSION}" \
+	&& pi --version && claude --version \
+	&& node -e "require('fs').accessSync('/usr/local/lib/node_modules/pi-mcp-adapter/index.ts')"
+ENV PI_MCP_ADAPTER=/usr/local/lib/node_modules/pi-mcp-adapter/index.ts
 
 # The wheel is copied in by the build (make confinement-image builds it first), never fetched
 # from an index: the server inside the container is exactly this checkout's revision.

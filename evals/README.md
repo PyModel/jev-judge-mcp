@@ -197,7 +197,13 @@ call's round trip.
 | `ab/ledger.py` | One `SpendPolicy` per agent: 18 runs (3 tasks x 2 arms x 3 repeats), 25 USD, checked per pair. Pi's worst case is its Jev headroom only |
 | `ab/run.py`, `ab/report.py` | Seeded pair schedule, the runner and its refusals, the pinned-setup guard, and the markdown report |
 
-The study refuses without `JEV_AB_LIVE=1` (no make target or CI job sets it), with `TYPESAFE_API_KEY` set,
+`JEV_AB_MODEL` selects the pi arm's model (the confined D3 re-run pins
+`opencode-go/deepseek-v4.1-flash`; the host-loopback `ds4` default cannot cross the boundary —
+the chosen model's provider needs an entry with `baseUrl` in the operator's `models.json`, e.g.
+`"opencode-go": {"baseUrl": "https://opencode.ai/zen/go/v1", "api": "openai-completions"}`, and
+an API-key `auth.json` entry). The bench (`JEV_BENCH_LIVE`) refuses until it is routed through
+the same boundary — the named follow-up. The study refuses without `JEV_AB_LIVE=1` (no make
+target or CI job sets it), with `TYPESAFE_API_KEY` set,
 without the agent binary (and, for Pi, the MCP adapter at `PI_MCP_ADAPTER`), and when `reports/agent-outcomes/<agent>/meta.json`
 records a different Jev revision, fixture hash, agent version, held-constant setup, or hardware: pairs
 never span two setups. Live runs execute inside the confinement boundary of ADR-0074:

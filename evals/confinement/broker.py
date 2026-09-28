@@ -136,14 +136,22 @@ class Broker:
         return upstream
 
     @staticmethod
-    def _path_allowed(rules: Sequence[str], path: str) -> bool:
-        return any(rule == "*" or path == rule or (rule.endswith("*") and path.startswith(rule[:-1])) for rule in rules)
+    def _origin_form(path: str) -> bool:
+        """Only origin-form paths cross: a leading `/`, no scheme, authority, dot-segment, or
+        percent-encoded slash/dot (F3). An absolute URI here would be forwarded under the
+        allowlisted host's credential while naming another authority — refused instead."""
+        if not path.startswith("/") or path.startswith("//"):
+            return False
+        lowered = path.lower()
+        return not any(marker in lowered for marker in ("://", "..", "@", "%2f", "%2e", "\\", " "))
 
     def check_allowlist(self, method: str, scheme: str, host: str, port: int, path: str) -> dict[str, Any]:
         upstream = self._match_upstream(scheme, host, port)
         if method.upper() not in {str(m).upper() for m in upstream["methods"]}:
             raise Refused("allowlist", f"method {method.upper()} is not allowlisted")
-        if not self._path_allowed([str(p) for p in upstream["paths"]], path):
+        if not self._origin_form(path):
+            raise Refused("allowlist", f"path {path[:120]} is not origin-form")
+        if path not in {str(rule) for rule in upstream["paths"]}:
             raise Refused("allowlist", f"path {path} is not allowlisted")
         return upstream
 
@@ -153,9 +161,15 @@ class Broker:
     def _strip(headers: Sequence[Sequence[str]]) -> list[list[str]]:
         kept: list[list[str]] = []
         for name, value in headers:
-            if name.lower() in protocol.CREDENTIAL_REQUEST_HEADERS or name.lower() in HOP:
+            lowered = name.lower()
+            if lowered in protocol.CREDENTIAL_REQUEST_HEADERS or lowered in HOP:
                 continue
+            if lowered in protocol.METHOD_OVERRIDE_HEADERS:
+                continue  # F6: the allowlisted method is the method; overrides never cross
+            if lowered == "accept-encoding":
+                continue  # F6: the broker reads bytes it must scan, so it asks for identity
             kept.append([name, value])
+        kept.append(["Accept-Encoding", "identity"])
         return kept
 
     def _redact(self, body: bytes, headers: list[list[str]]) -> tuple[bytes, list[list[str]]]:
@@ -185,11 +199,16 @@ class Broker:
         try:
             connection.request(
                 method.upper(),
-                path,
+                str(upstream.get("base_path", "")) + path,
                 body=body,
                 headers={name: value for name, value in sent},
             )
             response = connection.getresponse()
+            encoding = response.getheader("Content-Encoding")
+            if encoding and encoding.strip().lower() not in ("identity", ""):
+                # F6: a compressed body cannot be scanned for a credential echo, so it never
+                # crosses back; the request asked for identity, so an encoding is a refusal.
+                raise Refused("upstream", f"upstream returned {encoding.strip()} content encoding")
             raw = response.read(protocol.MAX_BODY_BYTES + 1)
             if len(raw) > protocol.MAX_BODY_BYTES:
                 raise Refused("upstream", "upstream response exceeds the protocol cap")
@@ -284,21 +303,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     with open(args.config, encoding="utf-8") as handle:
         config = json.load(handle)
     broker = Broker(config)
+    deadline = float(config.get("max_lifetime_s") or 0)
+    if deadline <= 0:
+        raise SystemExit("config needs max_lifetime_s: the broker bounds its own life (ADR-0074)")
     os.makedirs(os.path.dirname(broker.listen_path) or ".", exist_ok=True)
     server = _Server(broker)
     os.chmod(broker.listen_path, SOCKET_MODE)
-    stopping = threading.Event()
 
     def stop(signum: int, _frame: Any) -> None:
-        stopping.set()
         threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
+    # F5: the broker never outlives its study. The deadline fires even if the harness dies: a
+    # killed run leaves the sidecar holding the key mounts for at most this long.
+    timer = threading.Timer(deadline, lambda: stop(0, None))
+    timer.daemon = True
+    timer.start()
     _emit({"ts": round(time.time(), 3), "listening": broker.listen_path})
     try:
         server.serve_forever(poll_interval=0.2)
     finally:
+        timer.cancel()
         server.server_close()
         try:
             os.unlink(broker.listen_path)

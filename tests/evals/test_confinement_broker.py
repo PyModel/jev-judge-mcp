@@ -43,6 +43,8 @@ class _Upstream(BaseHTTPRequestHandler):
                 "authorization": self.headers.get("Authorization"),
                 "x_api_key": self.headers.get("x-api-key"),
                 "content_type": self.headers.get("Content-Type"),
+                "accept_encoding": self.headers.get("Accept-Encoding"),
+                "method_override": self.headers.get("X-HTTP-Method-Override"),
                 "body": body.decode("utf-8", "replace"),
             }
         )
@@ -156,12 +158,14 @@ def stack(tmp_path: Path) -> Any:
                 "host": "127.0.0.1",
                 "port": provider_port,
                 "methods": ["POST", "GET"],
-                "paths": ["*"],
+                "paths": ["/chat/completions", "/models"],
+                "base_path": "/zen/go/v1",
                 "credential_file": str(provider_key_file),
                 "credential_header": "Authorization",
                 "credential_scheme": "Bearer ",
             },
         ],
+        "max_lifetime_s": 3600,
     }
     config_path = short_root / "broker-config.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
@@ -265,11 +269,19 @@ def test_non_allowlisted_operations_are_refused_without_an_upstream_call(
     assert len(_Upstream.seen) == before
 
 
-def test_the_provider_upstream_is_allowlisted_by_host_not_path(stack: Any) -> None:
+def test_the_provider_keeps_its_base_path_and_exact_endpoints(stack: Any) -> None:
+    """F3: the base URL's path prefix is prepended, only the API family's endpoints cross, and
+    anything else on the same host is refused."""
     cap = mint_capability(stack["grants"], 60)
     header, _ = _call(stack["sock"], cap.token, "POST", "127.0.0.1", "/chat/completions", port=stack["provider_port"])
     assert header.get("status") == 200
+    assert _Upstream.seen[-1]["path"] == "/zen/go/v1/chat/completions"
     assert _Upstream.seen[-1]["authorization"] == f"Bearer {PROVIDER_KEY}"
+    header, _ = _call(stack["sock"], cap.token, "GET", "127.0.0.1", "/models", port=stack["provider_port"])
+    assert header.get("status") == 200
+    assert _Upstream.seen[-1]["path"] == "/zen/go/v1/models"
+    header, _ = _call(stack["sock"], cap.token, "POST", "127.0.0.1", "/embeddings", port=stack["provider_port"])
+    assert header.get("error") == "allowlist"
 
 
 def test_an_unknown_capability_is_refused(stack: Any) -> None:
@@ -322,6 +334,146 @@ def test_an_oversized_body_is_refused_without_an_upstream_call(stack: Any) -> No
                 b"x" * (protocol.MAX_BODY_BYTES + 1),
             )
     assert len(_Upstream.seen) == before
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "http://evil.example/steal",
+        "//evil.example/x",
+        "/v1/%2e%2e/systemone",
+        "/v1/../v1/systemone",
+        "https://api.typesafe.ai/v1/systemone",
+    ],
+)
+def test_non_origin_form_paths_never_cross_even_on_an_allowlisted_host(stack: Any, path: str) -> None:
+    """F3/F9: the destination fields may name the allowlisted host, but a path that is not
+    origin-form — an absolute URI, a network-path, an encoded or plain dot-segment — is refused
+    before any socket opens, so the credential cannot be re-aimed at another authority."""
+    cap = mint_capability(stack["grants"], 60)
+    before = len(_Upstream.seen)
+    header, _ = _call(stack["sock"], cap.token, "POST", "127.0.0.1", path, port=stack["port"])
+    assert header.get("error") == "allowlist"
+    assert "origin-form" in str(header.get("detail"))
+    assert len(_Upstream.seen) == before
+
+
+def test_the_broker_forces_identity_encoding_and_strips_method_overrides(stack: Any) -> None:
+    """F6: the upstream sees `Accept-Encoding: identity` and never a method override; the client
+    cannot smuggle a method past the allowlist or a compressed echo past the redaction scan."""
+    cap = mint_capability(stack["grants"], 60)
+    _call(
+        stack["sock"],
+        cap.token,
+        "POST",
+        "127.0.0.1",
+        "/v1/systemone",
+        port=stack["port"],
+        headers=[["Accept-Encoding", "gzip"], ["X-HTTP-Method-Override", "DELETE"]],
+    )
+    seen = _Upstream.seen[-1]
+    assert seen["accept_encoding"] == "identity"
+    assert seen["method_override"] is None
+
+
+def test_an_encoded_upstream_response_is_refused_not_decoded(tmp_path: Path) -> None:
+    """F6: a gzip body the broker cannot scan never crosses back, even when it carries the key."""
+    import gzip
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _Gzipper(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            payload = gzip.compress(json.dumps({"echo": KEY}).encode())
+            self.send_response(200)
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, format: str, *args: Any) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Gzipper)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    import tempfile
+
+    short_root = Path(tempfile.mkdtemp(prefix="jevbrk-", dir="/tmp"))
+    try:
+        key_file = short_root / "typesafe.key"
+        key_file.write_text(KEY + "\n", encoding="utf-8")
+        grants = short_root / "grants"
+        grants.mkdir()
+        sock_path = short_root / "broker.sock"
+        config = {
+            "listen": str(sock_path),
+            "grants_dir": str(grants),
+            "max_lifetime_s": 600,
+            "upstreams": [
+                {
+                    "name": "typesafe",
+                    "scheme": "http",
+                    "host": "127.0.0.1",
+                    "port": server.server_address[1],
+                    "methods": ["POST"],
+                    "paths": ["/v1/systemone"],
+                    "credential_file": str(key_file),
+                }
+            ],
+        }
+        config_path = short_root / "broker-config.json"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        proc = subprocess.Popen(
+            [sys.executable, str(BROKER), str(config_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        deadline = time.time() + 20
+        while not sock_path.exists() and time.time() < deadline:
+            time.sleep(0.05)
+        cap = mint_capability(grants, 60)
+        header, _ = _call(
+            str(sock_path), cap.token, "POST", "127.0.0.1", "/v1/systemone", port=server.server_address[1]
+        )
+        proc.terminate()
+        assert header.get("error") == "upstream"
+        assert "gzip" in str(header.get("detail"))
+    finally:
+        server.shutdown()
+        shutil.rmtree(short_root, ignore_errors=True)
+
+
+def test_the_broker_refuses_to_start_without_a_self_bound_deadline(tmp_path: Path) -> None:
+    """F5: `max_lifetime_s` is mandatory — a broker that could outlive its study must not start."""
+    import tempfile
+
+    short_root = Path(tempfile.mkdtemp(prefix="jevbrk-", dir="/tmp"))
+    try:
+        key_file = short_root / "typesafe.key"
+        key_file.write_text(KEY + "\n", encoding="utf-8")
+        config = {
+            "listen": str(short_root / "broker.sock"),
+            "grants_dir": str(short_root / "grants"),
+            "upstreams": [
+                {
+                    "name": "typesafe",
+                    "scheme": "http",
+                    "host": "127.0.0.1",
+                    "port": 1,
+                    "methods": ["POST"],
+                    "paths": ["/v1/systemone"],
+                    "credential_file": str(key_file),
+                }
+            ],
+        }
+        config_path = short_root / "broker-config.json"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        done = subprocess.run(
+            [sys.executable, str(BROKER), str(config_path)], capture_output=True, text=True, timeout=30
+        )
+        assert done.returncode != 0
+        assert "max_lifetime_s" in done.stderr
+    finally:
+        shutil.rmtree(short_root, ignore_errors=True)
 
 
 def test_the_broker_log_and_receipts_never_contain_a_credential(stack: Any) -> None:

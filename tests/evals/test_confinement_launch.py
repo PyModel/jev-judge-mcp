@@ -26,7 +26,7 @@ def _spec(tmp_path: Path, **overrides: Any) -> launch.ConfinementSpec:
         "agent_image": "jev-eval-agent:test",
         "upstreams": (
             launch.Upstream.typesafe(str(key)),
-            launch.Upstream.provider("opencode-go", "https://api.opencode-go.example", str(provider_key)),
+            launch.Upstream.provider("opencode-go", "https://opencode.example/zen/go/v1", str(provider_key)),
         ),
         "timeout_s": 900.0,
         "env": {"HOME": "/scratch/home", "TERM": "dumb"},
@@ -110,9 +110,17 @@ def test_the_broker_config_names_only_container_paths_and_allowlisted_rules(tmp_
         ["/v1/systemone"],
     )
     provider = config["upstreams"][1]
-    assert provider["paths"] == ["*"] and "POST" in provider["methods"]
+    assert provider["paths"] == ["/chat/completions", "/models"] and "POST" in provider["methods"]
+    assert provider["base_path"] == "/zen/go/v1"
+    assert config["max_lifetime_s"] > 0
     dumped = json.dumps(config)
     assert KEY not in dumped and PROVIDER_KEY not in dumped
+
+
+def _wait_snippet(text: str) -> str:
+    start = text.index("python3 -c '") + len("python3 -c '")
+    end = text.index("' || exit 97", start)
+    return text[start:end]
 
 
 def test_the_entrypoint_starts_one_shim_per_upstream_and_holds_no_secret(tmp_path: Path) -> None:
@@ -123,6 +131,25 @@ def test_the_entrypoint_starts_one_shim_per_upstream_and_holds_no_secret(tmp_pat
     assert "--cap-file /run/capability.json" in text
     assert "exec pi --print 'do the task'" in text
     assert KEY not in text and PROVIDER_KEY not in text
+
+
+@pytest.mark.parametrize("shim_ports", [(8079,), (8079, 8080), (8079, 8080, 8081)])
+def test_the_shim_readiness_wait_is_valid_python_and_fatal(shim_ports: tuple[int, ...]) -> None:
+    """F4: the generated wait compiles for any port count, ends fatally (`|| exit 97`), and never
+    emits the doubled-comma tuple literal that made the suite flaky."""
+    spec = _spec(
+        Path("/tmp"),
+        upstreams=tuple(
+            launch.Upstream(f"u{i}", "https", f"h{i}", 443, ("POST",), ("/x",), "/tmp/k", shim_port=port)
+            for i, port in enumerate(shim_ports)
+        ),
+    )
+    text = launch.entrypoint_text(spec, ["true"])
+    assert "|| exit 97" in text
+    snippet = _wait_snippet(text)
+    compile(snippet, "wait", "exec")
+    assert f"for port in {shim_ports!r}:" in snippet
+    assert ",," not in snippet
 
 
 def test_the_capability_grant_is_sha256_named_ttl_bounded_and_revocable(
@@ -184,7 +211,7 @@ def test_the_scoped_provider_key_and_the_container_agent_files(tmp_path: Path) -
     (operator / "auth.json").write_text(
         json.dumps(
             {
-                "opencode-go": {"type": "api_key", "key": PROVIDER_KEY},
+                "opencode-go": {"type": "api_key", "key": PROVIDER_KEY, "oauth_refresh": "should-not-cross"},
                 "other": {"type": "api_key", "key": "sk-other"},
             }
         ),
@@ -195,10 +222,12 @@ def test_the_scoped_provider_key_and_the_container_agent_files(tmp_path: Path) -
             {
                 "providers": {
                     "opencode-go": {
-                        "baseUrl": "https://api.opencode-go.example",
+                        "baseUrl": "https://opencode.example/zen/go/v1",
                         "api": "openai-completions",
                         "apiKey": PROVIDER_KEY,
-                        "models": [{"id": "deepseek-v4.1-flash"}],
+                        "headers": {"X-Api-Key": "should-not-cross"},
+                        "env": {"SECRET": "should-not-cross"},
+                        "models": [{"id": "deepseek-v4.1-flash", "apiKey": "should-not-cross", "limit": 8}],
                     }
                 }
             }
@@ -216,14 +245,16 @@ def test_the_scoped_provider_key_and_the_container_agent_files(tmp_path: Path) -
         provider_shim_url="http://127.0.0.1:8080",
     )
     auth = json.loads((target / "auth.json").read_text(encoding="utf-8"))
-    assert list(auth) == ["opencode-go"] and auth["opencode-go"]["key"] == arms.PLACEHOLDER_KEY
+    assert list(auth) == ["opencode-go"]
+    assert auth["opencode-go"] == {"type": "api_key", "key": arms.PLACEHOLDER_KEY}, "F7: only type and key cross"
     models = json.loads((target / "models.json").read_text(encoding="utf-8"))
     entry = models["providers"]["opencode-go"]
     assert entry["baseUrl"] == "http://127.0.0.1:8080"
     assert entry["apiKey"] == arms.PLACEHOLDER_KEY
-    assert entry["models"] == [{"id": "deepseek-v4.1-flash"}]
+    assert entry["models"] == [{"id": "deepseek-v4.1-flash", "limit": 8}], "F7: credential-shaped keys drop"
     carried = json.dumps(auth) + json.dumps(models)
     assert PROVIDER_KEY not in carried
+    assert "should-not-cross" not in carried and "oauth_refresh" not in carried
 
 
 def test_the_confined_mcp_config_points_the_server_at_the_shim_with_the_placeholder(tmp_path: Path) -> None:
@@ -245,6 +276,47 @@ def test_the_confined_mcp_config_points_the_server_at_the_shim_with_the_placehol
     assert (scratch / "servers" / "harness_server.py").is_file()
     arm_a = arms.confined_mcp_config("A", scratch=scratch, server_env={}, typesafe_shim_url="http://127.0.0.1:8079")
     assert "jev" not in arm_a["mcpServers"]
+
+
+def test_the_provider_upstream_keeps_its_base_path_and_exact_endpoints() -> None:
+    """F3: `Upstream.provider` keeps the base URL's path and swaps `*` for the API family's
+    endpoints; `full_path` is what the broker forwards."""
+    upstream = launch.Upstream.provider("opencode-go", "https://opencode.ai/zen/go/v1", "/tmp/key")
+    assert (upstream.host, upstream.port, upstream.scheme) == ("opencode.ai", 443, "https")
+    assert upstream.base_path == "/zen/go/v1"
+    assert upstream.paths == ("/chat/completions", "/models")
+    assert upstream.full_path("/chat/completions") == "/zen/go/v1/chat/completions"
+    anthropic = launch.Upstream.provider("anthropic", "https://api.anthropic.com", "/tmp/key", api="anthropic")
+    assert anthropic.credential_header == "x-api-key" and anthropic.credential_scheme == ""
+    assert anthropic.paths == launch.ANTHROPIC_ENDPOINTS and anthropic.base_path == ""
+
+
+def test_the_broker_mounts_the_operator_files_directly_with_no_copies(tmp_path: Path) -> None:
+    """F10: `credential_files` hands back the operator's own paths; no copy exists anywhere, so
+    nothing can linger at a loose mode after the run."""
+    spec = _spec(tmp_path)
+    files = launch.credential_files(spec)
+    assert files == {"typesafe": tmp_path / "typesafe.key", "opencode-go": tmp_path / "provider.key"}
+    assert all(path.stat().st_size > 0 for path in files.values())
+
+
+def test_a_relay_copy_never_follows_a_planted_symlink(tmp_path: Path) -> None:
+    """F1: a symlink the agent planted in its writable scratch never makes the host read another
+    file; only a plain regular file crosses, by that name."""
+    secret_file = tmp_path / "outside.txt"
+    secret_file.write_text("host-only", encoding="utf-8")
+    planted = tmp_path / "relay"
+    planted.symlink_to(secret_file)
+    target = tmp_path / "copied"
+    assert launch.copy_regular_nofollow(planted, target) is False
+    assert not target.exists()
+    regular = tmp_path / "plain"
+    regular.write_text("relay-bytes", encoding="utf-8")
+    assert launch.copy_regular_nofollow(regular, target) is True
+    assert target.read_text(encoding="utf-8") == "relay-bytes"
+    directory = tmp_path / "dir"
+    directory.mkdir()
+    assert launch.copy_regular_nofollow(directory, tmp_path / "nope") is False
 
 
 def test_a_secret_in_the_container_env_is_refused_before_anything_starts(tmp_path: Path) -> None:

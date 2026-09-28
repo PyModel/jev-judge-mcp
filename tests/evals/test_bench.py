@@ -702,14 +702,15 @@ _FROZEN = load_items(DRYRUN)[0]
 
 
 @pytest.mark.parametrize("agent", ["claude", "pi"])
-def test_a_dead_preflight_exits_2_and_books_nothing(
+def test_a_live_bench_refuses_unconfined_and_books_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], agent: str
 ) -> None:
-    """A dead login refuses before any run is booked and publishes nothing.
+    """A live bench with anything to launch refuses until it is confined (F11, ADR-0074), before
+    any run is booked and before anything is published.
 
-    The item is frozen, so a preflight placed after `run_bench` books the dead run and the ledger
-    appears. Empty items cannot show that: nothing can be booked either way. Exit 2 is `main`'s
-    refusal; a stop string that still publishes fails the publish stand-in.
+    The item is frozen, so a refusal placed after `run_bench` would book a run and the ledger
+    would appear. Empty items cannot show that: nothing can be booked either way. Exit 2 is
+    `main`'s refusal; a stop string that still publishes fails the publish stand-in.
     """
     _agent_bin(tmp_path / "bin", agent, dead_login())
     adapter = tmp_path / "adapter.ts"
@@ -720,33 +721,27 @@ def test_a_dead_preflight_exits_2_and_books_nothing(
     monkeypatch.setattr(run, "publish", _refuse_publish)
     monkeypatch.setattr(run, "write_report", _refuse_publish)
     assert run.main(["--agent", agent], environ=_bench_env(tmp_path / "bin", tmp_path)) == 2
-    assert "Not logged in" in capsys.readouterr().err
+    assert "not yet confined" in capsys.readouterr().err
     out = tmp_path / "out"
     assert not (out / "ledger.json").exists()
     assert list(out.glob("*/result.json")) == []
 
 
 @pytest.mark.parametrize("agent", ["claude", "pi"])
-def test_a_preflight_that_reaches_the_model_lets_the_bench_proceed(
+def test_even_a_healthy_login_does_not_bypass_the_confinement_refusal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: str
 ) -> None:
-    """The gate is not unconditional. The recorded model is the one the trace named, never a silent default."""
+    """The refusal is the boundary, not a health gate: a login that reaches its model changes
+    nothing (F11). No preflight artifact is written, because no live turn ever runs."""
     _agent_bin(tmp_path / "bin", agent, reaches_model(agent))
     adapter = tmp_path / "adapter.ts"
     adapter.write_text("export {}", encoding="utf-8")
     monkeypatch.setenv("PI_MCP_ADAPTER", str(adapter))
     out = tmp_path / "out"
-    stop = run.live(
-        _bench_env(tmp_path / "bin", tmp_path),
-        out,
-        items=(_FROZEN,),
-        agent=agent,
-    )
-    assert stop == "all 1 triplets recorded"
-    recorded = (out / "model.txt").read_text(encoding="utf-8").strip()
-    assert recorded == ("stub/stub-model" if agent == "pi" else "stub-model")
-    cost = json.loads((out / "preflight.json").read_text(encoding="utf-8"))["total_cost_usd"]
-    assert cost == 0.01
+    with pytest.raises(run.BenchRefusedError, match="not yet confined"):
+        run.live(_bench_env(tmp_path / "bin", tmp_path), out, items=(_FROZEN,), agent=agent)
+    assert not (out / "model.txt").exists()
+    assert not (out / "preflight.json").exists()
 
 
 def test_a_finished_bench_does_not_preflight_again(tmp_path: Path) -> None:
@@ -770,10 +765,11 @@ def test_a_finished_bench_does_not_preflight_again(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("agent", ["claude", "pi"])
-def test_an_unlinkable_keychain_refuses_with_exit_2(
+def test_a_live_bench_refuses_before_any_host_sandbox_prep(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], agent: str
 ) -> None:
-    """An OSError while preparing the sandbox is a refusal, not a traceback, and publishes nothing."""
+    """The confinement refusal fires before any host sandbox work: an `_isolated_env` that would
+    explode is never called, and the refusal is exit 2, not a traceback (F11)."""
 
     def unlinkable(*_args: object, **_kwargs: object) -> dict[str, str]:
         raise OSError("unlinkable keychain")
@@ -788,7 +784,7 @@ def test_an_unlinkable_keychain_refuses_with_exit_2(
     monkeypatch.setattr(run, "write_report", _refuse_publish)
     monkeypatch.setattr("evals.agent._isolated_env", unlinkable)
     assert run.main(["--agent", agent], environ=_bench_env(tmp_path / "bin", tmp_path)) == 2
-    assert "sandbox setup failed" in capsys.readouterr().err
+    assert "not yet confined" in capsys.readouterr().err
     assert not (tmp_path / "out" / "ledger.json").exists()
 
 

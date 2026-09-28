@@ -44,12 +44,9 @@ from evals.ab import arms, stream
 from evals.agent import (
     RELAY_LOG,
     AgentCommand,
-    AgentPreflightError,
     AgentRunResult,
     AgentSetupError,
     run_agent,
-    run_preflight,
-    write_preflight,
 )
 from evals.bench import analysis, answer, chart, gate, prompt, spans
 from evals.bench.items import Item, load_items
@@ -542,16 +539,6 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
     return 0
 
 
-def _preflight_argv(agent: str, binary: str) -> Callable[[Path], Sequence[str]]:
-    if agent == "pi":
-        from evals.bench import pi as pi_mod
-
-        return lambda config: pi_mod.pi_command(
-            binary, "Reply with the single word ok.", config, prompt.BENCH_ADDENDUM, model=pi_mod.BENCH_MODEL
-        )
-    return lambda config: arms.claude_command(binary, "Reply with the single word ok.", config)
-
-
 def live(
     environ: Mapping[str, str],
     out: Path,
@@ -579,7 +566,6 @@ def live(
     binary = shutil.which(agent, path=agent_path)
     if binary is None:
         raise BenchRefusedError(f"{agent} not found on PATH")
-    parse = None
     if agent == "pi":
         from evals.bench import pi
 
@@ -587,7 +573,6 @@ def live(
             pi.adapter_path()
         except pi.AdapterMissing as error:
             raise BenchRefusedError(str(error)) from error
-        parse = pi.parse
         setup = Setup(
             agent=lambda _item, _arm: [binary],
             server=arms.jev_command(),
@@ -608,37 +593,16 @@ def live(
             secret=key,
             login_keychain=True,
         )
-    # A finished bench, or one already stopped, has nothing to launch and does not pay for another
-    # preflight. A dead one refuses before run_bench, so main exits 2 and publishes nothing.
+    # A finished bench, or one already stopped, has nothing left to launch and returns without
+    # touching a provider. A bench with anything left to launch refuses here (F11): its live path
+    # still runs through the unconfined `run_agent`, and ADR-0074 admits no unconfined live run.
+    # Routing the bench through `evals.confinement.run_confined` is the named follow-up.
     if runs_remain(items, out, seed=seed):
-        try:
-            result = run_preflight(
-                _preflight_argv(agent, binary),
-                base_env=base_env,
-                secret=key,
-                mcp_config={},
-                login_keychain=setup.login_keychain,
-                parse=parse,
-                auth_provider=setup.auth_provider or None,
-            )
-        except AgentPreflightError as error:
-            write_preflight(out, cost_usd=error.cost_usd, model=error.model)
-            raise BenchRefusedError(
-                f"{agent} preflight could not reach its model ({error}); refusing the batch before any run is booked"
-            ) from error
-        model = result.trace.model or "unknown"
-        cost = result.trace.result_field("total_cost_usd")
-        write_preflight(
-            out,
-            cost_usd=None if isinstance(cost, bool) or not isinstance(cost, int | float) else float(cost),
-            model=result.trace.model,
+        raise BenchRefusedError(
+            "the bench's live path is not yet confined (ADR-0074): routing it through "
+            "evals.confinement.run_confined is the named follow-up; no live bench run starts "
+            "until then"
         )
-        out.mkdir(parents=True, exist_ok=True)
-        (out / "model.txt").write_text(model + "\n", encoding="utf-8")
-        if agent == "pi":
-            from evals.bench import pi
-
-            (out / "thinking.txt").write_text(pi.PI_THINKING + "\n", encoding="utf-8")
     return run_bench(items, setup, out, seed=seed)
 
 

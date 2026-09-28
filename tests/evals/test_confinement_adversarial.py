@@ -11,10 +11,15 @@ must succeed, with the real (fake) key injected and redacted on echo.
 Skips cleanly without a Docker daemon, which is the Linux CI shape.
 """
 
+import functools
 import json
+import os
 import shutil
 import subprocess
+import sys
+import tempfile
 import threading
+import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -42,7 +47,18 @@ REPO = Path(__file__).resolve().parents[2]
 KEY = "sk-adversarial-fake-typesafe-0123456789abcdefNOTREAL"
 PROVIDER_KEY = "sk-adversarial-fake-provider-0123456789abcdefNOTREAL"
 
-DOCKER = pytest.mark.skipif(launch.docker_available() is not None, reason="needs a Docker daemon")
+
+def DOCKER(test: Any) -> Any:
+    """Skip inside the test, not at import (P3): a deselected module must not probe the daemon."""
+
+    @functools.wraps(test)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        reason = launch.docker_available()
+        if reason is not None:
+            pytest.skip(f"needs a Docker daemon ({reason})")
+        return test(*args, **kwargs)
+
+    return wrapper
 
 
 class _Upstream(BaseHTTPRequestHandler):
@@ -122,6 +138,8 @@ def image() -> str:
     context.mkdir(exist_ok=True)
     (context / "Dockerfile").write_text(
         "FROM python@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f\n"
+        "RUN apt-get update && apt-get install -y --no-install-recommends git \\\n"
+        "    && rm -rf /var/lib/apt/lists/*\n"
         "COPY jev_judge_mcp-*.whl /tmp/\n"
         "RUN wheel=$(ls /tmp/jev_judge_mcp-*.whl) \\\n"
         '    && pip install --no-cache-dir "$wheel[typesafe]" \\\n'
@@ -318,23 +336,24 @@ def boundary_stack(image: str, tmp_path: Path) -> Any:
         shutil.copyfile(source / module, code / module)
     upstreams = (
         Upstream(
-            "typesafe",
-            "http",
-            "host.internal",
-            porta,
-            ("POST",),
-            ("/v1/systemone",),
-            str(secrets / "typesafe.key"),
+            name="typesafe",
+            scheme="http",
+            host="host.internal",
+            port=porta,
+            methods=("POST",),
+            paths=("/v1/systemone",),
+            credential_file=str(secrets / "typesafe.key"),
             shim_port=8079,
         ),
         Upstream(
-            "model-provider",
-            "http",
-            "host.internal",
-            portb,
-            ("POST", "GET"),
-            ("*",),
-            str(secrets / "model-provider.key"),
+            name="model-provider",
+            scheme="http",
+            host="host.internal",
+            port=portb,
+            methods=("POST", "GET"),
+            paths=("/chat/completions", "/models"),
+            base_path="/zen/go/v1",
+            credential_file=str(secrets / "model-provider.key"),
             shim_port=8080,
         ),
     )
@@ -344,6 +363,7 @@ def boundary_stack(image: str, tmp_path: Path) -> Any:
             broker_config(
                 upstreams,
                 secret_mounts={"typesafe": "/secrets/typesafe.key", "model-provider": "/secrets/model-provider.key"},
+                max_life_s=1800,
             )
         ),
         encoding="utf-8",
@@ -431,6 +451,238 @@ def test_the_adversary_finds_no_credential_and_the_boundary_holds(boundary_stack
     assert not any(arms.PLACEHOLDER_KEY in (row["authorization"] or "") for row in typesafe_calls)
 
 
+AGENT_IMAGE = "jev-eval-agent:latest"
+"""The real runtime image (F2): pi, the adapter, claude, node, and the wheel. Built by
+`make confinement-image`; the F2 test skips when it is absent so a stale image never lies."""
+
+
+@DOCKER
+def test_pi_starts_and_completes_inside_the_image(boundary_stack: Any, tmp_path: Path) -> None:
+    """F2: the pi arm can actually start confined — the adapter loads from the image, the argv is
+    accepted, and one prompt completes end to end through the shim, the broker, and a fake
+    openai-completions provider whose base URL carries a path prefix."""
+    if launch.docker_available() is not None:
+        pytest.skip("needs a Docker daemon")
+    probe = subprocess.run(
+        ["docker", "image", "inspect", AGENT_IMAGE], capture_output=True, env=launch.docker_env(), check=False
+    )
+    if probe.returncode != 0:
+        pytest.skip(f"{AGENT_IMAGE} is not built; run make confinement-image")
+    stack = boundary_stack
+    spec = stack["spec"]
+    scratch = tmp_path / "scratch"
+    for name in ("agent", "agent-cfg", "code", "home", "tmp"):
+        (scratch / name).mkdir(parents=True)
+    for module in launch.MODULES:
+        shutil.copyfile(stack["code"] / module, scratch / "code" / module)
+    from evals.confinement.launch import CONTAINER_ADAPTER
+
+    provider = next(u for u in spec.upstreams if u.name != "typesafe")
+    (scratch / "agent" / "models.json").write_text(
+        json.dumps(
+            {
+                "providers": {
+                    provider.name: {
+                        "baseUrl": "http://127.0.0.1:8080",
+                        "api": "openai-completions",
+                        "apiKey": arms.PLACEHOLDER_KEY,
+                        "models": [{"id": "stub-model", "contextWindow": 8192, "maxTokens": 1024}],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (scratch / "agent" / "auth.json").write_text(
+        json.dumps({provider.name: {"type": "api_key", "key": arms.PLACEHOLDER_KEY}}), encoding="utf-8"
+    )
+    (scratch / "agent-cfg" / "mcp.json").write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
+    env = {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "HOME": "/scratch/home",
+        "TMPDIR": "/scratch/tmp",
+        "TERM": "dumb",
+        "PI_CODING_AGENT_DIR": "/scratch/agent",
+    }
+    argv = [
+        "pi",
+        "--print",
+        "--mode",
+        "json",
+        "--model",
+        f"{provider.name}/stub-model",
+        "--thinking",
+        "high",
+        "--no-extensions",
+        "-e",
+        CONTAINER_ADAPTER,
+        "--mcp-config",
+        "/scratch/agent-cfg/mcp.json",
+        "--no-session",
+        "--no-context-files",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--",
+        "Reply with the single word ok",
+    ]
+    (scratch / "entrypoint.sh").write_text(
+        entrypoint_text(
+            spec,
+            argv,
+        ),
+        encoding="utf-8",
+    )
+    _ProviderUpstream.seen.clear()
+    try:
+        result = launch.docker_run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--name",
+                "jev-eval-f2",
+                "--network",
+                "none",
+                "--cap-drop",
+                "ALL",
+                *(item for key, value in sorted(env.items()) for item in ("-e", f"{key}={value}")),
+                "-v",
+                f"{stack['volume']}:/broker:ro",
+                "-v",
+                f"{stack['cap'].grant_path}:{AGENT_GRANT_MOUNT}:ro",
+                "-v",
+                f"{scratch}:/scratch",
+                AGENT_IMAGE,
+                "/bin/sh",
+                "/scratch/entrypoint.sh",
+            ],
+            check=False,
+            timeout=300,
+        )
+    finally:
+        pass
+    assert result.returncode == 0, f"pi failed:\n{result.stdout[-500:]}\n{result.stderr[-1500:]}"
+    assert "Unknown option" not in result.stderr and "Cannot find module" not in result.stderr
+    assert '"type":"agent_end"' in result.stdout.replace(" ", ""), "the run must reach agent_end"
+    calls = [row for row in _ProviderUpstream.seen if row["path"] == "/zen/go/v1/chat/completions"]
+    assert calls, f"pi never called the provider through the broker: {_ProviderUpstream.seen}"
+    assert calls[0]["authorization"] == f"Bearer {PROVIDER_KEY}", calls[0]
+
+
+@DOCKER
+def test_grading_runs_inside_the_image_and_trusts_nothing_host_side(image: str, tmp_path: Path) -> None:
+    """F1: the post-run step never executes or follows agent-written trees on the host. A planted
+    conftest.py tries to write a host marker, a symlink points at a host file, and neither the
+    marker appears nor the target's content lands anywhere — while a real task still grades."""
+    from evals.ab import tasks as ab_tasks
+    from evals.confinement.launch import confined_postprocess
+
+    task = ab_tasks.load_task("j10-control-spec")
+    workdir = tmp_path / "tree"
+    ab_tasks.materialize(task, workdir)
+    marker = tmp_path / "host-marker.txt"
+    (workdir / "tests" / "conftest.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran on host')\n", encoding="utf-8"
+    )
+    outside = tmp_path / "outside.txt"
+    outside.write_text("host-only-content-not-for-records", encoding="utf-8")
+    (workdir / "planted-link").symlink_to(outside)
+    patch, result = confined_postprocess(image, workdir, task.id, timeout_s=600)
+    assert not marker.exists(), "the planted conftest must never run with host privileges"
+    assert "host-only-content-not-for-records" not in patch, "a followed symlink leaked host bytes"
+    assert result.acceptance_total > 0 and result.original_total > 0, "the task graded end to end"
+    assert not result.regressions, "the untouched snapshot tree grades clean"
+
+
+@DOCKER
+def test_sigterm_tears_the_boundary_down_and_the_reaper_sweeps_leftovers(image: str, tmp_path: Path) -> None:
+    """F5: SIGTERM unwinds teardown (containers, volume, temp root gone), and whatever a killed
+    run still left behind is removed by the owner-label reaper on the next start."""
+
+    child = tmp_path / "child.py"
+    stub = tmp_path / "stub.py"
+    stub.write_text("import time\ntime.sleep(600)\n", encoding="utf-8")
+    key_file = tmp_path / "k.key"
+    key_file.write_text("k-sigterm-fake-not-real\n", encoding="utf-8")
+    child.write_text(
+        "\n".join(
+            [
+                "import sys, time",
+                "from pathlib import Path",
+                f"sys.path.insert(0, {str(REPO)!r})",
+                "from evals.agent import AgentCommand",
+                "from evals.confinement import launch",
+                "from evals.confinement.launch import ConfinementSpec, Upstream",
+                "launch.exit_on_sigterm()",
+                'up = Upstream(name="typesafe", scheme="http", host="host.invalid", port=1, '
+                f'methods=("POST",), paths=("/v1/systemone",), credential_file={str(key_file)!r})',
+                f"spec = ConfinementSpec(agent_image={image!r}, upstreams=(up,), timeout_s=600.0)",
+                "from evals.bench import pi",
+                "import shutil as _sh",
+                "def _scratch_files(s):",
+                f"    _sh.copyfile({str(stub)!r}, s / 'stub.py')",
+                "print('READY', flush=True)",
+                "try:",
+                "    with launch.run_confined("
+                "        AgentCommand(argv=lambda config: ['python3', '/scratch/stub.py'], timeout_s=500.0),"
+                "        spec=spec, mcp_config={}, secret='k-sigterm-fake-not-real',"
+                f"        run_dir=Path({str(tmp_path / 'records')!r}), parse=pi.parse, "
+                "scratch_files=_scratch_files) as run:",
+                "        print('STARTED', flush=True)",
+                "        time.sleep(400)",
+                "finally:",
+                "    print('TOREDOWN', flush=True)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    log = tmp_path / "child.log"
+    with open(log, "w") as sink:
+        proc = subprocess.Popen(
+            [sys.executable, str(child)], stdout=sink, stderr=sink, env={**os.environ, "PYTHONPATH": str(REPO)}
+        )
+        # READY lands before the container starts; the SIGTERM then hits the run in flight —
+        # the case that used to leak every container, volume, and key mount.
+        deadline = time.time() + 120
+        while "READY" not in log.read_text(encoding="utf-8", errors="replace") and time.time() < deadline:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.2)
+        assert "READY" in log.read_text(encoding="utf-8", errors="replace"), log.read_text(
+            encoding="utf-8", errors="replace"
+        )[-800:]
+        proc.terminate()
+        try:
+            proc.wait(timeout=90)
+        except subprocess.TimeoutExpired as error:
+            proc.kill()
+            raise AssertionError("SIGTERM did not unwind the child") from error
+    assert "TOREDOWN" in log.read_text(encoding="utf-8", errors="replace")
+    leftovers = launch.docker_run(["docker", "ps", "-aq", "--filter", "label=jev-eval"], check=False).stdout.strip()
+    assert leftovers == "", f"teardown left containers: {leftovers}"
+    # The reaper: forge the leftovers a killed run would leave, then sweep them.
+    launch.docker_run(
+        ["docker", "run", "-d", "--name", "jev-eval-broker-orphan", "--label", launch.OWNER_LABEL, "busybox", "true"],
+        check=False,
+    )
+    launch.docker_run(
+        ["docker", "volume", "create", "--label", launch.OWNER_LABEL, "jev-eval-sock-orphan"], check=False
+    )
+    stale = Path(tempfile.gettempdir()) / "jev-confined-orphan"
+    stale.mkdir(exist_ok=True)
+    os.utime(stale, (0, 0))
+    removed = launch.reap()
+    # `docker ps -aq --filter label=…` yields ids, so the container leg proves removal by absence.
+    assert removed["containers"], removed
+    still = launch.docker_run(
+        ["docker", "ps", "-aq", "--filter", "name=jev-eval-broker-orphan"], check=False
+    ).stdout.strip()
+    assert still == "", "the orphan container survived the reaper"
+    assert "jev-eval-sock-orphan" in removed["volumes"], removed
+    assert "jev-confined-orphan" in removed["dirs"], removed
+    shutil.rmtree(stale, ignore_errors=True)
+
+
 def _materialize(workdir: Path) -> None:
     (workdir / "task.txt").write_text("materialized", encoding="utf-8")
 
@@ -490,4 +742,7 @@ def test_a_stub_agent_workflow_runs_confined_end_to_end(boundary_stack: Any, tmp
     provider_calls = _ProviderUpstream.seen
     assert provider_calls and all(row["authorization"] == f"Bearer {PROVIDER_KEY}" for row in provider_calls), (
         provider_calls
+    )
+    assert all(row["path"] == "/zen/go/v1/chat/completions" for row in provider_calls), (
+        "F3: the shim's /chat/completions must arrive with the provider base path prepended"
     )

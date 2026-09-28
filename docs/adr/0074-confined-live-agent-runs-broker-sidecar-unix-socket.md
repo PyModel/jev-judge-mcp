@@ -22,12 +22,22 @@ confinement boundary of three pieces, built by `evals/confinement/` and driven b
 
 1. **The broker sidecar.** A host-named process the harness starts with `docker run`: a
    stdlib-only Python process (`evals/confinement/broker.py`) that alone holds the credentials.
-   The operator's `JEV_STUDY_KEY_FILE` and a scoped file holding only the arm's one
-   model-provider key are bind-mounted into it **read-only, as single files** — never a directory
-   of the operator's, never the whole `auth.json`. It listens on a Unix socket in a per-run docker
-   volume, injects the real credential into allowlisted requests itself, strips or redacts any
-   upstream echo of a credential before the response crosses back, and writes receipts (method,
-   host, path, status, bytes; capability by hash prefix) that never contain a key or a token.
+   The operator's `JEV_STUDY_KEY_FILE` (and, for the Claude arm, `JEV_CLAUDE_KEY_FILE`) is
+   bind-mounted into it **read-only, directly, with no copy anywhere**; the pi arm's scoped file
+   — the one provider entry's key, never the operator's whole `auth.json` — is the only written
+   credential, in a 0700 run temp dir deleted at study end. The harness process itself reads the
+   key values only to scan and scrub the kept records; it does hold them in memory for that, and
+   every injected credential is in that scan, not only the TypeSafe key. The broker listens on a
+   Unix socket in a per-run docker volume, injects the real credential into allowlisted requests
+   itself, forces `Accept-Encoding: identity` and refuses an encoded response it cannot scan,
+   strips method-override headers, strips or redacts any upstream echo of a credential before the
+   response crosses back, and writes receipts (method, host, path, status, bytes; capability by
+   hash prefix) that never contain a key or a token. It carries a mandatory self-bound
+   deadline (`max_lifetime_s`): even a harness killed without cleanup loses its key mounts within
+   hours, not forever. The allowlist is exact paths, not wildcards, and requires origin-form
+   request paths — an absolute URI or dot-segment never crosses, so the credential cannot be
+   re-aimed at another authority on an allowlisted host. The provider's base URL path prefix
+   (`/zen/go/v1` for opencode-go) is kept and prepended to every forwarded path.
 2. **The capability boundary.** The harness mints a random per-run token — not the key — whose
    grant file lives in a directory mounted read-only into the broker; the TTL is the run timeout
    plus a margin, and removing the grant file revokes it (the broker re-reads grants per request).
@@ -111,9 +121,36 @@ and the broker, and as a bonus the macOS harness process never holds the key in 
 - The image pins the agent CLIs (`docker/eval-agent.Dockerfile`); a study's `agent_version`
   records the host binary's version, and the image is the one that actually runs. The re-run task
   should verify the two agree or pin the image tag in the study meta.
-- Residual, named as follow-ups rather than solved here: the broker container's layer-3 egress is
-  the docker bridge — destination control is enforced in the broker process (allowlist before any
-  socket opens, verified by the adversarial suite), and network-layer egress filtering (an L7
-  firewall rule set on the broker's network) is a follow-up; the macOS `sandbox-exec` wrapper
-  around the host-side launch is defence in depth and was deliberately not added.
+- **Broker egress (the firstmate decision on F9, accepted):** the broker container's layer-3
+  egress is the docker bridge and is NOT network-restricted — no internal network or egress proxy
+  was built. The control is in-process: the allowlist is checked before any socket opens, paths
+  must be origin-form and exactly listed, overrides are stripped, and encoded responses are
+  refused, so the only sockets the broker opens are to allowlisted origins, verified by the
+  adversarial suite (including a request that names an allowlisted host with a re-aiming path).
+  Layer-3 egress filtering remains a named follow-up, not a claim.
+- **The grading boundary (F1):** nothing the agent wrote executes or is followed on the host.
+  The diff, the reference grading, and the acceptance grading run inside the same image
+  (`--network none`, `--cap-drop ALL`, only a symlink-preserving copy of the tree, the grading
+  code, and an output dir mounted); relay logs cross by a no-follow, regular-file-only copy; the
+  graded tree is copied with `symlinks=True` on both sides of the container line.
+- **The pi arm's adapter ships in the image** (F2, pinned in `docker/eval-agent.Dockerfile` at
+  `/usr/local/lib/node_modules/pi-mcp-adapter`): it is a package with its own dependency tree,
+  and the arm loads it from that fixed path. The Docker-marked suite proves pi starts confined
+  and completes one prompt end to end through the broker.
+- **Teardown under signals (F5):** `main` turns SIGTERM into SystemExit so the context managers
+  unwind; the broker self-expires; an owner-label reaper removes leftover containers, volumes,
+  and stale run temp dirs at the next study start.
+- **The bench (F11):** `JEV_BENCH_LIVE` live runs refuse until the bench is routed through
+  `run_confined` — the named follow-up. There is no unconfined live path.
+- The macOS `sandbox-exec` wrapper around the host-side launch is defence in depth and was
+  deliberately not added.
+- **Known information exposure (P3, documented rather than fixed):** `/proc/self/mountinfo`
+  inside the agent container shows the host-side paths of its bind mounts (workdir, scratch,
+  grant). No credential crosses; the paths are per-run temp dirs. Stripping mount sources is not
+  cheap under docker, so it stands recorded here.
+- **The D3 re-run shape:** `JEV_AB_MODEL=opencode-go/deepseek-v4.1-flash` selects the study model
+  (the ds4 host-loopback default cannot cross); the operator's `models.json` needs the matching
+  provider entry — `"opencode-go": {"baseUrl": "https://opencode.ai/zen/go/v1", "api":
+  "openai-completions"}` — plus an API-key `auth.json` entry; the base path and exact endpoints
+  ride the broker allowlist.
 - Rotating the provider keys and the niblet token remains a separate credential step, unchanged.

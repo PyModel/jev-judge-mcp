@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from evals.ab import arms, ledger, outcomes, report, stream, tasks, unsafe
-from evals.ab.grade import expected_ids, grade, old_rule_success, run_correct
+from evals.ab.grade import grade, old_rule_success, run_correct
 from evals.agent import (
     PREFLIGHT_TIMEOUT_S,
     AgentCommand,
@@ -49,12 +49,16 @@ from evals.agent import (
 )
 from evals.bench import pi
 from evals.confinement.launch import (
+    CONTAINER_ADAPTER,
     ConfinementError,
     ConfinementSpec,
     Upstream,
+    confined_reference,
     docker_available,
+    exit_on_sigterm,
     image_present,
     probe_provider,
+    reap,
     run_confined,
 )
 from evals.spend import SpendLedger, agent_started, book_outcome
@@ -97,6 +101,10 @@ class Setup:
     timeout_s: float = arms.RUN_TIMEOUT_S
     confinement: ConfinementSpec | None = None
     """The broker + container boundary live runs use (ADR-0074); None is the offline dry run."""
+    model: str = ""
+    """The study's pi model (`JEV_AB_MODEL`, default `pi.PI_MODEL`); empty means the default."""
+    provider_secret: str = ""
+    """The scoped provider key value, scanned and scrubbed alongside the TypeSafe key (F10)."""
     task_list: Sequence[tasks.Task] = field(default_factory=tasks.load_tasks)
 
     def __post_init__(self) -> None:
@@ -117,11 +125,18 @@ def user_prompt(task: tasks.Task) -> str:
     )
 
 
-def argv_tail(agent: str, prompt: str, config: Path, addendum: str, adapter: str | None = None) -> list[str]:
+def argv_tail(
+    agent: str, prompt: str, config: Path, addendum: str, adapter: str | None = None, model: str = ""
+) -> list[str]:
     """Everything after the agent binary. Arms differ only in `addendum` (and the config's contents).
-    Confined runs pass the container-side adapter path."""
+    Confined runs pass the container-side adapter path; `model` overrides the pi default."""
     if agent == "pi":
-        return pi.pi_command("pi", prompt, config, addendum, adapter=adapter)[1:]
+        extra: dict[str, Any] = {}
+        if adapter:
+            extra["adapter"] = adapter
+        if model:
+            extra["model"] = model
+        return pi.pi_command("pi", prompt, config, addendum, **extra)[1:]
     return arms.claude_command("claude", prompt, config, addendum)[1:]
 
 
@@ -184,9 +199,13 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
     addendum = arms.addendum(arm, setup.agent, task.judgment.jev_tool)
     if setup.confinement is not None:
         spec = setup.confinement
-        adapter = "/scratch/adapter/index.ts" if setup.agent == "pi" else None
+        adapter = CONTAINER_ADAPTER if setup.agent == "pi" else None
+        model_args = {"model": setup.model} if (setup.agent == "pi" and setup.model) else {}
         command = AgentCommand(
-            argv=lambda config: [setup.agent, *argv_tail(setup.agent, prompt, config, addendum, adapter=adapter)],
+            argv=lambda config: [
+                setup.agent,
+                *argv_tail(setup.agent, prompt, config, addendum, adapter=adapter, **model_args),
+            ],
             timeout_s=setup.timeout_s,
         )
         with run_confined(
@@ -201,6 +220,7 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
             scratch_files=_container_agent_files(spec, setup),
             secret=setup.secret,
             run_dir=run_dir,
+            extra_secrets=(setup.provider_secret,) if setup.provider_secret else (),
             prepare=lambda workdir: tasks.materialize(task, workdir),
             parse=parser_for(setup.agent),
         ) as run:
@@ -599,7 +619,7 @@ def _git_head() -> str:
     return f"{head}{'+dirty' if dirty else ''}"
 
 
-def held_constant(agent: str, timeout_s: float) -> dict[str, str]:
+def held_constant(agent: str, timeout_s: float, model: str = "") -> dict[str, str]:
     """What both arms share, per agent. The Jev integration (server + one addendum sentence) is the
     only difference; `tests/evals/test_ab_harness.py` checks the command lines and configs."""
     common = {
@@ -620,7 +640,7 @@ def held_constant(agent: str, timeout_s: float) -> dict[str, str]:
     if agent == "pi":
         return {
             **common,
-            "model": f"`{pi.PI_MODEL}`, thinking `{pi.PI_THINKING}`",
+            "model": f"`{model or pi.PI_MODEL}`, thinking `{pi.PI_THINKING}`",
             "temperature": "Pi's default for the model, identical in both arms",
             "tools": "Pi's built-in tools + `pi-mcp-adapter` (loaded in both arms)",
             "limits": "no turn or token cap exposed by `pi --print`; the timeout bounds the run",
@@ -634,13 +654,13 @@ def held_constant(agent: str, timeout_s: float) -> dict[str, str]:
     }
 
 
-def meta_for(agent: str, agent_version: str, timeout_s: float) -> dict[str, Any]:
+def meta_for(agent: str, agent_version: str, timeout_s: float, model: str = "") -> dict[str, Any]:
     return {
         "jev_revision": _git_head(),
         "fixture_sha256": tasks.fixture_digest(),
         "agent": agent,
         "agent_version": agent_version,
-        "held_constant": held_constant(agent, timeout_s),
+        "held_constant": held_constant(agent, timeout_s, model),
         "hardware": f"{platform.platform()}, {platform.machine()}, {os.cpu_count()} CPUs",
     }
 
@@ -675,7 +695,7 @@ agent CLIs. Build it with `make confinement-image`."""
 
 def _confinement(
     environ: Mapping[str, str], agent: str, base_env: Mapping[str, str], auth_provider: str, out: Path
-) -> tuple[ConfinementSpec, Path]:
+) -> tuple[ConfinementSpec, Path, str]:
     """The broker + container boundary live runs use (ADR-0074), plus the scoped provider key
     file the study must delete when it ends. Refuses (never bypasses) when a piece is missing."""
     unavailable = docker_available()
@@ -688,9 +708,10 @@ def _confinement(
     if not typesafe_key_file or not Path(typesafe_key_file).is_file():
         raise StudyRefusedError("JEV_STUDY_KEY_FILE must name the study key file for the broker's read-only mount")
     upstreams: list[Upstream] = [Upstream.typesafe(typesafe_key_file)]
-    scoped_dir = out / "confinement"
-    scoped_dir.mkdir(parents=True, exist_ok=True)
+    scoped_dir = Path(tempfile.mkdtemp(prefix="jev-ab-secrets-"))
+    scoped_dir.chmod(0o700)
     provider_key_file = scoped_dir / "provider.key"
+    provider_secret = ""
     if agent == "pi":
         real = real_agent_dir(base_env)
         models: dict[str, Any] = {}
@@ -717,6 +738,7 @@ def _confinement(
             )
         provider_key_file.write_text(key + "\n", encoding="utf-8")
         provider_key_file.chmod(0o600)
+        provider_secret = key
         upstreams.append(
             Upstream.provider(
                 auth_provider, base_url, str(provider_key_file), api=str(cast(dict[str, Any], entry).get("api", ""))
@@ -729,13 +751,15 @@ def _confinement(
                 "the Claude arm's macOS keychain login cannot cross the container boundary (ADR-0074); "
                 "set JEV_CLAUDE_KEY_FILE to a file holding the Anthropic API key, or run the pi arm"
             )
-        provider_key_file.write_text(Path(claude_key).read_text(encoding="utf-8-sig").strip() + "\n", encoding="utf-8")
-        provider_key_file.chmod(0o600)
+        # The operator names the Anthropic key file itself, so it mounts directly (F10) — the
+        # only written scoped file is the pi arm's, whose source is the whole-operator auth.json.
+        claude_secret = Path(claude_key).read_text(encoding="utf-8-sig").strip()
+        provider_secret = claude_secret
         upstreams.append(
             Upstream.provider(
                 "anthropic",
                 environ.get("JEV_ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-                str(provider_key_file),
+                claude_key,
                 api="anthropic",
             )
         )
@@ -760,11 +784,10 @@ def _confinement(
         upstreams=tuple(upstreams),
         timeout_s=arms.RUN_TIMEOUT_S,
         env=env,
-        adapter_source=str(pi.adapter_path()) if agent == "pi" else "",
         uid=os.getuid(),
         gid=os.getgid(),
     )
-    return spec, scoped_dir
+    return spec, scoped_dir, provider_secret
 
 
 def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = ledger.REPEATS) -> str:
@@ -785,12 +808,13 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
             pi.adapter_path()
         except pi.AdapterMissing as error:
             raise StudyRefusedError(str(error)) from error
-    for task in tasks.load_tasks():
-        expected_ids(task, python3)
     version = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False).stdout.strip()
     agent_out = out / agent
     interpreter = arms.study_venv(Path(tempfile.gettempdir()) / f"jev-study-{_git_head()[:12]}", arms.ensure_wheel())
-    auth_provider = pi.PI_MODEL.split("/")[0] if agent == "pi" else ""
+    # JEV_AB_MODEL selects the study's pi model (the D3 re-run pins opencode-go/deepseek-v4.1-flash
+    # instead of the host-loopback ds4 default); the provider entry is derived from it.
+    model = environ.get("JEV_AB_MODEL", pi.PI_MODEL)
+    auth_provider = model.split("/")[0] if agent == "pi" else ""
     setup = Setup(
         agent=agent,
         binary=[binary],
@@ -800,17 +824,23 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
         python3=python3,
         auth_provider=auth_provider,
         server_python=str(interpreter),
+        model=model,
     )
     # A finished study has nothing left to launch: it pins and re-renders with no boundary built,
     # so a resume or a report pass never needs Docker.
     if not runs_remain(setup, agent_out, repeats=repeats):
-        pin_meta(agent_out, meta_for(agent, version, arms.RUN_TIMEOUT_S))
+        pin_meta(agent_out, meta_for(agent, version, arms.RUN_TIMEOUT_S, model))
         return study(setup, agent_out, repeats=repeats)
     # The confinement boundary is how live runs execute (ADR-0074); the macOS sandbox path stays
-    # the offline dry-run shape only.
-    spec, scoped_dir = _confinement(environ, agent, base_env, auth_provider, out)
-    setup = replace(setup, confinement=spec)
+    # the offline dry-run shape only. A killed earlier run's orphans go first (F5).
+    reap()
+    spec, scoped_dir, provider_secret = _confinement(environ, agent, base_env, auth_provider, out)
+    setup = replace(setup, confinement=spec, provider_secret=provider_secret)
     try:
+        # Reference grading on the agent image's interpreter (F1): every task's reference solution
+        # must pass there before any run is booked, exactly as the host-side check did.
+        for task in tasks.load_tasks():
+            confined_reference(spec.agent_image, task.id)
         # Preflight before pin_meta: a dead path must not pin a setup that has no runs, or the next
         # resume is refused for an agent_version that never recorded anything. Confined, the
         # preflight is one allowlisted provider request through the real boundary — no spend, no
@@ -822,7 +852,7 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
                 f"confined preflight could not reach the model provider through the broker ({detail}); "
                 "refusing the batch before any run is booked"
             )
-        pin_meta(agent_out, meta_for(agent, version, arms.RUN_TIMEOUT_S))
+        pin_meta(agent_out, meta_for(agent, version, arms.RUN_TIMEOUT_S, model))
         return study(setup, agent_out, repeats=repeats)
     finally:
         shutil.rmtree(scoped_dir, ignore_errors=True)
@@ -840,6 +870,7 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
     parser.add_argument("--repeats", type=int, default=ledger.REPEATS)
     parser.add_argument("--report-only", action="store_true", help="re-render the report from recorded runs")
     args = parser.parse_args(argv)
+    exit_on_sigterm()
     try:
         if not args.report_only:
             stop = live(environ, OUT, agent=args.agent, repeats=args.repeats)

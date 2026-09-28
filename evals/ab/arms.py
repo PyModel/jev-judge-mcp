@@ -30,6 +30,16 @@ RUN_TIMEOUT_S = 900
 
 JEV_MODEL = "jev-1.13.0"
 
+AUTH_ENTRY_FIELDS = ("type", "key")
+"""What an auth.json entry may carry into the container (F7); everything else stays behind."""
+
+MODEL_ENTRY_FIELDS = ("baseUrl", "api", "apiKey", "models", "compat")
+"""What a provider's models.json entry may carry into the container (F7). `headers`, `env`, and
+any other operator extra never cross."""
+
+MODEL_ITEM_DROP = ("apiKey", "key", "headers", "env")
+"""Credential-shaped keys dropped from each model item (F7); limits and pricing cross untouched."""
+
 PLACEHOLDER_KEY = "confined-placeholder-the-broker-holds-the-real-key"
 """The only credential-shaped value the container config ever carries (ADR-0074): the shim strips
 it and the broker injects the real key, so a leak of this string carries nothing."""
@@ -268,11 +278,18 @@ def container_agent_files(
 ) -> None:
     """Write the container's auth.json and models.json: the one scoped provider entry with the
     placeholder key, and the scoped models entry with its base URL pointed at the provider shim
-    (ADR-0074). The real provider key never crosses; the broker injects it."""
+    (ADR-0074). The real provider key never crosses; the broker injects it.
+
+    F7: only known field names cross. The auth entry keeps `type` and the placeholder `key`; the
+    models entry keeps the fields pi reads for routing (`baseUrl`, `api`, `models`, `compat`),
+    and every model item drops credential-shaped keys. An unknown operator field — a stray
+    `headers` block with a literal secret among them — never reaches the container."""
     scratch_agent.mkdir(parents=True, exist_ok=True)
-    entry = dict(auth_entry)
-    if "key" in entry:
-        entry["key"] = PLACEHOLDER_KEY
+    entry = {
+        name: PLACEHOLDER_KEY if name == "key" else value
+        for name, value in auth_entry.items()
+        if name in AUTH_ENTRY_FIELDS
+    }
     (scratch_agent / "auth.json").write_text(json.dumps({provider: entry}, indent=2) + "\n", encoding="utf-8")
     if models_bytes is None:
         return
@@ -282,11 +299,20 @@ def container_agent_files(
     providers = cast(dict[str, Any], raw_providers) if isinstance(raw_providers, dict) else {}
     raw_scoped: object = providers.get(provider)
     if isinstance(raw_scoped, dict):
-        scoped = cast(dict[str, Any], raw_scoped)
+        scoped = {name: value for name, value in cast(dict[str, Any], raw_scoped).items() if name in MODEL_ENTRY_FIELDS}
         if scoped.get("baseUrl"):
             scoped["baseUrl"] = provider_shim_url
-        if scoped.get("apiKey"):
+        if scoped.get("apiKey") is not None:
             scoped["apiKey"] = PLACEHOLDER_KEY
+        raw_models: object = scoped.get("models")
+        if isinstance(raw_models, list):
+            models_list = cast(list[object], raw_models)
+            scoped["models"] = [
+                {name: value for name, value in cast(dict[str, Any], item).items() if name not in MODEL_ITEM_DROP}
+                if isinstance(item, dict)
+                else item
+                for item in models_list
+            ]
         providers[provider] = scoped
     (scratch_agent / "models.json").write_text(
         json.dumps({**document, "providers": providers}, indent=2) + "\n", encoding="utf-8"

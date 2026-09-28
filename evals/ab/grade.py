@@ -112,10 +112,13 @@ def run_correct(result: Grade, *, decision_matches_gold: bool | None) -> bool:
 
 
 def run_tests(tree: Path, task: Task, python: str) -> dict[str, str]:
-    """Outcome per test id for `tree` graded against the pristine tests plus `task`'s acceptance tests."""
+    """Outcome per test id for `tree` graded against the pristine tests plus `task`'s acceptance tests.
+
+    The tree is copied with `symlinks=True` (ADR-0074, F1): a link the agent planted is graded as
+    the link it wrote — never followed into whatever it points at on whichever host is grading."""
     with tempfile.TemporaryDirectory(prefix="jev-ab-grade-") as scratch:
         work = Path(scratch) / "tree"
-        shutil.copytree(tree, work, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        shutil.copytree(tree, work, symlinks=True, ignore=shutil.ignore_patterns(".git", "__pycache__"))
         shutil.rmtree(work / "tests", ignore_errors=True)
         shutil.copytree(SNAPSHOT / "tests", work / "tests", ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copyfile(task.acceptance, work / "tests" / f"{ACCEPTANCE_MODULE}.py")
@@ -303,7 +306,7 @@ def agent_outcomes(tree: Path, python: str) -> dict[str, str] | None:
     """
     with tempfile.TemporaryDirectory(prefix="jev-ab-added-") as scratch:
         work = Path(scratch) / "tree"
-        shutil.copytree(tree, work, ignore=shutil.ignore_patterns(".git", "__pycache__"))
+        shutil.copytree(tree, work, symlinks=True, ignore=shutil.ignore_patterns(".git", "__pycache__"))
         if _has_pytest(python):
             return _junit_outcomes(tree, work, python)
         return _unittest_outcomes(work, python)

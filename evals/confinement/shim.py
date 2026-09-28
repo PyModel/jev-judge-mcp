@@ -50,15 +50,20 @@ class _Forwarder(http.server.BaseHTTPRequestHandler):
 
     def _forward(self) -> None:
         try:
-            body = self.rfile.read(int(self.headers.get("Content-Length") or 0)) if self.command == "POST" else b""
+            declared = int(self.headers.get("Content-Length") or 0)
+            if declared > protocol.MAX_BODY_BYTES:
+                self._fail(413, "request body exceeds the cap")
+                return
+            body = self.rfile.read(declared) if self.command == "POST" else b""
             if len(body) > protocol.MAX_BODY_BYTES:
-                self._fail(400, "request body exceeds the cap")
+                self._fail(413, "request body exceeds the cap")
                 return
             headers = [
                 [name, value]
                 for name, value in self.headers.items()
                 if name.lower() not in protocol.CREDENTIAL_REQUEST_HEADERS
                 and name.lower() not in protocol.HOP_BY_HOP_HEADERS
+                and name.lower() not in protocol.METHOD_OVERRIDE_HEADERS
                 and name.lower() != "host"
             ]
             scheme, host, port = self.upstream
