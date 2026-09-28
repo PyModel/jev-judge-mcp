@@ -1180,19 +1180,26 @@ def test_failure_category_prefers_the_first_matching_cause() -> None:
 def test_report_defines_unnecessary_calls_and_counts_an_observed_decision_change() -> None:
     text = report.render([], {})
     assert "Unnecessary Jev call:" in text and "Jev changed the decision:" in text
-    without = _run("j1", "A", decision="keep-rate")
+    # Counted only on option-returning tools (j7 is jev_find); a verdict-word task (j1 is
+    # jev_verify) is not interpretable: the verdict describes the passages the agent chose.
+    without = _run("j7-find-line", "A", decision="keep-rate")
     with_jev = _run(
-        "j1",
+        "j7-find-line",
         "B",
         decision="use-spec",
         decision_correct=True,
         jev_answer="use-spec",
-        jev_call_log=[{"tool": "jev_verify", "ms": 12.5}],
+        jev_call_log=[{"tool": "jev_find", "ms": 12.5}],
     )
     rendered = report.render([without, with_jev], {})
     assert "Jev changed the decision: 1 observed changes; 1 of those equal gold" in rendered
     assert report.jev_changed_decision(without, with_jev) is True
     assert report.jev_changed_decision(without, {**with_jev, "jev_answer": None}) is None
+    verdict_pair = _run("j1-refund-window", "A", decision="keep-rate"), _run(
+        "j1-refund-window", "B", decision="use-spec", jev_answer="use-spec"
+    )
+    assert report.jev_changed_decision(*verdict_pair) is None, "a verdict-word task is not interpretable"
+    assert "not interpretable" in report.render(list(verdict_pair), {})
     saved = _run("j1", "A", success=True, old_rule_success=False)
     compared = report.render([saved, _run("j1", "B", success=True, old_rule_success=True)], {})
     assert "### Old rule vs new rule, all recorded runs" in compared
@@ -1352,7 +1359,7 @@ def test_outcomes_use_measured_runs_and_count_failures_in_the_time() -> None:
     assert a["correct solutions per hour"] == f"{2 / (600 / 3600):.2f}"
     assert b["correct solutions per hour"] == f"{2 / (1020 / 3600):.2f}"
     assert a["wrong branches (runs with one / runs on tasks with signatures; total)"] == "1/2; 1"
-    assert a["tool calls per solved task"] == "15.0" and a["tokens per solved task (context + output)"] == "1500"
+    assert a["tool calls per solved task"] == "15.0" and a["tokens per solved task (context + output; solved runs only)"] == "1000"  # 2 solved x 1000, the failed run no longer inflates it
     assert a["judge accuracy (decision = gold)"] == "1/2"
     assert (a["retries (total)"], a["Jev calls (total; runs with one)"]) == ("3", "0; 0/3")
     none_solved = report.arm_summary([_run("j1", "A", success=False)])

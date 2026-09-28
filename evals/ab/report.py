@@ -9,9 +9,11 @@ evaluator, not the agent.
 
 import statistics
 from collections import Counter
+from functools import lru_cache
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
+from evals.ab import tasks
 from evals.ab.arms import ARM_LABELS, ARMS
 from evals.ab.outcomes import CATEGORY_ORDER
 
@@ -24,50 +26,87 @@ HISTORY = (
     "History, not this study: `p8-pilot.md` (2026-09-21; no run called a Jev tool) and `bench150.md` "
     "(accuracy unscored, item rate is evaluator overhead) measured something else and are kept as recorded."
 )
-DEFINITIONS = [
-    "**Measured run:** reached the model (at least one frontier call produced output). A with-Jev run also "
-    "needs a Jev answer from the pinned model through the MCP server; the proxy log, not the agent's text, "
-    "decides. A run that reached the model and then failed is a measured failure, never a fast completion.",
-    "**Measured pair:** both arms of one task and repeat measured. Only measured pairs are summarized.",
-    "**Success:** ADR-0073. Hidden acceptance tests all pass, no pre-existing test regresses, every "
-    "pre-existing test is unchanged in content (new test functions and new test files are allowed; "
-    "modifying, deleting, skipping, or weakening a pre-existing test line fails the run), every added "
-    "test passes, and the stated decision matches gold when the task has gold. **Old-rule success:** "
-    "the pre-ADR-0073 grader: acceptance passes, no regressions, and no pre-existing test file's bytes "
-    "changed. A correct fix plus an added test method fails the old rule and passes the new one. "
-    "Records graded before ADR-0073 store only the old rule in `success`. **Final tests passed:** "
-    "every pristine graded test passed; added tests are separate.",
-    "**Added tests:** count, file, name, pass/fail, and relevance. Relevant means the added test's file "
-    "imports the task's `target_module`. A failing or irrelevant added test fails the run (its own "
-    "failure category); relevance is the ask's own requirement, and in the recorded D3 runs every "
-    "added test was relevant (52 of 52), so the clause changed no grade there.",
-    "**Unnecessary Jev call:** every proxy-logged Jev call on a control task (the code or tests already "
-    "determine the answer), or a later call of the same tool with the same arguments as an earlier call "
-    "in that run. The repeat count cannot exceed the proxy log.",
-    "**Jev changed the decision:** the with-Jev run's final decision differs from its paired without-Jev "
-    "run and equals the option Jev's last non-error result selects — the one answer field of the tool's "
-    "JSON document (`top[0].id` for find, `results[0].verdict` for verify, and so on), mapped to an option "
-    "id by `task.json`'s `jev_verdict_options` where the tool answers with a verdict word. If that field "
-    "names no task option, the change is not observed. The paired comparison is a **B-versus-paired-A "
-    "proxy**, not within-run causality: the two arms are independent stochastic trajectories. **The "
-    "change was correct** when that final decision equals gold.",
-    "**Jev round trip:** the proxy's per-call `ms`, which includes the server's local work and so bounds "
-    "provider latency from above. **Run wall** is `wall_s`.",
-    f"**Failure category:** why a failed run failed, first match: {', '.join(CATEGORY_ORDER)}. "
-    "A correct run has none. **Out-of-task exploration** is not a failure category but its own "
-    "field: the distinct paths a confined run's commands used outside its task workdir, recorded as "
-    "evidence with no effect on the grade. Only three things void a confined study: a secret-scan "
-    "hit, host material in a tool result, or a normalized path outside the task workdir naming "
-    "hidden fixture material (`task.json`, `acceptance_test.py`, `reference`, `distractors`), by "
-    "any tool.",
-    "**Correct solutions per hour:** successes divided by the summed wall time of every measured run of the "
-    "arm, failures included.",
-    "**Test cycles:** shell calls that run `unittest` or `pytest`. **Retries:** test cycles after the first.",
-    "**Wrong branch:** a non-gold option whose declared signature appears in what the agent wrote or ran; a "
-    "heuristic lower bound, counted only on tasks that declare signatures.",
-    "**Judge accuracy:** the agent's stated decision against the task's gold decision; reported only for "
-    "tasks with gold.",
-]
+OPTION_TOOLS = frozenset({"jev_find", "jev_decide", "jev_classify", "jev_extract"})
+"""Tools whose answer is a task option id. A verdict word (verify, compare, screen, gate, review)
+describes whatever passages or claims the agent chose to send, and those vary per run, so no fixed
+map turns a verdict into "the option Jev selected"."""
+
+
+@lru_cache(maxsize=64)
+def _jev_tool(task_id: str) -> str:
+    """The task's Jev tool, or "" for a task the fixture no longer defines: a record the renderer
+    cannot interpret is not interpretable, not a crash."""
+    try:
+        return tasks.load_task(task_id).judgment.jev_tool
+    except (OSError, ValueError, KeyError):
+        return ""
+
+
+def added_tests_definition(records: Sequence[Record]) -> str:
+    """The added-tests definition, with the relevance count computed from the records being
+    rendered: the hard-coded '52 of 52' described the void 2026-09-27 study, not whatever
+    this report renders."""
+    added = [item for run in records for item in cast(Sequence[Record], run.get("added_tests") or [])]
+    relevant = sum(1 for item in added if item.get("relevant"))
+    tail = (
+        f" Across the runs this report renders, {relevant} of {len(added)} added tests were relevant, so the "
+        "clause changed no grade there."
+        if added
+        else ""
+    )
+    return (
+        "**Added tests:** count, file, name, pass/fail, and relevance. Relevant means the added test's file "
+        "imports the task's `target_module`. A failing or irrelevant added test fails the run (its own "
+        f"failure category); relevance is the ask's own requirement.{tail}"
+    )
+
+
+def _definitions(records: Sequence[Record]) -> list[str]:
+    return [
+        "**Measured run:**     reached the model (at least one frontier call produced output). A with-Jev run also "
+        "needs a Jev answer from the pinned model through the MCP server; the proxy log, not the agent's text, "
+        "decides. A run that reached the model and then failed is a measured failure, never a fast completion.",
+        "**Measured pair:** both arms of one task and repeat measured. Only measured pairs are summarized.",
+        "**Success:** ADR-0073. Hidden acceptance tests all pass, no pre-existing test regresses, every "
+        "pre-existing test is unchanged in content (new test functions and new test files are allowed; "
+        "modifying, deleting, skipping, or weakening a pre-existing test line fails the run), every added "
+        "test passes, and the stated decision matches gold when the task has gold. **Old-rule success:** "
+        "the pre-ADR-0073 grader: acceptance passes, no regressions, and no pre-existing test file's bytes "
+        "changed. A correct fix plus an added test method fails the old rule and passes the new one. "
+        "Records graded before ADR-0073 store only the old rule in `success`. **Final tests passed:** "
+        "every pristine graded test passed; added tests are separate.",
+        *added_tests_definition(records),
+        "**Unnecessary Jev call:** every proxy-logged Jev call on a control task (the code or tests already "
+        "determine the answer), or a later call of the same tool with the same arguments as an earlier call "
+        "in that run. The repeat count cannot exceed the proxy log.",
+        "**Jev changed the decision:** the with-Jev run's final decision differs from its paired without-Jev "
+        "run and equals the option id Jev's last non-error result selects. Counted only for the "
+        "option-returning tools (find, decide, classify, extract): a verdict word (verify, compare, screen, "
+        "gate, review) describes whatever passages or claims the agent chose to send — those vary per run — "
+        "so a fixed verdict-to-option map is not a reading of what Jev selected, and those pairs are **not "
+        "interpretable**. The paired comparison is also a **B-versus-paired-A proxy**, not within-run "
+        "causality: the two arms are independent stochastic trajectories. **The change was correct** when "
+        "that final decision equals gold. The within-run view — the agent's final decision against Jev's "
+        "answer, same restriction — is the table below the invocation line.",
+        "**Jev round trip:** the proxy's per-call `ms` over answered calls only — a call the server rejected "
+        "before the provider (input validation) measures the round trip to nothing — including the server's "
+        "local work and so bounding provider latency from above. **Run wall** is `wall_s`; the paired wall "
+        "difference is agent turns (MCP discovery, retries), not Jev latency.",
+        f"**Failure category:** why a failed run failed, first match: {', '.join(CATEGORY_ORDER)}. "
+        "A correct run has none. **Out-of-task exploration** is not a failure category but its own "
+        "field: the distinct paths a confined run's commands used outside its task workdir, recorded as "
+        "evidence with no effect on the grade. Only three things void a confined study: a secret-scan "
+        "hit, host material in a tool result, or a normalized path outside the task workdir naming "
+        "hidden fixture material (`task.json`, `acceptance_test.py`, `reference`, `distractors`), by "
+        "any tool.",
+        "**Correct solutions per hour:** successes divided by the summed wall time of every measured run of the "
+        "arm, failures included.",
+        "**Test cycles:** shell calls that run `unittest` or `pytest`. **Retries:** test cycles after the first.",
+        "**Wrong branch:** a non-gold option whose declared signature appears in what the agent wrote or ran; a "
+        "heuristic lower bound, counted only on tasks that declare signatures.",
+        "**Judge accuracy:** the agent's stated decision against the task's gold decision; reported only for "
+        "tasks with gold.",
+    ]
 
 
 def pairs(records: Sequence[Record]) -> dict[tuple[str, str, int], dict[str, Record]]:
@@ -110,13 +149,23 @@ def _per_solved(total: float, solved: int) -> str:
 
 
 def _round_trip(runs: Sequence[Record]) -> str:
+    """Over answered calls only: a call the server rejected before the provider (input
+    validation, is_error) measures the round trip to nothing."""
     samples = [
         float(call["ms"])
         for run in runs
         for call in cast(Sequence[Mapping[str, Any]], run.get("jev_call_log") or [])
-        if isinstance(call.get("ms"), int | float)
+        if isinstance(call.get("ms"), int | float) and not call.get("is_error")
     ]
     return distribution(samples) if samples else "not recorded"
+
+
+def _answered_split(runs: Sequence[Record]) -> str:
+    if not any("jev_call_log" in run for run in runs):
+        return "not recorded"
+    calls = [call for run in runs for call in cast(Sequence[Mapping[str, Any]], run.get("jev_call_log") or [])]
+    answered = sum(1 for call in calls if not call.get("is_error"))
+    return f"{answered} answered / {len(calls) - answered} rejected before the provider"
 
 
 def _flag_count(runs: Sequence[Record], key: str) -> str:
@@ -136,7 +185,12 @@ def _categories(runs: Sequence[Record]) -> str:
 
 
 def jev_changed_decision(without: Record, with_jev: Record) -> bool | None:
-    """True when B's decision differs from A's and equals Jev's observed option. None if unobserved."""
+    """True when B's decision differs from A's and equals Jev's selected option id; None when the
+    task's Jev tool answers with a verdict word (not interpretable: the verdict describes whatever
+    passages the agent chose to send, so no fixed map turns it into a selection) or when Jev
+    selected no option."""
+    if _jev_tool(str(with_jev["task"])) not in OPTION_TOOLS:
+        return None
     answer = with_jev.get("jev_answer")
     chosen = with_jev.get("decision")
     other = without.get("decision")
@@ -164,14 +218,15 @@ def arm_summary(runs: Sequence[Record]) -> dict[str, str]:
         "test cycles per run": distribution([float(r["test_cycles"]) for r in runs]),
         "retries (total)": str(sum(int(r["retries"]) for r in runs)),
         "tool calls per solved task": _per_solved(sum(int(r["tool_calls"]) for r in runs), len(solved)),
-        "tokens per solved task (context + output)": _per_solved(
-            sum(int(r["tokens"]["total"]) for r in runs), len(solved)
+        "tokens per solved task (context + output; solved runs only)": _per_solved(
+            sum(int(r["tokens"]["total"]) for r in solved), len(solved)
         ),
         "Jev calls (total; runs with one)": (
             f"{sum(int(r['jev_calls']) for r in runs)}; {sum(bool(r['jev_tool_called']) for r in runs)}/{len(runs)}"
         ),
+        "Jev calls answered": _answered_split(runs),
         "unnecessary Jev calls (total)": str(sum(int(r.get("unnecessary_jev_calls") or 0) for r in runs)),
-        "Jev round trip, ms": _round_trip(runs),
+        "Jev round trip, ms (answered calls)": _round_trip(runs),
         "old-rule successes": _flag_count(runs, "old_rule_success"),
         "failure categories": _categories(runs),
         "judge accuracy (decision = gold)": (
@@ -206,7 +261,8 @@ def paired_lines(measured: Sequence[Pair]) -> list[str]:
     ]
     lines.append(
         f"- Jev changed the decision: {len(changed)} observed changes; "
-        f"{len(correct)} of those equal gold; {observed.count(None)} pairs had no Jev option to compare."
+        f"{len(correct)} of those equal gold; {observed.count(None)} pairs not interpretable "
+        "(verdict-word tool, or Jev selected no option)."
     )
     lines.append("- Old-rule vs new-rule successes are the arm rows `old-rule successes` and `tasks solved`.")
     lines.append("- Descriptive only: no significance test, and n is small.")
@@ -233,6 +289,36 @@ def _invocation(records: Sequence[Record]) -> list[str]:
         f"({len(reached_b) - len(called)} did not); "
         f"{sum(int(r.get('unnecessary_jev_calls') or 0) for r in reached_b)} unnecessary calls."
     ]
+
+
+def _decision_vs_jev(records: Sequence[Record]) -> list[str]:
+    """The within-run view the B-versus-A proxy cannot be: the agent's final decision against
+    Jev's answer, restricted to the option-returning tools for the same reason the paired metric
+    is. Answer/decision rows only — a run whose Jev call was rejected or named no option has no
+    answer to compare."""
+    rows = [
+        run
+        for run in records
+        if run["arm"] == "B" and _jev_tool(str(run["task"])) in OPTION_TOOLS and isinstance(run.get("jev_answer"), str)
+    ]
+    if not rows:
+        return []
+    agree = sum(1 for run in rows if run.get("decision") == run.get("jev_answer"))
+    lines = [
+        "### Final decision vs Jev's answer (option tools, within-run)",
+        "",
+        f"{agree} of {len(rows)} with-Jev runs on option-returning tools ended on Jev's answer.",
+        "",
+        "| run | Jev answer | final decision | same |",
+        "|---|---|---|---|",
+    ]
+    lines += [
+        f"| {run['run_id']} | {run.get('jev_answer')} | {run.get('decision') or 'none'} | "
+        f"{'yes' if run.get('decision') == run.get('jev_answer') else 'no'} |"
+        for run in sorted(rows, key=lambda run: str(run["run_id"]))
+    ]
+    lines.append("")
+    return lines
 
 
 def _task_table(measured: Sequence[Pair]) -> list[str]:
@@ -357,6 +443,7 @@ def agent_section(agent: str, records: Sequence[Record], meta: Mapping[str, Any]
             "",
             *_invocation(records),
             "",
+            *_decision_vs_jev(records),
             "### Per task",
             "",
             *_task_table(measured),
@@ -382,5 +469,5 @@ def render(records: Sequence[Record], meta: Mapping[str, Mapping[str, Any]]) -> 
         lines += [f"**{NOT_MEASURED.capitalize()}.** No runs are recorded, so there are no outcome numbers.", ""]
     for agent in agents:
         lines += agent_section(agent, [r for r in records if r["agent"] == agent], meta.get(agent, {}))
-    lines += ["## Definitions", "", *(f"- {d}" for d in DEFINITIONS)]
+    lines += ["## Definitions", "", *(f"- {d}" for d in _definitions(records))]
     return "\n".join(lines).rstrip() + "\n"
