@@ -1,6 +1,7 @@
 """The harness-agnostic CLI refuses paths it must not read, and does not print allow."""
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -255,6 +256,43 @@ def test_required_flag_stays_open_after_the_provider_was_reached(
     assert captured.out == ""
     assert "error.code=timeout" in captured.err
     assert "allow" not in captured.out
+
+
+_REASON_SHAPE = re.compile(r"^Jev completion hook: gate action is (escalate|review|not auto)\.$")
+
+
+@pytest.mark.parametrize("action", ["escalate", "review", "unsupported-value"])
+def test_the_asks_reason_states_the_gate_action_as_a_fact(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], action: str
+) -> None:
+    """The regression: 'escalate. Read action, not verdict.' — an imperative inside a
+    permissionDecisionReason — was read by a host model as a possible prompt injection. A reason
+    states the gate's action as a fact and nothing else; the decision is the permissionDecision
+    field, so a directive in the reason has nowhere legitimate to live."""
+
+    def gate(_argv: object) -> int:
+        import sys
+
+        sys.stdout.write(json.dumps({"action": action}) + "\n")
+        return 0
+
+    monkeypatch.setattr("jev_judge_mcp.cli.gate_main", gate)
+    code = completion_hook_main(
+        [],
+        text=_PUSH,
+        environ={
+            "JEV_COMPLETION_DIFF": "HEAD",
+            "JEV_COMPLETION_CLAIMS": "claims.json",
+            "JEV_COMPLETION_TESTS": "tests.log",
+        },
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert _ask(captured.out) == "ask"
+    reason = json.loads(captured.out)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _REASON_SHAPE.match(reason), reason
+    expected = "not auto" if action not in ("escalate", "review") else action
+    assert reason == f"Jev completion hook: gate action is {expected}."
 
 
 def test_required_completion_hook_asks_on_a_rejected_key(

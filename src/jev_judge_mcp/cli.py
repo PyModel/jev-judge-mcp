@@ -576,11 +576,14 @@ def completion_hook_main(
     action = envelope.get("action") if isinstance(envelope, dict) else None
     if action == "auto":
         return 0
-    reason = "Jev completion hook: not auto."
+    reason = "Jev completion hook: gate action is not auto."
     if action == "escalate":
-        reason = "Jev completion hook: escalate. Read action, not verdict."
+        # A fact, not a directive: a host model reads an imperative in a permissionDecisionReason
+        # ("Read action, not verdict.") as a possible prompt injection. The decision is the JSON
+        # field; the reason only states what the gate decided.
+        reason = "Jev completion hook: gate action is escalate."
     elif action == "review":
-        reason = "Jev completion hook: review. Confirm before proceeding."
+        reason = "Jev completion hook: gate action is review."
     sys.stdout.write(
         stringify_compact(
             {
