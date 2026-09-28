@@ -12,8 +12,9 @@ those same roots while the suite runs.
 Write-time check: every write the test process makes through the pathlib surface, `open()`, or
 the directory-creating `os` functions must land outside the fixed shared roots (/tmp, /var/tmp,
 and `tempfile.gettempdir()`) or inside a root this test owns — its tmp_path (under pytest's
-basetemp) or a directory `tempfile.mkdtemp` returned during the test. The leak of record dies
-at the offending `write_text` call, naming the test and the path.
+basetemp) or a directory `tempfile.mkdtemp` returned during the test — or inside this
+session's own checkout or Python environment (the scope note below names them). The leak of
+record dies at the offending `write_text` call, naming the test and the path.
 
 Teardown check: a mkdtemp root this test created must be gone once every fixture has torn down;
 a root that survives is residue the test failed to remove, and the test errors naming it.
@@ -23,19 +24,29 @@ subprocesses (agents, brokers, uv, node) are invisible here — their cleanup is
 tests that spawn them (the confinement suite's leftover checks). fd-level writes and `io.open`
 direct calls are likewise out of scope; nothing in this suite writes that way. The blocked roots
 are the fixed shared TEMP directories only — every fixed-path write this suite has had lived
-there (/tmp for the key leak, $TMPDIR for the reaper test's forged orphan): on this machine and
-on GitHub runners the checkout itself lives under $HOME, so blocking home would flag every lazy
-`__pycache__` write under the venv — a fixed `~/.foo` leak gets a blocked root the day it
-appears.
+there (/tmp for the key leak, $TMPDIR for the reaper test's forged orphan) — minus this
+session's own checkout and Python environment: the pre-push gate clones into a mktemp
+directory under $TMPDIR (scripts/ci/pre_push_check.sh) and uv builds the .venv inside that
+clone, so both legitimately sit inside a blocked root, where lazy `__pycache__` writes under
+the venv and a test's deliberate inside-repo file (removed in its finally) must pass. A
+session root carves out only the subtree it occupies inside the shared root — one sitting at
+or above a blocked root carves out nothing — so the shared root itself stays refused and a
+leak next to the clone still dies. Home stays unblocked as ever: a fixed `~/.foo` leak gets a
+blocked root the day it appears.
 
 Authoring gate (.agents/skills/test-audit/SKILL.md): the protected behavior is suite
 hermeticity; the credible regression is any helper handed a fixed shared directory — proven by
-reverting the d6f73c6 fix, which turns this guard's write-time check into the reported error;
-no production seam is added — this is plain pytest configuration.
+reverting the d6f73c6 fix, which turns this guard's write-time check into the reported error —
+and the credible misfire is this guard refusing the session's own checkout or venv when they
+sit under the temp dir, the class that broke the pre-push gate at cc6e934; that one is proven
+by the gate itself, which clones into $TMPDIR and runs this whole suite there before any push,
+so no unit test replays the under-temp layout — the gate owns that boundary. No production
+seam is added — this is plain pytest configuration.
 """
 
 import builtins
 import os
+import sys
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -55,12 +66,27 @@ _BLOCKED_ROOTS = frozenset(
     }
 )
 
+# This session's own checkout and interpreter environment, wherever they live: the pre-push
+# gate's clone and its .venv sit under $TMPDIR, and writes inside them are the suite working
+# on itself, not a shared-location leak. Only a root strictly inside a blocked root carves
+# anything out, so a checkout placed at (or above) a shared root never silences the guard.
+_SESSION_ROOTS = frozenset(
+    root
+    for root in (
+        Path(__file__).resolve().parent.parent,  # the checkout under test
+        Path(sys.prefix).resolve(),  # its virtualenv, wherever uv built it
+    )
+    if any(root != blocked and root.is_relative_to(blocked) for blocked in _BLOCKED_ROOTS)
+)
+
 
 def _resolved(target: str | os.PathLike[str]) -> Path:
     return Path(target).resolve()
 
 
 def _shared(path: Path) -> bool:
+    if any(path == root or path.is_relative_to(root) for root in _SESSION_ROOTS):
+        return False
     return any(path == root or path.is_relative_to(root) for root in _BLOCKED_ROOTS)
 
 
