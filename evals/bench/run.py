@@ -95,6 +95,8 @@ class Setup:
     """Scrubbed from every kept artifact."""
     auth_provider: str = ""
     """The one auth.json provider entry the agent's model needs; empty copies no auth."""
+    server_python: str = ""
+    """The study venv interpreter the sandbox launcher wraps; empty is the offline dry-run shape."""
     timeout_s: float = arms.RUN_TIMEOUT_S
     flags: Callable[[Item, str, Path], Sequence[str]] | None = None
     """Argv after the agent binary. None uses the Claude command; the Pi arm supplies its own."""
@@ -133,7 +135,7 @@ def mcp_config(arm: str, sandbox: Path, setup: Setup) -> dict[str, Any]:
     interpreter is the sandbox symlink, and the relay log is written there and copied out to the
     run's records after the run.
     """
-    python = arms.sandbox_python(sandbox)
+    python = arms.sandbox_python(sandbox, setup.server_python or None)
     servers = arms.copy_servers(sandbox, "bench")
     config = arms.mcp_config("A", sandbox=sandbox, server_env={})
     if arm in ("B", "C"):

@@ -459,14 +459,56 @@ def test_the_mcp_config_names_no_host_path(tmp_path: Path) -> None:
     """The agent reads its own MCP config (the D3 study proved it), so the document names only paths
     inside the run sandbox: no repo root, no interpreter path, no log path under the records."""
     sandbox = tmp_path / "box"
+    neutral = tmp_path / "neutral-venv" / "bin" / "python"
     for arm in arms.ARMS:
-        doc = arms.mcp_config(arm, sandbox=sandbox / arm, server_env={"K": "v"} if arm == "B" else {})
+        doc = arms.mcp_config(
+            arm,
+            sandbox=sandbox / arm,
+            server_env={"K": "v"} if arm == "B" else {},
+            interpreter=str(neutral),
+        )
         text = json.dumps(doc)
         assert str(arms.REPO_ROOT) not in text
         assert sys.executable not in text
         assert str(tmp_path / "records") not in text
         for entry in doc["mcpServers"].values():
             assert entry["command"].startswith(str(sandbox / arm))
+
+
+def test_no_file_under_the_sandbox_names_the_repo(tmp_path: Path) -> None:
+    """Layer 2 is about every file the run sandbox carries, not only the JSON: the launcher names
+    the study venv (neutral, outside the repo), so neither an agent-visible file nor `sys.prefix`
+    inside the sandbox can reach the repo root and its gold fixtures."""
+    sandbox = tmp_path / "box"
+    neutral = tmp_path / "neutral-venv" / "bin" / "python"
+    arms.mcp_config("B", sandbox=sandbox, server_env={"K": "v"}, interpreter=str(neutral))
+    for path in sandbox.rglob("*"):
+        if path.is_file():
+            body = path.read_text(encoding="utf-8", errors="replace")
+            assert str(arms.REPO_ROOT) not in body, path
+            assert sys.executable not in body, path
+    launcher = (sandbox / "bin" / "python3").read_text(encoding="utf-8")
+    assert str(neutral) in launcher
+
+
+def test_the_study_venv_is_built_from_the_wheel_outside_the_repo(tmp_path: Path) -> None:
+    """`study_venv` builds a venv from the built wheel: the interpreter's `sys.prefix` names no repo
+    path, so a server process cannot be talked into reading the checkout. Skipped without a wheel;
+    `make ci` builds one before the eval stage."""
+    wheels = sorted((arms.REPO_ROOT / "dist").glob("jev_judge_mcp-*.whl"))
+    if not wheels:
+        pytest.skip("no built wheel; run `make build` first")
+    python = arms.study_venv(tmp_path, wheels[-1])
+    done = subprocess.run(
+        [str(python), "-I", "-c", "import sys;print(sys.prefix);import jev_judge_mcp"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    prefix = done.stdout.strip().splitlines()[0]
+    assert str(arms.REPO_ROOT) not in prefix
+    assert prefix.startswith(str(tmp_path))
 
 
 def test_the_typesafe_key_never_rides_in_the_config(tmp_path: Path) -> None:

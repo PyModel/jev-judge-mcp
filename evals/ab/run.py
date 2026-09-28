@@ -25,6 +25,7 @@ import random
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -78,6 +79,8 @@ class Setup:
     """The grader's interpreter."""
     auth_provider: str = ""
     """The one auth.json provider entry the agent's model needs; empty copies no auth."""
+    server_python: str = ""
+    """The study venv interpreter the sandbox launcher wraps; empty is the offline dry-run shape."""
     timeout_s: float = arms.RUN_TIMEOUT_S
     task_list: Sequence[tasks.Task] = field(default_factory=tasks.load_tasks)
 
@@ -175,6 +178,7 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
             sandbox=sandbox,
             server_env=setup.server_env,
             api_key=setup.secret if arm == "B" else "",
+            interpreter=setup.server_python or None,
         ),
         base_env=setup.base_env,
         secret=setup.secret,
@@ -589,6 +593,7 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
         expected_ids(task, python3)
     version = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False).stdout.strip()
     agent_out = out / agent
+    interpreter = arms.study_venv(Path(tempfile.gettempdir()) / f"jev-study-{_git_head()[:12]}", arms.ensure_wheel())
     setup = Setup(
         agent=agent,
         binary=[binary],
@@ -597,6 +602,7 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
         secret=key,
         python3=python3,
         auth_provider=(pi.PI_MODEL.split("/")[0] if agent == "pi" else ""),
+        server_python=str(interpreter),
     )
     # Preflight before pin_meta: a dead login must not pin a setup that has no runs, or the next
     # resume is refused for an agent_version that never recorded anything. A finished study has

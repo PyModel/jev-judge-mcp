@@ -7,6 +7,7 @@ for the judgment the task hinges on. Nothing else differs (`tests/evals/test_ab_
 """
 
 import shutil
+import subprocess
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -59,21 +60,51 @@ def jev_command() -> list[str]:
     return [sys.executable, "-m", "jev_judge_mcp"]
 
 
-def sandbox_python(sandbox: Path) -> Path:
-    """A sandbox-local interpreter for the servers: `sandbox/bin/python3`, a launcher for the harness
+def study_venv(root: Path, wheel: Path) -> Path:
+    """Build, once per study, a venv OUTSIDE the repo with this package installed from the wheel.
+
+    The sandbox launcher names this interpreter, so no agent-visible file and no `sys.prefix`
+    inside the sandbox can name the repo — the D3 contamination route ran through a launcher that
+    did. The repo checkout is an editable install whose `.pth` names `src/`, so copying the repo
+    venv would not meet that bar; only a wheel-built venv does. Dependencies come from the wheel's
+    metadata (network, at study launch: the operator's paid action).
+    """
+    venv = root / "jev-study-venv"
+    python = venv / "bin" / "python"
+    if not python.exists():
+        subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
+        subprocess.run([str(python), "-m", "pip", "install", str(wheel)], check=True)
+    return python
+
+
+def ensure_wheel() -> Path:
+    """The built wheel for this checkout, building it if `make build` has not run yet."""
+    dist = REPO_ROOT / "dist"
+    wheels = sorted(dist.glob("jev_judge_mcp-*.whl"))
+    if wheels:
+        return wheels[-1]
+    subprocess.run(["uv", "build", "--wheel"], cwd=REPO_ROOT, check=True)
+    wheels = sorted(dist.glob("jev_judge_mcp-*.whl"))
+    if not wheels:
+        raise RuntimeError("uv build --wheel produced no wheel")
+    return wheels[-1]
+
+
+def sandbox_python(sandbox: Path, interpreter: str | None = None) -> Path:
+    """A sandbox-local interpreter for the servers: `sandbox/bin/python3`, a launcher for the study
     venv's python.
 
     The agent reads its own MCP config (recorded runs show it did), so the config text must name no
-    host path. A plain symlink does not work: CPython resolves argv0 through every hop, so a
-    sandbox symlink to the venv python starts the base interpreter without the venv's site-packages.
-    The launcher is one file inside the sandbox that names the venv — a path only a real read
-    boundary can fully hide, which the diagnosis records.
+    host path outside the run sandbox. `interpreter` is the per-study venv built from the wheel
+    (`study_venv`) — neutral, outside the repo. Empty falls back to this process's interpreter,
+    which names the repo and is the offline dry-run shape only.
     """
     bin_dir = sandbox / "bin"
     bin_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     launcher = bin_dir / "python3"
     if not launcher.exists():
-        launcher.write_text(f'#!/bin/sh\nexec {sys.executable!r} "$@"\n', encoding="utf-8")
+        target = interpreter or sys.executable
+        launcher.write_text(f'#!/bin/sh\nexec {target!r} "$@"\n', encoding="utf-8")
         launcher.chmod(0o755)
     return launcher
 
@@ -108,14 +139,16 @@ def keyfile_env(sandbox: Path, api_key: str) -> dict[str, str]:
     return {"JEV_MCP_KEY_FILE": str(path)}
 
 
-def mcp_config(arm: str, *, sandbox: Path, server_env: Mapping[str, str], api_key: str = "") -> dict[str, Any]:
+def mcp_config(
+    arm: str, *, sandbox: Path, server_env: Mapping[str, str], api_key: str = "", interpreter: str | None = None
+) -> dict[str, Any]:
     """The `--mcp-config` document, built against the run's private sandbox.
 
     Every path in the document is inside `sandbox`: the servers run from copies placed there, the
     interpreter is the sandbox symlink, and the relay log is written there and copied out to the
     run's records after the run. Only B carries `server_env`.
     """
-    python = sandbox_python(sandbox)
+    python = sandbox_python(sandbox, interpreter)
     servers = copy_servers(sandbox, "ab")
     harness = {
         "type": "stdio",
