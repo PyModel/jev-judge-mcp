@@ -66,7 +66,6 @@ def _shared(path: Path) -> bool:
 
 @pytest.fixture(autouse=True)
 def _writes_stay_in_test_owned_roots(
-    tmp_path: Path,
     tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
     request: pytest.FixtureRequest,
