@@ -2377,7 +2377,7 @@
       align-items: stretch;
       gap: 0.35rem;
       min-width: 0;
-      margin: 0 0 0.75rem;
+      margin: var(--archify-toolbar-drop, 0px) 0 0.75rem;
       padding: 0.35rem;
       border: 1px solid var(--toolbar-border);
       border-radius: 0.85rem;
@@ -2694,6 +2694,11 @@
       gap: 0.28rem;
       min-width: 0;
       margin: 0;
+      /* Like the header's own toolbar clearance, the chapter row reserves
+         the fixed toolbar's measured horizontal intrusion so chips stay
+         clickable while the band crosses them; the var is written by
+         Viewer Chrome Layout only while a real collision exists. */
+      margin-right: var(--archify-toolbar-reserve, 0px);
       padding: 0.08rem 0.05rem 0.2rem;
       overflow-x: auto;
       list-style: none;
@@ -11298,7 +11303,10 @@
        Viewer Chrome Layout — keep HTML controls clear of the canonical SVG
        stage without changing authored geometry. The dock keeps its floating
        appearance while a small bottom stage rail becomes part of the reader
-       budget whenever its zero-reserve position would enter the stage.
+       budget whenever its zero-reserve position would enter the stage. The
+       fixed toolbar gets the same treatment for the guided-views chapter
+       row: its measured horizontal intrusion is reserved as row padding
+       only while it would otherwise cover chapter chips.
        ============================================================ */
     Archify.viewerChromeLayout = (function () {
       var html = document.documentElement;
@@ -11306,6 +11314,9 @@
       var svg = container && container.querySelector(':scope > svg');
       var nav = container && container.querySelector('.diagram-nav');
       var legend = svg && svg.querySelector('[data-legend]');
+      var toolbar = document.querySelector('.toolbar');
+      var guided = document.querySelector('.guided-views');
+      var chapterRow = guided && guided.querySelector('.guided-view-chapters');
       var frame = 0;
       var settleFrame = 0;
       var reserve = 0;
@@ -11316,6 +11327,8 @@
       var baselineStageGap = null;
       var restorableReserve = 0;
       var probeFallbackReserve = 0;
+      var toolbarReserve = 0;
+      var toolbarDrop = 0;
       var lastReceipt = null;
       var SAFE_GAP = 10;
 
@@ -11415,9 +11428,82 @@
         }
         return true;
       }
+      function writeToolbarClearance(nextReserve, nextDrop) {
+        nextReserve = Math.max(0, Math.ceil(nextReserve));
+        nextDrop = Math.max(0, Math.ceil(nextDrop));
+        if (Math.abs(nextReserve - toolbarReserve) < 1 && Math.abs(nextDrop - toolbarDrop) < 1) return false;
+        toolbarReserve = nextReserve;
+        toolbarDrop = nextDrop;
+        if (toolbarReserve) html.style.setProperty('--archify-toolbar-reserve', toolbarReserve + 'px');
+        else html.style.removeProperty('--archify-toolbar-reserve');
+        if (toolbarDrop) html.style.setProperty('--archify-toolbar-drop', toolbarDrop + 'px');
+        else html.style.removeProperty('--archify-toolbar-drop');
+        if (Archify.readerLayout && typeof Archify.readerLayout.schedule === 'function') {
+          Archify.readerLayout.schedule();
+        }
+        if (settleFrame) cancelAnimationFrame(settleFrame);
+        settleFrame = requestAnimationFrame(function () {
+          settleFrame = 0;
+          schedule();
+        });
+        return true;
+      }
+      function px(value) {
+        var parsed = parseFloat(value);
+        return Number.isFinite(parsed) ? parsed : 0;
+      }
+      /* The fixed toolbar owns the top band of the viewport; the guided
+         strip's chapter row flows underneath it. The zero-clearance geometry
+         is derived from live boxes on every measurement: the index box
+         carries no clearance of its own, and vertical positions are
+         taken at scroll 0 because the toolbar is fixed while the strip
+         scrolls. No baseline is cached, so strip layout changes (chapter
+         selection, fonts, presets) and scroll position cannot leave a stale
+         decision, and re-measuring after a write yields the same value.
+         While the band crosses the row, its horizontal intrusion becomes row
+         padding; when that would leave less than one chip's minimum width,
+         the whole strip drops below the band instead, through the Reader
+         budget (outerHeight includes margins). */
+      function measureToolbarClearance() {
+        var state = { reserve: 0, drop: 0, gap: null, intersectionArea: 0 };
+        var index = guided && guided.querySelector('.guided-view-index');
+        var firstChip = chapterRow && chapterRow.querySelector('li');
+        if (!toolbar || !index || !firstChip || !visible(toolbar) || !visible(guided) || !visible(index)) {
+          writeToolbarClearance(0, 0);
+          return state;
+        }
+        var toolbarRect = toolbar.getBoundingClientRect();
+        var indexRect = index.getBoundingClientRect();
+        var rowRect = chapterRow.getBoundingClientRect();
+        if (!usable(toolbarRect) || !usable(indexRect) || !usable(rowRect)) {
+          writeToolbarClearance(0, 0);
+          return state;
+        }
+        var style = window.getComputedStyle(index);
+        var scrollY = window.scrollY || 0;
+        var contentLeft = indexRect.left + px(style.borderLeftWidth) + px(style.paddingLeft);
+        var contentRight = indexRect.right - px(style.borderRightWidth) - px(style.paddingRight);
+        var rowTop = rowRect.top + scrollY - toolbarDrop;
+        var rowBottom = rowRect.bottom + scrollY - toolbarDrop;
+        var horizontal = contentRight - toolbarRect.left;
+        var vertical = Math.min(rowBottom, toolbarRect.bottom) - Math.max(rowTop, toolbarRect.top);
+        state.gap = Math.round((toolbarRect.left - contentRight) * 100) / 100;
+        state.intersectionArea = Math.round(Math.max(0, horizontal) * Math.max(0, vertical) * 100) / 100;
+        if (!(horizontal > 0 && vertical > 0)) {
+          writeToolbarClearance(0, 0);
+        } else if (contentRight - contentLeft - (horizontal + SAFE_GAP) >= px(window.getComputedStyle(firstChip).minWidth)) {
+          writeToolbarClearance(horizontal + SAFE_GAP, 0);
+        } else {
+          writeToolbarClearance(0, toolbarRect.bottom + SAFE_GAP - rowTop);
+        }
+        state.reserve = toolbarReserve;
+        state.drop = toolbarDrop;
+        return state;
+      }
       function clear(options) {
         options = options || {};
         railLatched = false;
+        writeToolbarClearance(0, 0);
         if (options.preserveBaseline !== true) {
           baselineIntersectionArea = 0;
           baselineStageGap = null;
@@ -11442,6 +11528,8 @@
         if (probingBaseline) return null;
         if (!eligible()) return clear({ preserveBaseline: !cameraAtBaseline() });
 
+        var toolbarState = measureToolbarClearance();
+
         /* Camera transforms enlarge and translate authored paint inside the
            fixed, clipped root SVG viewport. They must not redefine the
            reader's baseline rail.
@@ -11462,6 +11550,10 @@
             eligible: true,
             active: reserve > 0,
             reserve: reserve,
+            toolbarReserve: toolbarState.reserve,
+            toolbarDrop: toolbarState.drop,
+            toolbarGap: toolbarState.gap,
+            toolbarIntersectionArea: toolbarState.intersectionArea,
             gap: SAFE_GAP,
             baselineStageGap: baselineStageGap == null ? null : Math.round(baselineStageGap * 100) / 100,
             stageGap: Math.round((cameraNavRect.top - cameraStageRect.bottom) * 100) / 100,
@@ -11502,6 +11594,10 @@
           eligible: true,
           active: reserve > 0,
           reserve: reserve,
+          toolbarReserve: toolbarState.reserve,
+          toolbarDrop: toolbarState.drop,
+          toolbarGap: toolbarState.gap,
+          toolbarIntersectionArea: toolbarState.intersectionArea,
           gap: SAFE_GAP,
           baselineStageGap: baselineStageGap == null ? null : Math.round(baselineStageGap * 100) / 100,
           stageGap: Math.round(stageGap * 100) / 100,
@@ -11551,6 +11647,8 @@
         var containerRect = container ? container.getBoundingClientRect() : { width: 0, height: 0 };
         var navRect = nav ? nav.getBoundingClientRect() : { top: 0, left: 0 };
         var legendRect = legend ? legend.getBoundingClientRect() : { top: 0, left: 0 };
+        var toolbarRect = toolbar ? toolbar.getBoundingClientRect() : { top: 0, left: 0, right: 0, bottom: 0 };
+        var guidedRect = guided ? guided.getBoundingClientRect() : { top: 0, left: 0, right: 0, bottom: 0 };
         return [
           reserve,
           Math.round(containerRect.width * 100) / 100,
@@ -11559,6 +11657,13 @@
           Math.round(navRect.top * 100) / 100,
           Math.round(legendRect.left * 100) / 100,
           Math.round(legendRect.top * 100) / 100,
+          toolbarReserve,
+          toolbarDrop,
+          Math.round(toolbarRect.left * 100) / 100,
+          Math.round(toolbarRect.bottom * 100) / 100,
+          Math.round(guidedRect.left * 100) / 100,
+          Math.round(guidedRect.top * 100) / 100,
+          Math.round(guidedRect.right * 100) / 100,
           railLatched ? 'latched' : 'clear',
           lastReceipt ? lastReceipt.stageGap : ''
         ].join('|');
@@ -11579,7 +11684,7 @@
       if (document.fonts && document.fonts.ready) document.fonts.ready.then(reprobe).catch(function () {});
       if (typeof ResizeObserver === 'function') {
         var resizeObserver = new ResizeObserver(schedule);
-        [nav, svg, legend].forEach(function (element) { if (element) resizeObserver.observe(element); });
+        [nav, svg, legend, toolbar, guided].forEach(function (element) { if (element) resizeObserver.observe(element); });
       }
       if (typeof MutationObserver === 'function') {
         var contentObserver = new MutationObserver(function (records) {
