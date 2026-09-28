@@ -14,14 +14,15 @@ class FindLineAcceptance(unittest.TestCase):
     def test_day_31_after_delivery_is_late(self) -> None:
         self.assertFalse(refund_allowed(ORDERED, DELIVERED, date(2026, 4, 5)))
 
-    def test_routing_rules_line_is_unchanged(self) -> None:
+    def test_the_other_two_files_are_unchanged(self) -> None:
+        """"Do not change the other two lines" means the other two FILES: a substring check graded a
+        routing edit correct."""
         from pathlib import Path
 
-        text = Path("routing.py").read_text(encoding="utf-8")
-        self.assertIn('("billing", ("charge", "charged", "refund", "invoice", "payment"))', text)
-
-    def test_installments_round_line_is_unchanged(self) -> None:
-        from pathlib import Path
-
-        text = Path("installments.py").read_text(encoding="utf-8")
-        self.assertIn("return [round(total_cents / parts)] * parts", text)
+        routing = Path("routing.py").read_text(encoding="utf-8")
+        installments = Path("installments.py").read_text(encoding="utf-8")
+        self.assertIn('    ("billing", ("charge", "charged", "refund", "invoice", "payment")),\n'
+                      '    ("shipping", ("package", "delivery", "delivered", "tracking", "courier")),', routing)
+        self.assertIn("return [round(total_cents / parts)] * parts", installments)
+        self.assertNotIn("sign-in", routing)
+        self.assertNotIn("divmod", installments)

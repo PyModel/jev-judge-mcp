@@ -14,7 +14,7 @@
   "gold_source": "docs/fees.md says it is the source of truth: no fee within 7 days of delivery, otherwise 15 percent rounded half up to the cent.",
   "wrong_branch_signatures": {
     "code-governs": [
-      "price_cents\\s*//\\s*10"
+      "price_cents\\s*//\\s*10\\b"
     ]
   },
   "jev_verdict_options": {
