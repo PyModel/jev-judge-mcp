@@ -43,14 +43,16 @@ def sdk_importable() -> bool:
 
     The startup gate (`server.ensure_provider_runnable`) probes a *selected* typesafe provider
     with this before serving, so a bare install without the extra refuses at startup instead of
-    failing every judgment call. It imports exactly what `_sdk_client` imports, so a pass here
-    holds there; another provider selected leaves both untouched.
+    failing every judgment call. It imports the SDK entry points `_sdk_client` constructs its
+    client from (`AsyncTypeSafeClient`, `RetryPolicy`) plus their `httpx2` transport, so a pass
+    here holds there — the request path's later error-type imports come from the same package.
+    Another provider selected leaves both untouched.
     """
     try:
         import httpx2
-        from typesafe_sdk import AsyncTypeSafeClient
+        from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy
 
-        del httpx2, AsyncTypeSafeClient
+        del httpx2, AsyncTypeSafeClient, RetryPolicy
     except ImportError:
         return False
     return True
