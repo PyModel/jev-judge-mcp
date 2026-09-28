@@ -81,7 +81,7 @@ def test_every_jev_skill_uri_named_in_served_text_resolves() -> None:
     texts += [PACKAGED.joinpath(rel).read_text(encoding="utf-8") for rel in packaged_rels()]
     for text in texts:
         for uri in re.findall(r"jev-skill://\S+", text):
-            uri = uri.rstrip("`.,:;)")
+            uri = uri.rstrip('`.,:;)"]')
             assert uri in served, f"served text names {uri!r}, which resources/list does not serve"
 
 
