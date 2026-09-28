@@ -1,19 +1,25 @@
 {
   "judgment": "extract",
   "jev_tool": "jev_extract",
-  "question": "Which number in memo.txt is the restocking rate?",
+  "question": "What restocking rate do the memo's amounts charge?",
   "options": {
-    "rate-15": "15, the RESTOCK_RATE line",
-    "rate-10": "10, the legacy handling percent",
-    "rate-7": "7, the waiver window in days"
+    "rate-15": "15 percent: restocking over price, consistent on both invoices",
+    "rate-12": "12 percent: the handling figure from invoice 4471",
+    "rate-3": "a flat 3 units: the shipping figure from invoice 4471"
   },
   "gold": "rate-15",
   "control": false,
   "target_module": "tariff",
   "gold_verification": "The gold option is the one the hidden acceptance tests accept. It is not a model's opinion. rate-10 and rate-7 produce a different fee on 1000 cents.",
-  "gold_source": "memo.txt labels RESTOCK_RATE as 15 and says not to use the legacy handling percent. tariff.py still uses 10.",
+  "gold_source": "18/120 = 30/200 = 15 percent on both invoices; handling and shipping are stated flat amounts that do not scale with the price.",
   "wrong_branch_signatures": {
-    "rate-10": ["RATE\\s*=\\s*10\\b"],
-    "rate-7": ["RATE\\s*=\\s*7\\b"]
+    "rate-12": [
+      "RATE\\s*=\\s*12\\b",
+      "\\*\\s*12\\s*//\\s*100"
+    ],
+    "rate-3": [
+      "RATE\\s*=\\s*3\\b",
+      "\\*\\s*3\\s*//\\s*100"
+    ]
   }
 }

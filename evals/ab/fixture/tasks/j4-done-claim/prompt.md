@@ -1,1 +1,1 @@
-`CLAIM.md` says refund handling is already done. Decide whether that claim holds, then make `refund_allowed` in `refunds.py` match the truth of the claim. The documents in `docs/` are the policy. Do not treat the claim as proof.
+`CLAIM.md` says refund handling is done, pointing at `patches/proposed.diff` and a green `testrun.log`. Decide whether that done-claim holds. If it does not, make `refund_allowed` in `refunds.py` follow `docs/refunds.md` correctly. Do not treat the claim or the green run as proof.

@@ -8,4 +8,4 @@ def split(total_cents: int, parts: int) -> list[int]:
     if total_cents < 0:
         raise ValueError("total must be non-negative")
     base = total_cents // parts
-    return [base] * (parts - 1) + [total_cents - base * (parts - 1)]
+    return [total_cents - base * (parts - 1)] + [base] * (parts - 1)

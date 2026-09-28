@@ -4,8 +4,9 @@ from tariff import fee
 
 
 class ExtractAcceptance(unittest.TestCase):
-    def test_fee_on_1000_is_the_labeled_rate(self) -> None:
-        self.assertEqual(fee(1000), 150)
+    def test_fee_on_the_memo_prices(self) -> None:
+        self.assertEqual(fee(12000), 1800)
+        self.assertEqual(fee(20000), 3000)
 
-    def test_fee_on_200(self) -> None:
-        self.assertEqual(fee(200), 30)
+    def test_fee_on_a_round_price(self) -> None:
+        self.assertEqual(fee(1000), 150)

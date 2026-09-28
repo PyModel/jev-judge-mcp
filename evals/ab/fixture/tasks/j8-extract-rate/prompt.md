@@ -1,1 +1,1 @@
-`memo.txt` states the restocking rate among other numbers. Extract that rate and make `fee` in `tariff.py` use it. Do not use a different number from the memo.
+`memo.txt` states the restocking rate only through amounts. Work out the rate those amounts charge, and make `fee` in `tariff.py` use exactly that.

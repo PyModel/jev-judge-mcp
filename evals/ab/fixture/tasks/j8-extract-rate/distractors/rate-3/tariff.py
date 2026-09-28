@@ -1,6 +1,6 @@
 """Restocking rate as a percent of price."""
 
-RATE = 7
+RATE = 3
 
 
 def fee(price_cents: int) -> int:

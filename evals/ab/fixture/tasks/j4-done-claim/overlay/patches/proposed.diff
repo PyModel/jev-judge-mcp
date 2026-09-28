@@ -1,0 +1,8 @@
+diff --git a/refunds.py b/refunds.py
+--- a/refunds.py
++++ b/refunds.py
+@@ -9,4 +9,4 @@ def refund_allowed(ordered: date, delivered: date, requested: date) -> bool:
+     if delivered < ordered or requested < delivered:
+         raise ValueError("dates out of order")
+-    return (requested - ordered).days <= REFUND_WINDOW_DAYS
++    return (requested - delivered).days < REFUND_WINDOW_DAYS

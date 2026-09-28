@@ -1,1 +1,1 @@
-`candidates.md` lists three lines that might be the refund bug. Decide which line it is, then fix that bug so `refund_allowed` follows `docs/refunds.md`. Do not change the other two lines.
+`candidates.md` lists three sites in `refunds.py`. Decide which one makes `refund_allowed` violate `docs/refunds.md`, fix exactly that one, and leave the other two lines unchanged.

@@ -1,6 +1,6 @@
 # Restocking
 
-Source of truth for the restocking fee. Last reviewed 2026-08-14. Where `fees.py` disagrees with this document, this document applies.
+Fee rules for restocking a refunded item. Draft, last reviewed 2026-08-14.
 
 1. No fee when the refund is requested within 7 days of delivery. The delivery date is day 0.
    A request on day 7 is free; a request on day 8 is charged.

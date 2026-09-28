@@ -1,1 +1,1 @@
-Review `patches/proposed.diff` against `docs/installments.md`. If the patch is the right change, apply it. If it is not, do not apply it; make `split` follow the finance rules. Leaving a wrong `split` in place is not a finished review.
+Review `patches/proposed.diff` against `docs/installments.md`; `testrun.log` shows the existing suite green on it. If the patch is right, apply it. If it is not, do not apply it and make `split` follow the finance rules. Leaving a wrong `split` in place is not a finished review.
