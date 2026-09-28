@@ -57,6 +57,7 @@ ALLOWED_USES = {
 ALLOWED_RUN = {
     "uv sync --locked --all-extras": "uv sync --locked --all-extras",
     "python scripts/ci_old_python_entry.py": "scripts/ci_old_python_entry.py",
+    "bash scripts/ci/install_actionlint.sh": "scripts/ci/install_actionlint.sh",
 }
 PAID_TARGETS = ("security-live", "eval-live", "ab", "load")
 PAID_FLAGS = ("JEV_EVAL_LIVE", "JEV_AB_LIVE")
@@ -249,6 +250,24 @@ def test_every_workflow_step_is_emulated() -> None:
             assert f"uv python find --no-project {python_pin}" in linux, (
                 f"the old-Python entry needs Python {python_pin} first on PATH, found with --no-project"
             )
+
+
+def test_the_actionlint_pin_is_one_pin_in_two_files() -> None:
+    """ci.yml installs actionlint through scripts/ci/install_actionlint.sh before its lint job;
+    the CI image bakes the same binary inline. Version and both per-arch sha256s must be equal,
+    or hosted CI and the gate leg enforce different linters."""
+    script = (REPO / "scripts" / "ci" / "install_actionlint.sh").read_text(encoding="utf-8")
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    version = re.search(r"^VERSION=(\S+)", script, re.MULTILINE)
+    assert version, "the install script lost its VERSION pin"
+    shas = dict(re.findall(r"\b(amd64|arm64)\) SHA=([0-9a-f]{64})", script))
+    assert set(shas) == {"amd64", "arm64"}, "the install script lost a per-arch sha256"
+    assert f"actionlint/releases/download/v{version.group(1)}/" in dockerfile, "versions differ"
+    for arch, sha in shas.items():
+        assert f"{arch}) SHA={sha}" in dockerfile, f"the {arch} sha256 differs between script and image"
+    assert any(step.run == "bash scripts/ci/install_actionlint.sh" for step in _parse_steps()), (
+        "ci.yml must run the pinned installer, or hosted CI skips the workflow lint"
+    )
 
 
 def test_every_workflow_command_runs_in_a_gate_leg() -> None:

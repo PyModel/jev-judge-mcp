@@ -3,11 +3,10 @@
     check_workflows.py
 
 Runs actionlint over the repository's workflow files, with its shellcheck integration when
-shellcheck is installed too. actionlint is not a Python dependency and is not on GitHub's
-hosted runners, so this check skips with one stderr line when the binary is absent; the
-pre-push gate's Linux image ships actionlint and shellcheck (docker/ci-linux.Dockerfile),
-and that leg runs `make lint` on every push (ADR-0056) — the enforcement point. A local run
-without actionlint is a skip, not a proof.
+shellcheck is installed too. actionlint is not a Python dependency; CI installs it through
+scripts/ci/install_actionlint.sh (the pin the CI image shares) and the pre-push gate's Linux
+image ships it (docker/ci-linux.Dockerfile), so both enforcement points run it for real. A
+local run without the binary skips with one stderr line — a skip, not a proof.
 
 Exit 0 clean or skipped, 1 on findings, 2 when the repository or actionlint cannot be run.
 """

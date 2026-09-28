@@ -37,7 +37,8 @@ RUN case "$TARGETARCH" in \
 
 # actionlint 1.7.12 (sha256-verified per arch, the Node precedent above) plus Debian's shellcheck:
 # make lint's workflow check (scripts/check_workflows.py) runs them here, and this leg is the
-# enforcement point for every push — GitHub's hosted runners do not carry actionlint.
+# enforcement point for every push. ci.yml installs the same pin through
+# scripts/ci/install_actionlint.sh; tests/unit/test_ci_prepush_coverage.py holds the two equal.
 RUN set -eu; \
 	case "$TARGETARCH" in \
 		amd64) SHA=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 ;; \

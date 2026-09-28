@@ -101,6 +101,9 @@ run() {
 
 # uv sync first, as every ci.yml job does (stage names follow the workflow's jobs).
 run sync 900 env -u TYPESAFE_API_KEY uv sync --locked --all-extras
+# ci.yml's lint job installs the pinned actionlint before make lint; the image already bakes it,
+# so this mirror is the script's no-op path here and a real install on a hosted runner.
+run actionlint-install 300 bash scripts/ci/install_actionlint.sh
 run make:lint 600 make lint
 run make:typecheck 1200 make typecheck
 run make:unit 1800 make unit

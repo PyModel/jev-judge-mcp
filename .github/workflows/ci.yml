@@ -17,6 +17,10 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.12.19"
+      # ubuntu-latest carries no actionlint; `make lint`'s workflow check would skip there.
+      # The pin is the CI image's — scripts/ci/install_actionlint.sh and the Dockerfile are one
+      # pin in two places, held equal by tests/unit/test_ci_prepush_coverage.py.
+      - run: bash scripts/ci/install_actionlint.sh
       - run: uv sync --locked --all-extras
       - run: make lint
 
