@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.6.0...v0.7.0) (2026-09-29)
+
+
+### Features
+
+* grade confined agent runs inside the isolation adapter ([2f1f22a](https://github.com/PyModel/jev-judge-mcp/commit/2f1f22a3d59e55fb12f846cf0e28297021a1d705))
+
+
+### Bug Fixes
+
+* hash the tests file the CLI gate reads ([d8e412d](https://github.com/PyModel/jev-judge-mcp/commit/d8e412dc1bf1347fcdb075d1e333ec14be04997f))
+* return a typed tool outcome instead of re-parsing error text ([c0f6688](https://github.com/PyModel/jev-judge-mcp/commit/c0f66884ab429bbe61e74468cf9549507fa45abd))
+* type the outcome test reads so pyright stays clean ([8e0626f](https://github.com/PyModel/jev-judge-mcp/commit/8e0626f4bcb6a23a9b41e586cc4d5d1ef77340a9))
+
 ## [0.6.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.5.0...v0.6.0) (2026-09-28)
 
 
