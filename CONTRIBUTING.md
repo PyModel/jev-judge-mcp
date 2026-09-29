@@ -54,6 +54,10 @@ Enable it once per clone:
 make hooks
 ```
 
+The setting is absolute, so a moved or renamed clone goes stale — git then runs no hooks at
+all, with no warning. The next `make` in that clone fails with the repair instead: re-run
+`make hooks` after moving a clone.
+
 `make hooks` installs forwarders outside the tracked tree and points `core.hooksPath` at
 them, then proves the gate is reachable (a banner check with empty stdin — nothing is
 pushed, nothing is checked). Every checkout of the clone keeps its previous hooks: the
@@ -65,6 +69,11 @@ and the gate ever diverge. Rationale and environment-fidelity notes:
 `docs/adr/0056-pre-push-ci-gate.md`.
 
 CI guards prevent these failure classes:
+
+- The stale-hooks guard (`scripts/ci/check_hooks.sh`, run before every make target) fails the
+  build when this clone's absolute `core.hooksPath` no longer exists or points into another
+  repository — a moved or renamed clone — instead of letting every push run un-gated;
+  `make hooks` re-enables. Fresh clones carry no local setting and are never blocked.
 
 - The unit-stage fake-secret scanner rejects non-empty test credentials shorter than the server's
   eight-character redaction floor, preventing short values from corrupting unrelated text.

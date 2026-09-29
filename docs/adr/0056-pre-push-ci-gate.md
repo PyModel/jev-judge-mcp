@@ -21,6 +21,25 @@ red run after the fact. This ADR puts the whole workflow in front of every push.
   `reference-transaction` is the one githooks(5) client hook not forwarded, on purpose: it
   fires on every ref transaction and a forwarder there costs one bash spawn per ref update
   for no gate value.
+- **A moved clone fails loudly at the next `make`, not silently at push time (amendment:
+  the stale-path guard).** The absolute `core.hooksPath` cannot survive a move or rename
+  of the clone — git treats the missing hooks directory as "no hooks", so every commit
+  and push runs un-gated with no warning. That happened once for real: the clone was
+  renamed `jev-mcp` → `jev-judge-mcp`, the setting kept pointing at the old path, and the
+  gate was discovered missing by hand before a push. Moving to a relative path is not a
+  repair: git resolves a relative `core.hooksPath` from the invoking working tree's root,
+  where `.git` is a file in every linked worktree, so `git worktree add` and every later
+  hook run there die on `Invalid path … Not a directory` — and a worktree-scoped setting
+  is no escape, because `git worktree add` copies the main worktree's `config.worktree`
+  into each new linked worktree — while dropping the repo-local setting hands every hook
+  back to whatever global `core.hooksPath` the machine carries, the exact hooks this gate
+  exists to chain. The enablement therefore stays absolute, and
+  `scripts/ci/check_hooks.sh`, run by the `Makefile` before every target (`hooks` itself
+  exempt — it is the repair), refuses to proceed when the local `core.hooksPath` does not
+  exist or points outside this repository: one line naming `make hooks`, before any
+  recipe runs. A clone with no local `core.hooksPath` — a fresh clone, GitHub CI — is
+  untouched, and neither is a setting that resolves inside this repository, even a
+  hand-written relative one.
 - **Reachability self-check, no bypass switch.** After installing the forwarders, the
   enablement runs `git hook run pre-push -- origin <url>` with empty stdin and fails unless
   the gate's banner appears. Nothing is checked with empty stdin, so the self-check costs
@@ -110,3 +129,6 @@ red run after the fact. This ADR puts the whole workflow in front of every push.
   environment whose scheduling differs just enough to expose a coin-flip.
 - Hook chains are dynamic: whatever the global or system config points at when the hook runs
   is what chains, so changing the global hooks directory needs no re-run of `make hooks`.
+- Renaming or moving a clone breaks its next `make` with the one-line repair (`make
+  hooks`) instead of silently disabling the pre-push gate. The guard costs one
+  `git config` read per make invocation and nothing on a fresh clone.

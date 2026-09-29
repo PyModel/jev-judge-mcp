@@ -3,6 +3,18 @@
 # in the same commit that adds its tests.
 PYTEST := uv run pytest
 
+# ADR-0056 amendment: the absolute core.hooksPath from `make hooks` dangles after the clone
+# is moved or renamed, and git then runs no hooks at all — the pre-push gate included — with
+# no warning. Every target first proves the enablement is not stale
+# (scripts/ci/check_hooks.sh; silent on a fresh clone or CI, where no local core.hooksPath
+# exists). `hooks` itself is exempt: it is the repair.
+ifeq (,$(filter hooks,$(MAKECMDGOALS)))
+STALE_HOOKS := $(shell bash "$$(git rev-parse --show-toplevel 2>/dev/null)/scripts/ci/check_hooks.sh" 2>/dev/null)
+ifneq (,$(STALE_HOOKS))
+$(error $(STALE_HOOKS))
+endif
+endif
+
 .PHONY: ci lint typecheck unit property policy-coverage contract parity security build smoke eval eval-live security-live ab load load_canary hooks ci-linux confinement-adversarial confinement-image
 
 ci: sync lint typecheck unit property policy-coverage contract parity policy-replay security build smoke eval load_canary

@@ -39,6 +39,7 @@ HOOK_CHAIN = REPO / "scripts" / "ci" / "hook_chain.sh"
 LINUX_CHECK = REPO / "scripts" / "ci" / "linux_check.sh"
 PRE_PUSH_CHECK = REPO / "scripts" / "ci" / "pre_push_check.sh"
 INSTALL_HOOKS = REPO / "scripts" / "ci" / "install_hooks.sh"
+CHECK_HOOKS = REPO / "scripts" / "ci" / "check_hooks.sh"
 DOCKERFILE = REPO / "docker" / "ci-linux.Dockerfile"
 
 # The `uses:` steps the gate emulates: checkout (the temporary clone), setup-uv (uv baked
@@ -327,7 +328,7 @@ def test_the_gate_never_runs_a_paid_stage_or_sets_a_live_flag() -> None:
     """The regression: the MACHINERY gaining a paid invocation outside ci.yml — a stage
     hardwired into a script's sync line, or a leg that shells into `make ab` — which the
     stage-equality check cannot see, because it only compares ci.yml against the stage list."""
-    for script in (LINUX_CHECK, PRE_PUSH_CHECK, INSTALL_HOOKS, HOOK_CHAIN):
+    for script in (LINUX_CHECK, PRE_PUSH_CHECK, INSTALL_HOOKS, CHECK_HOOKS, HOOK_CHAIN):
         text = script.read_text(encoding="utf-8")
         for target in PAID_TARGETS:
             assert not re.search(rf"^run .*make.*\b{target}\b", text, re.MULTILINE), (
@@ -371,12 +372,14 @@ class TempRepo:
         return proc.stdout.decode().strip()
 
 
-def _temp_gate_repo(tmp_path: Path, with_docker: bool = False) -> TempRepo:
-    """A throwaway clone of the gate's files, hooks installed, config isolated.
+def _temp_gate_repo(tmp_path: Path, with_docker: bool = False, install: bool = True) -> TempRepo:
+    """A throwaway clone of the gate's files, config isolated.
 
     Every git call sees GIT_CONFIG_GLOBAL pointed at an empty temp file and
     GIT_CONFIG_NOSYSTEM set, so the machine's real global and system config never decides
-    a test's outcome — and is never written to.
+    a test's outcome — and is never written to. With ``install=False`` the clone keeps no
+    local core.hooksPath, the exact state of a fresh clone before `make hooks` (its
+    hooks_dir is the default location and no test uses it).
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -407,12 +410,17 @@ def _temp_gate_repo(tmp_path: Path, with_docker: bool = False) -> TempRepo:
         check=True,
         env=env,
     )
-    subprocess.run(("bash", "scripts/ci/install_hooks.sh"), cwd=repo, env=env, capture_output=True, check=True)
-    hooks_dir = (
-        subprocess.run(("git", "-C", str(repo), "config", "core.hooksPath"), env=env, capture_output=True, check=True)
-        .stdout.decode()
-        .strip()
-    )
+    if install:
+        subprocess.run(("bash", "scripts/ci/install_hooks.sh"), cwd=repo, env=env, capture_output=True, check=True)
+        hooks_dir = (
+            subprocess.run(
+                ("git", "-C", str(repo), "config", "core.hooksPath"), env=env, capture_output=True, check=True
+            )
+            .stdout.decode()
+            .strip()
+        )
+    else:
+        hooks_dir = str(repo / ".git" / "hooks")
     return TempRepo(root=repo, env=env, hooks_dir=Path(hooks_dir))
 
 
@@ -810,3 +818,97 @@ def test_make_hooks_self_check_passes_and_enables_the_gate(tmp_path: Path) -> No
     hooks_path = configured.stdout.decode().strip()
     assert "jev-hooks" in hooks_path, "the enablement must use the common-dir forwarders"
     assert b"pre-push gate reachable" in proc.stdout + proc.stderr, "the gate must report reachability"
+
+
+def test_a_moved_clone_fails_loudly_on_the_next_make_invocation(tmp_path: Path) -> None:
+    """The regression: `make hooks` writes an absolute core.hooksPath, the clone is
+    renamed, and git treats the missing hooks directory as "no hooks" — every commit and
+    push then runs without the pre-push gate, with no warning. The next make invocation
+    must refuse to work and name the repair; a dry run refuses too, because the refusal
+    happens at parse time, before any recipe runs."""
+    repo = _temp_gate_repo(tmp_path)
+    moved = tmp_path / "repo-moved"
+    repo.root.rename(moved)
+    moved_repo = TempRepo(root=moved, env=repo.env, hooks_dir=repo.hooks_dir)
+    proc = moved_repo.run(("make", "-f", str(REPO / "Makefile"), "-n", "lint"))
+    assert proc.returncode != 0, "a moved clone must fail loudly instead of running ungated work"
+    combined = proc.stdout + proc.stderr
+    assert b"core.hooksPath" in combined, "the refusal must name the stale setting"
+    assert b"make hooks" in combined, "the refusal must name the one-line repair"
+
+
+def test_a_hooks_path_into_another_repository_fails_loudly_too(tmp_path: Path) -> None:
+    """The second stale shape: the configured directory exists but belongs to a different
+    repository — the old clone after a copy, or another checkout's hooks. Existence alone
+    is not health; the refusal must fire before this clone's pushes run un-gated."""
+    repo = _temp_gate_repo(tmp_path)
+    other = tmp_path / "other-repo"
+    other.mkdir()
+    subprocess.run(("git", "init", "-q", str(other)), capture_output=True, check=True, env=repo.env)
+    foreign = other / ".git" / "jev-hooks"
+    foreign.mkdir()
+    repo.git("config", "core.hooksPath", str(foreign))
+    proc = repo.run(("make", "-f", str(REPO / "Makefile"), "-n", "lint"))
+    assert proc.returncode != 0, "an existing directory in another repository is still stale"
+    combined = proc.stdout + proc.stderr
+    assert b"another repository" in combined, "the refusal must say where the path lands"
+    assert b"make hooks" in combined
+
+
+def test_make_hooks_repairs_a_moved_clone(tmp_path: Path) -> None:
+    """`make hooks` is the repair the refusal names: it re-points core.hooksPath at the
+    moved clone's own common dir, proves the gate reachable, and the next make invocation
+    is silent again about hooks."""
+    repo = _temp_gate_repo(tmp_path)
+    moved = tmp_path / "repo-moved"
+    repo.root.rename(moved)
+    moved_repo = TempRepo(root=moved, env=repo.env, hooks_dir=repo.hooks_dir)
+    blocked = moved_repo.run(("make", "-f", str(REPO / "Makefile"), "-n", "lint"))
+    assert blocked.returncode != 0, "the move must make make refuse first"
+    repaired = moved_repo.run(("make", "-f", str(REPO / "Makefile"), "hooks"))
+    assert repaired.returncode == 0, repaired.stderr.decode()
+    hooks_path = Path(moved_repo.git("config", "core.hooksPath"))
+    assert hooks_path.resolve().is_relative_to((moved / ".git").resolve()), (
+        "the repair must re-point at this clone's common dir"
+    )
+    again = moved_repo.run(("make", "-f", str(REPO / "Makefile"), "-n", "lint"))
+    assert again.returncode == 0, again.stdout.decode() + again.stderr.decode()
+
+
+def test_a_clone_without_a_local_hooks_path_is_never_blocked(tmp_path: Path) -> None:
+    """Fresh-clone parity: a brand-new clone and GitHub CI have no local core.hooksPath,
+    and the guard must leave them exactly as they are — no output, no failure."""
+    repo = _temp_gate_repo(tmp_path, install=False)
+    proc = repo.run(("make", "-f", str(REPO / "Makefile"), "-n", "lint"))
+    assert proc.returncode == 0, proc.stdout.decode() + proc.stderr.decode()
+    assert b"core.hooksPath" not in proc.stdout + proc.stderr
+
+
+def test_linked_worktrees_keep_hooks_through_the_common_dir(tmp_path: Path) -> None:
+    """ADR-0056: linked worktrees run the common dir's forwarders. This is the check that
+    forbids the tempting fix for a moved clone: a relative core.hooksPath (`.git/jev-hooks`)
+    survives a move but resolves from the invoking worktree root, where `.git` is a file —
+    git then fails on every hook in every linked worktree. The enablement stays absolute,
+    and a worktree must still reach the previous hooks through it."""
+    repo = _temp_gate_repo(tmp_path)
+    repo.git("add", "-A")  # a worktree checks out the committed tree: carry the chain in it
+    repo.git("commit", "-q", "-m", "carry the chain")
+    repo.git("worktree", "add", "-q", str(tmp_path / "wt"), "-b", "wtb")
+    log = tmp_path / "hook.log"
+    _write_global_hook(
+        repo,
+        tmp_path,
+        "commit-msg",
+        '#!/usr/bin/env bash\nprintf "args:%s\n" "$*" >>"$HOOK_LOG"\nexit 7\n',
+    )
+    worktree = TempRepo(root=tmp_path / "wt", env=repo.env, hooks_dir=repo.hooks_dir)
+    proc = worktree.run(
+        ("git", "hook", "run", "commit-msg", "--", ".git/COMMIT_EDITMSG"),
+        input=b"",
+        env_extra={"HOOK_LOG": str(log)},
+    )
+    assert proc.returncode == 7, (
+        "the worktree must reach its previous commit-msg through the common-dir forwarders: "
+        f"rc={proc.returncode} out={proc.stdout.decode()[:300]} err={proc.stderr.decode()[:300]}"
+    )
+    assert log.exists() and "args:.git/COMMIT_EDITMSG" in log.read_text(encoding="utf-8")

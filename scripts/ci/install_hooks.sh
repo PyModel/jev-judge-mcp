@@ -2,10 +2,14 @@
 # `make hooks`: enable the pre-push gate for this clone (ADR-0056).
 #
 # The forwarders live in the repository's common dir — shared by every linked worktree — and
-# core.hooksPath points there absolutely. Each forwarder delegates to the checked-out tree's
-# scripts/ci/hook_chain.sh when that exists, and otherwise chains straight to the previous
-# hooks, so no checkout of this repo — any worktree, any commit, a bisect step, a hotfix off
-# an old tag — is ever left with zero hooks.
+# core.hooksPath points there absolutely. The setting is absolute on purpose: relative paths
+# resolve from the invoking worktree root, where `.git` is a file in a linked worktree
+# (ADR-0056 amendment). A moved or renamed clone therefore goes stale, and every make
+# invocation refuses to work (scripts/ci/check_hooks.sh) until `make hooks` re-enables.
+# Each forwarder delegates to the checked-out tree's scripts/ci/hook_chain.sh when that
+# exists, and otherwise chains straight to the previous hooks, so no checkout of this
+# repo — any worktree, any commit, a bisect step, a hotfix off an old tag — is ever left
+# with zero hooks.
 set -Eeuo pipefail
 
 common=$(git rev-parse --git-common-dir)
