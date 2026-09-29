@@ -922,6 +922,22 @@ def real_agent_dir(base_env: Mapping[str, str]) -> Path:
     return Path(raw)
 
 
+def sandbox_diff(workdir: Path) -> str:
+    """The dry-run sandbox's post-run diff, taken on the host.
+
+    Confined runs do not call this. Their diff is produced inside the container (ADR-0074).
+    """
+    subprocess.run(["git", "add", "-A"], cwd=workdir, check=False, capture_output=True)  # noqa: S607
+    done = subprocess.run(
+        ["git", "diff", "--cached"],  # noqa: S607
+        cwd=workdir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return done.stdout
+
+
 @contextmanager
 def run_agent(
     command: AgentCommand,

@@ -812,11 +812,6 @@ def test_preflight_passes_when_the_agent_reaches_its_model(
     assert result.trace.model
 
 
-def _skip_grader(_image: object, _task_id: object) -> tuple[str, ...]:
-    """Stands in for the confined reference grader: no container, no real reference run."""
-    return ()
-
-
 def _agent_bin(bindir: Path, name: str, body: str) -> None:
     bindir.mkdir(exist_ok=True)
     stub = bindir / name
@@ -860,45 +855,23 @@ def _confined_env(bindir: Path, home: Path, agent: str) -> dict[str, str]:
     return env
 
 
-def _docker_answers() -> None:
-    return None
-
-
-def _image_exists(_image: str) -> bool:
-    return True
-
-
-def _dead_probe(_spec: object) -> str:
-    return "upstream unreachable: ConnectionRefused"
-
-
-def _stub_the_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The docker gate answers without a daemon; no image build, no probe containers."""
-    monkeypatch.setattr(ab_run, "docker_available", _docker_answers)
-    monkeypatch.setattr(ab_run, "image_present", _image_exists)
-
-
 @pytest.mark.parametrize("agent", ab_run.AGENTS)
-def test_a_dead_preflight_exits_2_and_books_nothing(
+def test_a_missing_confinement_image_exits_2_and_books_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], agent: str
 ) -> None:
-    """A dead boundary refuses before any run is booked, pins no setup, and rewrites no report.
+    """A boundary that cannot be built refuses before any run is booked. No private grader is stubbed:
 
-    Live preflight is the confined probe (ADR-0074): a probe that cannot reach the model provider
-    through the broker refuses the batch. `confined_reference` is the reference grader, unrelated to this
-    gate. Moving the preflight to after `study`, or dropping it, books the dead run: the ledger
-    appears and this fails. Exit 2 is `main`'s refusal, so a stop string that still publishes also
-    fails.
+    `main` takes the production path, and a missing image (or a daemon that is not up) is a refusal,
+    exit 2, with no ledger, no pinned setup, and no report. A refusal that still books fails this.
     """
     _agent_bin(tmp_path / "bin", agent, dead_login())
-    _stub_the_boundary(monkeypatch)
     monkeypatch.setenv("PI_MCP_ADAPTER", str(tmp_path / "adapter.ts"))
-    monkeypatch.setattr(ab_run, "probe_provider", _dead_probe)
-    monkeypatch.setattr(ab_run, "confined_reference", _skip_grader)
     monkeypatch.setattr(ab_run, "OUT", tmp_path / "out")
     monkeypatch.setattr(ab_run, "REPORT", tmp_path / "report.md")
-    assert ab_run.main(["--agent", agent], environ=_confined_env(tmp_path / "bin", tmp_path, agent)) == 2
-    assert "confined preflight could not reach the model provider" in capsys.readouterr().err
+    env = _confined_env(tmp_path / "bin", tmp_path, agent)
+    env["JEV_EVAL_IMAGE"] = "jev-eval-missing:no-such"
+    assert ab_run.main(["--agent", agent], environ=env) == 2
+    assert "refused:" in capsys.readouterr().err
     study_out = tmp_path / "out" / agent
     assert not (study_out / "meta.json").exists()
     assert not (study_out / "ledger.json").exists()
@@ -919,7 +892,6 @@ def test_a_finished_study_does_not_preflight_again(tmp_path: Path, monkeypatch: 
         ]
     )
     _agent_bin(tmp_path / "bin", "claude", body)
-    monkeypatch.setattr(ab_run, "confined_reference", _skip_grader)
     out = tmp_path / "out"
     study_out = out / "claude"
     study_out.mkdir(parents=True)
@@ -929,35 +901,6 @@ def test_a_finished_study_does_not_preflight_again(tmp_path: Path, monkeypatch: 
     stop = ab_run.live(_live_env(tmp_path / "bin", tmp_path), out, agent="claude")
     assert stop == f"all {len(plan)} pairs recorded"
     assert not log.exists()
-
-
-@pytest.mark.parametrize("agent", ab_run.AGENTS)
-def test_a_broken_confinement_setup_refuses_with_exit_2(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], agent: str
-) -> None:
-    """A failure while building the boundary is a refusal, not a traceback, and books nothing.
-
-    The macOS-sandbox predecessor (an OSError inside `_isolated_env`) is the offline dry-run path;
-    a live run's setup failure is the confinement build (ADR-0074), and `main` must catch it the
-    same way: exit 2, nothing pinned, nothing booked, no report rewritten.
-    """
-
-    def unlinkable(*_args: object, **_kwargs: object) -> tuple[object, Path]:
-        raise ab_run.ConfinementError("unlinkable broker volume")
-
-    _agent_bin(tmp_path / "bin", agent, dead_login())
-    _stub_the_boundary(monkeypatch)
-    monkeypatch.setenv("PI_MCP_ADAPTER", str(tmp_path / "adapter.ts"))
-    monkeypatch.setattr(ab_run, "confined_reference", _skip_grader)
-    monkeypatch.setattr(ab_run, "OUT", tmp_path / "out")
-    monkeypatch.setattr(ab_run, "REPORT", tmp_path / "report.md")
-    monkeypatch.setattr(ab_run, "_confinement", unlinkable)
-    assert ab_run.main(["--agent", agent], environ=_confined_env(tmp_path / "bin", tmp_path, agent)) == 2
-    assert "unlinkable broker volume" in capsys.readouterr().err
-    study_out = tmp_path / "out" / agent
-    assert not (study_out / "ledger.json").exists()
-    assert not (study_out / "meta.json").exists()
-    assert not (tmp_path / "report.md").exists()
 
 
 def test_a_resume_under_another_setup_is_refused(tmp_path: Path) -> None:

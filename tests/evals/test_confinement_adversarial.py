@@ -574,7 +574,9 @@ def test_grading_runs_inside_the_image_and_trusts_nothing_host_side(image: str, 
     conftest.py tries to write a host marker, a symlink points at a host file, and neither the
     marker appears nor the target's content lands anywhere — while a real task still grades."""
     from evals.ab import tasks as ab_tasks
-    from evals.confinement.launch import confined_postprocess
+    from evals.ab.grade import expected_ids
+    from evals.confinement.launch import ConfinementSpec
+    from evals.isolation import postprocess
 
     task = ab_tasks.load_task("j10-control-spec")
     workdir = tmp_path / "tree"
@@ -586,7 +588,14 @@ def test_grading_runs_inside_the_image_and_trusts_nothing_host_side(image: str, 
     outside = tmp_path / "outside.txt"
     outside.write_text("host-only-content-not-for-records", encoding="utf-8")
     (workdir / "planted-link").symlink_to(outside)
-    patch, result = confined_postprocess(image, workdir, task.id, timeout_s=600)
+    graded = postprocess(
+        workdir=workdir,
+        task=task,
+        python=sys.executable,
+        confinement=ConfinementSpec(agent_image=image, upstreams=(), timeout_s=600),
+        reference_ids={task.id: expected_ids(task, sys.executable)},
+    )
+    patch, result = graded.patch, graded.grade
     assert not marker.exists(), "the planted conftest must never run with host privileges"
     assert "host-only-content-not-for-records" not in patch, "a followed symlink leaked host bytes"
     assert result.acceptance_total > 0 and result.original_total > 0, "the task graded end to end"
@@ -842,3 +851,178 @@ def test_a_stub_agent_workflow_runs_confined_end_to_end(boundary_stack: Any, tmp
     assert all(row["path"] == "/zen/go/v1/chat/completions" for row in provider_calls), (
         "F3: the shim's /chat/completions must arrive with the provider base path prepended"
     )
+
+
+def _escape_script(path: Path, marker: Path, label: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"#!/bin/sh\necho {label} >> {marker}\n", encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _plant(case: str, workdir: Path, marker: Path, tmp_path: Path) -> None:
+    """Agent-controlled content that the pre-change host `git add` or host grader would execute."""
+    if case == "conftest":
+        body = f"from pathlib import Path\nPath({str(marker)!r}).write_text('conftest')\n"
+        (workdir / "conftest.py").write_text(body, encoding="utf-8")
+        (workdir / "tests" / "conftest.py").write_text(body, encoding="utf-8")
+        added = "def test_added():\n    assert True\n"
+        (workdir / "tests" / "test_added_escape.py").write_text(added, encoding="utf-8")
+        return
+    if case == "pytest-plugin":
+        (workdir / "planted_plugin.py").write_text(
+            f"from pathlib import Path\nPath({str(marker)!r}).write_text('plugin')\n",
+            encoding="utf-8",
+        )
+        (workdir / "conftest.py").write_text("pytest_plugins = ['planted_plugin']\n", encoding="utf-8")
+        (workdir / "pyproject.toml").write_text(
+            "[project.entry-points.pytest11]\nplanted = 'planted_plugin'\n",
+            encoding="utf-8",
+        )
+        added = "def test_added():\n    assert True\n"
+        (workdir / "tests" / "test_added_escape.py").write_text(added, encoding="utf-8")
+        return
+    if case == "sitecustomize":
+        body = f"from pathlib import Path\nPath({str(marker)!r}).write_text('site')\n"
+        (workdir / "sitecustomize.py").write_text(body, encoding="utf-8")
+        (workdir / "usercustomize.py").write_text(body, encoding="utf-8")
+        return
+    if case == "hooks":
+        _escape_script(workdir / ".git" / "hooks" / "pre-commit", marker, "hook")
+        _escape_script(tmp_path / "hooks" / "escape", marker, "hookspath")
+        config = workdir / ".git" / "config"
+        config.write_text(
+            config.read_text(encoding="utf-8")
+            + f"\n[core]\n\thooksPath = {tmp_path / 'hooks'}\n\tfsmonitor = {tmp_path / 'hooks' / 'escape'}\n",
+            encoding="utf-8",
+        )
+        return
+    if case == "fsmonitor":
+        _escape_script(tmp_path / "fs.sh", marker, "fsmonitor")
+        config = workdir / ".git" / "config"
+        config.write_text(
+            config.read_text(encoding="utf-8") + f"\n[core]\n\tfsmonitor = {tmp_path / 'fs.sh'}\n",
+            encoding="utf-8",
+        )
+        return
+    if case == "git-alias":
+        _escape_script(tmp_path / "alias.sh", marker, "alias")
+        config = workdir / ".git" / "config"
+        config.write_text(
+            config.read_text(encoding="utf-8")
+            + f"\n[alias]\n\tescape = !{tmp_path / 'alias.sh'}\n[core]\n\tfsmonitor = git escape\n",
+            encoding="utf-8",
+        )
+        return
+    if case == "symlink":
+        secret = tmp_path / "outside.txt"
+        secret.write_text("host-only-content-not-for-records", encoding="utf-8")
+        (workdir / "planted-link").symlink_to(secret)
+        return
+    if case == "path-shadow":
+        bindir = tmp_path / "bin"
+        _escape_script(bindir / "git", marker, "path-git")
+        _escape_script(bindir / "python3", marker, "path-python")
+        (workdir / "sitecustomize.py").write_text(
+            f"from pathlib import Path\nPath({str(marker)!r}).write_text('pythonpath')\n",
+            encoding="utf-8",
+        )
+        return
+    raise AssertionError(case)
+
+
+@pytest.fixture(scope="module")
+def j10_reference_ids(image: str) -> tuple[str, ...]:
+    """Study-start ids from the image, once. The per-case grade must not recompute them on the host."""
+    from evals.confinement.launch import confined_reference
+
+    return confined_reference(image, "j10-control-spec")
+
+
+def _production_record(image: str, workdir: Path, ids: tuple[str, ...], run_dir: Path) -> dict[str, Any]:
+    """The function `run_one` grades through: `_record` → `isolation.postprocess`."""
+    from evals.ab import ledger as ab_ledger
+    from evals.ab import tasks as ab_tasks
+    from evals.ab.run import Setup, _record  # pyright: ignore[reportPrivateUsage]
+    from evals.ab.stream import Trace
+    from evals.agent import AgentRunResult
+    from evals.confinement.launch import ConfinementSpec
+    from evals.spend import SpendLedger
+
+    task = ab_tasks.load_task("j10-control-spec")
+    setup = Setup(
+        agent="pi",
+        binary=["pi"],
+        server_env={},
+        base_env={},
+        secret="sk-g4-not-a-real-key",  # noqa: S106
+        python3=sys.executable,
+        confinement=ConfinementSpec(agent_image=image, upstreams=(), timeout_s=600),
+        reference_ids={task.id: ids},
+        task_list=(task,),
+    )
+    book = SpendLedger.load(run_dir / "ledger.json", ab_ledger.POLICIES["pi"])
+    run = AgentRunResult(
+        argv=(),
+        workdir=workdir,
+        stdout="",
+        stderr="",
+        returncode=0,
+        wall_s=1.0,
+        trace=Trace(result={"total_cost_usd": 0.01}),
+        status="ok",
+    )
+    return _record(  # pyright: ignore[reportPrivateUsage]
+        "j10-control-spec.A.r1", task, "A", 1, setup, run, book, run_dir / "jev.jsonl", run_dir
+    )
+
+
+@DOCKER
+@pytest.mark.parametrize(
+    "case",
+    ["conftest", "pytest-plugin", "sitecustomize", "hooks", "fsmonitor", "git-alias", "symlink", "path-shadow"],
+)
+def test_hostile_content_does_not_run_on_the_host(
+    case: str, image: str, j10_reference_ids: tuple[str, ...], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """G4: each hostile-content case goes through `_record`, the production post-run path.
+
+    A host marker means a process from the agent tree ran outside the container adapter.
+    """
+    from evals.ab import tasks as ab_tasks
+
+    task = ab_tasks.load_task("j10-control-spec")
+    workdir = tmp_path / "tree"
+    ab_tasks.materialize(task, workdir)
+    marker = tmp_path / "host-marker.txt"
+    _plant(case, workdir, marker, tmp_path)
+    if case == "path-shadow":
+        monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}:{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("PYTHONPATH", str(workdir))
+    record = _production_record(image, workdir, j10_reference_ids, tmp_path / "run")
+    assert not marker.exists(), f"{case} executed on the host"
+    text = json.dumps(record)
+    assert "host-only-content-not-for-records" not in text
+    patch = (tmp_path / "run" / "diff.patch").read_text(encoding="utf-8")
+    assert "host-only-content-not-for-records" not in patch
+    total = record["acceptance_total"]
+    assert isinstance(total, int) and total > 0, "the production path did not grade"
+
+
+@DOCKER
+def test_a_missing_grade_image_stops_without_host_execution(tmp_path: Path) -> None:
+    """G9: the grading container cannot start. The planted fsmonitor does not run on the host, and
+    `_record` raises the infrastructure stop instead of a failed-agent result."""
+    from evals.ab import tasks as ab_tasks
+    from evals.ab.run import _InfrastructureStop  # pyright: ignore[reportPrivateUsage]
+
+    task = ab_tasks.load_task("j10-control-spec")
+    workdir = tmp_path / "tree"
+    ab_tasks.materialize(task, workdir)
+    marker = tmp_path / "host-marker.txt"
+    _plant("fsmonitor", workdir, marker, tmp_path)
+    with pytest.raises(_InfrastructureStop) as stopped:  # pyright: ignore[reportPrivateUsage]
+        _production_record("jev-eval-missing:no-such", workdir, ("unused.id",), tmp_path / "run")
+    assert "did not start" in stopped.value.reason
+    assert stopped.value.incurred_usd == pytest.approx(0.01)
+    assert not marker.exists()
+    assert not (tmp_path / "run" / "result.json").exists()

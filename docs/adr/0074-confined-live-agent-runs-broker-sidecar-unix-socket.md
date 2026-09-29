@@ -183,3 +183,37 @@ F1/F2/F5/F6/F8-F10, landed on `fm/jev-eval-d3-rerun`):
   refuses without `JEV_AB_RUN_BOUND_USD`, its per-run ceiling.
 - Residual, named: a bare filename after a `cd` outside `/task` resolves only when it carries a
   slash; paths built at runtime inside programs are covered by the wall, not the canary.
+
+
+## Amendment 2026-09-29: the isolation adapter grades, and the host does not open the tree
+
+Post-run grading of a confined A/B run no longer runs `git` or the grader on the host. The live
+defect was `_record` diffing and grading the agent workdir in the harness process while
+`confined_postprocess` had no production caller.
+
+- **`evals/isolation.py` selects the adapter and names the shared result.** It holds nothing else.
+  Container mechanics stay in `evals/confinement/launch.py`. The dry-run sandbox diff stays in
+  `evals.agent.sandbox_diff`. A `ConfinementSpec` selects the container adapter; `None` selects the
+  macOS sandbox adapter, which still grades on the host. That path is the offline dry-run only.
+- **Reference ids are computed once, in the image, at study start** (`confined_reference`) and
+  stored on the setup as an immutable input. Each confined grade receives them and does not call
+  host `expected_ids`. The sandbox adapter still computes ids on the host, because that adapter
+  grades on the host.
+- **The container adapter reuses `confined_postprocess`.** The host bind-mounts the workdir and
+  does not open or copy it. The container returns only `diff.patch` and the grade payload. The
+  host reads those as untrusted data: no symlink is followed, each file is capped at 8 MiB, and
+  the grade payload must match the `Grade` schema. There is no general host/container file bridge.
+  A `started` mark in the output dir is a classification signal, not a returned artifact.
+- **A grade that fails after the container has started** is a failed run with the existing status
+  (`failed: post-processing raised …`), written by `write_record` and booked once.
+- **Docker unavailable, or a container that does not start,** is not that result. It stops the
+  study. If the agent already ran, the cost it incurred is booked first; if it never started,
+  nothing is booked. No failed-agent `result.json` is synthesized. The stop escapes `write_record`
+  and `run_recorded` as a `BaseException` so the study runner cannot book it as an unfinished agent
+  run at the run bound.
+- **The bench's live path stays refused** until a separate decision routes it through `run_confined`.
+- **Acceptance:** no process from agent-controlled content runs outside the selected adapter. The
+  Docker-marked suite drives `_record` — the production post-run path — with conftest.py, a pytest
+  plugin entry point, sitecustomize/usercustomize, `.git/hooks` and `core.hooksPath`,
+  `core.fsmonitor`, a git alias, a symlink out of the workdir, and PATH/PYTHONPATH shadowing. A
+  host marker from any of those fails the suite. No paid A/B run is started by that suite.

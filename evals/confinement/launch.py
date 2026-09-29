@@ -31,7 +31,7 @@ from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from evals.ab import stream
@@ -86,6 +86,14 @@ CLOCK = time.time
 
 class ConfinementError(RuntimeError):
     """The confinement boundary could not be built or verified. Not a run: nothing is booked."""
+
+
+class ContainerStartError(ConfinementError):
+    """Docker is unavailable, or the grading container did not start.
+
+    Not an agent failure. A study that has already run an agent books that incurred cost and stops;
+    this is never written as a failed-agent result (ADR-0074).
+    """
 
 
 OPENAI_ENDPOINTS = ("/chat/completions", "/models")
@@ -789,12 +797,28 @@ import json, os, subprocess, sys
 from dataclasses import asdict
 from pathlib import Path
 
+# First act, before the tree or the grading code is touched: a regular-file mark so the host can
+# tell a started container from docker never having run this process.
+Path("/out/started").write_text("1", encoding="utf-8")
+os.environ["PATH"] = "/usr/local/bin:/usr/bin:/bin"
+os.environ.pop("PYTHONPATH", None)
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
 sys.path.insert(0, "/code")
 from evals.ab import tasks
 from evals.ab.grade import grade, expected_ids
 
-# Hostile-tree-safe git (F1): no config files, no fsmonitor, no hooks, no protocol helpers.
-GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
+# Hostile-tree-safe git (F1): a clean PATH, no inherited config, hooks and fsmonitor forced off.
+# Repo-local config is still read; command-line -c wins, so a planted hook or fsmonitor does not
+# run even inside the container. The workdir is not on PATH.
+GIT_ENV = {
+    "PATH": "/usr/local/bin:/usr/bin:/bin",
+    "HOME": "/tmp",
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_SYSTEM": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_TERMINAL_PROMPT": "0",
+}
 
 
 def git(*args):
@@ -812,14 +836,160 @@ if mode == "reference":
     raise SystemExit(0)
 
 task = tasks.load_task(argument)
+ids = tuple(json.loads(Path("/reference.json").read_text(encoding="utf-8"))["ids"])
 if (Path("/tree") / ".git").exists():
     git("add", "-A")
     Path("/out/diff.patch").write_text(git("diff", "--cached").stdout, encoding="utf-8")
 else:
     Path("/out/diff.patch").write_text("", encoding="utf-8")
-result = grade(Path("/tree"), task, sys.executable)
+result = grade(Path("/tree"), task, sys.executable, expected=ids)
 Path("/out/grade.json").write_text(json.dumps(asdict(result)))
 """
+
+
+GRADE_OUTPUT_CAP = 8 * 1024 * 1024
+"""Bytes the host will read back from one grading-container file. Over the cap is a failed grade."""
+
+_GRADE_OUTCOMES = frozenset({"pass", "fail", "error", "skip", "timeout"})
+_START_NEEDLES = (
+    "Cannot connect to the Docker daemon",
+    "Is the docker daemon running",
+    "error during connect",
+    "Unable to find image",
+    "unable to find image",
+    "No such image",
+    "pull access denied",
+    "failed to resolve reference",
+)
+
+
+def _regular_marker(path: Path) -> bool:
+    """True when `path` is a regular file opened without following a symlink."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return False
+    try:
+        return stat.S_ISREG(os.fstat(fd).st_mode)
+    finally:
+        os.close(fd)
+
+
+def read_untrusted_text(path: Path, *, cap: int = GRADE_OUTPUT_CAP) -> str:
+    """Read one regular file the grading container wrote. A symlink is refused, not followed."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise ValueError(f"{path.name} is not a regular file") from error
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > cap:
+            raise ValueError(f"{path.name} is not a capped regular file")
+        with os.fdopen(fd, "rb") as reader:
+            fd = -1
+            raw = reader.read(cap + 1)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if len(raw) > cap:
+        raise ValueError(f"{path.name} exceeds {cap} bytes")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeError as error:
+        raise ValueError(f"{path.name} is not utf-8") from error
+
+
+def parse_grade_payload(payload: object) -> Any:
+    """The grade object the container returned. Extra keys, wrong types, and non-objects are refused."""
+    from evals.ab.grade import AddedTest, Grade
+
+    if not isinstance(payload, dict):
+        raise ValueError("grade output is not an object")
+    data = cast(dict[str, Any], payload)
+    required = (
+        "acceptance_passed",
+        "acceptance_total",
+        "original_passed",
+        "original_total",
+        "regressions",
+        "protected_changed",
+        "preexisting_altered",
+        "added_tests",
+    )
+    missing = [key for key in required if key not in data]
+    extra = [key for key in data if key not in required]
+    if missing or extra:
+        raise ValueError(f"grade output keys drifted: missing {missing}, extra {extra}")
+
+    def count(key: str) -> int:
+        value = data[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"grade output {key} is not a non-negative int")
+        return value
+
+    def strings(key: str) -> tuple[str, ...]:
+        value = data[key]
+        if not isinstance(value, list):
+            raise ValueError(f"grade output {key} is not a list of strings")
+        found: list[str] = []
+        for item in cast(list[object], value):
+            if not isinstance(item, str):
+                raise ValueError(f"grade output {key} is not a list of strings")
+            found.append(item)
+        return tuple(found)
+
+    added_raw = data["added_tests"]
+    if not isinstance(added_raw, list):
+        raise ValueError("grade output added_tests is not a list")
+    added: list[AddedTest] = []
+    for item in cast(list[object], added_raw):
+        if not isinstance(item, dict):
+            raise ValueError("grade output added test is not an object")
+        row = cast(dict[str, Any], item)
+        if set(row) != {"file", "name", "outcome", "relevant"}:
+            raise ValueError("grade output added test keys drifted")
+        file, name, outcome, relevant = row["file"], row["name"], row["outcome"], row["relevant"]
+        if not isinstance(file, str) or not isinstance(name, str) or outcome not in _GRADE_OUTCOMES:
+            raise ValueError("grade output added test has a bad field")
+        if not isinstance(relevant, bool):
+            raise ValueError("grade output added test relevance is not a bool")
+        added.append(AddedTest(file=file, name=name, outcome=str(outcome), relevant=relevant))
+    return Grade(
+        acceptance_passed=count("acceptance_passed"),
+        acceptance_total=count("acceptance_total"),
+        original_passed=count("original_passed"),
+        original_total=count("original_total"),
+        regressions=strings("regressions"),
+        protected_changed=strings("protected_changed"),
+        preexisting_altered=strings("preexisting_altered"),
+        added_tests=tuple(added),
+    )
+
+
+def parse_reference_ids(payload: object) -> tuple[str, ...]:
+    """The study-start id list. A non-object or an empty list is refused."""
+    if not isinstance(payload, dict):
+        raise ValueError("reference output is not an object")
+    raw = cast(dict[str, Any], payload).get("ids")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("reference output ids are not a non-empty list of strings")
+    ids: list[str] = []
+    for item in cast(list[object], raw):
+        if not isinstance(item, str) or not item:
+            raise ValueError("reference output ids are not a non-empty list of strings")
+        ids.append(item)
+    return tuple(ids)
+
+
+def _container_did_not_start(done: subprocess.CompletedProcess[str], started: bool) -> bool:
+    if started:
+        return False
+    err = f"{done.stderr or ''}\n{done.stdout or ''}"
+    if done.returncode in (125, 126, 127):
+        return True
+    if any(needle in err for needle in _START_NEEDLES):
+        return True
+    return done.returncode != 0
 
 
 def _grade_container(
@@ -829,10 +999,14 @@ def _grade_container(
     argument: str,
     tree: Path | None,
     timeout_s: float,
-) -> dict[str, Any]:
-    """Run the grading driver once inside the agent image (F1): `--network none`,
-    `--cap-drop ALL`, only the tree copy, the grading code, and an output dir mounted. Returns
-    the files the driver wrote."""
+    reference_ids: tuple[str, ...] | None = None,
+) -> dict[str, str]:
+    """Run the grading driver once inside the image: `--network none`, `--cap-drop ALL`.
+
+    The workdir is bind-mounted, never opened or copied on the host. Only the named output files
+    are read back, as untrusted data. A container that does not start raises `ContainerStartError`;
+    a driver that starts and fails raises `ValueError`.
+    """
     import tempfile
     import uuid
 
@@ -846,6 +1020,8 @@ def _grade_container(
         "docker",
         "run",
         "--rm",
+        "--pull",
+        "never",
         "--name",
         f"jev-eval-grade-{uuid.uuid4().hex[:12]}",
         "--label",
@@ -856,69 +1032,83 @@ def _grade_container(
         "ALL",
         "--security-opt",
         "no-new-privileges",
+        "-e",
+        "PATH=/usr/local/bin:/usr/bin:/bin",
+        "-e",
+        "HOME=/tmp",
+        "-e",
+        "PYTHONDONTWRITEBYTECODE=1",
         "-v",
         f"{root / 'code'}:/code:ro",
         "-v",
         f"{out}:/out",
     ]
+    if reference_ids is not None:
+        (root / "reference.json").write_text(json.dumps({"ids": list(reference_ids)}), encoding="utf-8")
+        argv += ["-v", f"{root / 'reference.json'}:/reference.json:ro"]
     if tree is not None:
-        # The tree copy is mounted writable: `git add` updates the snapshot repo the tree carries,
-        # and any write the graded code makes lands in this throwaway copy, never on the host.
+        # The workdir itself, not a host-side copy. The host passes the path and does not open it.
         argv += ["-v", f"{tree}:/tree"]
-    argv += [image, "python3", "/code/grade_driver.py", mode, argument]
+    argv += [image, "/usr/local/bin/python3", "/code/grade_driver.py", mode, argument]
     try:
-        done = docker_run(argv, check=False, timeout=timeout_s)
+        try:
+            done = docker_run(argv, check=False, timeout=timeout_s)
+        except subprocess.TimeoutExpired as error:
+            if _regular_marker(out / "started"):
+                raise ValueError("grading container timed out") from error
+            raise ContainerStartError("grading container did not start before the timeout") from error
+        except OSError as error:
+            raise ContainerStartError(f"docker is unavailable: {error}") from error
+        started = _regular_marker(out / "started")
         if done.returncode != 0:
-            raise ConfinementError(f"grading container failed: {(done.stderr or '')[-300:]}")
-        written: dict[str, Any] = {}
-        for name in ("diff.patch", "grade.json", "reference.json"):
-            path = out / name
-            if path.is_file():
-                written[name] = path.read_text(encoding="utf-8")
-        if not written:
-            raise ConfinementError("grading container wrote no output")
-        return written
+            detail = (done.stderr or done.stdout or "")[-300:]
+            if _container_did_not_start(done, started):
+                raise ContainerStartError(f"grading container did not start: {detail}")
+            raise ValueError(f"grading failed inside the container: {detail}")
+        names = ("reference.json",) if mode == "reference" else ("diff.patch", "grade.json")
+        return {name: read_untrusted_text(out / name) for name in names}
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def confined_postprocess(image: str, workdir: Path, task_id: str, *, timeout_s: float = 600.0) -> tuple[str, Any]:
-    """The confined path's post-run step (F1): diff and grade the agent's tree INSIDE the image,
-    never on the host. The tree crosses as a symlink-preserving copy; nothing in it executes with
-    host privileges. Returns `(patch_text, Grade)`.
+def confined_postprocess(
+    image: str,
+    workdir: Path,
+    task_id: str,
+    reference_ids: tuple[str, ...],
+    *,
+    timeout_s: float = 600.0,
+) -> tuple[str, Any]:
+    """Diff and grade inside the image. The host does not open `workdir`.
+
+    `reference_ids` are the study-start ids, an immutable input. The container returns only the
+    diff and the grade payload, read as untrusted data. Returns `(patch_text, Grade)`.
     """
-    import tempfile
-
-    from evals.ab.grade import AddedTest, Grade
-
-    root = Path(tempfile.mkdtemp(prefix="jev-grade-"))
+    if not reference_ids:
+        raise ValueError(f"confined grading of {task_id} needs the study-start reference ids")
+    written = _grade_container(
+        image,
+        mode="grade",
+        argument=task_id,
+        tree=workdir,
+        timeout_s=timeout_s,
+        reference_ids=reference_ids,
+    )
     try:
-        tree = root / "tree"
-        shutil.copytree(workdir, tree, symlinks=True, ignore=shutil.ignore_patterns("__pycache__"))
-        written = _grade_container(image, mode="grade", argument=task_id, tree=tree, timeout_s=timeout_s)
         payload = json.loads(written["grade.json"])
-        added = tuple(
-            AddedTest(file=item["file"], name=item["name"], outcome=item["outcome"], relevant=item["relevant"])
-            for item in payload["added_tests"]
-        )
-        grade_result = Grade(
-            acceptance_passed=payload["acceptance_passed"],
-            acceptance_total=payload["acceptance_total"],
-            original_passed=payload["original_passed"],
-            original_total=payload["original_total"],
-            regressions=tuple(payload["regressions"]),
-            protected_changed=tuple(payload["protected_changed"]),
-            preexisting_altered=tuple(payload["preexisting_altered"]),
-            added_tests=added,
-        )
-        return written.get("diff.patch", ""), grade_result
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
+    except json.JSONDecodeError as error:
+        raise ValueError("grade output is not json") from error
+    return written["diff.patch"], parse_grade_payload(payload)
 
 
 def confined_reference(image: str, task_id: str, *, timeout_s: float = 600.0) -> tuple[str, ...]:
     """Reference grading on the same interpreter the agent runs on (F1): the task's reference
-    solution graded inside the image. Raises when the reference does not pass, exactly like the
-    host-side `expected_ids` it replaces for confined studies."""
-    written = _grade_container(image, mode="reference", argument=task_id, tree=None, timeout_s=timeout_s)
-    return tuple(json.loads(written["reference.json"])["ids"])
+    solution graded inside the image, once per study. Raises when the reference does not pass,
+    exactly like the host-side `expected_ids` it replaces for confined studies."""
+    try:
+        written = _grade_container(image, mode="reference", argument=task_id, tree=None, timeout_s=timeout_s)
+        return parse_reference_ids(json.loads(written["reference.json"]))
+    except ContainerStartError:
+        raise
+    except (ValueError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise ConfinementError(f"reference grading failed: {error}") from error

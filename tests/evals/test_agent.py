@@ -630,10 +630,10 @@ def test_a_bench_forced_run_whose_server_is_not_connected_fails(
 def test_a_study_run_whose_grading_raises_leaves_a_failed_record(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arm: str
 ) -> None:
-    def broken(*_args: object) -> None:
+    def broken(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError(f"grading broke {KEY}")
 
-    monkeypatch.setattr(ab_run, "grade", broken)
+    monkeypatch.setattr(ab_run, "postprocess", broken)
     with pytest.raises(RuntimeError, match="grading broke"):
         _study_run(tmp_path, _reporting([]), arm=arm)
     out = tmp_path / "out"
@@ -653,7 +653,7 @@ def test_a_study_run_whose_grading_raises_leaves_a_failed_record(
 def test_the_study_books_a_run_whose_grading_raises_and_never_relaunches_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def broken(*_args: object) -> None:
+    def broken(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("grading broke")
 
     launches = tmp_path / "launches.log"
@@ -662,7 +662,7 @@ def test_the_study_books_a_run_whose_grading_raises_and_never_relaunches_it(
     stub.write_text("import json, sys\nsys.argv = [sys.argv[0], '0', *sys.argv[1:]]\n" + STUB, encoding="utf-8")
     launcher.write_text(f'#!/bin/sh\necho launch >> "{launches}"\nexec "{sys.executable}" "{stub}" "$@"\n', "utf-8")
     launcher.chmod(0o755)
-    monkeypatch.setattr(ab_run, "grade", broken)
+    monkeypatch.setattr(ab_run, "postprocess", broken)
     setup = ab_run.Setup(
         agent="claude",
         binary=[str(launcher)],

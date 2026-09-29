@@ -31,10 +31,11 @@ import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, cast
 
 from evals.ab import arms, ledger, outcomes, report, stream, tasks, unsafe
-from evals.ab.grade import grade, old_rule_success, run_correct
+from evals.ab.grade import old_rule_success, run_correct
 from evals.agent import (
     PREFLIGHT_TIMEOUT_S,
     AgentCommand,
@@ -63,6 +64,7 @@ from evals.confinement.launch import (
     reap,
     run_confined,
 )
+from evals.isolation import IsolationInfrastructureError, postprocess
 from evals.spend import SpendLedger, agent_started, book_outcome
 from evals.study_runner import record_row, run_recorded, write_record
 
@@ -78,6 +80,20 @@ PINNED = ("jev_revision", "fixture_sha256", "agent", "agent_version", "held_cons
 
 class StudyRefusedError(RuntimeError):
     pass
+
+
+class _InfrastructureStop(BaseException):
+    """Escapes `write_record` and `run_recorded`.
+
+    An infrastructure failure is not an `Exception` the study runner would book as an unfinished
+    agent run, and it is not a failed-agent result. The study books `incurred_usd` when the agent
+    already ran, then stops.
+    """
+
+    def __init__(self, reason: str, incurred_usd: float | None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.incurred_usd = incurred_usd
 
 
 @dataclass(frozen=True)
@@ -107,6 +123,8 @@ class Setup:
     """The study's pi model (`JEV_AB_MODEL`, default `pi.PI_MODEL`); empty means the default."""
     provider_secret: str = ""
     """The scoped provider key value, scanned and scrubbed alongside the TypeSafe key (F10)."""
+    reference_ids: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: dict[str, tuple[str, ...]]())
+    """Study-start reference test ids, computed once in the image. Empty on the sandbox path."""
     task_list: Sequence[tasks.Task] = field(default_factory=tasks.load_tasks)
     policy: ledger.SpendPolicy | None = None
     """The agent's spend policy with `JEV_AB_MAX_USD` applied (live); None uses the stock policy."""
@@ -221,23 +239,27 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
             ],
             timeout_s=setup.timeout_s,
         )
-        with run_confined(
-            command,
-            spec=spec,
-            mcp_config=lambda scratch: arms.confined_mcp_config(
-                arm,
-                scratch=scratch,
-                server_env=setup.server_env,
-                typesafe_shim_url=spec.shim_url("typesafe"),
-            ),
-            scratch_files=_container_agent_files(spec, setup),
-            secret=setup.secret,
-            run_dir=run_dir,
-            extra_secrets=(setup.provider_secret,) if setup.provider_secret else (),
-            prepare=lambda workdir: tasks.materialize(task, workdir),
-            parse=parser_for(setup.agent),
-        ) as run:
-            record = _record_inside(run_dir, run, rid, task, arm, repeat, setup, book, jev_log)
+        try:
+            with run_confined(
+                command,
+                spec=spec,
+                mcp_config=lambda scratch: arms.confined_mcp_config(
+                    arm,
+                    scratch=scratch,
+                    server_env=setup.server_env,
+                    typesafe_shim_url=spec.shim_url("typesafe"),
+                ),
+                scratch_files=_container_agent_files(spec, setup),
+                secret=setup.secret,
+                run_dir=run_dir,
+                extra_secrets=(setup.provider_secret,) if setup.provider_secret else (),
+                prepare=lambda workdir: tasks.materialize(task, workdir),
+                parse=parser_for(setup.agent),
+            ) as run:
+                record = _record_inside(run_dir, run, rid, task, arm, repeat, setup, book, jev_log)
+        except ConfinementError as error:
+            # The agent container did not start. No trace, no incurred cost, no failed-agent result.
+            raise _InfrastructureStop(str(error), None) from error
     else:
         command = AgentCommand(
             argv=lambda config: [*setup.binary, *argv_tail(setup.agent, prompt, config, addendum)],
@@ -398,6 +420,12 @@ def _outcome_record(
     return record_row(_RECORD_KEYS, values)
 
 
+def _incurred_usd(run: AgentRunResult, book: SpendLedger, jev_log: Path) -> float:
+    """The cost the agent already incurred, from its trace and the Jev log. Not the run bound unless
+    the agent reported no usable cost — that clamp is `SpendLedger.cost_of`, not a synthesized failure."""
+    return book.cost_of(run.trace.result_field("total_cost_usd"), _read_jsonl(jev_log)).total_usd
+
+
 def _record(
     rid: str,
     task: tasks.Task,
@@ -410,10 +438,18 @@ def _record(
     run_dir: Path,
 ) -> dict[str, Any]:
     workdir, trace = run.workdir, run.trace
-    subprocess.run(["git", "add", "-A"], cwd=workdir, check=False, capture_output=True)
-    patch = subprocess.run(["git", "diff", "--cached"], cwd=workdir, capture_output=True, text=True, check=False).stdout
-    (run_dir / "diff.patch").write_text(patch, encoding="utf-8")
-    result = grade(workdir, task, setup.python3)
+    try:
+        graded = postprocess(
+            workdir=workdir,
+            task=task,
+            python=setup.python3,
+            confinement=setup.confinement,
+            reference_ids=setup.reference_ids,
+        )
+    except IsolationInfrastructureError as error:
+        raise _InfrastructureStop(str(error), _incurred_usd(run, book, jev_log)) from error
+    (run_dir / "diff.patch").write_text(graded.patch, encoding="utf-8")
+    result = graded.grade
     protected = frozenset(tasks.protected_files())
     calls = _read_jsonl(jev_log)
     reached = outcomes.reached_model(trace)
@@ -604,12 +640,17 @@ def study(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int =
         for arm in pending:
             rid = run_id(task.id, arm, repeat)
             sys.stderr.write(f"run {setup.agent} {rid} (spent ${book.spent:.2f})\n")
-            record = run_recorded(
-                book,
-                rid,
-                out / rid / "result.json",
-                lambda task=task, arm=arm, repeat=repeat: run_one(task, arm, repeat, setup, book, out),
-            )
+            try:
+                record = run_recorded(
+                    book,
+                    rid,
+                    out / rid / "result.json",
+                    lambda task=task, arm=arm, repeat=repeat: run_one(task, arm, repeat, setup, book, out),
+                )
+            except _InfrastructureStop as stop:
+                if stop.incurred_usd is not None and rid not in book.runs:
+                    book.record(rid, stop.incurred_usd)
+                return f"stopped: isolation infrastructure: {stop.reason}"
             if isinstance(record, Mapping) and record.get("failure_category") == "escape":
                 return f"stopped: sandbox escape on {rid}"
     return f"all {len(plan)} pairs recorded"
@@ -903,10 +944,10 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
     spec, scoped_dir, provider_secret = _confinement(environ, agent, base_env, auth_provider, out)
     setup = replace(setup, confinement=spec, provider_secret=provider_secret)
     try:
-        # Reference grading on the agent image's interpreter (F1): every task's reference solution
-        # must pass there before any run is booked, exactly as the host-side check did.
-        for task in tasks.load_tasks():
-            confined_reference(spec.agent_image, task.id)
+        # Reference ids, once, in the image, before any run is booked. Each confined grade receives
+        # this immutable input and does not recompute it on the host (ADR-0074).
+        ids = {task.id: confined_reference(spec.agent_image, task.id) for task in setup.task_list}
+        setup = replace(setup, reference_ids=MappingProxyType(ids))
         # Preflight before pin_meta: a dead path must not pin a setup that has no runs, or the next
         # resume is refused for an agent_version that never recorded anything. Confined, the
         # preflight is one allowlisted provider request through the real boundary — no spend, no

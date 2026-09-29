@@ -164,8 +164,10 @@ def changed_protected(tree: Path) -> tuple[str, ...]:
     return tuple(changed)
 
 
-def grade(tree: Path, task: Task, python: str) -> Grade:
-    expected = expected_ids(task, python)
+def grade(tree: Path, task: Task, python: str, *, expected: tuple[str, ...] | None = None) -> Grade:
+    """Grade `tree`. `expected` is the study-start reference ids; confined runs pass them in and do not
+    recompute them. The sandbox path leaves it empty, so the ids are computed here."""
+    expected = expected_ids(task, python) if expected is None else expected
     outcomes = run_tests(tree, task, python)
     acceptance = [test_id for test_id in expected if f".{ACCEPTANCE_MODULE}." in test_id]
     original = [test_id for test_id in expected if test_id not in acceptance]
