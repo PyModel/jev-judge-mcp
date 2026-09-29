@@ -108,10 +108,11 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     for candidate in candidates:
         candidate_id = candidate["id"]
         if candidate_id in seen:
-            raise ToolError("Duplicate candidate id: " + candidate_id)
+            raise ToolError("Duplicate candidate id: " + candidate_id, code="invalid_arguments")
         if hatches and candidate_id in ESCAPE_HATCHES:
             raise ToolError(
-                f'Candidate id "{candidate_id}" collides with an escape hatch; rename it or set escape_hatches: false.'
+                f'Candidate id "{candidate_id}" collides with an escape hatch; rename it or set escape_hatches: false.',
+                code="invalid_arguments",
             )
         seen.add(candidate_id)
 

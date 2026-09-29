@@ -3,10 +3,9 @@
 The example reads whatever `jev-judge-mcp judge <tool>` prints, and its docstring names
 jev_verify, jev_review, and jev_gate — three tools whose payloads carry confidences in three
 different shapes: verify's flat `results[]`, review's `scores{rubric}` beside a top-level
-`safe_to_apply`, and gate's both nested under `review` and `verification`. Every envelope here
-is generated, not hand-written: the real Toolset with the parity fake provider produces the
-payload, and the CLI judge's own envelope path wraps it (the `cli._call` replay
-`tests/unit/test_cli_judge.py` uses). A payload-shape change in any of the three tools breaks
+`safe_to_apply`, and gate's both nested under `review` and `verification`. Every DecisionResult
+here is generated, not hand-written: `judge_main` runs the real toolset against a fake provider.
+A payload-shape change in any of the three tools breaks
 the per-shape pins below instead of silently defeating the stricter bar — the exact failure the
 delta-critique demonstrated when these envelopes were synthetic.
 """
@@ -17,13 +16,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import anyio
 import pytest
-from mcp.types import CallToolResult, TextContent
 
-from jev_judge_mcp import cli
 from jev_judge_mcp.cli import judge_main
-from tests.support.jev import call_tool
+from tests.support.jev import FakeProvider
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "risk_proportional_thresholds.py"
@@ -83,26 +79,16 @@ def _decision_envelope(
 ) -> dict[str, Any]:
     """A DecisionResult exactly as `jev-judge-mcp judge <tool>` writes it.
 
-    The real toolset with the parity fake provider produces the payload text; the CLI's own
-    envelope path (replayed through the `cli._call` seam `test_cli_judge` uses) wraps it, so
-    even the wrapper's `action`/`unresolved`/`confidence` derivation is production code.
+    `judge_main` runs the real toolset against the fake provider, so the wrapper's `action`,
+    `unresolved`, and `confidence` are production code.
     """
-
-    async def run() -> str:
-        outcome = await call_tool(tool, arguments, answers)
-        return outcome.text
-
-    recorded = anyio.run(run)
-
-    async def fake_call(_name: str, _arguments: dict[str, Any]) -> CallToolResult:
-        return CallToolResult(content=[TextContent(type="text", text=recorded)], is_error=False)
-
-    monkeypatch.setattr(cli, "_call", fake_call)
+    del monkeypatch
     capsys.readouterr()
-    assert judge_main([tool], text=json.dumps(arguments)) == 0
-    envelope = json.loads(capsys.readouterr().out)
-    assert envelope["payload"] == json.loads(recorded)
-    return envelope
+    assert judge_main([tool], text=json.dumps(arguments), provider=FakeProvider(answers)) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert document["tool"] == tool
+    assert document["error"] is None
+    return document
 
 
 def _run(tmp_path: Path, envelope: dict[str, Any], stakes: str) -> tuple[int, str]:

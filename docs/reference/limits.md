@@ -36,15 +36,16 @@ back as `provider`, not `input_too_large`.
 ## Error codes
 
 Every `isError` result carries its code twice: in `structuredContent.code` and in a second text
-block (ADR-0062). `src/jev_judge_mcp/responses.py` `error_code` is the mapping.
+block (ADR-0062). The code is set from the exception type or at the return site.
+`src/jev_judge_mcp/tools/toolset.py` `code_of` is the mapping. It does not read the error text.
 
 | Code | Produced by |
 | --- | --- |
 | `invalid_arguments` | a schema reject (every row marked reject below); an unknown tool; duplicate caller ids; a decide candidate id colliding with an escape hatch; a diff that is not the file-list shape; a broken `auto_accept`/`review_at` pair (the frozen text `Thresholds must satisfy 0 <= review_at <= auto_accept <= 1.`) |
 | `input_too_large` | every frozen budget refusal marked error below: the aggregate character budgets, jev_gate's item-count budget, and the file-list diff budget. `tests/contract/test_limits.py` pins each frozen budget text to this code |
-| `auth` | no provider credentials; the hook's fail-open text; an upstream 401 (`{label} 401:`), which is code `auth` |
-| `timeout` | a provider timeout |
-| `quota` | HTTP 429 / rate limit |
+| `auth` | `ProviderConfigError` (no credentials, including an explicit provider with a missing or malformed key); an upstream 401 (`ProviderError.status`), which is code `auth` |
+| `timeout` | `ProviderTimeoutError` |
+| `quota` | HTTP 429 (`ProviderError.status`) |
 | `provider` | any other provider failure. 403, 404, and 422 stay here; a 401 that appears only in the body does too |
 
 `529 Overloaded` is retried as a 5xx (`providers/retry.py`). A final failure is `provider` or `timeout`, not its own code.

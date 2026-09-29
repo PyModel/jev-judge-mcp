@@ -6,7 +6,7 @@ makes no provider request (and so never resolves the provider); an incomplete ca
 """
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question
 from jev_judge_mcp.extract.candidates import Refused, find_candidates
@@ -17,10 +17,22 @@ from jev_judge_mcp.policy import (
     DEFAULT_MINIMUM_MARGIN,
     ExtractFieldEvidence,
     ExtractJudgment,
+    worst_action,
 )
+from jev_judge_mcp.policy.actions import Action
 from jev_judge_mcp.serialize import quote
 from jev_judge_mcp.text import length
-from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, caller_actions, define, frame, headline
+from jev_judge_mcp.tools.base import (
+    ExtractHeadlines,
+    JevTool,
+    Runtime,
+    ToolError,
+    ToolResult,
+    caller_actions,
+    define,
+    frame,
+    headline,
+)
 from jev_judge_mcp.tools.observed import decide_extract_field, fail_closed, validate_extract_choice
 from jev_judge_mcp.validation import margin, top_probability
 from jev_judge_mcp.validation.caps import CapLedger, candidate_budget_error, exceeds
@@ -202,7 +214,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     seen: set[str] = set()
     for raw in raw_fields:
         if raw["id"] in seen:
-            raise ToolError(f"Duplicate field id: {raw['id']}")
+            raise ToolError(f"Duplicate field id: {raw['id']}", code="invalid_arguments")
         seen.add(raw["id"])
 
     # Fields run one after another, in caller order (ADR-0012 D5).
@@ -212,7 +224,8 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     total = sum(length(candidate) for field in fields for candidate in field.candidates)
     if exceeds(total, EXTRACT.aggregate_candidate_units):
         raise ToolError(
-            candidate_budget_error(total, EXTRACT.aggregate_candidate_units, "Tighten the patterns or split the call.")
+            candidate_budget_error(total, EXTRACT.aggregate_candidate_units, "Tighten the patterns or split the call."),
+            code="input_too_large",
         )
 
     # One Choice per field with candidates; the document is sent once, candidates only in their criteria.
@@ -242,6 +255,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     if any(field.truncated or field.too_long > 0 for field in fields):
         ledger.note("context")  # an incomplete candidate universe: Policy never auto-accepts over it
     item_actions = caller_actions(r["status"] for r in results)
+    headlines = _headlines(results, item_actions)
     return ToolResult(
         frame(
             "jev_extract",
@@ -260,10 +274,28 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             },
             model=runtime.model,
         ),
-        action=headline(item_actions),
+        action=headlines.item_action,
         item_actions=item_actions,
         truncated=ledger.scopes,
+        extract=headlines,
     )
+
+
+def _headlines(results: list[dict[str, object]], item_actions: tuple[Action, ...]) -> ExtractHeadlines:
+    """Both headlines, from the rows. The CLI does not walk them again (ADR-0064 amendment)."""
+    item_action = headline(item_actions)
+    actions: list[Action] = []
+    for row in results:
+        status = row.get("status")
+        if status == "auto" or status == "review":
+            actions.append(cast(Action, status))
+        elif status in ("invalid_pattern", "invalid_response"):
+            actions.append("review")
+        elif status != "not_found":
+            return ExtractHeadlines(item_action, None)
+    if not actions:
+        return ExtractHeadlines(item_action, "auto")
+    return ExtractHeadlines(item_action, worst_action(actions))
 
 
 TOOL = JevTool(DEFINITION, handle)

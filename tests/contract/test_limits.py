@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 from typing import Final, cast
 
+import anyio
 import pytest
 
 from jev_judge_mcp.extract.candidates import REGEX_TIMEOUT_S
@@ -31,8 +32,8 @@ from jev_judge_mcp.limits import (
     VERIFY,
 )
 from jev_judge_mcp.policy import EXTRACT_REASON_CODES
-from jev_judge_mcp.responses import error_code
 from jev_judge_mcp.validation import caps
+from tests.support.jev import call_tool
 
 MANIFEST: Final = Path(__file__).resolve().parents[2] / "docs/reference/parity-manifest.json"
 
@@ -207,47 +208,88 @@ def test_schema_only_caps_stay_owned_by_limits() -> None:
     assert ids.MAX_ID_LENGTH == SANITIZE_ID_UNITS
 
 
-_BUDGET_REFUSALS = [
-    pytest.param(caps.candidate_budget_error(500, 200, "Split the batch."), id="candidate_budget_error"),
-    pytest.param(caps.classify_budget_error(9_000, 5, CLASSIFY.item_class_pairs), id="classify_budget_error"),
-    pytest.param(caps.gate_evidence_items_error(GATE.evidence_items), id="gate_evidence_items_error"),
-    pytest.param(caps.gate_evidence_aggregate_error(GATE.aggregate_evidence_units), id="gate_evidence_aggregate_error"),
-    pytest.param(caps.gate_diff_aggregate_error(GATE.aggregate_evidence_units), id="gate_diff_aggregate_error"),
+_BUDGET_CALLS = [
+    pytest.param(
+        "jev_rerank",
+        {"query": "q", "candidates": [{"text": "a" * 2000}] * 50 + [{"text": "b"}]},
+        "candidate_budget_error",
+        id="candidate_budget_error",
+    ),
+    pytest.param(
+        "jev_classify",
+        {
+            "items": [{"text": f"item {index}"} for index in range(64)],
+            "classes": [{"description": "c"}] * 126,
+        },
+        "classify_budget_error",
+        id="classify_budget_error",
+    ),
+    pytest.param(
+        "jev_gate",
+        {
+            "request": "fix the parser",
+            "diff": "+ x",
+            "claims": ["it works"],
+            "evidence": [{"id": f"e{index}", "text": "line"} for index in range(GATE.evidence_items + 1)],
+        },
+        "gate_evidence_items_error",
+        id="gate_evidence_items_error",
+    ),
+    pytest.param(
+        "jev_gate",
+        {
+            "request": "fix the parser",
+            "diff": "+ x",
+            "claims": ["it works"],
+            "evidence": [{"id": f"e{index}", "text": "x" * 100_001} for index in range(2)],
+        },
+        "gate_evidence_aggregate_error",
+        id="gate_evidence_aggregate_error",
+    ),
+    pytest.param(
+        "jev_gate",
+        {
+            "request": "fix the parser",
+            "diff": [{"path": "a.py", "patch": "x" * (GATE.aggregate_evidence_units + 1)}],
+            "claims": ["it works"],
+            "evidence": [{"id": "e0", "text": "line"}],
+        },
+        "gate_diff_aggregate_error",
+        id="gate_diff_aggregate_error",
+    ),
 ]
-"""One pinned case per budget scaffold `validation/caps.py` freezes; ids are the function names.
-
-`test_every_budget_refusal_scaffold_is_pinned` derives the scaffold inventory from the module's
-own names and holds it to this list, so a sixth scaffold cannot land without a marker and a
-param (the drift `dc06e0e` fixed cannot reopen silently)."""
 
 
-@pytest.mark.parametrize("refusal", _BUDGET_REFUSALS)
-def test_every_frozen_budget_refusal_codes_input_too_large(refusal: str) -> None:
-    """Each budget scaffold `validation/caps.py` produces is a caller-input refusal.
+@pytest.mark.parametrize(("tool", "arguments", "scaffold"), _BUDGET_CALLS)
+def test_every_frozen_budget_refusal_codes_input_too_large(
+    tool: str, arguments: dict[str, object], scaffold: str
+) -> None:
+    """Each budget scaffold is refused on the wire as `input_too_large`, from the return site.
 
-    The item-count text (`evidence exceeds 16 items; …`) shares no older substring marker, so a
-    prefix heuristic alone classified it `provider` on the wire while callers (and the limits
-    page) branch on `input_too_large` to split and retry. The texts are derived from the frozen
-    producers at their real caps, not hand-copied.
+    The item-count text shares no substring with the aggregate texts. A text heuristic coded it
+    `provider`. The code is set where the tool returns the refusal (ADR-0062 amendment).
     """
-    assert error_code(refusal) == "input_too_large"
+    outcome = anyio.run(call_tool, tool, arguments, {})
+    assert outcome.is_error
+    assert outcome.code == "input_too_large"
+    assert outcome.requests == []
+    assert scaffold.endswith("_error")
 
 
 def test_every_budget_refusal_scaffold_is_pinned() -> None:
     """A new `*_error` scaffold in `validation/caps.py` cannot land silently.
 
     The inventory is derived from the module's own names, not hand-copied: a sixth budget
-    scaffold fails here by name until it carries a `BUDGET_REFUSAL_MARKERS` marker and a
-    `_BUDGET_REFUSALS` param, so its refusal cannot code non-`input_too_large` on the wire with
-    every test green. A stale pin (scaffold renamed or removed) fails the same way.
+    scaffold fails here by name until a `_BUDGET_CALLS` row drives it and the wire codes it
+    `input_too_large`. A stale pin (scaffold renamed or removed) fails the same way.
     """
     derived = {
         name
         for name, scaffold in vars(caps).items()
         if callable(scaffold) and name.endswith("_error") and getattr(scaffold, "__module__", "") == caps.__name__
     }
-    pinned = {param.id for param in _BUDGET_REFUSALS if isinstance(param.id, str)}
+    pinned = {param.id for param in _BUDGET_CALLS if isinstance(param.id, str)}
     assert derived == pinned, (
-        f"caps.py budget scaffolds {sorted(derived - pinned)} need a BUDGET_REFUSAL_MARKERS entry "
-        f"and a _BUDGET_REFUSALS param; stale pins: {sorted(pinned - derived)}"
+        f"caps.py budget scaffolds {sorted(derived - pinned)} need a _BUDGET_CALLS row; "
+        f"stale pins: {sorted(pinned - derived)}"
     )

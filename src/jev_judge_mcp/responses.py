@@ -123,66 +123,6 @@ def next_checks_for(codes: Sequence[object]) -> list[str]:
     return [NEXT_CHECKS[str(code)] for code in codes if str(code) in NEXT_CHECKS]
 
 
-CALLER_INPUT_ERROR_PREFIXES = (
-    "Duplicate ",
-    "diff file list",
-    "Thresholds must satisfy",
-)
-"""Prefixes of a ToolError that refuses the caller's own arguments before anything is asked.
-
-Duplicate caller ids (jev_decide, jev_classify, jev_extract, jev_rerank), a diff that is not the
-file-list shape (jev_review, jev_gate), and a broken auto_accept/review_at pair are argument
-validation, not provider failures. A budget refusal is not here: it keeps its own
-`input_too_large` code below.
-"""
-
-ESCAPE_HATCH_COLLISION = " collides with an escape hatch;"
-"""Infix of jev_decide's refusal of a candidate id that shadows an escape hatch."""
-
-BUDGET_REFUSAL_MARKERS = (
-    "Batch too large: ",
-    "diff exceeds the ",
-    "evidence exceeds ",
-)
-"""Markers of the budget refusals `validation/caps.py` freezes (`isError` results).
-
-Every text these scaffolds appear in is a caller-input refusal, whatever number the cap renders.
-They are matched as substrings, wherever the scaffold sits in the isError text: jev_gate's
-refusals are serialized payloads (`{"tool": …, "error": "evidence exceeds 16 items; …"}`),
-which carry none of the older substrings and start with none of these markers."""
-
-
-def _provider_status(text: str) -> str | None:
-    """The status token in ``{label} {status}: {body}`` (``providers/base.py`` ``_status_error``)."""
-    head, sep, _body = text.partition(": ")
-    if not sep:
-        return None
-    token = head.rsplit(" ", 1)[-1]
-    return token if token.isdigit() else None
-
-
-def error_code(text: str) -> str:
-    """A code for an ``isError`` result. The text itself is not changed."""
-    if text.startswith("No Jev provider credentials") or text.startswith("jev-judge-mcp hook: fail-open"):
-        return "auth"
-    if _provider_status(text) == "401":
-        return "auth"
-    if (
-        text.startswith("MCP error -32602")
-        or ESCAPE_HATCH_COLLISION in text
-        or any(text.startswith(prefix) for prefix in CALLER_INPUT_ERROR_PREFIXES)
-    ):
-        return "invalid_arguments"
-    if "aggregate budget" in text or "exceeds the" in text or any(marker in text for marker in BUDGET_REFUSAL_MARKERS):
-        return "input_too_large"
-    lowered = text.lower()
-    if "timed out" in lowered or "timeout" in lowered:
-        return "timeout"
-    if "429" in text or "rate limit" in lowered:
-        return "quota"
-    return "provider"
-
-
 def nearest_level(score: object) -> int | None:
     if isinstance(score, bool) or not isinstance(score, (int, float)):
         return None

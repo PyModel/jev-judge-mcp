@@ -39,3 +39,25 @@ in one registry (`cli._DECISIONS`, guarded by `tests/unit/test_cli_judge.py`):
 `unresolved` still means "not a green light", never "failed": a `block` or `skip` screen, an
 escaped decide, and a `review` row are decided answers that need the caller's attention, and a
 failed call still writes `error` with exit non-zero, as before. Exit codes are unchanged.
+
+## Amendment (2026-09-29): the kernel's outcome, and extract's two headlines
+
+`judge` and `gate` read the tool outcome. They do not parse rendered MCP text back into a
+payload, and they do not classify the error text. `error.code` is the outcome's code (ADR-0062
+amendment). The DecisionResult JSON keys are unchanged.
+
+The Python names that used to call that JSON an envelope are renamed. Envelope remains the
+provider reply (CONTEXT.md). No wire key changes.
+
+jev_extract has two sanctioned headlines, both computed in the tool where the rows are:
+
+- `item_action`: the ADR-0013 headline, the worst row Action, or none when no row carries an
+  Action (every field `not_found`, or only broken rows).
+- `call_action`: the DecisionResult action. `not_found` is neutral. A broken row
+  (`invalid_pattern`, `invalid_response`) counts as `review`. Every field `not_found` settles as
+  `auto`. A status outside that set leaves `call_action` none, and the call is unresolved.
+
+The CLI reads `call_action`. It does not walk extract rows. Other tools still map their own
+payload field, as the amendment above describes. `judge` and `gate` take a Python `provider=`
+argument, the same kind of seam `hook.main(provider=)` and `Runtime(provider_factory=)` already
+have. It is not a CLI flag.

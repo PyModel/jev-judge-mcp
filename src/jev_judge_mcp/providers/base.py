@@ -51,17 +51,22 @@ def origin_of(url: str | httpx.URL) -> tuple[str, str, int]:
 
 
 class ProviderError(Exception):
-    """A provider failure. Its text is MCP-visible, so `evaluate` redacts it before raising."""
+    """A provider failure. Its text is MCP-visible, so `evaluate` redacts it before raising.
+
+    `status` is set at the raise site (`_status_error`, or the exhausted-retry error that quotes
+    that status). The kernel maps it to an error code; the text is not parsed (ADR-0062 amendment).
+    """
 
     status: int | None = None
-    """The HTTP status of a status error; `None` on every other failure. Drives retry classification."""
+    """The HTTP status of a status error; `None` on every other failure. Drives retry classification
+    and the kernel's error code."""
 
     retry_after: float | None = None
     """A retryable status error's `Retry-After` hint in seconds; `None` otherwise."""
 
 
 class ProviderConfigError(ProviderError):
-    """Provider resolution failed before any request (`provider.ts:35-77`)."""
+    """Provider resolution failed before any request (`provider.ts:35-77`). Code `auth`."""
 
 
 class ProviderConnectionError(ProviderError):
@@ -73,7 +78,18 @@ class ProviderConnectionError(ProviderError):
 
 
 class ProviderTimeoutError(ProviderError):
-    """An attempt missed its deadline, or the caller's whole-call deadline fired."""
+    """An attempt missed its deadline, or the caller's whole-call deadline fired. Code `timeout`."""
+
+
+def _redacted(error: ProviderError, redact: Redactor) -> ProviderError:
+    """The same failure, text redacted, status and retry hint kept.
+
+    `type(error)(text)` alone drops `status`. A 401 would then code `provider` (ADR-0072).
+    """
+    redacted = type(error)(redact(str(error)))
+    redacted.status = error.status
+    redacted.retry_after = error.retry_after
+    return redacted
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,7 +265,9 @@ class JevProvider(ABC):
                         await retries.sleep(delay)
                         retried = True
         except ProviderError as error:
-            raise type(error)(self._redact(str(error))) from None
+            # Redact the text, but keep the status the raise site recorded. Dropping it made a 401
+            # look like a generic provider error once the text was no longer parsed (ADR-0072).
+            raise _redacted(error, self._redact) from None
         except (TimeoutError, httpx.TimeoutException):
             after = "" if timeout is None else f" after {timeout:g} s"
             raise ProviderTimeoutError(f"{self.label} request timed out{after}.") from None
@@ -290,9 +308,17 @@ class JevProvider(ABC):
         return None
 
     def _exhausted(self, attempts: int, failure: TransientFailure) -> ProviderError:
-        """The final error once a retried sequence failed: provider, attempt count, last failure."""
+        """The final error once a retried sequence failed: provider, attempt count, last failure.
+
+        A status failure keeps that status, so a 429 still codes `quota` after the retries
+        (ADR-0062). The text is unchanged.
+        """
         text = f"{self.label} request failed after {attempts} attempts: last failure: {failure.detail}"
-        return ProviderTimeoutError(text) if failure.kind == "timeout" else ProviderError(text)
+        if failure.kind == "timeout":
+            return ProviderTimeoutError(text)
+        error = ProviderError(text)
+        error.status = failure.status
+        return error
 
     @abstractmethod
     async def _send(

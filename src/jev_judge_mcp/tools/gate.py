@@ -177,7 +177,8 @@ def gate_source_question(index: int, evidence_ids: list[str]) -> ChoiceQuestion:
 
 
 def _refused(error: str) -> ToolResult:
-    return ToolResult({"tool": "jev_gate", "error": error}, is_error=True)
+    """A budget refusal. The code is set here, not recovered from the sentence (ADR-0062)."""
+    return ToolResult({"tool": "jev_gate", "error": error}, is_error=True, error_code="input_too_large")
 
 
 def _sent_evidence_item(item: dict[str, object], ledger: CapLedger) -> dict[str, object]:

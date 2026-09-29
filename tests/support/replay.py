@@ -17,7 +17,6 @@ import pytest
 import respx
 
 from jev_judge_mcp.providers import NO_RETRIES, resolve_provider
-from jev_judge_mcp.responses import error_code
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
@@ -98,10 +97,15 @@ async def replay_call(call: FixtureCall, monkeypatch: pytest.MonkeyPatch) -> Non
     assert content.text == expected_text, call.id
     assert bool(result.is_error) == expected_error, call.id
     if expected_error:
-        # ADR-0062: the first block stays the recorded error text. The second block is the code.
+        # ADR-0062: the first block stays the recorded error text. The second block is the code
+        # the kernel set, not a re-parse of that text. A10 owns the literal codes.
         assert len(result.content) == 2, call.id
         code_block = result.content[1]
         assert code_block.type == "text", call.id
-        assert code_block.text == stringify_compact({"code": error_code(content.text)}), call.id
+        structured = result.structured_content
+        assert isinstance(structured, dict), call.id
+        code = structured.get("code")
+        assert isinstance(code, str) and code, call.id
+        assert code_block.text == stringify_compact({"code": code}), call.id
     else:
         assert len(result.content) == 1, call.id

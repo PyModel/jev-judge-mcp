@@ -86,7 +86,7 @@ async def test_handler_keyerror_reaches_stderr_and_is_an_error(capsys: pytest.Ca
 
 @pytest.mark.parametrize(
     ("error", "outcome"),
-    [(ToolError("owned failure"), "tool_error"), (ProviderError("provider down"), "provider_error")],
+    [(ToolError("owned failure", code="provider"), "tool_error"), (ProviderError("provider down"), "provider_error")],
 )
 async def test_owned_handler_errors_are_logged_then_returned(
     capsys: pytest.CaptureFixture[str], error: Exception, outcome: str
@@ -134,7 +134,7 @@ async def test_error_results_keep_the_text_and_append_the_code() -> None:
     """Clients that read only content still see the typed code. The first block stays the error text."""
 
     async def handler(_parsed: dict[str, Any], _runtime: Runtime) -> ToolResult:
-        raise ToolError("No Jev provider credentials found. Set TYPESAFE_API_KEY.")
+        raise ToolError("No Jev provider credentials found. Set TYPESAFE_API_KEY.", code="auth")
 
     toolset = _toolset(handler)
     try:
@@ -176,6 +176,7 @@ async def test_error_results_keep_the_text_and_append_the_code() -> None:
         "diff file list was not a list",
         "diff file list item was not an object",
         "Thresholds must satisfy 0 <= review_at <= auto_accept <= 1.",
+        "TypeSafe API 401: the code is the exception's, not this text.",
     ],
     ids=[
         "duplicate-candidate",
@@ -186,13 +187,14 @@ async def test_error_results_keep_the_text_and_append_the_code() -> None:
         "diff-not-a-list",
         "diff-item-not-an-object",
         "threshold-invariant",
+        "text-that-looks-like-auth",
     ],
 )
 async def test_caller_input_tool_errors_carry_invalid_arguments(text: str) -> None:
-    """A refusal of the caller's own arguments is argument validation, not a provider failure."""
+    """The wire code is the one the raise site set, even when the text looks like another code."""
 
     async def handler(_parsed: dict[str, Any], _runtime: Runtime) -> ToolResult:
-        raise ToolError(text)
+        raise ToolError(text, code="invalid_arguments")
 
     toolset = _toolset(handler)
     try:

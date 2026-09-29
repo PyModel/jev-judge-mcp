@@ -31,7 +31,29 @@ logger = logging.getLogger("jev_judge_mcp.tools.base")
 
 
 class ToolError(Exception):
-    """A handler failure. Its message is the whole `isError` text, as a thrown `Error` is in the reference."""
+    """A handler failure. Its message is the whole `isError` text, as a thrown `Error` is in the reference.
+
+    `code` is set at the raise site (`invalid_arguments`, `input_too_large`, or another code the
+    refusal owns). The kernel does not recover it from the message (ADR-0062 amendment).
+    """
+
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractHeadlines:
+    """jev_extract's two sanctioned headlines, computed where the rows are (ADR-0064 amendment).
+
+    `item_action` is the ADR-0013 headline: the worst row Action, or `None` when no row carries one
+    (every field `not_found`, or only broken rows). `call_action` is the call headline the CLI
+    reports: `not_found` is neutral, a broken row counts as `review`, and every field `not_found`
+    settles as `auto`. `None` when a row status is outside that set.
+    """
+
+    item_action: Action | None
+    call_action: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +63,8 @@ class ToolResult:
     `action`, `item_actions` and `truncated` are for telemetry only, never serialized: the call's
     one headline auto/review/escalate Action (`None` when the payload carries none), the per-item
     Actions of a tool that judges items one by one, and the scopes of every cut the call's
-    `CapLedger` made.
+    `CapLedger` made. `error_code` is set at an `isError` return site. `extract` is set only by
+    jev_extract.
     """
 
     payload: Payload
@@ -49,6 +72,8 @@ class ToolResult:
     action: Action | None = None
     item_actions: tuple[Action, ...] = ()
     truncated: frozenset[CapScope] = frozenset()
+    error_code: str | None = None
+    extract: ExtractHeadlines | None = None
 
 
 def caller_actions(values: Iterable[object]) -> tuple[Action, ...]:

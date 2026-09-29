@@ -12,6 +12,13 @@ A missing local credential was already `auth`. An upstream 401 — the API's "mi
 - The error text is unchanged. Only the code changes (ADR-0062).
 - This is divergence `upstream-401-is-auth`.
 
+## Amendment (2026-09-29): the status, not the text token
+
+The mapping no longer reads the rendered text (ADR-0062 amendment). `_status_error` records the
+HTTP status on the exception. `evaluate`'s redacting re-raise keeps that status. `code_of` maps
+status 401 to `auth` and 429 to `quota`. A 401 that appears only in the body of another status
+still stays `provider`, because the status is not 401. The error text is unchanged.
+
 ## Consequences
 
 - A client that branches on `auth` can tell a rejected key from an outage.

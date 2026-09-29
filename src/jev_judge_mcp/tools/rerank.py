@@ -57,7 +57,7 @@ def _external_ids(raw: list[dict[str, str]]) -> list[str]:
     for candidate in raw:
         if "id" in candidate:
             if candidate["id"] in supplied:
-                raise ToolError(f"Duplicate candidate id: {candidate['id']}")
+                raise ToolError(f"Duplicate candidate id: {candidate['id']}", code="invalid_arguments")
             supplied.add(candidate["id"])
     used = set(supplied)
     ids: list[str] = []
@@ -83,7 +83,10 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     texts = [ledger.text(candidate["text"], CANDIDATES.text_units, "item") for candidate in args["candidates"]]
     total = sum(length(text) for text in texts)
     if exceeds(total, RERANK.aggregate_candidate_units):
-        raise ToolError(candidate_budget_error(total, RERANK.aggregate_candidate_units, "Split the batch."))
+        raise ToolError(
+            candidate_budget_error(total, RERANK.aggregate_candidate_units, "Split the batch."),
+            code="input_too_large",
+        )
 
     # The query is sent once in state; each question carries only its own candidate.
     questions: dict[str, Question] = {

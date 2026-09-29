@@ -9,7 +9,7 @@ from mcp.types import CallToolResult, TextContent
 
 from jev_judge_mcp.domain import JsonValue, Usage
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.providers import Evaluation, JevProvider, ProviderName
+from jev_judge_mcp.providers import NO_RETRIES, Evaluation, JevProvider, ProviderName
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 
@@ -20,10 +20,17 @@ class FakeProvider(JevProvider):
     name: ClassVar[ProviderName] = "compatible"
     label: ClassVar[str] = "Fake"
 
-    def __init__(self, answers: Mapping[str, Any], *, request_id: str | None = None) -> None:
-        super().__init__(Redactor(()))
+    def __init__(
+        self,
+        answers: Mapping[str, Any],
+        *,
+        request_id: str | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        super().__init__(Redactor(()), retry=NO_RETRIES)
         self.answers = dict(answers)
         self.request_id = request_id
+        self._error = error
         self.requests: list[tuple[JsonValue, dict[str, JsonValue]]] = []
 
     @override
@@ -31,6 +38,8 @@ class FakeProvider(JevProvider):
         self, state: JsonValue, questions: dict[str, JsonValue], model: str, timeout: float | None
     ) -> Evaluation:
         self.requests.append((state, questions))
+        if self._error is not None:
+            raise self._error
         return Evaluation(self.answers, Usage(1, 1), self.name, model, request_id=self.request_id)
 
     @override
@@ -44,6 +53,7 @@ class Outcome:
     is_error: bool
     text: str
     requests: list[tuple[JsonValue, dict[str, JsonValue]]] = field(default_factory=list[Any])
+    code: str | None = None
 
 
 async def call_tool(
@@ -60,7 +70,11 @@ async def call_tool(
         payload = json.loads(text)
     except ValueError:
         payload = None
-    return Outcome(payload, bool(result.is_error), text, provider.requests)
+    code = None
+    if isinstance(result.structured_content, dict):
+        raw = result.structured_content.get("code")
+        code = raw if isinstance(raw, str) else None
+    return Outcome(payload, bool(result.is_error), text, provider.requests, code)
 
 
 def text_of(result: CallToolResult) -> str:

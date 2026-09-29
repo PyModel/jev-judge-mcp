@@ -6,9 +6,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from mcp.types import CallToolResult, TextContent
 
-from jev_judge_mcp.cli import completion_hook_main, completion_matches, gate_main, judge_main
+from jev_judge_mcp.cli import _completion_ask, completion_hook_main, completion_matches, gate_main, judge_main
+from jev_judge_mcp.providers import ProviderError, ProviderTimeoutError
+from tests.support.jev import FakeProvider
 
 _PUSH = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push origin main"}})
 _CREDENTIALS = (
@@ -230,26 +231,21 @@ def test_completion_hook_stays_open_without_the_flag(capsys: pytest.CaptureFixtu
 
 
 def test_required_flag_stays_open_after_the_provider_was_reached(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A timeout means the provider was called. The flag does not turn that into allow, or into ask."""
-
-    def gate(_argv: object) -> int:
-        import sys
-
-        sys.stdout.write(json.dumps({"error": {"code": "timeout", "message": "timed out"}}) + "\n")
-        return 1
-
-    monkeypatch.setattr("jev_judge_mcp.cli.gate_main", gate)
+    repo = _repo_with_diff(tmp_path)
+    monkeypatch.chdir(repo)
     code = completion_hook_main(
         [],
         text=_PUSH,
         environ={
             "JEV_HOOK_REQUIRED": "1",
-            "JEV_COMPLETION_DIFF": "HEAD",
+            "JEV_COMPLETION_DIFF": "HEAD~1",
             "JEV_COMPLETION_CLAIMS": "claims.json",
             "JEV_COMPLETION_TESTS": "tests.log",
         },
+        provider=FakeProvider({}, error=ProviderTimeoutError("still working")),
     )
     captured = capsys.readouterr()
     assert code == 0
@@ -261,63 +257,59 @@ def test_required_flag_stays_open_after_the_provider_was_reached(
 _REASON_SHAPE = re.compile(r"^Jev completion hook: gate action is (escalate|review|not auto)\.$")
 
 
-@pytest.mark.parametrize("action", ["escalate", "review", "unsupported-value"])
 def test_the_asks_reason_states_the_gate_action_as_a_fact(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], action: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The regression: 'escalate. Read action, not verdict.' — an imperative inside a
     permissionDecisionReason — was read by a host model as a possible prompt injection. A reason
     states the gate's action as a fact and nothing else; the decision is the permissionDecision
     field, so a directive in the reason has nowhere legitimate to live."""
-
-    def gate(_argv: object) -> int:
-        import sys
-
-        sys.stdout.write(json.dumps({"action": action}) + "\n")
-        return 0
-
-    monkeypatch.setattr("jev_judge_mcp.cli.gate_main", gate)
+    repo = _repo_with_diff(tmp_path)
+    monkeypatch.chdir(repo)
     code = completion_hook_main(
         [],
         text=_PUSH,
         environ={
-            "JEV_COMPLETION_DIFF": "HEAD",
+            "JEV_COMPLETION_DIFF": "HEAD~1",
             "JEV_COMPLETION_CLAIMS": "claims.json",
             "JEV_COMPLETION_TESTS": "tests.log",
         },
+        provider=FakeProvider({}),
     )
     captured = capsys.readouterr()
     assert code == 0
     assert _ask(captured.out) == "ask"
     reason = json.loads(captured.out)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason == "Jev completion hook: gate action is escalate."
     assert _REASON_SHAPE.match(reason), reason
-    expected = "not auto" if action not in ("escalate", "review") else action
-    assert reason == f"Jev completion hook: gate action is {expected}."
+    # A non-action string cannot arrive on the typed outcome. The renderer still states it as a fact.
+    other = json.loads(_completion_ask("unsupported-value"))
+    assert other["hookSpecificOutput"]["permissionDecisionReason"] == ("Jev completion hook: gate action is not auto.")
+    review = json.loads(_completion_ask("review"))
+    assert review["hookSpecificOutput"]["permissionDecisionReason"] == ("Jev completion hook: gate action is review.")
 
 
 def test_required_completion_hook_asks_on_a_rejected_key(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A 401 reached the provider but is `auth` (ADR-0072): the required hook asks, like a missing key."""
+    """A 401 reached the provider but is `auth` (ADR-0072): the required hook asks, like a missing key.
 
-    async def rejected(_name: str, _arguments: dict[str, object]) -> CallToolResult:
-        text = "TypeSafe API 401: invalid API key"
-        return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
-
-    def empty_gate(_options: object) -> dict[str, object]:
-        return {}
-
-    monkeypatch.setattr("jev_judge_mcp.cli._call", rejected)
-    monkeypatch.setattr("jev_judge_mcp.cli._gate_arguments", empty_gate)
+    The message does not contain a status token. The code comes from `ProviderError.status`.
+    """
+    repo = _repo_with_diff(tmp_path)
+    monkeypatch.chdir(repo)
+    rejected = ProviderError("upstream rejected the credential")
+    rejected.status = 401
     code = completion_hook_main(
         [],
         text=_PUSH,
         environ={
             "JEV_HOOK_REQUIRED": "1",
-            "JEV_COMPLETION_DIFF": "HEAD",
+            "JEV_COMPLETION_DIFF": "HEAD~1",
             "JEV_COMPLETION_CLAIMS": "claims.json",
             "JEV_COMPLETION_TESTS": "tests.log",
         },
+        provider=FakeProvider({}, error=rejected),
     )
     captured = capsys.readouterr()
     assert code == 0

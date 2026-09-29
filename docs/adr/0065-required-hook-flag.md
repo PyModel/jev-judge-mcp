@@ -23,3 +23,11 @@ The flag applies to both `jev-judge-mcp hook gate` and `jev-judge-mcp completion
 ## Amendment (2026-09-27): an upstream 401 asks
 
 An upstream 401 is `auth` (ADR-0072). It reached the provider, but the flag treats it like a missing key and asks. A timeout, quota, or other provider error after the call stays fail-open.
+
+## Amendment (2026-09-29): the completion hook reads the gate outcome
+
+`completion-hook` calls `run_gate` in process and reads the outcome. It does not capture
+`gate_main` stdout or parse that JSON. A missing or malformed key, including an explicit
+provider, is `auth`, so the required hook asks instead of exiting 0 with empty stdout. A timeout,
+quota, or other provider error after the call stays fail-open. Asks are written by
+`hook_render.render_decision`. The hook still never prints `allow`.

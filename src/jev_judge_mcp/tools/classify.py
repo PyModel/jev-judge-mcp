@@ -91,7 +91,7 @@ def _opaque(
         supplied = entry.get("id")
         external = supplied if supplied is not None else f"{kind}{index}"
         if external in seen:
-            raise ToolError(f"Duplicate {kind} id: {external}")
+            raise ToolError(f"Duplicate {kind} id: {external}", code="invalid_arguments")
         seen.add(external)
         out.append((external, f"{key_prefix}{index}", ledger.text(entry[text_key], cap, "item")))
     return out
@@ -106,7 +106,9 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     items = _opaque(args["items"], "item", "i", "text", CLASSIFY.item_units, ledger)
     classes = _opaque(args["classes"], "class", "c", "description", CLASSIFY.class_description_units, ledger)
     if exceeds(len(items) * len(classes), CLASSIFY.item_class_pairs):
-        raise ToolError(classify_budget_error(len(items), len(classes), CLASSIFY.item_class_pairs))
+        raise ToolError(
+            classify_budget_error(len(items), len(classes), CLASSIFY.item_class_pairs), code="input_too_large"
+        )
 
     # The catalog is sent once in state; each question carries only its own item.
     state = {

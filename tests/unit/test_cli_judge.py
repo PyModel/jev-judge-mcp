@@ -1,25 +1,20 @@
-"""The judge envelope's `action` and `unresolved` come from each tool's own decision field.
+"""The judge DecisionResult's `action` and `unresolved` come from each tool's own decision.
 
 ADR-0064's amendment: `judge` first read only a top-level `action`, which only jev_gate and
-jev_review set, so every other tool's envelope carried `action: null` and `unresolved: true`
-even on a clean call. The mapping in `jev_judge_mcp.cli` (`_DECISIONS`) now names each tool's
-own field. These tests drive the real boundary — `judge_main` stdin/argv to envelope stdout —
-with the provider leg stubbed by payloads the real toolset produced (`tests/support/jev.py`):
-the payload shapes are production output, not hand-written fixtures, so a tool that renames its
-decision field fails here too. The last test is the recurrence guard: a tool that registers
-without a mapping fails it, as the renamed_ids guard did for dropped renames.
+jev_review set, so every other tool's DecisionResult carried `action: null` and `unresolved: true`
+even on a clean call. Payload tools still map their own field. jev_extract's call headline is on
+the outcome. These tests drive `judge_main` with a fake provider, not a patched caller.
 """
 
 import json
 from typing import Any
 
-import anyio
 import pytest
-from mcp.types import CallToolResult, TextContent
 
 from jev_judge_mcp import cli
 from jev_judge_mcp.cli import judge_main
-from tests.support.jev import call_tool
+from jev_judge_mcp.providers import ProviderError, ProviderTimeoutError
+from tests.support.jev import FakeProvider, call_tool
 
 _VERIFY_SUPPORTED = {
     "choice": "supports",
@@ -43,33 +38,30 @@ _GOOD_GATE = {
 }
 
 
-def _text_of(tool: str, arguments: dict[str, Any], answers: dict[str, Any]) -> str:
-    """The payload the real toolset produces for these arguments and model answers."""
-
-    async def run() -> str:
-        outcome = await call_tool(tool, arguments, answers)
-        return outcome.text
-
-    text = anyio.run(run)
-    assert '"usage"' in text  # a success payload, not an isError text
-    return text
-
-
-def _envelope(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tool: str, recorded: str, arguments: str
+def _decision(
+    capsys: pytest.CaptureFixture[str],
+    tool: str,
+    arguments: dict[str, Any],
+    answers: dict[str, Any],
 ) -> dict[str, Any]:
-    async def fake_call(_name: str, _arguments: dict[str, Any]) -> CallToolResult:
-        return CallToolResult(content=[TextContent(type="text", text=recorded)], is_error=False)
-
-    monkeypatch.setattr(cli, "_call", fake_call)
-    code = judge_main([tool], text=arguments)
+    """`judge_main` with the same fake provider the toolset helper uses. No caller patch."""
+    code = judge_main([tool], text=json.dumps(arguments), provider=FakeProvider(answers))
     captured = capsys.readouterr()
     assert code == 0
-    envelope = json.loads(captured.out)
-    assert envelope["error"] is None
-    assert envelope["tool"] == tool
-    assert envelope["payload"] == json.loads(recorded)
-    return envelope
+    document = json.loads(captured.out)
+    assert document["error"] is None
+    assert document["tool"] == tool
+    recorded = call_tool_sync(tool, arguments, answers)
+    assert document["payload"] == recorded
+    return document
+
+
+def call_tool_sync(tool: str, arguments: dict[str, Any], answers: dict[str, Any]) -> Any:
+    import anyio
+
+    outcome = anyio.run(call_tool, tool, arguments, answers)
+    assert outcome.code is None
+    return outcome.payload
 
 
 @pytest.mark.parametrize(
@@ -236,7 +228,6 @@ def _envelope(
     ],
 )
 def test_a_clean_call_resolves_every_tool(
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tool: str,
     arguments: dict[str, Any],
@@ -244,10 +235,9 @@ def test_a_clean_call_resolves_every_tool(
     action: str | None,
     unresolved: bool,
 ) -> None:
-    recorded = _text_of(tool, arguments, answers)
-    envelope = _envelope(monkeypatch, capsys, tool, recorded, json.dumps(arguments))
-    assert envelope["action"] == action
-    assert envelope["unresolved"] is unresolved
+    document = _decision(capsys, tool, arguments, answers)
+    assert document["action"] == action
+    assert document["unresolved"] is unresolved
 
 
 @pytest.mark.parametrize(
@@ -420,7 +410,6 @@ def test_a_clean_call_resolves_every_tool(
     ],
 )
 def test_a_call_that_needs_attention_stays_unresolved(
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tool: str,
     arguments: dict[str, Any],
@@ -428,64 +417,125 @@ def test_a_call_that_needs_attention_stays_unresolved(
     action: str | None,
     unresolved: bool,
 ) -> None:
-    recorded = _text_of(tool, arguments, answers)
-    envelope = _envelope(monkeypatch, capsys, tool, recorded, json.dumps(arguments))
-    assert envelope["action"] == action
-    assert envelope["unresolved"] is unresolved
+    document = _decision(capsys, tool, arguments, answers)
+    assert document["action"] == action
+    assert document["unresolved"] is unresolved
+
+
+def test_extract_headlines_are_computed_on_the_outcome() -> None:
+    """The two headlines disagree: all not_found settles the call and has no item Action."""
+    import anyio
+
+    from jev_judge_mcp.settings import Settings
+    from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
+
+    async def run(arguments: dict[str, Any]):
+        toolset = Toolset(Runtime(Settings(), provider_factory=lambda _settings: FakeProvider({})), TOOLS)
+        try:
+            return await toolset.execute("jev_extract", arguments)
+        finally:
+            await toolset.aclose()
+
+    settled = anyio.run(
+        run,
+        {
+            "document": "No prices here.",
+            "fields": [{"id": "price", "pattern": r"\$[0-9]+", "description": "the price"}],
+        },
+    )
+    assert settled.extract is not None
+    assert settled.extract.item_action is None
+    assert settled.extract.call_action == "auto"
+    broken = anyio.run(
+        run,
+        {"document": "Price: $10", "fields": [{"id": "price", "pattern": "[", "description": "the price"}]},
+    )
+    assert broken.extract is not None
+    assert broken.extract.item_action is None
+    assert broken.extract.call_action == "review"
+
+
+def test_extract_carries_both_headlines(capsys: pytest.CaptureFixture[str]) -> None:
+    """All not_found settles the call and has no item Action. A broken row is review, still no item Action."""
+    settled = _decision(
+        capsys,
+        "jev_extract",
+        {
+            "document": "No prices here.",
+            "fields": [{"id": "price", "pattern": "\\$[0-9]+", "description": "the price"}],
+        },
+        {},
+    )
+    assert settled["action"] == "auto"
+    assert settled["unresolved"] is False
+    broken = _decision(
+        capsys,
+        "jev_extract",
+        {"document": "Price: $10", "fields": [{"id": "price", "pattern": "[", "description": "the price"}]},
+        {},
+    )
+    assert broken["action"] == "review"
+    assert broken["unresolved"] is True
 
 
 def test_every_registered_tool_has_a_decision_mapping() -> None:
-    """Guard: a tool that registers without a `_DECISIONS` entry would judge as always-unresolved."""
+    """Guard: a tool that registers without a payload mapping or extract headlines judges unresolved."""
     from jev_judge_mcp.tools import TOOLS
 
-    assert set(cli.TOOL_DECISIONS) == {tool.name for tool in TOOLS}
+    assert set(cli.TOOL_DECISIONS) | {"jev_extract"} == {tool.name for tool in TOOLS}
+    assert "jev_extract" not in cli.TOOL_DECISIONS
 
 
-_NO_CREDENTIALS = (
-    "No Jev provider credentials found. Set TYPESAFE_API_KEY, OPENROUTER_API_KEY (sk-or-), Cloudflare token + "
-    "CLOUDFLARE_ACCOUNT_ID, AI_GATEWAY_API_KEY, or JEV_API_KEY + JEV_API_BASE_URL; set JEV_PROVIDER to choose "
-    "explicitly."
-)
+_VERIFY = {"claims": ["The service listens on 8080."], "evidence": "server.listen(8080)"}
+
+
+def _status_error(message: str, status: int) -> ProviderError:
+    error = ProviderError(message)
+    error.status = status
+    return error
 
 
 @pytest.mark.parametrize(
-    ("text", "code"),
+    ("error", "code"),
     [
-        pytest.param(_NO_CREDENTIALS, "auth", id="auth"),
-        pytest.param("MCP error -32602: Tool jev_verify not found", "invalid_arguments", id="unknown-tool"),
-        pytest.param("diff exceeds the 200,000-character aggregate budget", "input_too_large", id="aggregate-budget"),
-        pytest.param("TypeSafe request timed out.", "timeout", id="timeout"),
-        pytest.param("OpenRouter 429: rate limit exceeded", "quota", id="quota"),
-        pytest.param("TypeSafe API 401: Missing or invalid API key", "auth", id="upstream-401"),
-        pytest.param("TypeSafe API 403: forbidden", "provider", id="upstream-403"),
-        pytest.param(
-            "evidence exceeds 16 items; split the gate or trim the evidence.",
-            "input_too_large",
-            id="items-refusal",
-        ),
+        pytest.param(ProviderTimeoutError("still working"), "timeout", id="timeout"),
+        pytest.param(_status_error("slow down", 429), "quota", id="quota"),
+        pytest.param(_status_error("upstream rejected the credential", 401), "auth", id="upstream-401"),
+        pytest.param(_status_error("TypeSafe API 401: the body mentions 401", 403), "provider", id="upstream-403"),
     ],
 )
-def test_an_iserror_envelope_codes_the_text_like_the_wire_block(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    text: str,
-    code: str,
+def test_judge_codes_the_exception_not_its_text(
+    capsys: pytest.CaptureFixture[str], error: BaseException, code: str
 ) -> None:
-    """The envelope's `error.code` is the same code the isError block carries, never a second mapping.
-
-    `evidence exceeds 16 items` is the pin: it shares no substring marker with the aggregate
-    budget texts, so a mapping that classifies by those substrings alone codes it `provider`
-    while callers branch on `input_too_large` to split and retry. The one mapping now recognizes
-    the budget-refusal scaffolds themselves (ADR-0062).
-    """
-
-    async def fake_call(_name: str, _arguments: dict[str, Any]) -> CallToolResult:
-        return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
-
-    monkeypatch.setattr(cli, "_call", fake_call)
-    exit_code = judge_main(["jev_verify"], text="{}")
+    """The DecisionResult code is the exception's, so a 401-shaped sentence on a 403 stays `provider`."""
+    exit_code = judge_main(["jev_verify"], text=json.dumps(_VERIFY), provider=FakeProvider({}, error=error))
     captured = capsys.readouterr()
     assert exit_code == 1
-    envelope = json.loads(captured.out)
-    assert envelope["error"] == {"code": code, "message": text}
-    assert envelope["unresolved"] is True
+    document = json.loads(captured.out)
+    assert document["error"] == {"code": code, "message": str(error)}
+    assert document["unresolved"] is True
+
+
+def test_an_unknown_tool_is_invalid_arguments(capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code = judge_main(["no_such_tool"], text="{}")
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert json.loads(captured.out)["error"]["code"] == "invalid_arguments"
+
+
+def test_a_gate_item_budget_is_input_too_large(capsys: pytest.CaptureFixture[str]) -> None:
+    """The item-count refusal shares no substring with the aggregate texts; the return site sets the code."""
+    provider = FakeProvider({})
+    arguments = {
+        "request": "fix it",
+        "diff": "+ x",
+        "claims": ["it works"],
+        "evidence": [{"id": f"e{index}", "text": "line"} for index in range(17)],
+    }
+    exit_code = judge_main(["jev_gate"], text=json.dumps(arguments), provider=provider)
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    document = json.loads(captured.out)
+    assert document["error"]["code"] == "input_too_large"
+    assert "evidence exceeds 16 items; split the gate or trim the evidence." in document["error"]["message"]
+    assert provider.requests == []

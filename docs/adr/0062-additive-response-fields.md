@@ -29,6 +29,28 @@ with the reference holds; the field is part of divergence `program-response-fiel
 that collides with gate's implicit `diff` or `tests` evidence does not enter the map: the caller's
 id is unchanged and the implicit item is the one suffixed.
 
+## Amendment (2026-09-29): the code is set from the exception, not parsed from the text
+
+`error_code` used to classify the rendered `isError` text. An explicit provider with a missing or
+malformed key (`ProviderConfigError`) did not match the `No Jev provider credentials` prefix, so
+the code was `provider`. A required completion hook then treated that as a reached provider and
+exited 0 with no ask (ADR-0065). The text heuristics are gone. `responses.py` only renders
+additive fields. `tools/toolset.py` `code_of` is the one mapping, and it reads the exception:
+
+- `ProviderConfigError` → `auth`, for every provider, including a malformed OpenRouter key.
+- `ProviderError.status` 401 → `auth`, 429 → `quota`. 403, 404, and 422 stay `provider`. A 401
+  that appears only in the body stays `provider`.
+- `ProviderTimeoutError` → `timeout`.
+- `ArgumentsError` → `invalid_arguments`. A `ToolError` carries the code its raise site set
+  (`invalid_arguments` or `input_too_large`). An `isError` return (jev_gate's budget refusals)
+  sets `input_too_large` on the result.
+- Any other provider failure → `provider`.
+
+`evaluate` redacts the text and keeps the status the raise site recorded. An exhausted retry of a
+429 keeps that status, so the code stays `quota`. The first content block stays byte-equal. The
+second block and `structuredContent.code` are rendered from this code, not computed by re-reading
+the text.
+
 ## Consequences
 
 - A grep for `verified` can still hit a row whose action is `escalate`. `stands` is the boolean that grep should have been.

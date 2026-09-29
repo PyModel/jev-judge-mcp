@@ -11,17 +11,37 @@ Owned failures and any other `Exception` are logged with a traceback before that
 
 import logging
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from mcp.types import CallToolResult, TextContent, Tool
 
-from jev_judge_mcp.providers import ProviderConfigError, ProviderError
-from jev_judge_mcp.responses import error_code
+from jev_judge_mcp.policy.actions import Action
+from jev_judge_mcp.providers import ProviderConfigError, ProviderError, ProviderTimeoutError
 from jev_judge_mcp.serialize import stringify, stringify_compact
 from jev_judge_mcp.telemetry import ACTIONS, CAP_SCOPES, Span
 from jev_judge_mcp.tools.arguments import INVALID_PARAMS, ArgumentParser, ArgumentsError, compile_argument_schema
-from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError
+from jev_judge_mcp.tools.base import ExtractHeadlines, JevTool, Runtime, ToolError, ToolResult
+from jev_judge_mcp.validation.caps import CapScope
 
 logger = logging.getLogger("jev_judge_mcp.telemetry")
+
+
+@dataclass(frozen=True, slots=True)
+class ToolOutcome:
+    """What the kernel returns. MCP rendering is separate; callers do not parse `text` back.
+
+    `payload` is the handler payload, or `None` when the error is a bare exception message
+    (`text` is that message). `error_code` is set on errors and `None` on success.
+    """
+
+    payload: Mapping[str, object] | None
+    text: str
+    is_error: bool
+    action: Action | None
+    error_code: str | None
+    item_actions: tuple[Action, ...] = ()
+    truncated: frozenset[CapScope] = frozenset()
+    extract: ExtractHeadlines | None = None
 
 
 class Toolset:
@@ -41,9 +61,17 @@ class Toolset:
         return tuple(self._tools)
 
     async def call(self, name: str, arguments: Mapping[str, object] | None) -> CallToolResult:
-        """Dispatch under an `mcp.tool` span. An unknown tool is labelled `unknown`: its name is caller text.
+        """Dispatch under an `mcp.tool` span and render the outcome. MCP text stays byte-identical.
 
-        `arguments` is `None` when the request carried none.
+        `arguments` is `None` when the request carried none. Callers that need the typed outcome
+        use `execute`; this method only renders it (ADR-0006, ADR-0062).
+        """
+        return render_call(await self.execute(name, arguments))
+
+    async def execute(self, name: str, arguments: Mapping[str, object] | None) -> ToolOutcome:
+        """The kernel: payload, the tool's Action, and the error code from the exception type.
+
+        An unknown tool is labelled `unknown`: its name is caller text.
         """
         tool = self._tools.get(name)
         telemetry = self.runtime.telemetry
@@ -51,16 +79,16 @@ class Toolset:
             telemetry.payload(
                 span, "arguments", lambda: "undefined" if arguments is None else stringify(dict(arguments))
             )
-            result = await self._call(name, tool, arguments, span)
-            telemetry.payload(span, "result", lambda: _text(result))
-        return result
+            outcome = await self._execute(name, tool, arguments, span)
+            telemetry.payload(span, "result", lambda: outcome.text)
+        return outcome
 
-    async def _call(
+    async def _execute(
         self, name: str, tool: JevTool | None, arguments: Mapping[str, object] | None, span: Span
-    ) -> CallToolResult:
+    ) -> ToolOutcome:
         if tool is None:
             span.attributes["outcome"] = "unknown_tool"
-            return _error(f"MCP error {INVALID_PARAMS}: Tool {name} not found")
+            return _error_outcome(f"MCP error {INVALID_PARAMS}: Tool {name} not found", "invalid_arguments")
         try:
             parsed = self._parsers[name](arguments)
             result = await tool.handler(parsed, self.runtime)
@@ -73,7 +101,7 @@ class Toolset:
             else:
                 # Tool name only. The traceback is the diagnostic; argument text stays out of the log.
                 logger.exception("tool %s raised", name)
-            return _error(str(error))
+            return _error_outcome(str(error), code_of(error))
         span.attributes["outcome"] = "error_payload" if result.is_error else "ok"
         for scope in CAP_SCOPES:
             span.attributes[f"truncated.{scope}"] = scope in result.truncated
@@ -81,14 +109,7 @@ class Toolset:
             span.attributes["action"] = result.action
         for action in ACTIONS:
             span.attributes[f"item_actions.{action}"] = result.item_actions.count(action)
-        text = stringify(result.payload)
-        if result.is_error:
-            return _error(text)
-        return CallToolResult(
-            content=[TextContent(type="text", text=text)],
-            structured_content=None,
-            is_error=False,
-        )
+        return _from_result(result)
 
     async def aclose(self) -> None:
         logger.debug("metrics %s", self.runtime.telemetry.metrics.snapshot())
@@ -97,6 +118,50 @@ class Toolset:
     async def awarm(self) -> None:
         """The server's startup warm (ADR-0058): the pool is filled before any transport runs."""
         await self.runtime.awarm()
+
+
+def code_of(error: BaseException) -> str:
+    """The one error-code mapping. It reads the exception type and status, never the text.
+
+    ProviderConfigError is `auth` for every provider, including a malformed OpenRouter key.
+    A 401 is `auth` and a 429 is `quota` from `ProviderError.status` (ADR-0072). A timeout is
+    `timeout`. Argument errors are `invalid_arguments`. A ToolError carries the code its raise
+    site set. Everything else a provider raised is `provider`.
+    """
+    if isinstance(error, ProviderConfigError):
+        return "auth"
+    if isinstance(error, ProviderTimeoutError):
+        return "timeout"
+    if isinstance(error, ProviderError):
+        if error.status == 401:
+            return "auth"
+        if error.status == 429:
+            return "quota"
+        return "provider"
+    if isinstance(error, ArgumentsError):
+        return "invalid_arguments"
+    if isinstance(error, ToolError):
+        return error.code
+    return "provider"
+
+
+def render_call(outcome: ToolOutcome) -> CallToolResult:
+    """MCP bytes for an outcome. The first block is `text`, unchanged (ADR-0006, ADR-0062)."""
+    if not outcome.is_error:
+        return CallToolResult(
+            content=[TextContent(type="text", text=outcome.text)],
+            structured_content=None,
+            is_error=False,
+        )
+    code = outcome.error_code or "provider"
+    return CallToolResult(
+        content=[
+            TextContent(type="text", text=outcome.text),
+            TextContent(type="text", text=stringify_compact({"code": code})),
+        ],
+        structured_content={"code": code},
+        is_error=True,
+    )
 
 
 def _outcome(error: Exception) -> str:
@@ -109,18 +174,30 @@ def _outcome(error: Exception) -> str:
     return "handler_error"
 
 
-def _text(result: CallToolResult) -> str:
-    return "".join(block.text for block in result.content if isinstance(block, TextContent))
+def _error_outcome(text: str, code: str) -> ToolOutcome:
+    return ToolOutcome(payload=None, text=text, is_error=True, action=None, error_code=code)
 
 
-def _error(text: str) -> CallToolResult:
-    """Error text stays byte-equal in the first block. The second block carries the code (ADR-0062)."""
-    code = error_code(text)
-    return CallToolResult(
-        content=[
-            TextContent(type="text", text=text),
-            TextContent(type="text", text=stringify_compact({"code": code})),
-        ],
-        structured_content={"code": code},
-        is_error=True,
+def _from_result(result: ToolResult) -> ToolOutcome:
+    text = stringify(result.payload)
+    if result.is_error:
+        return ToolOutcome(
+            payload=result.payload,
+            text=text,
+            is_error=True,
+            action=result.action,
+            error_code=result.error_code or "provider",
+            item_actions=result.item_actions,
+            truncated=result.truncated,
+            extract=result.extract,
+        )
+    return ToolOutcome(
+        payload=result.payload,
+        text=text,
+        is_error=False,
+        action=result.action,
+        error_code=None,
+        item_actions=result.item_actions,
+        truncated=result.truncated,
+        extract=result.extract,
     )

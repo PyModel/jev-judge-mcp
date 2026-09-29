@@ -7,28 +7,29 @@ log from the repo and calls ``jev_gate``. Neither path branches on a harness.
 
 from __future__ import annotations
 
-import io
-import json
 import os
 import shlex
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import anyio
 
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.hook import fail_open_or_ask, hook_required
+from jev_judge_mcp.hook_render import render_decision
 from jev_judge_mcp.identity import reported_version
 from jev_judge_mcp.keyfile import stored_key_path
 from jev_judge_mcp.policy import POLICY_VERSION, worst_action
 from jev_judge_mcp.policy.actions import Action
-from jev_judge_mcp.responses import error_code
-from jev_judge_mcp.serialize import stringify, stringify_compact
+from jev_judge_mcp.providers import JevProvider
+from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
+from jev_judge_mcp.tools.toolset import ToolOutcome, code_of
 
 SCHEMA_VERSION = 1
 _USAGE_JUDGE = "jev-judge-mcp judge: usage: jev-judge-mcp judge <tool>\n"
@@ -45,7 +46,23 @@ class CliError(Exception):
         self.exit_code = exit_code
 
 
-def judge_main(argv: Sequence[str], *, text: str | None = None) -> int:
+@dataclass(frozen=True, slots=True)
+class Decision:
+    """One judge or gate result, in process. `rendered` is the DecisionResult JSON line, not yet written.
+
+    The name is Decision, not envelope: Envelope is the provider reply (CONTEXT.md). Wire keys are
+    unchanged (ADR-0064).
+    """
+
+    exit_code: int
+    rendered: str = ""
+    stderr: str = ""
+    action: str | None = None
+    error_code: str | None = None
+    unresolved: bool = True
+
+
+def judge_main(argv: Sequence[str], *, text: str | None = None, provider: JevProvider | None = None) -> int:
     if len(argv) != 1 or not argv[0] or argv[0].startswith("-"):
         sys.stderr.write(_USAGE_JUDGE)
         return 2
@@ -53,23 +70,27 @@ def judge_main(argv: Sequence[str], *, text: str | None = None) -> int:
     try:
         parsed = decode_json(body) if body.strip() else None
     except ValueError:
-        return _fail("invalid_arguments", "stdin was not one JSON object", tool=argv[0], exit_code=2)
+        return _emit(_failure("invalid_arguments", "stdin was not one JSON object", tool=argv[0], exit_code=2))
     if not is_json_object(parsed):
-        return _fail("invalid_arguments", "stdin was not one JSON object", tool=argv[0], exit_code=2)
-    return _run_tool(argv[0], parsed)
+        return _emit(_failure("invalid_arguments", "stdin was not one JSON object", tool=argv[0], exit_code=2))
+    return _emit(_run_tool(argv[0], parsed, provider=provider))
 
 
-def gate_main(argv: Sequence[str]) -> int:
+def gate_main(argv: Sequence[str], *, provider: JevProvider | None = None) -> int:
+    return _emit(run_gate(argv, provider=provider))
+
+
+def run_gate(argv: Sequence[str], *, provider: JevProvider | None = None) -> Decision:
+    """In-process gate. Does not write stdout. The completion hook reads this; `gate_main` emits it."""
     try:
         options = _gate_options(argv)
     except CliError as error:
-        sys.stderr.write(f"jev-judge-mcp gate: {error}\n")
-        return error.exit_code
+        return Decision(error.exit_code, stderr=f"jev-judge-mcp gate: {error}\n")
     try:
         arguments = _gate_arguments(options)
     except CliError as error:
-        return _fail(error.code, str(error), tool="jev_gate", exit_code=error.exit_code)
-    return _run_tool("jev_gate", arguments)
+        return _failure(error.code, str(error), tool="jev_gate", exit_code=error.exit_code)
+    return _run_tool("jev_gate", arguments, provider=provider)
 
 
 def calibrate_main(argv: Sequence[str]) -> int:
@@ -218,49 +239,56 @@ def _path_from_header(chunk: str) -> str | None:
     return path
 
 
-def _run_tool(name: str, arguments: Mapping[str, object]) -> int:
+def _run_tool(name: str, arguments: Mapping[str, object], *, provider: JevProvider | None) -> Decision:
     known = {tool.name for tool in TOOLS}
     if name not in known:
-        return _fail("invalid_arguments", f"unknown tool {name}", tool=name, exit_code=2)
+        return _failure("invalid_arguments", f"unknown tool {name}", tool=name, exit_code=2)
     try:
-        result = anyio.run(_call, name, dict(arguments))
+        outcome = anyio.run(_execute, name, dict(arguments), provider)
     except Exception as error:
-        return _fail(_code_for(error), str(error), tool=name)
-    text = result.content[0].text if result.content else ""
-    if result.is_error:
-        # One mapping with the wire (ADR-0062): the envelope's code is `error_code`'s, the same
-        # code the toolset's isError block carries for this text.
-        code = error_code(text)
-        return _fail(code, text, tool=name, payload_text=text)
-    try:
-        payload = json.loads(text)
-    except ValueError:
-        payload = {"text": text}
-    action, unresolved = _decision(name, payload)
-    codes = payload.get("reason_codes") if isinstance(payload, dict) else None
-    _write_envelope(
+        return _failure(code_of(error), str(error), tool=name)
+    if outcome.is_error:
+        body: object = outcome.payload if outcome.payload is not None else outcome.text
+        return _failure(outcome.error_code or "provider", outcome.text, tool=name, payload=body)
+    payload = outcome.payload if outcome.payload is not None else {"text": outcome.text}
+    action, unresolved = _reported(name, outcome, payload)
+    codes = payload.get("reason_codes")
+    return _success(
         tool=name,
         action=action,
         reason_codes=list(codes) if isinstance(codes, list) else [],
         confidence=_confidence(payload),
-        error=None,
-        usage=payload.get("usage") if isinstance(payload, dict) else None,
+        usage=payload.get("usage"),
         payload=payload,
         unresolved=unresolved,
     )
-    return 0
 
 
-async def _call(name: str, arguments: dict[str, Any]) -> Any:
-    toolset = Toolset(Runtime(load_settings()), TOOLS)
+async def _execute(name: str, arguments: dict[str, Any], provider: JevProvider | None) -> ToolOutcome:
+    toolset = Toolset(_runtime(provider), TOOLS)
     try:
-        return await toolset.call(name, arguments)
+        return await toolset.execute(name, arguments)
     finally:
         await toolset.aclose()
 
 
+def _runtime(provider: JevProvider | None) -> Runtime:
+    settings = load_settings()
+    if provider is None:
+        return Runtime(settings)
+    return Runtime(settings, provider_factory=lambda _settings: provider)
+
+
+def _emit(decision: Decision) -> int:
+    if decision.stderr:
+        sys.stderr.write(decision.stderr)
+    if decision.rendered:
+        sys.stdout.write(decision.rendered)
+    return decision.exit_code
+
+
 _ACTIONS: tuple[Action, ...] = ("auto", "review", "escalate")
-"""The Action vocabulary the envelope reports (ADR-0064 amendment)."""
+"""The Action vocabulary a payload decision reports (ADR-0064 amendment)."""
 
 
 def _top_action(payload: object) -> tuple[str | None, bool]:
@@ -296,26 +324,6 @@ def _row_action(key: str) -> Callable[[object], tuple[str | None, bool]]:
         return action, action != "auto"
 
     return decide
-
-
-def _extract_action(payload: object) -> tuple[str | None, bool]:
-    """jev_extract: per-field `status`; a broken or unjudged field counts as review, `not_found` is neutral."""
-    rows = payload.get("results") if isinstance(payload, dict) else None
-    if not isinstance(rows, list):
-        return None, True
-    actions: list[Action] = []
-    for row in rows:
-        status = row.get("status") if isinstance(row, dict) else None
-        if status == "auto" or status == "review":
-            actions.append(cast(Action, status))
-        elif status in ("invalid_pattern", "invalid_response"):
-            actions.append("review")
-        elif status != "not_found":
-            return None, True
-    if not actions:
-        return "auto", False  # every field not_found: the call settled
-    action = worst_action(actions)
-    return action, action != "auto"
 
 
 def _compare_action(payload: object) -> tuple[str | None, bool]:
@@ -355,20 +363,30 @@ TOOL_DECISIONS: Mapping[str, Callable[[object], tuple[str | None, bool]]] = {
     "jev_decide": _decide_clean,
     "jev_rerank": _status_clean,
     "jev_compare": _compare_action,
-    "jev_extract": _extract_action,
     "jev_review": _top_action,
     "jev_gate": _top_action,
     "jev_score": _score_clean,
 }
-"""Every tool's own decision field → the envelope's (`action`, `unresolved`), in registry order.
+"""Payload decision fields → (`action`, `unresolved`), in registry order.
 
-The guard in `tests/unit/test_cli_judge.py` fails when a tool registers without a mapping
-(ADR-0064 amendment): only the mapped green lights — `auto`, screen's `pass`, a selected
-jev_decide candidate, find/rerank without `invalid_response`, score's `ok` — resolve."""
+jev_extract is not here: its two headlines are on the outcome, computed where the rows are
+(ADR-0064 amendment). The guard in `tests/unit/test_cli_judge.py` fails when a tool registers
+without a mapping and is not extract. Only the mapped green lights — `auto`, screen's `pass`,
+a selected jev_decide candidate, find/rerank without `invalid_response`, score's `ok`,
+extract's call headline `auto` — resolve."""
+
+
+def _reported(name: str, outcome: ToolOutcome, payload: object) -> tuple[str | None, bool]:
+    """The DecisionResult `action` and `unresolved`. Extract reads the outcome; the rest read payload fields."""
+    if name == "jev_extract":
+        headlines = outcome.extract
+        action = None if headlines is None else headlines.call_action
+        return action, action != "auto"
+    return _decision(name, payload)
 
 
 def _decision(name: str, payload: object) -> tuple[str | None, bool]:
-    """The envelope's `action` and `unresolved` from `name`'s own decision field."""
+    """`action` and `unresolved` from `name`'s own payload field. Not used for jev_extract."""
     resolve = TOOL_DECISIONS.get(name)
     if resolve is None:
         return None, True
@@ -384,34 +402,61 @@ def _confidence(payload: object) -> float | None:
     return None
 
 
-def _fail(
+def _failure(
     code: str,
     message: str,
     *,
     tool: str,
     exit_code: int = 1,
-    payload_text: str | None = None,
-) -> int:
-    payload: object = None
-    if payload_text:
-        try:
-            payload = json.loads(payload_text)
-        except ValueError:
-            payload = payload_text
-    _write_envelope(
-        tool=tool,
+    payload: object = None,
+) -> Decision:
+    return Decision(
+        exit_code,
+        rendered=_render_decision(
+            tool=tool,
+            action=None,
+            reason_codes=[],
+            confidence=None,
+            error={"code": code, "message": message},
+            usage=None,
+            payload=payload,
+            unresolved=True,
+        ),
         action=None,
-        reason_codes=[],
-        confidence=None,
-        error={"code": code, "message": message},
-        usage=None,
-        payload=payload,
+        error_code=code,
         unresolved=True,
     )
-    return exit_code
 
 
-def _write_envelope(
+def _success(
+    *,
+    tool: str,
+    action: str | None,
+    reason_codes: list[object],
+    confidence: float | None,
+    usage: object,
+    payload: object,
+    unresolved: bool,
+) -> Decision:
+    return Decision(
+        0,
+        rendered=_render_decision(
+            tool=tool,
+            action=action,
+            reason_codes=reason_codes,
+            confidence=confidence,
+            error=None,
+            usage=usage,
+            payload=payload,
+            unresolved=unresolved,
+        ),
+        action=action,
+        error_code=None,
+        unresolved=unresolved,
+    )
+
+
+def _render_decision(
     *,
     tool: str,
     action: str | None,
@@ -421,13 +466,14 @@ def _write_envelope(
     usage: object,
     payload: object,
     unresolved: bool,
-) -> None:
+) -> str:
+    """The DecisionResult JSON line. Keys are the wire keys; the Python name is not envelope."""
     billed = None
     if isinstance(usage, dict):
         inp, out = usage.get("input_tokens"), usage.get("output_tokens")
         if isinstance(inp, (int, float)) and isinstance(out, (int, float)):
             billed = inp + out
-    envelope = {
+    document = {
         "schema_version": SCHEMA_VERSION,
         "policy_version": POLICY_VERSION,
         "server_version": _version(),
@@ -441,7 +487,7 @@ def _write_envelope(
         "unresolved": unresolved,
         "payload": payload,
     }
-    sys.stdout.write(stringify(envelope) + "\n")
+    return stringify(document) + "\n"
 
 
 def _version() -> str:
@@ -449,19 +495,6 @@ def _version() -> str:
         return reported_version()
     except Exception:
         return "unknown"
-
-
-def _code_for(error: BaseException) -> str:
-    name = type(error).__name__
-    if name in ("ProviderConfigError",):
-        return "auth"
-    if name in ("ProviderTimeoutError",):
-        return "timeout"
-    if getattr(error, "status", None) == 429:
-        return "quota"
-    if name == "ArgumentsError":
-        return "invalid_arguments"
-    return "provider"
 
 
 _COMPLETION_COMMANDS: tuple[tuple[str, ...], ...] = (
@@ -501,28 +534,42 @@ def command_from_hook_event(event: Mapping[str, object]) -> str:
 _REACHED_PROVIDER = frozenset({"timeout", "quota", "provider"})
 
 
-def _gate_failure(required: bool, rendered: str) -> int:
-    """A non-zero gate. Ask only when the flag is set and the provider was never called."""
-    message = "error.code=provider\n"
-    code_name = "provider"
-    parsed = False
-    try:
-        envelope = json.loads(rendered)
-    except ValueError:
-        envelope = None
-    if isinstance(envelope, dict) and isinstance(envelope.get("error"), dict):
-        parsed = True
-        raw = envelope["error"].get("code", "provider")
-        code_name = raw if isinstance(raw, str) and raw else "provider"
-        message = f"error.code={code_name}\n"
-    if required and not (parsed and code_name in _REACHED_PROVIDER):
+def _gate_failure(required: bool, error_code: str | None) -> int:
+    """A non-zero gate. Ask only when the flag is set and the provider was never called.
+
+    The code is the outcome's, not a parse of rendered JSON (ADR-0065 amendment).
+    """
+    code_name = error_code or "provider"
+    message = f"error.code={code_name}\n"
+    # A missing code is the old unparsed stdout: the provider was not shown to have been called.
+    if required and error_code not in _REACHED_PROVIDER:
         return fail_open_or_ask(True, message, code_name)
     sys.stderr.write(message)
     return 0
 
 
+def _completion_ask(action: str | None) -> str:
+    """The ask for a gate that did not return auto. A fact, not a directive.
+
+    A host model reads an imperative in a permissionDecisionReason ("Read action, not verdict.")
+    as a possible prompt injection. The decision is the JSON field; the reason only states what
+    the gate decided.
+    """
+    if action == "escalate":
+        reason = "Jev completion hook: gate action is escalate."
+    elif action == "review":
+        reason = "Jev completion hook: gate action is review."
+    else:
+        reason = "Jev completion hook: gate action is not auto."
+    return render_decision("ask", reason) + "\n"
+
+
 def completion_hook_main(
-    argv: Sequence[str], *, text: str | None = None, environ: Mapping[str, str] | None = None
+    argv: Sequence[str],
+    *,
+    text: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    provider: JevProvider | None = None,
 ) -> int:
     """Opt-in completion hook. Empty stdout abstains. Never prints allow.
 
@@ -531,7 +578,8 @@ def completion_hook_main(
     ``JEV_HOOK_REQUIRED=1`` asks instead for bad stdin, missing credentials, a gate error
     coded ``auth`` (a missing key, or an upstream 401 per ADR-0072), and a gate error that
     never reached the provider (ADR-0065). A provider timeout, quota, or other provider
-    error stays fail-open.
+    error stays fail-open. The gate runs in process; this function reads the outcome and
+    does not capture or parse stdout.
     """
     if list(argv):
         sys.stderr.write("jev-judge-mcp completion-hook: usage: jev-judge-mcp completion-hook\n")
@@ -552,48 +600,13 @@ def completion_hook_main(
     tests = env.get("JEV_COMPLETION_TESTS")
     if not claims or not tests:
         return fail_open_or_ask(required, "error.code=invalid_arguments\n", "invalid_arguments")
-    saved_out = sys.stdout
-    saved_err = sys.stderr
-    out, err = io.StringIO(), io.StringIO()
-    sys.stdout, sys.stderr = out, err
-    failed = False
     try:
-        code = gate_main(["--diff", diff, "--claims", claims, "--tests", tests])
+        decision = run_gate(["--diff", diff, "--claims", claims, "--tests", tests], provider=provider)
     except Exception:
-        failed = True
-        code = 1
-    finally:
-        sys.stdout, sys.stderr = saved_out, saved_err
-    if failed:
         return fail_open_or_ask(required, "error.code=provider\n", "provider")
-    rendered = out.getvalue()
-    if code != 0:
-        return _gate_failure(required, rendered)
-    try:
-        envelope = json.loads(rendered)
-    except ValueError:
-        return fail_open_or_ask(required, "error.code=provider\n", "provider")
-    action = envelope.get("action") if isinstance(envelope, dict) else None
-    if action == "auto":
+    if decision.exit_code != 0:
+        return _gate_failure(required, decision.error_code)
+    if decision.action == "auto":
         return 0
-    reason = "Jev completion hook: gate action is not auto."
-    if action == "escalate":
-        # A fact, not a directive: a host model reads an imperative in a permissionDecisionReason
-        # ("Read action, not verdict.") as a possible prompt injection. The decision is the JSON
-        # field; the reason only states what the gate decided.
-        reason = "Jev completion hook: gate action is escalate."
-    elif action == "review":
-        reason = "Jev completion hook: gate action is review."
-    sys.stdout.write(
-        stringify_compact(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "ask",
-                    "permissionDecisionReason": reason,
-                }
-            }
-        )
-        + "\n"
-    )
+    sys.stdout.write(_completion_ask(decision.action))
     return 0

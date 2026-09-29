@@ -17,11 +17,11 @@ from jev_judge_mcp.tools.observed import worst_action
 def file_patches(diff: object) -> list[dict[str, str]]:
     """A file-list `diff` as sent: one `{path, patch}` record per item, or a `ToolError`."""
     if not isinstance(diff, list):
-        raise ToolError("diff file list was not a list")
+        raise ToolError("diff file list was not a list", code="invalid_arguments")
     files: list[dict[str, str]] = []
     for raw in cast(list[object], diff):
         if not isinstance(raw, dict):
-            raise ToolError("diff file list item was not an object")
+            raise ToolError("diff file list item was not an object", code="invalid_arguments")
         record = cast(dict[str, object], raw)
         files.append({"path": str(record["path"]), "patch": str(record["patch"])})
     return files

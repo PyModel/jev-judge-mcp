@@ -160,7 +160,7 @@ def review_settings(args: dict[str, Any]) -> ReviewSettings:
     resolved = resolve_policy_thresholds(args.get("auto_accept", DEFAULT_AUTO_ACCEPT), args.get("review_at"))
     if isinstance(resolved, PolicyThresholds):
         return ReviewSettings(resolved, args.get("composite_floor", DEFAULT_COMPOSITE_FLOOR))
-    raise ToolError(resolved.message)
+    raise ToolError(resolved.message, code="invalid_arguments")
 
 
 @dataclass(frozen=True, slots=True)
@@ -273,7 +273,9 @@ async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: Re
     files = file_patches(args["diff"])
     total = sum(length(item["patch"]) for item in files)
     if total > GATE.aggregate_evidence_units:
-        raise ToolError(f"diff exceeds the {GATE.aggregate_evidence_units:,}-character aggregate budget")
+        raise ToolError(
+            f"diff exceeds the {GATE.aggregate_evidence_units:,}-character aggregate budget", code="input_too_large"
+        )
     unreviewed: list[str] = []
     halves: list[ReviewHalf] = []
     evaluations: list[Evaluation] = []
