@@ -7,6 +7,7 @@ log from the repo and calls ``jev_gate``. Neither path branches on a harness.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shlex
 import subprocess
@@ -126,18 +127,22 @@ def _gate_arguments(options: Mapping[str, str]) -> dict[str, object]:
     tests_path = _inside_repo(Path(options["tests"]), repo, key)
     try:
         claims_text = claims_path.read_text(encoding="utf-8")
-        tests_text = tests_path.read_text(encoding="utf-8")
+        tests_bytes = tests_path.read_bytes()
+        tests_text = tests_bytes.decode("utf-8")
     except (OSError, UnicodeDecodeError) as error:
         raise CliError("invalid_arguments", "could not read a local file", exit_code=2) from error
     request, claims = _claims(claims_text, options.get("request"))
     diff = _git_diff(repo, options["diff"])
     files = _split_unified(diff)
+    # The hash is set here because this reader read the file (ADR-0067). The MCP tool does not hash
+    # a string the caller typed.
     return {
         "request": request,
         "diff": files if files is not None else diff,
         "claims": claims,
         "evidence": [{"id": "cli", "text": "Read by jev-judge-mcp gate from the local repo."}],
         "tests": tests_text,
+        "tests_sha256": hashlib.sha256(tests_bytes).hexdigest(),
     }
 
 

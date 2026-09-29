@@ -1,5 +1,6 @@
 """The harness-agnostic CLI refuses paths it must not read, and does not print allow."""
 
+import hashlib
 import json
 import re
 import subprocess
@@ -7,7 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from jev_judge_mcp.cli import _completion_ask, completion_hook_main, completion_matches, gate_main, judge_main
+from jev_judge_mcp.cli import (
+    _completion_ask,
+    _gate_arguments,
+    completion_hook_main,
+    completion_matches,
+    gate_main,
+    judge_main,
+)
 from jev_judge_mcp.providers import ProviderError, ProviderTimeoutError
 from tests.support.jev import FakeProvider
 
@@ -339,3 +347,29 @@ def test_completion_matching_reads_tokens_not_a_string_prefix(command: str, matc
     run it either, so there is nothing to gate.
     """
     assert completion_matches(command) is matches
+
+
+def test_cli_gate_hashes_the_tests_file_it_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The CLI reader sets tests_sha256 from the file bytes, so the log is not self-reported.
+
+    The MCP tool still does not hash a string the caller typed (ADR-0067). The expected digest
+    is computed here from the file, not by a production helper.
+    """
+    repo = _repo_with_diff(tmp_path)
+    monkeypatch.chdir(repo)
+    raw = (repo / "tests.log").read_bytes()
+    expected = hashlib.sha256(raw).hexdigest()
+    arguments = _gate_arguments({"diff": "HEAD~1", "claims": "claims.json", "tests": "tests.log"})
+    assert arguments["tests"] == raw.decode("utf-8")
+    assert arguments["tests_sha256"] == expected
+
+    code = gate_main(
+        ["--diff", "HEAD~1", "--claims", "claims.json", "--tests", "tests.log"],
+        provider=FakeProvider({}),
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    review = json.loads(captured.out)["payload"]["review"]
+    assert "tests_weight" not in review
