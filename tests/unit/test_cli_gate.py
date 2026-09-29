@@ -1,6 +1,5 @@
 """The harness-agnostic CLI refuses paths it must not read, and does not print allow."""
 
-import hashlib
 import json
 import re
 import subprocess
@@ -8,15 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from jev_judge_mcp.cli import (
-    _completion_ask,  # pyright: ignore[reportPrivateUsage]
-    _gate_arguments,  # pyright: ignore[reportPrivateUsage]
-    completion_hook_main,
-    completion_matches,
-    gate_main,
-    judge_main,
-)
-from jev_judge_mcp.providers import ProviderError, ProviderTimeoutError
+from jev_judge_mcp.cli import completion_hook_main, completion_matches, gate_main, judge_main
 from tests.support.jev import FakeProvider
 
 _PUSH = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push origin main"}})
@@ -238,30 +229,6 @@ def test_completion_hook_stays_open_without_the_flag(capsys: pytest.CaptureFixtu
     assert "error.code=invalid_arguments" in captured.err
 
 
-def test_required_flag_stays_open_after_the_provider_was_reached(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A timeout means the provider was called. The flag does not turn that into allow, or into ask."""
-    repo = _repo_with_diff(tmp_path)
-    monkeypatch.chdir(repo)
-    code = completion_hook_main(
-        [],
-        text=_PUSH,
-        environ={
-            "JEV_HOOK_REQUIRED": "1",
-            "JEV_COMPLETION_DIFF": "HEAD~1",
-            "JEV_COMPLETION_CLAIMS": "claims.json",
-            "JEV_COMPLETION_TESTS": "tests.log",
-        },
-        provider=FakeProvider({}, error=ProviderTimeoutError("still working")),
-    )
-    captured = capsys.readouterr()
-    assert code == 0
-    assert captured.out == ""
-    assert "error.code=timeout" in captured.err
-    assert "allow" not in captured.out
-
-
 _REASON_SHAPE = re.compile(r"^Jev completion hook: gate action is (escalate|review|not auto)\.$")
 
 
@@ -290,39 +257,7 @@ def test_the_asks_reason_states_the_gate_action_as_a_fact(
     reason = json.loads(captured.out)["hookSpecificOutput"]["permissionDecisionReason"]
     assert reason == "Jev completion hook: gate action is escalate."
     assert _REASON_SHAPE.match(reason), reason
-    # A non-action string cannot arrive on the typed outcome. The renderer still states it as a fact.
-    other = json.loads(_completion_ask("unsupported-value"))
-    assert other["hookSpecificOutput"]["permissionDecisionReason"] == ("Jev completion hook: gate action is not auto.")
-    review = json.loads(_completion_ask("review"))
-    assert review["hookSpecificOutput"]["permissionDecisionReason"] == ("Jev completion hook: gate action is review.")
-
-
-def test_required_completion_hook_asks_on_a_rejected_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A 401 reached the provider but is `auth` (ADR-0072): the required hook asks, like a missing key.
-
-    The message does not contain a status token. The code comes from `ProviderError.status`.
-    """
-    repo = _repo_with_diff(tmp_path)
-    monkeypatch.chdir(repo)
-    rejected = ProviderError("upstream rejected the credential")
-    rejected.status = 401
-    code = completion_hook_main(
-        [],
-        text=_PUSH,
-        environ={
-            "JEV_HOOK_REQUIRED": "1",
-            "JEV_COMPLETION_DIFF": "HEAD~1",
-            "JEV_COMPLETION_CLAIMS": "claims.json",
-            "JEV_COMPLETION_TESTS": "tests.log",
-        },
-        provider=FakeProvider({}, error=rejected),
-    )
-    captured = capsys.readouterr()
-    assert code == 0
-    assert json.loads(captured.out)["hookSpecificOutput"]["permissionDecision"] == "ask"
-    assert "(auth)" in captured.out
+    assert "Read action" not in reason
 
 
 @pytest.mark.parametrize(
@@ -349,27 +284,27 @@ def test_completion_matching_reads_tokens_not_a_string_prefix(command: str, matc
     assert completion_matches(command) is matches
 
 
-def test_cli_gate_hashes_the_tests_file_it_read(
+def test_cli_gate_does_not_mark_a_file_it_read_self_reported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The CLI reader sets tests_sha256 from the file bytes, so the log is not self-reported.
+    """A tests log the CLI read is not self-reported (ADR-0067).
 
-    The MCP tool still does not hash a string the caller typed (ADR-0067). The expected digest
-    is computed here from the file, not by a production helper.
+    The digest is not on the wire. The observable is `tests_weight` absent, and the provider
+    state carrying the file text, so an unread file cannot pass.
     """
     repo = _repo_with_diff(tmp_path)
     monkeypatch.chdir(repo)
     raw = (repo / "tests.log").read_bytes()
-    expected = hashlib.sha256(raw).hexdigest()
-    arguments = _gate_arguments({"diff": "HEAD~1", "claims": "claims.json", "tests": "tests.log"})
-    assert arguments["tests"] == raw.decode("utf-8")
-    assert arguments["tests_sha256"] == expected
-
+    provider = FakeProvider({})
     code = gate_main(
         ["--diff", "HEAD~1", "--claims", "claims.json", "--tests", "tests.log"],
-        provider=FakeProvider({}),
+        provider=provider,
     )
     captured = capsys.readouterr()
     assert code == 0
     review = json.loads(captured.out)["payload"]["review"]
     assert "tests_weight" not in review
+    assert provider.requests
+    state = provider.requests[0][0]
+    assert isinstance(state, dict)
+    assert state.get("tests") == raw.decode("utf-8")

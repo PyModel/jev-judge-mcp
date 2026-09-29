@@ -165,33 +165,13 @@ async def test_error_results_keep_the_text_and_append_the_code() -> None:
     assert success.structured_content is None
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "Duplicate candidate id: a",
-        "Duplicate item id: i",
-        "Duplicate class id: class0",
-        "Duplicate field id: f",
-        'Candidate id "none" collides with an escape hatch; rename it or set escape_hatches: false.',
-        "diff file list was not a list",
-        "diff file list item was not an object",
-        "Thresholds must satisfy 0 <= review_at <= auto_accept <= 1.",
-        "TypeSafe API 401: the code is the exception's, not this text.",
-    ],
-    ids=[
-        "duplicate-candidate",
-        "duplicate-item",
-        "duplicate-class",
-        "duplicate-field",
-        "escape-hatch-collision",
-        "diff-not-a-list",
-        "diff-item-not-an-object",
-        "threshold-invariant",
-        "text-that-looks-like-auth",
-    ],
-)
-async def test_caller_input_tool_errors_carry_invalid_arguments(text: str) -> None:
-    """The wire code is the one the raise site set, even when the text looks like another code."""
+async def test_the_wire_code_is_the_raise_site_code_not_the_text() -> None:
+    """A 401-shaped sentence stays `invalid_arguments` when the raise site set that code.
+
+    The older texts in this test agreed with a text heuristic, so they still passed if parsing
+    returned. This sentence does not.
+    """
+    text = "TypeSafe API 401: the code is the exception's, not this text."
 
     async def handler(_parsed: dict[str, Any], _runtime: Runtime) -> ToolResult:
         raise ToolError(text, code="invalid_arguments")

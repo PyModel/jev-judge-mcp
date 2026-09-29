@@ -276,7 +276,14 @@ def test_every_frozen_budget_refusal_codes_input_too_large(tool: str, arguments:
     assert outcome.is_error
     assert outcome.code == "input_too_large"
     assert outcome.requests == []
-    assert scaffold.endswith("_error")
+    phrases = {
+        "candidate_budget_error": "candidate characters",
+        "classify_budget_error": "item-class budget",
+        "gate_evidence_items_error": "evidence exceeds 16 items",
+        "gate_evidence_aggregate_error": "evidence exceeds the",
+        "gate_diff_aggregate_error": "diff exceeds the",
+    }
+    assert phrases[scaffold] in outcome.text
 
 
 def test_every_budget_refusal_scaffold_is_pinned() -> None:

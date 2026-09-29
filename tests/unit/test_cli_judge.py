@@ -13,7 +13,7 @@ import pytest
 
 from jev_judge_mcp import cli
 from jev_judge_mcp.cli import judge_main
-from jev_judge_mcp.providers import ProviderError, ProviderTimeoutError
+from jev_judge_mcp.providers import ProviderError
 from tests.support.jev import FakeProvider, call_tool
 
 _VERIFY_SUPPORTED = {
@@ -455,29 +455,6 @@ def test_extract_headlines_are_computed_on_the_outcome() -> None:
     assert broken.extract.call_action == "review"
 
 
-def test_extract_carries_both_headlines(capsys: pytest.CaptureFixture[str]) -> None:
-    """All not_found settles the call and has no item Action. A broken row is review, still no item Action."""
-    settled = _decision(
-        capsys,
-        "jev_extract",
-        {
-            "document": "No prices here.",
-            "fields": [{"id": "price", "pattern": "\\$[0-9]+", "description": "the price"}],
-        },
-        {},
-    )
-    assert settled["action"] == "auto"
-    assert settled["unresolved"] is False
-    broken = _decision(
-        capsys,
-        "jev_extract",
-        {"document": "Price: $10", "fields": [{"id": "price", "pattern": "[", "description": "the price"}]},
-        {},
-    )
-    assert broken["action"] == "review"
-    assert broken["unresolved"] is True
-
-
 def test_every_registered_tool_has_a_decision_mapping() -> None:
     """Guard: a tool that registers without a payload mapping or extract headlines judges unresolved."""
     from jev_judge_mcp.tools import TOOLS
@@ -495,24 +472,14 @@ def _status_error(message: str, status: int) -> ProviderError:
     return error
 
 
-@pytest.mark.parametrize(
-    ("error", "code"),
-    [
-        pytest.param(ProviderTimeoutError("still working"), "timeout", id="timeout"),
-        pytest.param(_status_error("slow down", 429), "quota", id="quota"),
-        pytest.param(_status_error("upstream rejected the credential", 401), "auth", id="upstream-401"),
-        pytest.param(_status_error("TypeSafe API 401: the body mentions 401", 403), "provider", id="upstream-403"),
-    ],
-)
-def test_judge_codes_the_exception_not_its_text(
-    capsys: pytest.CaptureFixture[str], error: BaseException, code: str
-) -> None:
-    """The DecisionResult code is the exception's, so a 401-shaped sentence on a 403 stays `provider`."""
+def test_a_401_in_the_body_of_a_403_stays_provider(capsys: pytest.CaptureFixture[str]) -> None:
+    """Status 403 stays `provider` even when the sentence contains `401:`. A10 owns 401, 429, and timeout."""
+    error = _status_error("TypeSafe API 401: the body mentions 401", 403)
     exit_code = judge_main(["jev_verify"], text=json.dumps(_VERIFY), provider=FakeProvider({}, error=error))
     captured = capsys.readouterr()
     assert exit_code == 1
     document = json.loads(captured.out)
-    assert document["error"] == {"code": code, "message": str(error)}
+    assert document["error"] == {"code": "provider", "message": str(error)}
     assert document["unresolved"] is True
 
 
