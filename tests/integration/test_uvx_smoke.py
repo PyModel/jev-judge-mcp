@@ -16,11 +16,16 @@ pytestmark = pytest.mark.smoke
 # the cache-keys miss an uncommitted deletion. The temporary cache builds from this checkout.
 _NO_CACHE = "--no-cache"
 
+# The first reply must also cover `uvx --no-cache`'s cold build — resolve, ~5.6 MiB of wheels
+# from PyPI, install (the stage "needs the network", Makefile) — measured 22-50 s on a slow
+# link, far past the 15 s default hang budget. Later requests hit a warm server and keep it.
+_COLD_BUILD_TIMEOUT = 240.0
+
 
 def _assert_serves_this_checkout(command: list[str], tmp_path: Path) -> None:
     # cwd is not the checkout: a server that reads the skill off the source tree fails here.
     with StdioServer(command, cwd=tmp_path) as server:
-        reply = server.initialize()
+        reply = server.initialize(timeout=_COLD_BUILD_TIMEOUT)
         listed = server.request({"jsonrpc": "2.0", "id": 2, "method": "resources/list", "params": {}})
         skill = server.request(
             {

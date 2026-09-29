@@ -129,16 +129,16 @@ class StdioServer:
         message: dict[str, Any] = json.loads(line)
         return message
 
-    def request(self, message: Mapping[str, Any]) -> dict[str, Any]:
+    def request(self, message: Mapping[str, Any], *, timeout: float = TIMEOUT) -> dict[str, Any]:
         """Send a request and return the response with its id, skipping notifications."""
         self.send(message)
         while True:
-            reply = self.receive()
+            reply = self.receive(timeout=timeout)
             if reply.get("id") == message["id"]:
                 return reply
 
-    def initialize(self) -> dict[str, Any]:
-        reply = self.request(INITIALIZE)
+    def initialize(self, *, timeout: float = TIMEOUT) -> dict[str, Any]:
+        reply = self.request(INITIALIZE, timeout=timeout)
         self.send(INITIALIZED)
         return reply
 
