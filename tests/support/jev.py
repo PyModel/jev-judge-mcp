@@ -70,11 +70,14 @@ async def call_tool(
         payload = json.loads(text)
     except ValueError:
         payload = None
-    code = None
-    if isinstance(result.structured_content, dict):
-        raw = result.structured_content.get("code")
-        code = raw if isinstance(raw, str) else None
+    code = _structured_code(result)
     return Outcome(payload, bool(result.is_error), text, provider.requests, code)
+
+
+def _structured_code(result: CallToolResult) -> str | None:
+    content = cast(dict[str, object] | None, result.structured_content)
+    raw = None if content is None else content.get("code")
+    return raw if isinstance(raw, str) else None
 
 
 def text_of(result: CallToolResult) -> str:

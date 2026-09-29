@@ -10,7 +10,7 @@ text, and `isError` — unless `tests.parity.divergences.DIVERGENT` sanctions a 
 """
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -102,7 +102,7 @@ async def replay_call(call: FixtureCall, monkeypatch: pytest.MonkeyPatch) -> Non
         assert len(result.content) == 2, call.id
         code_block = result.content[1]
         assert code_block.type == "text", call.id
-        structured = result.structured_content
+        structured = cast(dict[str, object] | None, result.structured_content)
         assert isinstance(structured, dict), call.id
         code = structured.get("code")
         assert isinstance(code, str) and code, call.id

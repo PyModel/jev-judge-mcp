@@ -8,9 +8,11 @@ required hook ask come from the outcome.
 import json
 import subprocess
 from pathlib import Path
+from typing import cast
 
 import anyio
 import pytest
+from mcp.types import TextContent
 
 from jev_judge_mcp.cli import completion_hook_main, judge_main
 from jev_judge_mcp.providers import ProviderError, ProviderTimeoutError
@@ -108,8 +110,8 @@ async def _mcp() -> tuple[str, str, object]:
         result = await toolset.call("jev_verify", _VERIFY)
     finally:
         await toolset.aclose()
-    first = result.content[0].text
-    second = result.content[1].text
+    first = cast(TextContent, result.content[0]).text
+    second = cast(TextContent, result.content[1]).text
     return first, second, result.structured_content
 
 
@@ -190,7 +192,11 @@ def test_status_and_timeout_codes_are_literal(
             result = await toolset.call("jev_verify", _VERIFY)
         finally:
             await toolset.aclose()
-        return result.content[0].text, result.content[1].text, result.structured_content
+        return (
+            cast(TextContent, result.content[0]).text,
+            cast(TextContent, result.content[1]).text,
+            result.structured_content,
+        )
 
     first, second, structured = anyio.run(once)
     assert first == str(error)

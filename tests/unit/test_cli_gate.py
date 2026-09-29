@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 
 from jev_judge_mcp.cli import (
-    _completion_ask,
-    _gate_arguments,
+    _completion_ask,  # pyright: ignore[reportPrivateUsage]
+    _gate_arguments,  # pyright: ignore[reportPrivateUsage]
     completion_hook_main,
     completion_matches,
     gate_main,

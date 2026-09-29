@@ -11,7 +11,7 @@ without an entry: jev_classify's classes_min (2) and every presence-only minLeng
 import json
 import re
 from pathlib import Path
-from typing import Final, cast
+from typing import Any, Final, cast
 
 import anyio
 import pytest
@@ -33,7 +33,7 @@ from jev_judge_mcp.limits import (
 )
 from jev_judge_mcp.policy import EXTRACT_REASON_CODES
 from jev_judge_mcp.validation import caps
-from tests.support.jev import call_tool
+from tests.support.jev import Outcome, call_tool
 
 MANIFEST: Final = Path(__file__).resolve().parents[2] / "docs/reference/parity-manifest.json"
 
@@ -261,15 +261,18 @@ _BUDGET_CALLS = [
 
 
 @pytest.mark.parametrize(("tool", "arguments", "scaffold"), _BUDGET_CALLS)
-def test_every_frozen_budget_refusal_codes_input_too_large(
-    tool: str, arguments: dict[str, object], scaffold: str
-) -> None:
+def test_every_frozen_budget_refusal_codes_input_too_large(tool: str, arguments: dict[str, Any], scaffold: str) -> None:
     """Each budget scaffold is refused on the wire as `input_too_large`, from the return site.
 
     The item-count text shares no substring with the aggregate texts. A text heuristic coded it
     `provider`. The code is set where the tool returns the refusal (ADR-0062 amendment).
     """
-    outcome = anyio.run(call_tool, tool, arguments, {})
+    answers: dict[str, Any] = {}
+
+    async def run() -> Outcome:
+        return await call_tool(tool, arguments, answers)
+
+    outcome = anyio.run(run)
     assert outcome.is_error
     assert outcome.code == "input_too_large"
     assert outcome.requests == []
