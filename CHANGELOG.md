@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.8.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.7.0...v0.8.0) (2026-10-01)
+
+
+### Features
+
+* add jev_ask, the caller-written ask extension tool (ADR-0077) ([ea475dd](https://github.com/PyModel/jev-judge-mcp/commit/ea475ddb057ae8dccbebe0002105d9ba05cc0655))
+* add jev_file_judge, the server-read file judgment tool (ADR-0077) ([4a5df4c](https://github.com/PyModel/jev-judge-mcp/commit/4a5df4c0ae7065b77befade348bd96c7626e7279))
+* add jev_files_judge, the batched file judgment tool (ADR-0077) ([5d19992](https://github.com/PyModel/jev-judge-mcp/commit/5d19992c8b6222d0b1c57a6348470ee38a5d226f))
+* add the opt-in hook screen PostToolUse annotator ([ffb2d90](https://github.com/PyModel/jev-judge-mcp/commit/ffb2d9033db6f2602e272febdfa97fb2892124e7))
+* cut the compaction summary at the live-work turn (ADR-0077) ([6adb044](https://github.com/PyModel/jev-judge-mcp/commit/6adb044d46a3b6fbb4962cb2b55a6054d52c11aa))
+* route hook gate through guard questions ([99c3571](https://github.com/PyModel/jev-judge-mcp/commit/99c3571f2c80934cf00faf774150dd66584ee20c))
+
+
+### Bug Fixes
+
+* deny pattern-matched write content before any provider call ([d2d5cca](https://github.com/PyModel/jev-judge-mcp/commit/d2d5ccac558df42b2d97104d42107f26dc7b97e0))
+* judge only real user turns over a redacted transcript tail ([6b3080d](https://github.com/PyModel/jev-judge-mcp/commit/6b3080de7cf89781cf664e5480a003e220e440b4))
+* keep credential redaction linear on long identifier runs ([0df5b30](https://github.com/PyModel/jev-judge-mcp/commit/0df5b30367a0a7cbb8822834574f2b1dfde55fe3))
+* make jev_ask command execution opt-in, denylisted, scrubbed, and bounded ([53eac60](https://github.com/PyModel/jev-judge-mcp/commit/53eac605e22f8e4d977426eb4c16514ae87029cd))
+* reconcile jev_files_judge with the landed jev_ask (ADR-0077) ([7e0486b](https://github.com/PyModel/jev-judge-mcp/commit/7e0486b2b23e499f5e7e7b1986ecdf908a7d5fdd))
+* refuse every *.env dotenv as a secret store ([e9be1e6](https://github.com/PyModel/jev-judge-mcp/commit/e9be1e66433b191012b609225c58f7f0af3d396c))
+* refuse secret stores and redact credential literals in file state ([09e7f9e](https://github.com/PyModel/jev-judge-mcp/commit/09e7f9ec7909618dd7525fbb4f5e1d182b2c1adb))
+* refuse to work when a moved clone leaves core.hooksPath stale ([794024b](https://github.com/PyModel/jev-judge-mcp/commit/794024b9de4e5148a867345b05f2d5ac82c135b6))
+* scan write content with a strict credential-literal detector ([5f9392c](https://github.com/PyModel/jev-judge-mcp/commit/5f9392c3ecebb22fe03b8c9c328208c9463c9c00))
+* stop at the caps and summarize the overflow (ADR-0077) ([04e9c7f](https://github.com/PyModel/jev-judge-mcp/commit/04e9c7f4f0e02fc3d5112d1a5c9dcc2bda10dc15))
+* target screen at injected instructions, not any instruction text ([524cb3f](https://github.com/PyModel/jev-judge-mcp/commit/524cb3f675bdd3556701ebab34bcf5818df63829))
+* tighten the credential-literal detector against probed false positives ([3dd75c0](https://github.com/PyModel/jev-judge-mcp/commit/3dd75c0b9001daa5b6e125c769f30c7d5f30c597))
+
+
+### Documentation
+
+* add composite, routing, and catalog-traversal recipes ([774b7ed](https://github.com/PyModel/jev-judge-mcp/commit/774b7ed18874ac20001e404670e3b5e5a0c0c42e))
+* correct the dogfood confinement record ([f70e7cc](https://github.com/PyModel/jev-judge-mcp/commit/f70e7cc42788634f2d998f643c4bcf7ecbf4c804))
+* pass the S8 dogfood gate and scope the ask-command denylist ([efd933b](https://github.com/PyModel/jev-judge-mcp/commit/efd933b7ba0e5e38b75479d75a154e3a5d4b28c4))
+* record the ask and file-judgment extension family (ADR-0077) ([afb6fed](https://github.com/PyModel/jev-judge-mcp/commit/afb6fedfc8d7b4ca087b64eb7f47e6c95fd4057e))
+* record the hook guard-question design in ADR-0076 ([d81d937](https://github.com/PyModel/jev-judge-mcp/commit/d81d937c0b05fcdcfde588f46335ee6d764567f4))
+
 ## [0.7.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.6.0...v0.7.0) (2026-09-29)
 
 
