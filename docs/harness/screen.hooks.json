@@ -2,7 +2,7 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Bash|Read",
+        "matcher": "Bash|Read|WebFetch|WebSearch",
         "hooks": [
           {
             "type": "command",

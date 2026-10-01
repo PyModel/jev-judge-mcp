@@ -24,7 +24,7 @@ def test_gate_hooks_sample_parses() -> None:
     screen = json.loads((HARNESS / "screen.hooks.json").read_text(encoding="utf-8"))
     screen_group = screen["hooks"]["PostToolUse"][0]
     screen_command = screen_group["hooks"][0]
-    assert screen_group["matcher"] == "Bash|Read"
+    assert screen_group["matcher"] == "Bash|Read|WebFetch|WebSearch"
     assert screen_command["type"] == "command"
     assert screen_command["timeout"] == 30
     assert screen_command["command"] == "/absolute/path/to/jev-judge-mcp hook screen"

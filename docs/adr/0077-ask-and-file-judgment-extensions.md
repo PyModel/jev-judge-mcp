@@ -58,12 +58,17 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
   the per-file answers stays `jev_find` fed those answers as candidates — no new pick tool.
 - **`hook screen` — an opt-in annotator for tool output.** `jev-judge-mcp hook screen` reads a
   Claude Code PostToolUse event, judges the first `SCREEN_INPUT_CHARS` of the tool's output with
-  one Noul question (is this text aimed at the agent rather than the program), and on a flag emits
-  the harness's annotation envelope — additional context for the agent. It never blocks and never
-  rewrites content. Default off; the sample fragment is verified for Claude Code, and pi and other
-  hosts stay marked unverified until proven (the completion-hook convention). Unusable input or a
-  provider error means silence: an annotator must fail invisible, never into a gate, and
-  `JEV_HOOK_REQUIRED` does not apply to it — a screen cannot ask.
+  one Noul question (does the text carry injected instructions that try to redirect the agent
+  from its task or the user's request — override the task, unrequested actions, secret or data
+  exfiltration, user or system impersonation; documentation the agent was pointed at, such as
+  build or usage steps, is not a flag), and on a flag emits the harness's annotation envelope —
+  additional context for the agent, worded as data-not-directions. It never blocks and never
+  rewrites content. Deterministic precedence: a Read of the operator's instruction files —
+  `AGENTS.md`, `CLAUDE.md`, any `SKILL.md` — abstains before any provider call. Default off; the
+  sample fragment is verified for Claude Code, and pi and other hosts stay marked unverified
+  until proven (the completion-hook convention). Unusable input or a provider error means
+  silence: an annotator must fail invisible, never into a gate, and `JEV_HOOK_REQUIRED` does not
+  apply to it — a screen cannot ask.
 - **`hook compact-cut` — an opt-in compaction cut point.** `jev-judge-mcp hook compact-cut` reads
   the PreCompact event, asks one Choice over clipped user-turn summaries — which turn starts the
   live work — and folds the picked turn into the custom compaction instructions the harness
