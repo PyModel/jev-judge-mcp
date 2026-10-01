@@ -5,8 +5,9 @@ context or the payload. Everything here is deterministic and precedes any provid
 is a typed verdict about the input, never a judgment. `jev_files_judge` reuses this module for the
 per-file read, so the rules stay in one place: the path scope is the server's working directory
 with no caller override, known secret stores refuse `secret_file` before any read, the binary
-sniff is a NUL scan of the first `FILE_JUDGE.binary_sniff_bytes` bytes, and the size cap is
-`FILE_JUDGE.file_units_max` measured in UTF-16 units (ADR-0005). What does get read is redacted
+sniff is a NUL scan of the first bytes of the caller's caps block (the `jev_file_judge` window by
+default), and the size cap is that block's `file_units_max` measured in UTF-16 units (ADR-0005).
+What does get read is redacted
 with the ADR-0076 credential-literal detector before it becomes state, so a judgment about a
 config file never ships its secrets to the provider.
 """
@@ -15,7 +16,7 @@ from pathlib import Path
 from typing import NoReturn
 
 from jev_judge_mcp.credential_literal import redact_credential_literals
-from jev_judge_mcp.limits import FILE_JUDGE
+from jev_judge_mcp.limits import FILE_JUDGE, FileJudgeCaps, FilesJudgeCaps
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import ToolError
 
@@ -74,14 +75,16 @@ def resolve_scoped(path: str, scope: Path | None = None) -> Path:
     return resolved
 
 
-def read_state(path: Path) -> str:
+def read_state(path: Path, caps: FileJudgeCaps | FilesJudgeCaps = FILE_JUDGE) -> str:
     """The decoded text of a scoped regular file, or its typed refusal; no content is echoed.
 
     Order is cheapest first: the secret-store name test (pure, no I/O), existence and type
     (`stat`), the byte early-out, then the read with the NUL sniff, then the exact UTF-16
     measurement, and finally the credential-literal redaction. The caller resolves the path
     through `resolve_scoped` first, so scope precedes everything by construction, and every
-    refusal here precedes any provider call.
+    refusal here precedes any provider call. `caps` is the calling tool's budget block: the
+    default is `jev_file_judge`'s, and `jev_files_judge` passes its own (the same numbers today,
+    so a recalibration moves both in one change).
     """
     if is_secret_store(path):
         refuse("secret_file", f"{path.name} is a known secret store and is never read")
@@ -95,16 +98,14 @@ def read_state(path: Path) -> str:
         refuse("not_a_file", f"path is not a regular file: {path}")
     # Every UTF-8 byte sequence — valid, or replaced when undecodable — measures at least one
     # UTF-16 unit per four bytes, so a file over four times the unit cap is over-cap unread.
-    if stat.st_size > 4 * FILE_JUDGE.file_units_max:
-        refuse("file_too_large", f"file exceeds the {FILE_JUDGE.file_units_max:,}-unit state cap: {path}")
+    if stat.st_size > 4 * caps.file_units_max:
+        refuse("file_too_large", f"file exceeds the {caps.file_units_max:,}-unit state cap: {path}")
     data = path.read_bytes()
-    if b"\x00" in data[: FILE_JUDGE.binary_sniff_bytes]:
-        refuse(
-            "binary_file", f"file looks binary (NUL byte in the first {FILE_JUDGE.binary_sniff_bytes} bytes): {path}"
-        )
+    if b"\x00" in data[: caps.binary_sniff_bytes]:
+        refuse("binary_file", f"file looks binary (NUL byte in the first {caps.binary_sniff_bytes} bytes): {path}")
     content = data.decode("utf-8", errors="replace")
-    if length(content) > FILE_JUDGE.file_units_max:
-        refuse("file_too_large", f"file exceeds the {FILE_JUDGE.file_units_max:,}-unit state cap: {path}")
+    if length(content) > caps.file_units_max:
+        refuse("file_too_large", f"file exceeds the {caps.file_units_max:,}-unit state cap: {path}")
     # Redaction is the last step, so the cap measures the file as it is on disk, and a clean file
     # passes through unchanged (the detector is the identity without a literal).
     return redact_credential_literals(content)

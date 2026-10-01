@@ -216,19 +216,18 @@ the instructions bound.
 | `score_level_units_max` | 200 | refuse |
 | `binary_sniff_bytes` | 8000 | the NUL-scan window that classifies the file `binary_file` |
 
-### jev_files_judge (ADR-0077)
-
-Planned, not yet shipped: these numbers are the ADR's freeze. When the tool lands, the block
-moves to a `limits.py` caps owner and this table joins the machine-checked set.
+### jev_files_judge (`limits.FILES_JUDGE`, ADR-0077)
 
 A bound over the input entries rejects the call; a bound over one file skips that file with a
-reason, before the first provider call either way.
+reason, before the first provider call either way. The per-file units and the NUL sniff window are
+shared with `jev_file_judge` — one number to calibrate, both constants move together.
 
 | Cap | Value | Over the bound |
 | --- | --- | --- |
-| `patterns_max` | 32 | above → reject |
 | `files_max` | 64 | surviving paths over it are skipped `over_the_file_cap`, before any call |
+| `patterns_max` | 32 | above → reject |
 | `file_units_max` | 100000 | that file is skipped `too_large` |
+| `binary_sniff_bytes` | 8000 | the NUL-scan window that classifies the file `binary` |
 
 ### jev_ask (`limits.ASK`, ADR-0077)
 

@@ -397,11 +397,13 @@
       "tests": [
         "tests/contract/test_tools_list.py",
         "tests/contract/test_docs_alignment.py",
-        "tests/contract/test_file_judge.py"
+        "tests/contract/test_file_judge.py",
+        "tests/contract/test_files_judge.py",
+        "tests/unit/test_files_judge.py"
       ],
       "fixtures": [],
       "reference_behavior": "The reference has no tool that reads a caller-named file; all judged state arrives inside the call arguments.",
-      "python_behavior": "jev_file_judge and jev_files_judge are the registered file-judgment tools: they read caller-named files as state inside the server's working directory (answers in the payload, file bytes never), refuse typed with no provider call (not_found, not_a_file, binary_file, secret_file, file_too_large, path_outside_scope; known secret stores are never read and reads are credential-literal redacted, ADR-0076 detector), prune before the first provider call with every prune reported in skipped, and run under the ADR-0077 caps."
+      "python_behavior": "jev_file_judge and jev_files_judge are the registered file-judgment tools: they read caller-named files as state inside the server's working directory (answers in the payload, file bytes never), refuse typed with no provider call (not_found, not_a_file, binary_file, secret_file, file_too_large, path_outside_scope; known secret stores are never read and reads are credential-literal redacted, ADR-0076 detector), prune before the first provider call with every prune reported in skipped (the reasons: outside_scope, skipped_directory, not_found, empty, too_large, binary, secret_file, over_the_file_cap, and call_failed:<code> for a per-file provider failure), run one call per surviving file under the ADR-0069 in-flight cap with usage summed across calls (jev_files_judge), and run under the ADR-0077 caps."
     },
     {
       "id": "compare-aspect-contradiction-warning",

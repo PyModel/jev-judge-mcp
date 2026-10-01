@@ -238,8 +238,32 @@ prefixed `.env` family, `*.pem`,
 `.sample`/`.template` stand-ins do read), and every read is credential-literal redacted before it
 reaches the provider. Paths must resolve inside the server's working directory,
 symlinks followed; there is no override, and an escaping path is refused `path_outside_scope` with no
-provider call. One question per call: several files are several calls (the batched many-file tool is
-planned, ADR-0077).
+provider call. One question per call: several files are `jev_files_judge`, the batched form of this
+tool.
+
+**Not for** exact lookups, counting, math, or anything grep answers — run the command and read the
+answer yourself.
+
+## jev_files_judge — the same judgment over many files
+
+**Use when** one question spans a tree: which config in `config/` disables the timeout, how careful
+is this generated module, does any file in the diff root still name the old flag. Name paths —
+files, directories, or glob patterns — plus the same one question `jev_file_judge` takes, and the
+server expands, prunes, and makes one provider call per surviving file. The payload reports
+`{path, answer, status}` per judged file and `{path, reason}` per skipped one — a directory not
+entered (`skipped_directory`), a secret store (`secret_file`), a binary or empty read, an over-cap
+file (`too_large`), the hard cap (`over_the_file_cap`), a failed call (`call_failed:<code>`) — and
+no file's bytes enter your context. Directories are walked to the leaves only with `recursive:
+true`; dependency, build, cache, and VCS-internal directories are never entered either way. Picking
+among the answers is `jev_find` fed those answers as candidates.
+
+**Measured.** No recorded live eval, and no bench corpus yet (extension tool, ADR-0077).
+
+**Weak spots.** The hard caps bound a call before the first provider call — at most 64 surviving
+files from at most 32 path entries, each file at the `jev_file_judge` 100,000-unit cap — and the
+prune is deterministic: the same tree and the same paths always skip the same files. A per-file
+call failure is a skipped path, never a batch error, so a batch is only as good as its surviving
+files: read `skipped` before trusting `results`.
 
 **Not for** exact lookups, counting, math, or anything grep answers — run the command and read the
 answer yourself.

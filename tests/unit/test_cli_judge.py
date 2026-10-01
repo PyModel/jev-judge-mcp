@@ -225,6 +225,19 @@ def call_tool_sync(tool: str, arguments: dict[str, Any], answers: dict[str, Any]
             False,
             id="score",
         ),
+        pytest.param(
+            "jev_files_judge",
+            {
+                "paths": ["tests/fixtures/file_judge/notes.txt"],
+                "kind": "score",
+                "instructions": "How technical is the content?",
+                "criteria": ["plain prose", "expert prose"],
+            },
+            {"file": {"score": 0.2, "confidence": 0.9, "probabilities": {"0": 0.8, "1": 0.2}}},
+            None,
+            False,
+            id="files-judge",
+        ),
     ],
 )
 def test_a_clean_call_resolves_every_tool(
@@ -406,6 +419,19 @@ def test_a_clean_call_resolves_every_tool(
             "escalate",
             True,
             id="gate-contradicted",
+        ),
+        pytest.param(
+            "jev_files_judge",
+            {
+                "paths": ["tests/fixtures/file_judge/notes.txt"],
+                "kind": "score",
+                "instructions": "How technical is the content?",
+                "criteria": ["plain prose", "expert prose"],
+            },
+            {"file": {"score": "high", "confidence": 0.9, "probabilities": {"0": 0.8, "1": 0.2}}},
+            None,
+            True,
+            id="files-judge-invalid",
         ),
     ],
 )

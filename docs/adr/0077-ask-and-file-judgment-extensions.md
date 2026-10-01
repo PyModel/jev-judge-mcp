@@ -60,12 +60,14 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
 - **`jev_files_judge` — the same judgment over many files.** Files, directories, and glob
   patterns in; a deterministic prune runs before any provider call: pattern expansion, a
   skip-directory list (dependency, build, cache, and VCS-internal directories), binary and empty
-  reads, the per-file size cap, and a hard surviving-files cap. Every pruned path is reported in
-  `skipped` with a stable reason (`outside_scope`, `skipped_directory`, `not_found`, `empty`,
-  `too_large`, `binary`, `over_the_file_cap`). Surviving files get one provider call each under
-  the ADR-0069 in-flight cap; a per-file failure lands in `skipped` as `call_failed:<code>` and
-  does not fail the batch; `results` is input-order stable; usage sums across calls. Picking among
-  the per-file answers stays `jev_find` fed those answers as candidates — no new pick tool.
+  reads, the per-file size cap, and a hard surviving-files cap, with known secret stores — the
+  file tool's rule, unchanged — skipped `secret_file` rather than failing the batch. Every pruned
+  path is reported in `skipped` with a stable reason (`outside_scope`, `skipped_directory`,
+  `not_found`, `empty`, `too_large`, `binary`, `secret_file`, `over_the_file_cap`). Surviving
+  files get one provider call each under the ADR-0069 in-flight cap; a per-file failure lands in
+  `skipped` as `call_failed:<code>` and does not fail the batch; `results` is input-order stable;
+  usage sums across calls. Picking among the per-file answers stays `jev_find` fed those answers
+  as candidates — no new pick tool.
 - **`hook screen` — an opt-in annotator for tool output.** `jev-judge-mcp hook screen` reads a
   Claude Code PostToolUse event, judges the first `SCREEN_INPUT_CHARS` of the tool's output with
   one Noul question (does the text carry injected instructions that try to redirect the agent
@@ -113,6 +115,7 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
 | `jev_files_judge` | `files_max` | 64 | the worst-case cost of one call is bounded before the first provider call |
 | `jev_files_judge` | `patterns_max` | 32 | 64 survivors already bound the work; the input stays legible in refusals |
 | `jev_files_judge` | per-file units | 100,000 | shared with `jev_file_judge`, one number to calibrate |
+| `jev_files_judge` | binary sniff | 8,000 bytes | shared with `jev_file_judge`, same NUL scan |
 | `jev_ask` | `questions_min`/`questions_max` | 1–20 | one call judges one state; twenty narrow questions stay a single provider request while batching stays encouraged |
 | `jev_ask` | `files_max` | 20 | an ask composes several state parts, so files keep a small share of the window |
 | `jev_ask` | `state_units_max` | 20,000 | own state is framing, not a document dump; bulk material belongs in `paths` |

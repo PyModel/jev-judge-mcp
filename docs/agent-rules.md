@@ -40,6 +40,7 @@ enumerated into bounded options; or when the same unchanged decision was already
 | `jev_score` | Grade severity or risk on your own ordered rubric; threshold the level, never interpolate a magnitude between levels | 2–10 levels |
 | `jev_file_judge` | Judge a file without reading it: the server reads the path as state, you get the typed answer, the bytes never enter your context | 100,000 units per file, refused over |
 | `jev_ask` | Your own questions (noul, choice, score) over one composed state: framing text, server-read files, a gate-judged command's output. Typed answers keyed by your ids; overflow refuses with a split suggestion | 1–20 questions, ≤20 paths, 120,000 units of state plus questions |
+| `jev_files_judge` | The same judgment over many files: glob patterns, directories, and paths in, one call per surviving file, skips reported with reasons | ≤64 files, ≤32 path entries |
 
 Caps are UTF-16 code units, frozen in the server's `limits.py`. "no length bound" is not a token budget: Jev's context is 64k tokens per request, and an input inside the table can still come back as `provider`, not `input_too_large`.
 

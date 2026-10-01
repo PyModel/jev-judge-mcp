@@ -43,12 +43,12 @@ _PRUNED = {
 }
 _TEXT_SUFFIXES = {".md", ".py", ".json", ".toml", ".yml", ".jsonl"}
 
-_COUNT_WORDS = {"ten": 10, "eleven": 11, "twelve": 12}
+_COUNT_WORDS = {"ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14}
 # "ten tools", "the ten tools", "Ten JevTools", "10/10 tools": a claim that the tool count is N.
 # "the reference's ten, plus an extension" is not a count claim and must not match.
 _COUNT_CLAIM = re.compile(
-    r"\bthe (ten|eleven|twelve) tools\b"
-    r"|\b(ten|eleven|twelve) (?:published |judgment )?tools\b"
+    r"\bthe (ten|eleven|twelve|thirteen|fourteen) tools\b"
+    r"|\b(ten|eleven|twelve|thirteen|fourteen) (?:published |judgment )?tools\b"
     r"|\bTen JevTools\b"
     r"|\b(\d+)/\3 tools\b"
 )
@@ -133,6 +133,7 @@ _TOOL_CAPS = {
     "jev_gate": limits.GATE,
     "jev_score": limits.SCORE,
     "jev_file_judge": limits.FILE_JUDGE,
+    "jev_files_judge": limits.FILES_JUDGE,
 }
 _THRESHOLDS_SECTION = "Defaults and thresholds"
 _SHARED_SECTION = "shared"

@@ -43,6 +43,7 @@ GOLD: dict[str, Json] = {
     "jev_score": {"level": 0},
     "jev_file_judge": {"level": 0},
     "jev_ask": {"answer_id": "q1", "level": 0},
+    "jev_files_judge": {"level": 0},
 }
 PARAMS: dict[str, Json] = {"jev_screen": {"max_false_block_rate": 0.0}}
 
@@ -54,6 +55,7 @@ EMPTY_INVALID = {
     "jev_score": 1,
     "jev_file_judge": 1,
     "jev_ask": 1,
+    "jev_files_judge": 1,
 }
 """The scorers that report `invalid` (evals/README.md), each counting its one empty-answer row."""
 AUTO_TIER = {"jev_verify", "jev_screen", "jev_classify", "jev_compare", "jev_extract", "jev_review", "jev_gate"}

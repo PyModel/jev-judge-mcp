@@ -201,8 +201,7 @@ def test_the_schema_carries_the_adr_owned_caps_and_no_override() -> None:
     assert "allow_outside_cwd" not in schema["properties"]
 
 
-def test_file_judge_is_published_between_jev_score_and_jev_ask() -> None:
+def test_file_judge_sits_between_score_and_the_rest_of_the_extensions() -> None:
+    """The extension suffix order is pinned: score, file_judge, ask, files_judge (ADR-0077)."""
     names = tuple(tool.name for tool in TOOLS)
-    assert names[-1] == "jev_ask"
-    assert names[-2] == "jev_file_judge"
-    assert names[-3] == "jev_score"
+    assert names[-4:] == ("jev_score", "jev_file_judge", "jev_ask", "jev_files_judge")

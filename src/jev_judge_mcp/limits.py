@@ -293,6 +293,24 @@ SCORE: Final = ScoreCaps(
     subject_max=1500,
     context_max=12_000,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class FilesJudgeCaps:
+    """jev_files_judge (extension tool, ADR-0077): the same kind-discriminated judgment over many
+    files, pruned in code before the first provider call. No parity-manifest block exists, so the
+    ADR owns every value (the ScoreCaps precedent). The two input caps bound one call's shape: 64
+    surviving files, 32 path entries. The per-file budget is the file-judge state cap shared with
+    `FILE_JUDGE` — one number to calibrate, so both constants move together — and so is the NUL
+    sniff window; `file_state.read_state` runs under whichever block its caller passes.
+    """
+
+    files_max: int
+    patterns_max: int
+    file_units_max: int
+    binary_sniff_bytes: int
+
+
 FILE_JUDGE: Final = FileJudgeCaps(
     file_units_max=100_000,
     instructions_units_max=2_000,
@@ -313,3 +331,4 @@ ASK: Final = AskCaps(
     request_units_max=120_000,
     command_timeout_seconds=30,
 )
+FILES_JUDGE: Final = FilesJudgeCaps(files_max=64, patterns_max=32, file_units_max=100_000, binary_sniff_bytes=8_000)

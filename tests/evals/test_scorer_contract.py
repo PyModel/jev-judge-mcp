@@ -54,8 +54,9 @@ INPUTS["jev_ask"] = {
     },
     "state": "The payment service listens on port 8080 and retries twice.",
 }
-"""jev_score, jev_file_judge, and jev_ask have no bench150 corpus (the ADR-0048/ADR-0077 extension
-tools): one representative input each stands in so the contract run still exercises the tools."""
+INPUTS["jev_files_judge"] = {"paths": ["tests/fixtures/file_judge/notes.txt"], **INPUTS["jev_file_judge"]}
+"""jev_score and the ADR-0077 extension tools have no bench150 corpus: one representative input
+each stands in so the contract run still exercises the published tools."""
 
 
 class ConfidentProvider(FakeProvider):
@@ -137,7 +138,7 @@ def gold_for(tool: str) -> Json:
             return {"defective": False}
         case "jev_gate":
             return {"safe": True, "claims": ["verified"] * len(INPUTS[tool]["claims"]), "reason_codes": ["accepted"]}
-        case "jev_score" | "jev_file_judge":
+        case "jev_score" | "jev_file_judge" | "jev_files_judge":
             return {"level": 2}  # the confident score answer tops a 3-level rubric at level 2
         case _:
             raise KeyError(tool)

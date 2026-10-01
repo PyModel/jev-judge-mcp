@@ -352,6 +352,18 @@ def _score_clean(payload: object) -> tuple[str | None, bool]:
     return None, status != "ok"
 
 
+def _files_clean(payload: object) -> tuple[str | None, bool]:
+    """jev_files_judge: the batch resolves when every judged file projected a clean answer.
+
+    No results at all (everything pruned or every call failed) stays unresolved: the call ran but
+    judged nothing.
+    """
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, list) or not results:
+        return None, True
+    return None, any(result.get("status") != "ok" for result in results if isinstance(result, dict))
+
+
 def _decide_clean(payload: object) -> tuple[str | None, bool]:
     """jev_decide: no action vocabulary; unresolved when no candidate was selected or an escape hatch won."""
     recommendation = payload.get("recommendation") if isinstance(payload, dict) else None
@@ -373,14 +385,15 @@ TOOL_DECISIONS: Mapping[str, Callable[[object], tuple[str | None, bool]]] = {
     "jev_score": _score_clean,
     "jev_file_judge": _score_clean,
     "jev_ask": _score_clean,
+    "jev_files_judge": _files_clean,
 }
 """Payload decision fields → (`action`, `unresolved`), in registry order.
 
 jev_extract is not here: its two headlines are on the outcome, computed where the rows are
 (ADR-0064 amendment). The guard in `tests/unit/test_cli_judge.py` fails when a tool registers
 without a mapping and is not extract. Only the mapped green lights — `auto`, screen's `pass`,
-a selected jev_decide candidate, find/rerank without `invalid_response`, score's `ok`,
-extract's call headline `auto` — resolve."""
+a selected jev_decide candidate, find/rerank without `invalid_response`, score's `ok`, a fully
+clean files batch, extract's call headline `auto` — resolve."""
 
 
 def _reported(name: str, outcome: ToolOutcome, payload: object) -> tuple[str | None, bool]:

@@ -691,6 +691,66 @@ def _rubric_score(tool: str, examples: Sequence[Example], answer_of: Callable[[E
     )
 
 
+def _judge_files_judge(example: Example) -> Iterator[Judgment]:
+    """One judgment per `results` row, judged or not; the key names the file the row judged."""
+    for result in as_objects(example.output.get("results")):
+        answer = result.get("answer")
+        nearest = answer.get("nearest_level") if answer is not None else None
+        yield Judgment(
+            f"{example.id}/{result.get('path')}",
+            example.gold["level"],
+            nearest if isinstance(nearest, int) and not isinstance(nearest, bool) else None,
+            None,  # no single-score AUTO decision: the caller thresholds the level in code (ADR-0077)
+            False,
+        )
+
+
+def score_jev_files_judge(examples: Sequence[Example], params: Json) -> ToolScore:
+    """Gold `{"level": int}` — the 0-based rubric level that is right, per judged file.
+
+    The jev_score metrics over every `results` row the batch judged ok: nearest-level accuracy as
+    the primary metric, the fractional `score` for the level MAE and the within-one rate, and the
+    mass the distribution puts on the gold level as the calibration signal. No L3 corpus is
+    recorded yet (ADR-0077 ships with honest "no recorded live eval" cards).
+    """
+    gold: list[object] = []
+    predicted: list[object] = []
+    absolute: list[float] = []
+    within_one = 0
+    gold_mass: list[float] = []
+    for example in examples:
+        for result in as_objects(example.output.get("results")):
+            answer = result.get("answer")
+            if answer is None:
+                continue
+            nearest = answer.get("nearest_level")
+            predicted_row = nearest if isinstance(nearest, int) and not isinstance(nearest, bool) else None
+            score = as_number(answer.get("score"))
+            if predicted_row is None or score is None:
+                continue
+            level = example.gold["level"]
+            gold.append(level)
+            predicted.append(predicted_row)
+            absolute.append(abs(score - float(level)))
+            within_one += abs(predicted_row - level) <= 1
+            mass = as_number(as_object(answer.get("probabilities")).get(str(level)))
+            if mass is not None:
+                gold_mass.append(mass)
+    valid = len(gold)
+    return ToolScore(
+        "jev_files_judge",
+        "nearest_level_accuracy",
+        len(examples),
+        {
+            "nearest_level_accuracy": accuracy(gold, predicted),
+            "level_mae": mean(absolute),
+            "within_one_rate": ratio(within_one, valid),
+            "gold_level_probability": mean(gold_mass),
+            "invalid": len(examples) - valid,
+        },
+    )
+
+
 SCORERS: dict[str, Scorer] = {
     "jev_verify": score_verify,
     "jev_screen": score_screen,
@@ -705,6 +765,7 @@ SCORERS: dict[str, Scorer] = {
     "jev_score": score_jev_score,
     "jev_file_judge": lambda examples, params: _rubric_score("jev_file_judge", examples, _answer_of),
     "jev_ask": lambda examples, params: _rubric_score("jev_ask", examples, _ask_answer_of),
+    "jev_files_judge": score_jev_files_judge,
 }
 """Snapshot order, one scorer per tool; the ADR-0048 and ADR-0077 extensions follow the snapshot ten."""
 
@@ -722,6 +783,7 @@ _JUDGES: dict[str, Callable[[Example], Iterator[Judgment]]] = {
     "jev_score": _judge_score,
     "jev_file_judge": lambda example: _rubric_judgment(example, _answer_of(example)),
     "jev_ask": lambda example: _rubric_judgment(example, _ask_answer_of(example)),
+    "jev_files_judge": _judge_files_judge,
 }
 
 

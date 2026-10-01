@@ -26,6 +26,7 @@ EXPECTED_TOOLS: tuple[str, ...] = (
     "jev_score",
     "jev_file_judge",
     "jev_ask",
+    "jev_files_judge",
 )
 """The published tool names: the reference ten in snapshot order, then the extensions (ADR-0048,
 ADR-0077)."""
