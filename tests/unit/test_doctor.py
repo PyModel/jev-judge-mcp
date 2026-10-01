@@ -225,7 +225,7 @@ def test_allow_names_are_the_published_tools(
     """The reference ten plus the extensions (ADR-0048, ADR-0077): one allow rule per published tool."""
     monkeypatch.setenv("TYPESAFE_API_KEY", MARKER)
     main([])
-    assert len(ALLOW_RULES) == 12
+    assert len(ALLOW_RULES) == 13
     assert _field(capsys.readouterr().out, "allow").split() == list(ALLOW_RULES)
 
 

@@ -201,7 +201,8 @@ def test_the_schema_carries_the_adr_owned_caps_and_no_override() -> None:
     assert "allow_outside_cwd" not in schema["properties"]
 
 
-def test_file_judge_is_published_after_jev_score() -> None:
+def test_file_judge_is_published_between_jev_score_and_jev_ask() -> None:
     names = tuple(tool.name for tool in TOOLS)
-    assert names[-1] == "jev_file_judge"
-    assert names[-2] == "jev_score"
+    assert names[-1] == "jev_ask"
+    assert names[-2] == "jev_file_judge"
+    assert names[-3] == "jev_score"

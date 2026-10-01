@@ -347,7 +347,7 @@ def _status_clean(payload: object) -> tuple[str | None, bool]:
 
 
 def _score_clean(payload: object) -> tuple[str | None, bool]:
-    """jev_score and jev_file_judge: no action vocabulary; resolved only on `ok`."""
+    """jev_score, jev_file_judge, and jev_ask: no action vocabulary; resolved only on `ok`."""
     status = payload.get("status") if isinstance(payload, dict) else None
     return None, status != "ok"
 
@@ -372,6 +372,7 @@ TOOL_DECISIONS: Mapping[str, Callable[[object], tuple[str | None, bool]]] = {
     "jev_gate": _top_action,
     "jev_score": _score_clean,
     "jev_file_judge": _score_clean,
+    "jev_ask": _score_clean,
 }
 """Payload decision fields → (`action`, `unresolved`), in registry order.
 

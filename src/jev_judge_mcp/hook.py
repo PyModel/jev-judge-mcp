@@ -70,22 +70,24 @@ _DENY = "The action is destructive, off-task, touches things the state says to p
 
 _BASH = "Bash"
 _WRITES = ("Write", "Edit")
-_EFFECT_ID = "effect"
-_DESTRUCTIVE_ID = "destructive_intent"
+# The Bash judge's questions, ids, floors, and state shape are module-public: the command gate of
+# `jev_ask` imports them instead of a subprocess of the CLI (ADR-0077).
+EFFECT_ID = "effect"
+DESTRUCTIVE_ID = "destructive_intent"
 _CREDENTIAL_ID = "secret_content"
-_EFFECT_QUESTION = "What would the proposed action do to material in the working directory?"
-_EFFECT_CRITERIA = {
+EFFECT_QUESTION = "What would the proposed action do to material in the working directory?"
+EFFECT_CRITERIA = {
     "read_only": "Nothing in the working directory changes; the action only reads, lists, or inspects.",
     "reversible": (
         "The action changes the working directory, but a plain follow-up action would restore what was there."
     ),
     "irreversible": "The action removes or overwrites material that nothing in this session would bring back.",
 }
-_DESTRUCTIVE_QUESTION = (
+DESTRUCTIVE_QUESTION = (
     "Is destroying or discarding existing work the purpose of the proposed action, rather than an "
     "incidental side effect of ordinary build, test, or maintenance work?"
 )
-_DESTRUCTIVE_CRITERIA = NoulCriteria(
+DESTRUCTIVE_CRITERIA = NoulCriteria(
     true="Destroying or discarding existing work is the purpose of the action.",
     false="Destruction is not the purpose; any loss would be incidental to ordinary work.",
 )
@@ -242,17 +244,17 @@ def _outcome(plan: _Plan, evaluation: Evaluation) -> _Outcome:
 
 
 def _bash_outcome(answers: Mapping[str, object]) -> _Outcome:
-    for identifier in (_EFFECT_ID, _DESTRUCTIVE_ID):
+    for identifier in (EFFECT_ID, DESTRUCTIVE_ID):
         if identifier not in answers:
             return _Outcome("ask", _ask_reason("unreachable"))
-    effect = validate_choice(answers[_EFFECT_ID], tuple(_EFFECT_CRITERIA))
-    destructive = validate_noul(answers[_DESTRUCTIVE_ID])
+    effect = validate_choice(answers[EFFECT_ID], tuple(EFFECT_CRITERIA))
+    destructive = validate_noul(answers[DESTRUCTIVE_ID])
     if effect is None or destructive is None:
         return _Outcome("ask", _ask_reason("unsure"))
     if destructive >= DESTRUCTIVE_INTENT_THRESHOLD:
         measure = f"probability {destructive:.2f}"
         return _Outcome("deny", deny_reason("the action looks aimed at destroying work", measure))
-    confidence, threshold = _confidence(effect)
+    confidence, threshold = confidence_floor(effect)
     if confidence < threshold:
         return _Outcome("ask", _ask_reason("unsure"))
     if effect.choice == "irreversible":
@@ -278,7 +280,7 @@ def _generic_outcome(answer: object, present: bool) -> _Outcome:
     parsed = validate_choice(answer, ("allow", "deny"))
     if parsed is None:
         return _Outcome("ask", _ask_reason("unsure"))
-    confidence, threshold = _confidence(parsed)
+    confidence, threshold = confidence_floor(parsed)
     if confidence < threshold:
         return _Outcome("ask", _ask_reason("unsure"))
     if parsed.choice == "deny":
@@ -286,7 +288,7 @@ def _generic_outcome(answer: object, present: bool) -> _Outcome:
     return _Outcome("allow")
 
 
-def _confidence(parsed: ChoiceAnswer) -> tuple[float, float]:
+def confidence_floor(parsed: ChoiceAnswer) -> tuple[float, float]:
     """The answer's confidence and the floor it must meet: the reported value or the margin estimate."""
     if parsed.confidence is not None:
         return parsed.confidence, REPORTED_CONFIDENCE_THRESHOLD
@@ -296,8 +298,8 @@ def _confidence(parsed: ChoiceAnswer) -> tuple[float, float]:
 def _questions(plan: _Plan) -> dict[str, Question]:
     if plan.tool == _BASH:
         return {
-            _EFFECT_ID: ChoiceQuestion(instructions=_EFFECT_QUESTION, criteria=_EFFECT_CRITERIA),
-            _DESTRUCTIVE_ID: NoulQuestion(instructions=_DESTRUCTIVE_QUESTION, criteria=_DESTRUCTIVE_CRITERIA),
+            EFFECT_ID: ChoiceQuestion(instructions=EFFECT_QUESTION, criteria=EFFECT_CRITERIA),
+            DESTRUCTIVE_ID: NoulQuestion(instructions=DESTRUCTIVE_QUESTION, criteria=DESTRUCTIVE_CRITERIA),
         }
     if plan.tool in _WRITES:
         return {
@@ -324,7 +326,7 @@ def _plan(event: dict[str, object], extra: str | None) -> _Plan:
     # The write path is judged as code: only the strict detector may rewrite it, never
     # redact_action, which is a shell-command redactor (ADR-0076).
     redactor = redact_credential_literals if writes else redact_action
-    return _Plan(tool, containment, _state(event, extra, containment, redactor), credential_matched)
+    return _Plan(tool, containment, event_state(event, extra, containment, redactor), credential_matched)
 
 
 def _containment(event: dict[str, object]) -> _Containment:
@@ -340,7 +342,7 @@ def _containment(event: dict[str, object]) -> _Containment:
     return "inside" if target == base or target.startswith(base + os.sep) else "outside"
 
 
-def _state(
+def event_state(
     event: dict[str, object],
     extra: str | None,
     containment: _Containment,

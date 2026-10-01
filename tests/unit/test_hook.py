@@ -818,7 +818,7 @@ def test_hook_module_is_not_the_completion_tool() -> None:
 
 def test_hook_is_not_a_published_tool() -> None:
     names = [tool.name for tool in TOOLS]
-    assert len(names) == 12  # the reference ten plus jev_score (ADR-0048) and jev_file_judge (ADR-0077)
+    assert len(names) == 13  # the reference ten plus jev_score, jev_file_judge, and jev_ask (ADR-0048, ADR-0077)
     assert "hook" not in names
 
 

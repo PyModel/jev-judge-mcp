@@ -249,6 +249,16 @@ CASES: list[Case] = [
         {"file": noul_mutations()},
     ),
     Case(
+        "jev_ask",
+        {
+            "questions": {"q1": {"type": "noul", "instructions": "Is the port live?", "criteria": {}}},
+            "state": "server.listen(8080)",
+        },
+        {"q1": {"noul": 0.9}},
+        judged,
+        {"q1": noul_mutations()},
+    ),
+    Case(
         "jev_verify",
         {"claims": ["The service listens on 8080."], "evidence": "server.listen(8080)"},
         {"relation_claim0": choice("supports", {"supports": 0.97, "contradicts": 0.02, "says_nothing": 0.01})},

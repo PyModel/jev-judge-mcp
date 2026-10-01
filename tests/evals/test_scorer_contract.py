@@ -44,8 +44,18 @@ INPUTS["jev_file_judge"] = {
     "instructions": "How technical is the content?",
     "criteria": ["plain prose", "mixed", "expert"],
 }
-"""jev_score and jev_file_judge have no bench150 corpus (ADR-0048/ADR-0077 extension tools): one
-representative input each stands in so the contract run still exercises the published tools."""
+INPUTS["jev_ask"] = {
+    "questions": {
+        "q1": {
+            "type": "score",
+            "instructions": "How technical is the state?",
+            "criteria": ["plain prose", "mixed", "expert"],
+        }
+    },
+    "state": "The payment service listens on port 8080 and retries twice.",
+}
+"""jev_score, jev_file_judge, and jev_ask have no bench150 corpus (the ADR-0048/ADR-0077 extension
+tools): one representative input each stands in so the contract run still exercises the tools."""
 
 
 class ConfidentProvider(FakeProvider):

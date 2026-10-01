@@ -253,6 +253,12 @@ def test_tool_cards_state_the_frozen_numbers() -> None:
             (limits.FILE_JUDGE.file_units_max,),
         ),
         (r"a NUL byte in the first ([\d,]+) bytes", (limits.FILE_JUDGE.binary_sniff_bytes,)),
+        (r"state plus questions is capped at ([\d,]+) UTF-16 units", (limits.ASK.request_units_max,)),
+        (r"Own `state` is framing, capped at ([\d,]+)\s+units", (limits.ASK.state_units_max,)),
+        (r"command output is capped at ([\d,]+) units", (limits.ASK.command_output_units_max,)),
+        (r"runs under a\s+(\d+)-second timeout", (limits.ASK.command_timeout_seconds,)),
+        (r"(\d+) to (\d+) questions\s+per call", (limits.ASK.questions_min, limits.ASK.questions_max)),
+        (r"at most (\d+) paths", (limits.ASK.files_max,)),
     ]:
         assert _stated_numbers(text, pattern) == expected, pattern
     # The screen card's single "hardcoded at" number states both skip thresholds at once.
@@ -413,6 +419,11 @@ def test_agent_rule_block_caps_match_limits() -> None:
         "jev_decide": [f"{limits.DECIDE.candidates_min}\u2013{limits.DECIDE.candidates_max} options"],
         "jev_extract": [f"{limits.EXTRACT.document_max:,} units", f"\u2264{limits.EXTRACT.fields_max} fields"],
         "jev_score": [f"{limits.SCORE.levels_min}\u2013{limits.SCORE.levels_max} levels"],
+        "jev_ask": [
+            f"{limits.ASK.questions_min}\u2013{limits.ASK.questions_max} questions",
+            f"\u2264{limits.ASK.files_max} paths",
+            f"{limits.ASK.request_units_max:,} units",
+        ],
     }
     missing = [
         f"{tool} row lacks {needle!r}"

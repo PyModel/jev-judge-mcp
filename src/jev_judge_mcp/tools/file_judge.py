@@ -14,7 +14,6 @@ from typing import Any, cast
 from jev_judge_mcp.domain import ChoiceQuestion, NoulCriteria, NoulQuestion, Question, ScoreQuestion
 from jev_judge_mcp.domain.json import JsonValue
 from jev_judge_mcp.limits import FILE_JUDGE
-from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.arguments import Refinement
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
@@ -107,7 +106,8 @@ def build_question(kind: str, instructions: str, criteria: object) -> Question:
     The published schema carries the score array's bounds, but a Record's per-entry bounds cannot be
     expressed in it (the argument parser takes no per-property constraints on a keep-whole object,
     ADR-0022), so the choice and noul shapes are refused here, typed `invalid_arguments`, before any
-    provider call exists.
+    provider call exists. The score bounds are enforced here too, so a caller that reaches the
+    builder without the schema (jev_ask's keep-whole question map) gets the same typed rejects.
     """
     if kind == "score":
         levels = cast("list[object]", criteria) if isinstance(criteria, list) else None
@@ -117,7 +117,19 @@ def build_question(kind: str, instructions: str, criteria: object) -> Question:
                 f"{FILE_JUDGE.score_levels_max} level strings; send an array, not an object.",
                 code="invalid_arguments",
             )
-        return ScoreQuestion(instructions, cast("list[str]", levels))
+        if not FILE_JUDGE.score_levels_min <= len(levels) <= FILE_JUDGE.score_levels_max:
+            raise ToolError(
+                f"score criteria needs {FILE_JUDGE.score_levels_min}-{FILE_JUDGE.score_levels_max} levels, "
+                f"got {len(levels)}.",
+                code="invalid_arguments",
+            )
+        strings = cast("list[str]", levels)
+        if any(not level or length(level) > FILE_JUDGE.score_level_units_max for level in strings):
+            raise ToolError(
+                f"each score level is a description of at most {FILE_JUDGE.score_level_units_max} units.",
+                code="invalid_arguments",
+            )
+        return ScoreQuestion(instructions, strings)
     if not isinstance(criteria, dict):
         shape = (
             "an object with optional `true` and `false` keys"
@@ -163,32 +175,33 @@ def build_question(kind: str, instructions: str, criteria: object) -> Question:
     raise ToolError(f"kind must be one of {', '.join(KINDS)}, got {kind!r}.", code="invalid_arguments")
 
 
-def _project(kind: str, evaluation: Evaluation, expected: Sequence[str]) -> tuple[dict[str, Any], str]:
+def project_answer(kind: str, answer: object, expected: Sequence[str]) -> tuple[dict[str, Any], str]:
     """The typed answer payload and its status: fail-closed, with no default verdict (ADR-0077).
 
-    `expected` is the choice option list; the score projection reads its length as the rubric.
+    `answer` is the raw answer stored under the question's id (jev_ask reuses this projection for
+    each of its caller-keyed questions). `expected` is the choice option list; the score projection
+    reads its length as the rubric.
     """
-    raw = evaluation.answers.get(QUESTION_ID)
     if kind == "noul":
-        value = validate_noul(raw)
+        value = validate_noul(answer)
         return ({"noul": value}, "ok" if value is not None else INVALID)
     if kind == "choice":
-        answer = validate_choice(raw, expected)
-        if answer is None:
+        parsed = validate_choice(answer, expected)
+        if parsed is None:
             return ({"choice": None, "probabilities": None, "confidence": None}, INVALID)
-        return ({"choice": answer.choice, "probabilities": answer.probabilities, "confidence": answer.confidence}, "ok")
-    answer = validate_rubric_answer(raw, len(expected))
-    if answer is None:
+        return ({"choice": parsed.choice, "probabilities": parsed.probabilities, "confidence": parsed.confidence}, "ok")
+    parsed = validate_rubric_answer(answer, len(expected))
+    if parsed is None:
         return ({"score": None, "nearest_level": None, "probabilities": None, "confidence": None}, INVALID)
     # Ties go to the lower level: min() keeps the first minimum, and the keys are in level order.
     # The levels themselves are the caller's own input and are not echoed: the payload carries the
     # typed answer only.
-    nearest = min(range(len(expected)), key=lambda index: abs(index - answer.score))
+    nearest = min(range(len(expected)), key=lambda index: abs(index - parsed.score))
     body = {
-        "score": answer.score,
+        "score": parsed.score,
         "nearest_level": nearest,
-        "probabilities": answer.probabilities,
-        "confidence": answer.confidence,
+        "probabilities": parsed.probabilities,
+        "confidence": parsed.confidence,
     }
     return (body, "ok")
 
@@ -204,7 +217,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         expected = list(question.criteria)
     elif isinstance(question, ScoreQuestion):
         expected = cast("Sequence[str]", question.criteria)
-    answer, status = _project(kind, evaluation, expected)
+    answer, status = project_answer(kind, evaluation.answers.get(QUESTION_ID), expected)
     body = {"path": args["path"], "kind": kind, "answer": answer, "status": status}
     return ToolResult(frame("jev_file_judge", evaluation, body))
 

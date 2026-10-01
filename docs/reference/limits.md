@@ -52,8 +52,9 @@ block (ADR-0062). The code is set from the exception type or at the return site.
 
 ## Input caps, per tool
 
-`jev_score`'s caps have no parity-manifest block: ADR-0048 owns them, as ADR-0077 owns the planned
-extension blocks at the end of this section. Every other table is the
+`jev_score`'s caps have no parity-manifest block: ADR-0048 owns them, as ADR-0077 owns the
+extension blocks at the end of this section (`jev_files_judge`'s stays a planned freeze until its
+tool ships). Every other table is the
 manifest's `caps` block. `no cap` means the reference deliberately leaves the field open — the
 manifest records null and a bound must not be added.
 
@@ -229,13 +230,11 @@ reason, before the first provider call either way.
 | `files_max` | 64 | surviving paths over it are skipped `over_the_file_cap`, before any call |
 | `file_units_max` | 100000 | that file is skipped `too_large` |
 
-### jev_ask (ADR-0077)
-
-Planned, not yet shipped: these numbers are the ADR's freeze. When the tool lands, the block
-moves to a `limits.py` caps owner and this table joins the machine-checked set.
+### jev_ask (`limits.ASK`, ADR-0077)
 
 No part truncates: an over-budget call refuses typed, with each part's size and a Split
-suggestion.
+suggestion. The question and path caps reject; the composed aggregate is a strict greater-than
+error, and the output cap and the timeout refuse after or around the run.
 
 | Cap | Value | Over the bound |
 | --- | --- | --- |

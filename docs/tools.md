@@ -243,3 +243,28 @@ planned, ADR-0077).
 
 **Not for** exact lookups, counting, math, or anything grep answers — run the command and read the
 answer yourself.
+
+## jev_ask — your questions over composed state
+
+**Use when** several enumerable judgments share one state and no purpose-built tool fits: is this
+test failure a real regression and how severe, does this diff carry a credential and which class of
+change is it. Write the questions — noul, choice, or score, keyed by your ids — and compose the
+state: your own framing in `state`, files the server reads in `paths` (the `jev_file_judge` rules),
+and an optional `command` whose redacted output joins the state after the command hook's gate
+judges it read-only with confidence and no destructive intent. The gate judges; the tool does not
+sandbox. Answers come back keyed by your ids, fail-closed per question, with a state summary and
+summed usage.
+
+**Measured.** No recorded live eval, and no bench corpus yet (extension tool, ADR-0077).
+
+**Weak spots.** Nothing truncates: state plus questions is capped at 120,000 UTF-16 units, and an
+over-budget call refuses with every part's size and a first-fit split suggestion naming which parts
+go to which call — re-ask the same questions on each. Own `state` is framing, capped at 20,000
+units; command output is capped at 30,000 units and refuses after the run; the command runs under a
+30-second timeout, in the working directory, with no stdin and no sandbox. A refused command makes
+no execution and no ask call, but the gate judgment itself is one provider call. 1 to 20 questions
+per call, at most 20 paths; questions in one request cannot see each other's answers. Every
+answer is typed: a probability, one option, or a scale position — never an explanation.
+
+**Not for** exact lookups, counting, math, or anything grep answers — run that in your own shell
+and read the result; `command` is for output you want judged, not output you want to read.

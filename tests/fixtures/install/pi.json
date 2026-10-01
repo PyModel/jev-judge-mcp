@@ -24,6 +24,7 @@
         "jev_gate",
         "jev_score",
         "jev_file_judge",
+        "jev_ask",
         "get_jev_mcp_skill_md"
       ],
       "toolPrefix": "none"

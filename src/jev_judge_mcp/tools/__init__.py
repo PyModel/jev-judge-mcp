@@ -1,11 +1,13 @@
 """The Jev MCP tools, published in the reference's registration order (`parity-manifest.json` `tools_list_order`).
 
 `jev_score` is an extension published after the ten snapshot tools (ADR-0048, divergence
-`score-tool-extension`), and `jev_file_judge` after it (ADR-0077, divergence `file-judge-tools`):
-the snapshot order is preserved as a prefix and each extension is pinned by its own contract tests.
+`score-tool-extension`), `jev_file_judge` after it (ADR-0077, divergence `file-judge-tools`), and
+`jev_ask` after that (ADR-0077, divergence `ask-tool-extension`): the snapshot order is preserved
+as a prefix and each extension is pinned by its own contract tests.
 """
 
 from jev_judge_mcp.tools import (
+    ask,
     classify,
     compare,
     decide,
@@ -35,6 +37,7 @@ TOOLS: tuple[JevTool, ...] = (
     gate.TOOL,
     score.TOOL,
     file_judge.TOOL,
+    ask.TOOL,
 )
 
 __all__ = ["TOOLS", "JevTool", "Runtime", "ToolError", "ToolResult", "Toolset"]

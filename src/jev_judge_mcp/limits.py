@@ -198,6 +198,25 @@ class FileJudgeCaps:
     binary_sniff_bytes: int
 
 
+@dataclass(frozen=True, slots=True)
+class AskCaps:
+    """jev_ask (extension tool, ADR-0077): the caller writes the questions over a composed state —
+    own text, server-read files, and a gated command's output. No parity-manifest block exists, so
+    the ADR owns every value (the ScoreCaps precedent). No part truncates: an over-budget call
+    refuses typed, with each part's size and a Split suggestion. The request cap is the composed
+    aggregate of question and state units, strict greater-than; the command timeout is the budget
+    the hook passes its provider call; `questions_min`/`questions_max` and `files_max` reject.
+    """
+
+    questions_min: int
+    questions_max: int
+    files_max: int
+    state_units_max: int
+    command_output_units_max: int
+    request_units_max: int
+    command_timeout_seconds: int
+
+
 CANDIDATES: Final = CandidatesCaps(min_items=1, max_items=250, text_units=2000)
 """jev_find `"candidates": "1..250 reject"` / `"candidate_text": "2000 truncate"`; jev_rerank
 `"candidates": "..250 reject"` — one shared schema and one shared truncation."""
@@ -284,4 +303,13 @@ FILE_JUDGE: Final = FileJudgeCaps(
     score_levels_max=10,
     score_level_units_max=200,
     binary_sniff_bytes=8_000,
+)
+ASK: Final = AskCaps(
+    questions_min=1,
+    questions_max=20,
+    files_max=20,
+    state_units_max=20_000,
+    command_output_units_max=30_000,
+    request_units_max=120_000,
+    command_timeout_seconds=30,
 )

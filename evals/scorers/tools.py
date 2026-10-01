@@ -630,8 +630,14 @@ def _answer_of(example: Example) -> Json | None:
     return as_object(example.output.get("answer")) if example.output.get("status") == "ok" else None
 
 
-def _judge_file_judge(example: Example) -> Iterator[Judgment]:
-    answer = _answer_of(example)
+def _ask_answer_of(example: Example) -> Json | None:
+    """jev_ask's typed answer under the gold's answer id, or None when it did not produce one."""
+    answers = as_object(example.output.get("answers"))
+    answer = as_object(answers.get(str(example.gold["answer_id"])))
+    return answer if answer.get("status") == "ok" else None
+
+
+def _rubric_judgment(example: Example, answer: Json | None) -> Iterator[Judgment]:
     nearest = answer.get("nearest_level") if answer is not None else None
     yield Judgment(
         example.id,
@@ -642,13 +648,12 @@ def _judge_file_judge(example: Example) -> Iterator[Judgment]:
     )
 
 
-def score_jev_file_judge(examples: Sequence[Example], params: Json) -> ToolScore:
-    """Gold `{"level": int}` — the 0-based rubric level that is right.
+def _rubric_score(tool: str, examples: Sequence[Example], answer_of: Callable[[Example], Json | None]) -> ToolScore:
+    """The shared jev_score metrics over a nested typed answer: gold `{"level": int}`.
 
-    The jev_score metrics over the nested `answer` block: nearest-level accuracy as the primary
-    metric, the fractional `score` for the level MAE and the within-one rate, and the mass the
-    distribution puts on the gold level as the calibration signal. No L3 corpus is recorded yet
-    (ADR-0077 ships with honest "no recorded live eval" cards).
+    Nearest-level accuracy as the primary metric, the fractional `score` for the level MAE and the
+    within-one rate, and the mass the distribution puts on the gold level as the calibration signal.
+    No L3 corpus is recorded yet (ADR-0077 ships with honest "no recorded live eval" cards).
     """
     gold: list[object] = []
     predicted: list[object] = []
@@ -656,8 +661,8 @@ def score_jev_file_judge(examples: Sequence[Example], params: Json) -> ToolScore
     within_one = 0
     gold_mass: list[float] = []
     for example in examples:
-        answer = _answer_of(example)
-        for judgment in _judge_file_judge(example):
+        answer = answer_of(example)
+        for judgment in _rubric_judgment(example, answer):
             if judgment.predicted is None or answer is None:
                 continue
             score = as_number(answer.get("score"))
@@ -673,7 +678,7 @@ def score_jev_file_judge(examples: Sequence[Example], params: Json) -> ToolScore
                 gold_mass.append(mass)
     valid = len(gold)
     return ToolScore(
-        "jev_file_judge",
+        tool,
         "nearest_level_accuracy",
         len(examples),
         {
@@ -698,7 +703,8 @@ SCORERS: dict[str, Scorer] = {
     "jev_review": score_review,
     "jev_gate": score_gate,
     "jev_score": score_jev_score,
-    "jev_file_judge": score_jev_file_judge,
+    "jev_file_judge": lambda examples, params: _rubric_score("jev_file_judge", examples, _answer_of),
+    "jev_ask": lambda examples, params: _rubric_score("jev_ask", examples, _ask_answer_of),
 }
 """Snapshot order, one scorer per tool; the ADR-0048 and ADR-0077 extensions follow the snapshot ten."""
 
@@ -714,7 +720,8 @@ _JUDGES: dict[str, Callable[[Example], Iterator[Judgment]]] = {
     "jev_review": _judge_review,
     "jev_gate": _judge_gate,
     "jev_score": _judge_score,
-    "jev_file_judge": _judge_file_judge,
+    "jev_file_judge": lambda example: _rubric_judgment(example, _answer_of(example)),
+    "jev_ask": lambda example: _rubric_judgment(example, _ask_answer_of(example)),
 }
 
 

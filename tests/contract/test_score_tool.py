@@ -152,5 +152,5 @@ def test_the_schema_carries_the_adr_owned_caps() -> None:
 
 def test_score_is_published_after_the_snapshot_ten() -> None:
     names = tuple(tool.name for tool in TOOLS)
-    assert names[10] == "jev_score"  # first extension (ADR-0048); jev_file_judge follows (ADR-0077)
-    assert len(names) == 12
+    assert names[10] == "jev_score"  # first extension (ADR-0048); jev_file_judge and jev_ask follow (ADR-0077)
+    assert len(names) == 13
