@@ -114,6 +114,7 @@ class _Plan:
     tool: str
     containment: _Containment
     state: str
+    pattern_matched: bool = False
 
 
 def hook_required(env: Mapping[str, str]) -> bool:
@@ -160,6 +161,12 @@ def main(
         # no provider, so none of them is built (ADR-0076).
         outside = _Outcome("deny", deny_reason("the write targets a path outside the working directory"))
         sys.stdout.write(_decision(outside) + "\n")
+        return 0
+    if plan.pattern_matched:
+        # A redacted value never reaches the provider, so the credential question would judge a
+        # placeholder. The pattern match itself is the evidence; deny on it (ADR-0076).
+        matched = _Outcome("deny", deny_reason("the written content matches a credential pattern"))
+        sys.stdout.write(_decision(matched) + "\n")
         return 0
     if required and length(body) > HOOK_INPUT_UNITS:
         return fail_open_or_ask(True, "", "input_too_large")
@@ -294,7 +301,13 @@ def _questions(plan: _Plan) -> dict[str, Question]:
 def _plan(event: dict[str, object], extra: str | None) -> _Plan:
     tool = _text(event.get("tool_name"), "unknown")
     containment: _Containment = _containment(event) if tool in _WRITES else "unknown"
-    return _Plan(tool, containment, _state(event, extra, containment))
+    pattern_matched = False
+    if tool in _WRITES and containment != "outside":
+        raw = _render_input(event)
+        # The state is built from the redacted action, so a value the redactor would replace must
+        # never be judged by the credential question: the match itself denies first (ADR-0076).
+        pattern_matched = redact_action(raw) != raw
+    return _Plan(tool, containment, _state(event, extra, containment), pattern_matched)
 
 
 def _containment(event: dict[str, object]) -> _Containment:

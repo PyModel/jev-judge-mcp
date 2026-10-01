@@ -369,6 +369,29 @@ def test_outside_repo_write_denies_without_a_provider(
     assert reason.endswith(FINAL_BLOCK_NOTICE)
 
 
+def test_pattern_matched_write_denies_without_a_provider(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Content the redactor would rewrite denies on the match: the credential question never
+    judges a placeholder, and the raw secret never leaves the process."""
+
+    def boom(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("provider constructed")
+
+    monkeypatch.setattr("jev_judge_mcp.hook.resolve_provider", boom)
+    event = _write_event(tool_input={"file_path": "src/a.py", "content": f"api_key = '{_SK}'\n"})
+    code = main(["gate"], text=event, environ={}, provider=None)
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.err == ""
+    assert "allow" not in captured.out
+    decision = json.loads(captured.out)
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = decision["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason == f"Jev hook: denied: the written content matches a credential pattern. {FINAL_BLOCK_NOTICE}"
+
+
 def test_inside_repo_write_judges_the_content_and_stays_silent_without_a_secret(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

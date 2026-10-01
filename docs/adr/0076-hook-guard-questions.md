@@ -13,7 +13,8 @@ observation and the verdict, so its reason could only say "denied" without namin
 - **Routing.** The event's tool name routes the judgment. `Bash` gets two questions in one
   provider call: an effect Choice (`read_only` / `reversible` / `irreversible`) and a
   destructive-intent Noul. `Write` and `Edit` get a deterministic repo-containment check computed
-  in code and, for what stays inside, one credential-in-content Noul. Any other tool name keeps
+  in code, a deterministic credential-pattern check on the written content, and — for content
+  that survives both — one credential-in-content Noul. Any other tool name keeps
   the generic allow/deny Choice, so an operator who widens the matcher still gets judged.
 - **Per-question thresholds.** Every question's boundary is a hook constant in
   `src/jev_judge_mcp/hook.py`, documented there and never in `policy/thresholds.py` (ADR-0035).
@@ -40,14 +41,19 @@ observation and the verdict, so its reason could only say "denied" without namin
   variable. The hook still logs neither the action nor the state, and still passes one 30 second
   budget to its single provider call.
 - **Redaction order.** `redact_action` runs on the action input before the provider sees it
-  (ADR-0034), so the credential question judges redacted text: a pattern-redacted value hides the
-  secret but keeps the name that carried it, which is still evidence for the Noul.
+  (ADR-0034), and a raw secret never leaves the process. That redaction is also evidence: for a
+  judged Write or Edit (containment inside or unknown), input the redactor would change denies
+  outright — "the written content matches a credential pattern", no measure, the final-block
+  notice, and no provider construction. A credential question that judged a `[redacted]`
+  placeholder would be a judgment over erased evidence. Only content the redactor leaves
+  unchanged reaches the credential Noul, which then covers the shapes the patterns miss.
 
 ## Consequences
 
-- An outside-of-repo write costs no provider call and cannot hang on a missing key: the
-  deterministic denial happens first. With `JEV_HOOK_REQUIRED=1` it still denies, because a
-  deny is stronger than the ask the flag would have produced.
+- An outside-of-repo write, and an in-repo one whose content matches a credential pattern, cost
+  no provider call and cannot hang on a missing key: the deterministic denials happen first. With
+  `JEV_HOOK_REQUIRED=1` they still deny, because a deny is stronger than the ask the flag would
+  have produced.
 - A routine, confident, non-destructive command abstains with no output, exactly as before; the
   decomposition changes what is denied, not what is allowed, and the hook still never allows.
 - The generic fallback's deny reason now carries the failure phrase and the final-block notice,
