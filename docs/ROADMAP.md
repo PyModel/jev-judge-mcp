@@ -26,7 +26,8 @@ src/jev_judge_mcp/
   extract/    dialect.py worker.py candidates.py executor.py   # ADR-0004
   install/    engine.py layout.py launch.py verify.py …        # ADR-0033
   tools/      observed.py verify.py screen.py find.py classify.py rerank.py compare.py
-              decide.py extract.py review.py gate.py score.py toolset.py arguments.py
+              decide.py extract.py review.py gate.py score.py file_state.py file_judge.py
+              toolset.py arguments.py
 tests/  unit/ contract/ parity/ property/ security/ integration/ evals/ load/
 evals/  datasets/ manifests/ scorers/ runners/ baselines/ calibration/ reports/ ab/ bench/
 ```

@@ -1,6 +1,6 @@
 ---
 name: jev-mcp
-description: Use before a step that judges material you already have — a claim against evidence, screening fetched text before reading it, classifying or keeping or dropping many items, finding or reranking candidates, one bounded choice, comparing two passages, grading on an ordered rubric, extracting a regex-matched value, reviewing a patch, or checking that work finished. Batch every question about one state into one call. Jev is invoked when an unresolved judgment earns a model decision. Deterministic evidence takes precedence; Jev is not a mandatory ceremony. Write the text yourself when the step produces new words, code, or options you cannot list. Not for building on the Jev API; that is the jev skill.
+description: Use before a step that judges material you already have — a claim against evidence, screening fetched text before reading it, classifying or keeping or dropping many items, finding or reranking candidates, one bounded choice, comparing two passages, grading on an ordered rubric, judging a file without reading it into your context, extracting a regex-matched value, reviewing a patch, or checking that work finished. Batch every question about one state into one call. Jev is invoked when an unresolved judgment earns a model decision. Deterministic evidence takes precedence; Jev is not a mandatory ceremony. Write the text yourself when the step produces new words, code, or options you cannot list. Not for building on the Jev API; that is the jev skill.
 ---
 
 # Routing a judgment
@@ -18,7 +18,8 @@ Call a tool when the step judges material you already have. Write the result you
 | Where the facts are | What you do |
 | --- | --- |
 | Already in your context | One call. Batch every question about that state into it. |
-| In a file or in tool output | Pass excerpts the tool accepts. Leave the rest of the file out of the chat. |
+| In a file you have not read | `jev_file_judge`: the server reads the file as state and returns the typed answer, so the bytes never enter your context. |
+| Already fetched into your context (tool output, a paste) | Pass excerpts the tool accepts. Leave the rest of the file out of the chat. |
 | Still to be written | You write it. |
 
 If you already know the answer, act.
@@ -48,6 +49,7 @@ through `jev_decide`, and traversing a catalog too big for one call.
 | One bounded choice, and it may decline | `jev_decide` | Options you can write down, including a next action. Escape hatches are `ask_user`, `investigate`, and `none`. |
 | Two passages | `jev_compare` | Same fact, a contradiction, or different facts. |
 | Where on an ordered scale | `jev_score` | Your rubric of 2-10 levels, low to high. A fractional level index plus the per-level probabilities. Threshold it; do not interpolate a magnitude. |
+| A judgment inside a file you have not read | `jev_file_judge` | Name the path and one question (noul, choice, or score). The server reads the file as state and returns the typed answer. Paths must stay inside the server's working directory; over-cap and binary files refuse typed. |
 | A value sitting in a document | `jev_extract` | Your regex proposes the matches. Jev picks. The value is one of those matches, or null. |
 | Is this patch acceptable | `jev_review` | Pull-request triage. The diff against the request. |
 | Did the work finish | `jev_gate` | The patch, the completion claims, and the test logs. The recommended final judgment before claiming done on a diff and before opening or merging a pull request, unless tests, type checks, build, lint, or another explicit acceptance criterion already settle completion. Diff and tests are evidence. This is the ship check. |
@@ -75,7 +77,7 @@ Unknown confidence never meets a threshold, so the action stays off `auto`. A do
 
 ## Clients
 
-Any MCP client uses the published tools (the reference ten plus `jev_score`). pi reaches them through the MCP gateway.
+Any MCP client uses the published tools (the reference ten plus `jev_score` and `jev_file_judge`). pi reaches them through the MCP gateway.
 
 ## Command hook
 

@@ -195,12 +195,13 @@ Every bound is a schema reject.
 | `subject_max` | 1500 | above → reject |
 | `context_max` | 12000 | above → reject |
 
-### jev_file_judge (ADR-0077)
+### jev_file_judge (`limits.FILE_JUDGE`, ADR-0077)
 
-Planned, not yet shipped: these numbers are the ADR's freeze. When the tool lands, the block
-moves to a `limits.py` caps owner and this table joins the machine-checked set.
-
-Every bound is a schema reject; the refusal is typed and makes no provider call.
+Every bound refuses typed before any provider call. The score-array bounds are published-schema
+rejects; the noul and choice Record bounds cannot live in the schema (the argument parser takes no
+per-property constraints on a keep-whole object, ADR-0022), so the tool refuses them typed
+`invalid_arguments` — the same reject, one layer down. Noul's optional outcome descriptions share
+the instructions bound.
 
 | Cap | Value | Over the bound |
 | --- | --- | --- |

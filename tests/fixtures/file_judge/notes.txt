@@ -1,0 +1,3 @@
+The payment service listens on port 8080 and retries twice before failing over.
+
+Tokens are validated by `auth/verify.py`; the refresh window is 300 seconds.

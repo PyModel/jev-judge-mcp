@@ -219,3 +219,23 @@ several scales are several questions.
 
 **Not for** continuous magnitudes, or when you need an explanation — the answer is a distribution,
 never text.
+
+## jev_file_judge — judge a file without reading it
+
+**Use when** a judgment lives in a file you have not read: does this config disable the timeout, is
+this the file that names the retry policy, how careful does this generated code look. Name the path
+and one question — noul, choice, or score — and the server reads the file as state and returns the
+typed answer. The file's bytes never enter your context or the payload; write `instructions` against
+the state's `content` field.
+
+**Measured.** No recorded live eval, and no bench corpus yet (extension tool, ADR-0077).
+
+**Weak spots.** The whole decoded file is the state, capped at 100,000 UTF-16 units; an over-cap or
+binary file refuses typed (`file_too_large`; a NUL byte in the first 8,000 bytes means `binary_file`)
+instead of being judged over a cut read. Paths must resolve inside the server's working directory,
+symlinks followed; there is no override, and an escaping path is refused `path_outside_scope` with no
+provider call. One question per call: several files are several calls (the batched many-file tool is
+planned, ADR-0077).
+
+**Not for** exact lookups, counting, math, or anything grep answers — run the command and read the
+answer yourself.

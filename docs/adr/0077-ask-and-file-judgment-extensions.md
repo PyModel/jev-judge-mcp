@@ -39,7 +39,11 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
   kind-shaped `criteria`. The server reads the caller-named file as state; the payload carries the
   typed answer only — the file's bytes never enter it. Refusals are typed and cost no provider
   call: `not_found`, `not_a_file`, `binary_file`, `file_too_large`, `path_outside_scope`. A
-  refusal is a verdict about the input, never a judgment.
+  refusal is a verdict about the input, never a judgment. The score-array bounds are
+  published-schema rejects; the noul and choice shapes are Records whose per-entry bounds the
+  argument parser cannot express (ADR-0022), so the tool refuses a shape that breaks them typed
+  `invalid_arguments` before any provider call — the same reject, one layer down — and noul's
+  optional outcome descriptions share the instructions bound.
 - **Path scope is the server's working directory, with no caller override.** A path is read only
   when its resolved absolute path — symlinks followed — stays inside the server process's working
   directory; `..` segments and symlinked targets that resolve outside are refused

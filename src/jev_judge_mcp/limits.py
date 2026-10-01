@@ -177,6 +177,27 @@ class ScoreCaps:
     context_max: int
 
 
+@dataclass(frozen=True, slots=True)
+class FileJudgeCaps:
+    """jev_file_judge (extension tool, ADR-0077): one kind-discriminated judgment about a file the
+    server reads. No parity-manifest block exists, so the ADR owns every value (the ScoreCaps
+    precedent). The file cap is the per-request state budget shared with the question, in UTF-16
+    units (ADR-0005); the option bounds are the `jev_classify` convention for caller-supplied sets;
+    the score bounds are the ADR-0048 rubric freeze; the sniff window is the first-8,000-byte NUL
+    scan git uses.
+    """
+
+    file_units_max: int
+    instructions_units_max: int
+    choice_options_min: int
+    choice_options_max: int
+    choice_option_units_max: int
+    score_levels_min: int
+    score_levels_max: int
+    score_level_units_max: int
+    binary_sniff_bytes: int
+
+
 CANDIDATES: Final = CandidatesCaps(min_items=1, max_items=250, text_units=2000)
 """jev_find `"candidates": "1..250 reject"` / `"candidate_text": "2000 truncate"`; jev_rerank
 `"candidates": "..250 reject"` — one shared schema and one shared truncation."""
@@ -252,4 +273,15 @@ SCORE: Final = ScoreCaps(
     subject_min=1,
     subject_max=1500,
     context_max=12_000,
+)
+FILE_JUDGE: Final = FileJudgeCaps(
+    file_units_max=100_000,
+    instructions_units_max=2_000,
+    choice_options_min=2,
+    choice_options_max=250,
+    choice_option_units_max=2_000,
+    score_levels_min=2,
+    score_levels_max=10,
+    score_level_units_max=200,
+    binary_sniff_bytes=8_000,
 )

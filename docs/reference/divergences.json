@@ -396,7 +396,8 @@
       "adr": "docs/adr/0077-ask-and-file-judgment-extensions.md",
       "tests": [
         "tests/contract/test_tools_list.py",
-        "tests/contract/test_docs_alignment.py"
+        "tests/contract/test_docs_alignment.py",
+        "tests/contract/test_file_judge.py"
       ],
       "fixtures": [],
       "reference_behavior": "The reference has no tool that reads a caller-named file; all judged state arrives inside the call arguments.",

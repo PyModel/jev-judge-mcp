@@ -41,10 +41,11 @@ GOLD: dict[str, Json] = {
     "jev_review": {"defective": False},
     "jev_gate": {"safe": True, "claims": ["verified"], "reason_codes": ["accepted"]},
     "jev_score": {"level": 0},
+    "jev_file_judge": {"level": 0},
 }
 PARAMS: dict[str, Json] = {"jev_screen": {"max_false_block_rate": 0.0}}
 
-EMPTY_INVALID = {"jev_verify": 1, "jev_screen": 1, "jev_find": 1, "jev_review": 1, "jev_score": 1}
+EMPTY_INVALID = {"jev_verify": 1, "jev_screen": 1, "jev_find": 1, "jev_review": 1, "jev_score": 1, "jev_file_judge": 1}
 """The scorers that report `invalid` (evals/README.md), each counting its one empty-answer row."""
 AUTO_TIER = {"jev_verify", "jev_screen", "jev_classify", "jev_compare", "jev_extract", "jev_review", "jev_gate"}
 """Tools with an AUTO decision; find, rerank, decide, and score have none."""
@@ -138,6 +139,8 @@ def gold_from(tool: str, output: Json) -> Json:
             return {"defective": False}
         case "jev_score":
             return {"level": output.get("nearest_level")}  # structural: no jev_score parity fixture exists
+        case "jev_file_judge":
+            return {"level": as_object(output.get("answer")).get("nearest_level")}  # no fixture, like jev_score
         case "jev_gate":
             return {
                 "safe": True,

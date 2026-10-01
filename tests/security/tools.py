@@ -250,6 +250,25 @@ CASES: tuple[ToolCase, ...] = (
         {"grade": dressed({"score": 0.9, "probabilities": {"0": 0.1, "1": 0.9}, "confidence": 0.3})},
         lambda payload: payload["status"] == "ok" and payload["nearest_level"] == 0 and not auto_anywhere(payload),
     ),
+    # ADR-0077, registry order. `path` is deliberately absent from text_paths: an injected path
+    # names no file, so the honest verdict is the typed refusal, not a same-decision replay — its
+    # contract is the scope refusal owned by tests/contract/test_file_judge.py and
+    # tests/unit/test_file_state.py. The fields that reach the provider are listed.
+    ToolCase(
+        "jev_file_judge",
+        {
+            "path": "tests/fixtures/file_judge/notes.txt",
+            "kind": "score",
+            "instructions": "How operational is the content?",
+            "criteria": ["chatty", "operational"],
+        },
+        [("instructions",), ("criteria", 0), ("criteria", 1)],
+        {"file": {"score": 0.2, "probabilities": {"0": 0.8, "1": 0.2}, "confidence": 0.95}},
+        {"file": dressed({"score": 0.9, "probabilities": {"0": 0.1, "1": 0.9}, "confidence": 0.3})},
+        lambda payload: (
+            payload["status"] == "ok" and payload["answer"]["nearest_level"] == 0 and not auto_anywhere(payload)
+        ),
+    ),
 )
 
 BY_TOOL = {case.tool: case for case in CASES}

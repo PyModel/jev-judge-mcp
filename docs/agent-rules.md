@@ -38,6 +38,7 @@ enumerated into bounded options; or when the same unchanged decision was already
 | `jev_decide` | One bounded choice among 2–6 options with evidence and priorities; escape hatches `ask_user` / `investigate` / `none` | 2–6 options |
 | `jev_extract` | Your regex proposes candidates, Jev picks, the value comes back verbatim (versions, prices, dates, IDs) | 50,000 units per document, ≤32 fields |
 | `jev_score` | Grade severity or risk on your own ordered rubric; threshold the level, never interpolate a magnitude between levels | 2–10 levels |
+| `jev_file_judge` | Judge a file without reading it: the server reads the path as state, you get the typed answer, the bytes never enter your context | 100,000 units per file, refused over |
 
 Caps are UTF-16 code units, frozen in the server's `limits.py`. "no length bound" is not a token budget: Jev's context is 64k tokens per request, and an input inside the table can still come back as `provider`, not `input_too_large`.
 

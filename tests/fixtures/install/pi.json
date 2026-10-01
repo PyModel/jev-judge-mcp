@@ -23,6 +23,7 @@
         "jev_review",
         "jev_gate",
         "jev_score",
+        "jev_file_judge",
         "get_jev_mcp_skill_md"
       ],
       "toolPrefix": "none"

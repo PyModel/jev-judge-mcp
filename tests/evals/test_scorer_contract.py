@@ -38,8 +38,14 @@ INPUTS["jev_score"] = {
     "subject": "Regression risk of the rename.",
     "levels": ["minor risk", "major risk", "severe risk"],
 }
-"""jev_score has no bench150 corpus (ADR-0048 extension tool): one representative input stands in
-so the contract run still exercises the published tool end to end."""
+INPUTS["jev_file_judge"] = {
+    "path": "tests/fixtures/file_judge/notes.txt",
+    "kind": "score",
+    "instructions": "How technical is the content?",
+    "criteria": ["plain prose", "mixed", "expert"],
+}
+"""jev_score and jev_file_judge have no bench150 corpus (ADR-0048/ADR-0077 extension tools): one
+representative input each stands in so the contract run still exercises the published tools."""
 
 
 class ConfidentProvider(FakeProvider):
@@ -121,7 +127,7 @@ def gold_for(tool: str) -> Json:
             return {"defective": False}
         case "jev_gate":
             return {"safe": True, "claims": ["verified"] * len(INPUTS[tool]["claims"]), "reason_codes": ["accepted"]}
-        case "jev_score":
+        case "jev_score" | "jev_file_judge":
             return {"level": 2}  # the confident score answer tops a 3-level rubric at level 2
         case _:
             raise KeyError(tool)

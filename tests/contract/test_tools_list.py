@@ -22,9 +22,10 @@ from tests.support.tools_list import field_mismatches, load_snapshot, order_mism
 pytestmark = pytest.mark.anyio
 
 SNAPSHOT_TOOL_COUNT = 10
-EXTENSION_TOOLS = ("jev_score",)
-"""Published after the snapshot ten (ADR-0048, divergence `score-tool-extension`): the frozen
-surface stays a prefix; the extension carries its own pinning tests (`test_score_tool.py`)."""
+EXTENSION_TOOLS = ("jev_score", "jev_file_judge")
+"""Published after the snapshot ten, in this order (ADR-0048 divergence `score-tool-extension`,
+ADR-0077 divergence `file-judge-tools`): the frozen surface stays a prefix; each extension carries
+its own pinning tests (`test_score_tool.py`, `test_file_judge.py`)."""
 
 # Runs the real server over stdio, publishing the snapshot definitions through a stub Toolset —
 # the one registry, with no callable behavior behind it.

@@ -24,8 +24,10 @@ EXPECTED_TOOLS: tuple[str, ...] = (
     "jev_review",
     "jev_gate",
     "jev_score",
+    "jev_file_judge",
 )
-"""The published tool names: the reference ten in snapshot order, then the extension (ADR-0048)."""
+"""The published tool names: the reference ten in snapshot order, then the extensions (ADR-0048,
+ADR-0077)."""
 
 STDERR_TAIL_LINES = 5
 """How many of the child's last stderr lines a VerifyError carries (ADR-0053)."""

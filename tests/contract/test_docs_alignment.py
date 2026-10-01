@@ -132,6 +132,7 @@ _TOOL_CAPS = {
     "jev_review": limits.REVIEW,
     "jev_gate": limits.GATE,
     "jev_score": limits.SCORE,
+    "jev_file_judge": limits.FILE_JUDGE,
 }
 _THRESHOLDS_SECTION = "Defaults and thresholds"
 _SHARED_SECTION = "shared"
@@ -247,6 +248,11 @@ def test_tool_cards_state_the_frozen_numbers() -> None:
             (limits.GATE.evidence_items, limits.GATE.aggregate_evidence_units),
         ),
         (r"scale of (\d+) to (\d+) levels", (limits.SCORE.levels_min, limits.SCORE.levels_max)),
+        (
+            r"decoded file is the state, capped at ([\d,]+) UTF-16 units",
+            (limits.FILE_JUDGE.file_units_max,),
+        ),
+        (r"a NUL byte in the first ([\d,]+) bytes", (limits.FILE_JUDGE.binary_sniff_bytes,)),
     ]:
         assert _stated_numbers(text, pattern) == expected, pattern
     # The screen card's single "hardcoded at" number states both skip thresholds at once.

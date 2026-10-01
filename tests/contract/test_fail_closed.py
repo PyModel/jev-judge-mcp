@@ -237,6 +237,18 @@ CASES: list[Case] = [
         {"grade": rubric_mutations()},
     ),
     Case(
+        "jev_file_judge",
+        {
+            "path": "tests/fixtures/file_judge/notes.txt",
+            "kind": "noul",
+            "instructions": "Does the file mention a port?",
+            "criteria": {},
+        },
+        {"file": {"noul": 0.9}},
+        judged,
+        {"file": noul_mutations()},
+    ),
+    Case(
         "jev_verify",
         {"claims": ["The service listens on 8080."], "evidence": "server.listen(8080)"},
         {"relation_claim0": choice("supports", {"supports": 0.97, "contradicts": 0.02, "says_nothing": 0.01})},
