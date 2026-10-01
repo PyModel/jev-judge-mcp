@@ -36,7 +36,9 @@ Headless runs need an allow-rule. `acceptEdits` covers file edits. Add the publi
 `jev_ask` is safe to allow because its `command` argument is off unless the operator sets
 `JEV_ASK_COMMANDS=1` in the server environment: enabling it lets the server run what Jev judges
 read-only without a harness prompt, so decide that in the server's launch configuration, not in a
-permission file.
+permission file. Enabling it is not containment: the denylist blocks named clients such as `curl`
+and `ssh`, but an interpreter one-liner like `python -c` or `node -e` passes the denylist and can
+still reach the network. Run the server under your own sandbox when command isolation matters.
 
 ## Routing skill
 

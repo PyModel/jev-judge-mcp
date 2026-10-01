@@ -291,7 +291,11 @@ command runs under a 30-second timeout, in the working directory, with no stdin 
 an environment scrubbed of the server's configured secrets. Command execution is off unless the
 operator enables it; when enabled, a denylist (network clients, secret stores, private config
 directories, environment readers) refuses before the gate, and a refused command makes no
-execution and no ask call — but the gate judgment itself is one provider call. 1 to 20 questions
+execution and no ask call — but the gate judgment itself is one provider call. The denylist is
+not a sandbox: an interpreter one-liner such as `python -c` or `node -e` names no network client,
+so it passes the denylist and can still reach the network once commands are enabled. Enabling
+`command` trusts the gate's judgment and the operator's own isolation, not a containment
+boundary. 1 to 20 questions
 per call, at most 20 paths; questions in one request cannot see each other's answers. Every
 answer is typed: a probability, one option, or a scale position — never an explanation.
 

@@ -214,6 +214,10 @@ The extension family that makes the server a first-class coding-agent helper; th
 - [ ] secrets redacted in errors/logs for every provider
 - [ ] cancellation verified per provider (ADR-0011; no TS counterpart)
 - [ ] stdio stream clean
+- [ ] dogfood gate passed: the code loads in Claude Code (installer into a scratch config dir,
+  `tools/list` prefix byte-identical plus the extensions) and the end-to-end scenario script runs
+  through a live Claude session with hooks wired by a scratch settings file; transcripts scanned
+  for secrets, report archived under `evals/reports/` (S8)
 - [ ] live E2E green: TypeSafe, OpenRouter, Cloudflare, compatible
 - [ ] AUTO thresholds calibrated on held-out data; gate false-AUTO meets target on its upper bound
 - [x] 64-concurrent load test passes
