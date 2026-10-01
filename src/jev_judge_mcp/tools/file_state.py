@@ -30,12 +30,12 @@ REFUSAL_CODES = (
 """The typed file refusals (ADR-0077). Each one is an `isError` result with this code and no
 provider call behind it; the message names the path and the reason."""
 
-_SECRET_EXACT = frozenset({".env", ".npmrc", ".pypirc", ".netrc", "id_rsa", "id_ed25519", "id_ecdsa"})
-_SECRET_EXTENSIONS = (".pem", ".key", ".p12", ".pfx")
+_SECRET_EXACT = frozenset({".npmrc", ".pypirc", ".netrc", "id_rsa", "id_ed25519", "id_ecdsa"})
+_SECRET_EXTENSIONS = (".env", ".pem", ".key", ".p12", ".pfx")
 _SECRET_ENV_STANDINS = frozenset({".env.example", ".env.sample", ".env.template"})
-"""Known secret stores, matched on the resolved file's name (case-folded). The `.env.*` family is
-refused except the checked-in stand-ins, so a real environment file is never read but its redacted
-example is."""
+"""Known secret stores, matched on the resolved file's name (case-folded): every `*.env` dotenv
+(`secrets.env`, `prod.env`, ...), the dot-prefixed `.env` itself, and the `.env.*` family, except
+the checked-in stand-ins, so a real environment file is never read but its redacted example is."""
 
 
 def is_secret_store(path: Path) -> bool:

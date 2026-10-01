@@ -39,8 +39,9 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
   kind-shaped `criteria`. The server reads the caller-named file as state; the payload carries the
   typed answer only — the file's bytes never enter it. Refusals are typed and cost no provider
   call: `not_found`, `not_a_file`, `binary_file`, `secret_file`, `file_too_large`,
-  `path_outside_scope`. A path whose resolved name is a known secret store — `.env` (except the
-  `.env.example`/`.env.sample`/`.env.template` stand-ins), `*.pem`, `*.key`, `*.p12`, `*.pfx`,
+  `path_outside_scope`. A path whose resolved name is a known secret store — every `*.env` dotenv
+  and the dot-prefixed `.env` / `.env.*` family (except the `.env.example`/`.env.sample`/
+  `.env.template` stand-ins), `*.pem`, `*.key`, `*.p12`, `*.pfx`,
   `id_rsa`/`id_ed25519`/`id_ecdsa`, `.npmrc`, `.pypirc`, `.netrc` — refuses `secret_file` before
   any read: asking about a config file must not ship its live secrets to the provider. What is
   read is redacted with the ADR-0076 credential-literal detector before it becomes state. A

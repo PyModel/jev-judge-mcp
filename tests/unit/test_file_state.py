@@ -76,11 +76,19 @@ def test_a_secret_store_refuses_before_any_read(tmp_path: Path) -> None:
     refuses("secret_file")(lambda: file_state.read_state(tmp_path / ".env"))
 
 
+def test_a_dotted_suffix_env_dotenv_refuses_case_insensitively(tmp_path: Path) -> None:
+    for name in ("secrets.env", "prod.env", "PROD.ENV"):
+        make(tmp_path / name, "PASSWORD=hunter2")
+        refuses("secret_file")(lambda name=name: file_state.read_state(tmp_path / name))
+
+
 def test_the_secret_store_family_and_the_stand_ins(tmp_path: Path) -> None:
     refused = (
         ".env",
         ".env.production",
         ".env.local",
+        "secrets.env",
+        "prod.env",
         "server.pem",
         "ca.key",
         "cert.p12",
