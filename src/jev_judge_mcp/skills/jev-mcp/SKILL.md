@@ -31,7 +31,8 @@ How you write the state and the questions moves the probabilities you get back: 
 positional arrays, cutting text only at a boundary you can defend, option descriptions that
 separate lookalikes, rules kept out of the question, one judgment per question, and thresholds
 that rise with the risk of the next step. That guide, with the measurements behind it, is in
-`docs/guidance.md`.
+`docs/guidance.md`; its recipes cover composite blends with weights in code, routing a step
+through `jev_decide`, and traversing a catalog too big for one call.
 
 ## Which tool
 
@@ -51,6 +52,9 @@ that rise with the risk of the next step. That guide, with the measurements behi
 | Is this patch acceptable | `jev_review` | Pull-request triage. The diff against the request. |
 | Did the work finish | `jev_gate` | The patch, the completion claims, and the test logs. The recommended final judgment before claiming done on a diff and before opening or merging a pull request, unless tests, type checks, build, lint, or another explicit acceptance criterion already settle completion. Diff and tests are evidence. This is the ship check. |
 | Is this shell command safe to run | `jev-judge-mcp hook gate` | Opt-in process. Separate from the published tools. See below. |
+| A verdict blended from several factors | `jev_score` per factor, you blend | One graded call per factor; weights and arithmetic stay in your code, never in a call (`docs/guidance.md`). |
+| Which agent or harness takes a step | `jev_decide` | Handlers as options, task facts as state, escape hatches for "none fits". Ambiguity is a second question in the same call. The server never picks models: that is process config (ADR-0008). |
+| More classes than one catalog holds | `jev_classify`, then `jev_rerank`, then `jev_decide` | Prune into coarse buckets, rank the survivors, decide among the top few. The traversal is in `docs/guidance.md`. |
 | New text, code, or options you cannot list | you | You write it. |
 
 A typed in-set choice is what `jev_decide` and `jev_classify` already return: one of the options you supplied, an escape hatch, or `invalid_response`.
