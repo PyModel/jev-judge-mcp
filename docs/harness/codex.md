@@ -27,3 +27,7 @@ Stdin that is not a JSON object, or a missing provider credential, exits 0 with 
 ## Completion hook
 
 Codex hook matching is unverified against https://developers.openai.com/codex/hooks. Do not treat [`completion.hooks.json`](completion.hooks.json) as a Codex hook; its matcher is the Claude Code tool name `Bash`. It is not [`gate.hooks.json`](gate.hooks.json). `install` does not enable it. A missing credential fails open and is not a pass, unless `JEV_HOOK_REQUIRED=1` (ADR-0065), which asks. The command is the executable path, not `uv run --directory`. Use `jev-judge-mcp gate` until the Codex matcher is verified.
+
+## Screen hook
+
+`jev-judge-mcp hook screen` is a Claude Code PostToolUse annotator (`docs/harness/claude.md`). Codex PostToolUse matching is unverified against https://developers.openai.com/codex/hooks; do not treat [`screen.hooks.json`](screen.hooks.json) as a Codex hook. Use the CLI tools until the PostToolUse annotation shape is verified for Codex.

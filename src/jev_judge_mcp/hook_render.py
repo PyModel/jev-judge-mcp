@@ -31,3 +31,14 @@ def render_decision(kind: str, reason: str) -> str:
         }
     }
     return stringify_compact(payload)
+
+
+def render_annotation(context: str) -> str:
+    """One PostToolUse annotation. Additional context only: never a block, never a rewrite."""
+    payload: dict[str, JsonValue] = {
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": context,
+        }
+    }
+    return stringify_compact(payload)

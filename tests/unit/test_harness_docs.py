@@ -21,6 +21,13 @@ def test_gate_hooks_sample_parses() -> None:
     completion = json.loads((HARNESS / "completion.hooks.json").read_text(encoding="utf-8"))
     completion_matcher = completion["hooks"]["PreToolUse"][0]["matcher"]
     assert completion_matcher == "Bash"
+    screen = json.loads((HARNESS / "screen.hooks.json").read_text(encoding="utf-8"))
+    screen_group = screen["hooks"]["PostToolUse"][0]
+    screen_command = screen_group["hooks"][0]
+    assert screen_group["matcher"] == "Bash|Read"
+    assert screen_command["type"] == "command"
+    assert screen_command["timeout"] == 30
+    assert screen_command["command"] == "/absolute/path/to/jev-judge-mcp hook screen"
 
 
 def test_harness_tree_has_no_home_path_or_key_marker() -> None:
@@ -31,6 +38,7 @@ def test_harness_tree_has_no_home_path_or_key_marker() -> None:
         "pi.md",
         "gate.hooks.json",
         "completion.hooks.json",
+        "screen.hooks.json",
     }
     for path in files:
         text = path.read_text(encoding="utf-8")
@@ -65,8 +73,9 @@ def test_readme_links_harness_docs() -> None:
 
 def test_shipped_hook_fragments_do_not_change_directory() -> None:
     """``uv run --directory`` would make gate judge the checkout, not the caller's repo."""
-    for name in ("gate.hooks.json", "completion.hooks.json"):
+    for name in ("gate.hooks.json", "completion.hooks.json", "screen.hooks.json"):
         payload = json.loads((HARNESS / name).read_text(encoding="utf-8"))
-        for group in payload["hooks"]["PreToolUse"]:
-            for hook in group["hooks"]:
-                assert "--directory" not in hook["command"].split(), name
+        for groups in payload["hooks"].values():
+            for group in groups:
+                for hook in group["hooks"]:
+                    assert "--directory" not in hook["command"].split(), name

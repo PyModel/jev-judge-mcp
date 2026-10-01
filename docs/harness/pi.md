@@ -26,4 +26,6 @@ The judgment is routed by the event's tool name (ADR-0076). A `Bash` action is j
 
 The completion-hook protocol for pi is unverified. Do not treat [`completion.hooks.json`](completion.hooks.json) as a pi hook. The CLI `jev-judge-mcp gate` is the path that does not need a hook. `JEV_MCP_MODEL` pins the model.
 
+`jev-judge-mcp hook screen` is a Claude Code PostToolUse annotator (`docs/harness/claude.md`). The PostToolUse annotation protocol for pi is unverified, and this repo ships no pi hook that would run it. The CLI tools stay the path that does not need a hook.
+
 `JEV_GATE_STATE` is the environment variable `src/jev_judge_mcp/hook.py` reads when it builds judged state. Unset, or whitespace only, it is omitted. Otherwise the stripped value is the next line after the event's cwd and permission mode, before the proposed action. `redact_action` runs on the action description and input. It does not run on `JEV_GATE_STATE`. That text is sent to the provider, so it is not a place to put a key. The hook reads no further hook variable. The thresholds — the 0.5 / 0.4 confidence floors for the effect and fallback questions, 0.7 for the destructive-intent and credential questions — are constants in `src/jev_judge_mcp/hook.py`, not environment variables.
