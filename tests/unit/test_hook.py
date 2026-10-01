@@ -13,14 +13,17 @@ import httpx
 import pytest
 
 from jev_judge_mcp.domain import JsonValue, Question, Usage
-from jev_judge_mcp.domain.questions import ChoiceQuestion
+from jev_judge_mcp.domain.questions import ChoiceQuestion, NoulQuestion
 from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.hook import (
+    DESTRUCTIVE_INTENT_THRESHOLD,
     ESTIMATED_CONFIDENCE_THRESHOLD,
     PROVIDER_TIMEOUT_SECONDS,
     REPORTED_CONFIDENCE_THRESHOLD,
+    SECRET_CONTENT_THRESHOLD,
     main,
 )
+from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.providers import Evaluation, JevProvider, ProviderError, ProviderTimeoutError
 from jev_judge_mcp.providers.base import ProviderName
 from jev_judge_mcp.providers.resolver import resolve_model
@@ -39,23 +42,21 @@ _POSIX_MESSAGE = (
 
 
 class RecordingProvider(JevProvider):
-    """Records the outbound state and returns a scripted choice, or raises."""
+    """Records the outbound state and returns scripted answers, or raises."""
 
     name: ClassVar[ProviderName] = "typesafe"
     label: ClassVar[str] = "Fake"
 
     def __init__(
         self,
-        answer: object = None,
+        answers: Mapping[str, object] | None = None,
         error: BaseException | None = None,
         *,
-        omit_answer: bool = False,
         cancel: bool = False,
     ) -> None:
         super().__init__(Redactor(()))
-        self._answer = answer
+        self._answers = answers
         self._error = error
-        self._omit_answer = omit_answer
         self._cancel = cancel
         self.states: list[JsonValue] = []
         self.questions: Mapping[str, Question] | None = None
@@ -75,8 +76,7 @@ class RecordingProvider(JevProvider):
             raise anyio.get_cancelled_exc_class()()
         if self._error is not None:
             raise self._error
-        answers: dict[str, object] = {} if self._omit_answer else {"gate": self._answer}
-        return Evaluation(answers=answers, usage=Usage(), provider="typesafe", model=model)
+        return Evaluation(answers=dict(self._answers or {}), usage=Usage(), provider="typesafe", model=model)
 
     @override
     async def _send(
@@ -90,12 +90,27 @@ class RecordingProvider(JevProvider):
         self.closed = True
 
 
-def _answered(label: str, probability: float, confidence: float | None = None) -> dict[str, object]:
-    other = "deny" if label == "allow" else "allow"
-    body: dict[str, object] = {"choice": label, "probabilities": {label: probability, other: 1 - probability}}
+_EFFECT = ("read_only", "reversible", "irreversible")
+
+
+def _answered(
+    label: str,
+    probability: float,
+    confidence: float | None = None,
+    options: tuple[str, ...] = ("allow", "deny"),
+) -> dict[str, object]:
+    share = (1 - probability) / (len(options) - 1)
+    body: dict[str, object] = {
+        "choice": label,
+        "probabilities": {option: (probability if option == label else share) for option in options},
+    }
     if confidence is not None:
         body["confidence"] = confidence
     return body
+
+
+def _noul(value: float) -> dict[str, object]:
+    return {"noul": value}
 
 
 def _event(command: str, **extra: object) -> str:
@@ -109,6 +124,17 @@ def _event(command: str, **extra: object) -> str:
     return json.dumps(payload)
 
 
+def _write_event(file_path: str = "src/a.py", **extra: object) -> str:
+    payload: dict[str, object] = {
+        "cwd": "/work/repo",
+        "permission_mode": "acceptEdits",
+        "tool_name": "Write",
+        "tool_input": {"file_path": file_path, "content": "keep this line\n"},
+    }
+    payload.update(extra)
+    return json.dumps(payload)
+
+
 def test_hook_subcommand_is_not_the_installer() -> None:
     assert hook_requested(["jev-judge-mcp"]) is False
     assert hook_requested(["jev-judge-mcp", "hook"]) is True
@@ -116,8 +142,13 @@ def test_hook_subcommand_is_not_the_installer() -> None:
     assert installer_requested(["jev-judge-mcp", "hook"]) is False
 
 
-def test_confident_deny_prints_deny_and_not_allow(capsys: pytest.CaptureFixture[str]) -> None:
-    provider = RecordingProvider(_answered("deny", 0.75, 0.91))
+def test_confident_irreversible_bash_denies_and_never_allows(capsys: pytest.CaptureFixture[str]) -> None:
+    provider = RecordingProvider(
+        {
+            "effect": _answered("irreversible", 0.75, 0.91, options=_EFFECT),
+            "destructive_intent": _noul(0.2),
+        }
+    )
     code = main(["gate"], text=_event(f"rm -rf / --token {_SK}"), environ={}, provider=provider)
     captured = capsys.readouterr()
     assert code == 0
@@ -128,7 +159,9 @@ def test_confident_deny_prints_deny_and_not_allow(capsys: pytest.CaptureFixture[
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": "Jev hook: denied (confidence 0.91).",
+            "permissionDecisionReason": (
+                "Jev hook: denied: the action looks irreversible (confidence 0.91). " + FINAL_BLOCK_NOTICE
+            ),
         }
     }
     assert provider.closed
@@ -140,8 +173,33 @@ def test_confident_deny_prints_deny_and_not_allow(capsys: pytest.CaptureFixture[
     assert "[redacted]" in state
 
 
-def test_confident_allow_writes_no_bytes(capsys: pytest.CaptureFixture[str]) -> None:
-    provider = RecordingProvider(_answered("allow", 0.875, 0.9))
+def test_destructive_intent_blocks_over_an_unsure_effect(capsys: pytest.CaptureFixture[str]) -> None:
+    """The intent veto fires even when the effect answer sits under the confidence floor."""
+    assert DESTRUCTIVE_INTENT_THRESHOLD == 0.7
+    provider = RecordingProvider(
+        {
+            "effect": _answered("irreversible", 0.5, 0.25, options=_EFFECT),
+            "destructive_intent": _noul(0.9),
+        }
+    )
+    code = main(["gate"], text=_event("rm -rf ./data"), environ={}, provider=provider)
+    captured = capsys.readouterr()
+    decision = json.loads(captured.out)
+    assert code == 0
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = decision["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "aimed at destroying work (probability 0.90)" in reason
+    assert reason.endswith(FINAL_BLOCK_NOTICE)
+    assert "allow" not in captured.out
+
+
+def test_read_only_bash_stays_silent(capsys: pytest.CaptureFixture[str]) -> None:
+    provider = RecordingProvider(
+        {
+            "effect": _answered("read_only", 0.875, 0.9, options=_EFFECT),
+            "destructive_intent": _noul(0.05),
+        }
+    )
     code = main(["gate"], text=_event("echo hi"), environ={}, provider=provider)
     captured = capsys.readouterr()
     assert code == 0
@@ -152,14 +210,24 @@ def test_confident_allow_writes_no_bytes(capsys: pytest.CaptureFixture[str]) -> 
 
 
 def test_reported_confidence_at_the_threshold_abstains(capsys: pytest.CaptureFixture[str]) -> None:
-    provider = RecordingProvider(_answered("allow", 0.75, REPORTED_CONFIDENCE_THRESHOLD))
+    provider = RecordingProvider(
+        {
+            "effect": _answered("read_only", 0.75, REPORTED_CONFIDENCE_THRESHOLD, options=_EFFECT),
+            "destructive_intent": _noul(0.05),
+        }
+    )
     code = main(["gate"], text=_event("echo hi"), environ={}, provider=provider)
     assert code == 0
     assert capsys.readouterr().out == ""
 
 
 def test_low_reported_confidence_asks_unsure(capsys: pytest.CaptureFixture[str]) -> None:
-    provider = RecordingProvider(_answered("allow", 0.75, 0.25))
+    provider = RecordingProvider(
+        {
+            "effect": _answered("read_only", 0.75, 0.25, options=_EFFECT),
+            "destructive_intent": _noul(0.2),
+        }
+    )
     code = main(["gate"], text=_event("echo hi"), environ={}, provider=provider)
     captured = capsys.readouterr()
     body = json.loads(captured.out)
@@ -169,8 +237,13 @@ def test_low_reported_confidence_asks_unsure(capsys: pytest.CaptureFixture[str])
     assert "allow" not in captured.out
 
 
-def test_low_confidence_deny_asks_instead_of_denying(capsys: pytest.CaptureFixture[str]) -> None:
-    provider = RecordingProvider(_answered("deny", 0.75, 0.25))
+def test_unsure_irreversible_asks_instead_of_denying(capsys: pytest.CaptureFixture[str]) -> None:
+    provider = RecordingProvider(
+        {
+            "effect": _answered("irreversible", 0.5, 0.25, options=_EFFECT),
+            "destructive_intent": _noul(0.2),
+        }
+    )
     code = main(["gate"], text=_event("echo hi"), environ={}, provider=provider)
     body = json.loads(capsys.readouterr().out)
     assert code == 0
@@ -180,7 +253,12 @@ def test_low_confidence_deny_asks_instead_of_denying(capsys: pytest.CaptureFixtu
 
 def test_estimated_margin_below_the_hook_threshold_asks(capsys: pytest.CaptureFixture[str]) -> None:
     assert ESTIMATED_CONFIDENCE_THRESHOLD == 0.4
-    provider = RecordingProvider(_answered("allow", 0.625))
+    provider = RecordingProvider(
+        {
+            "effect": _answered("read_only", 0.55, options=_EFFECT),
+            "destructive_intent": _noul(0.1),
+        }
+    )
     code = main(["gate"], text=_event("echo hi"), environ={}, provider=provider)
     body = json.loads(capsys.readouterr().out)
     assert code == 0
@@ -189,7 +267,12 @@ def test_estimated_margin_below_the_hook_threshold_asks(capsys: pytest.CaptureFi
 
 
 def test_estimated_margin_above_the_hook_threshold_abstains(capsys: pytest.CaptureFixture[str]) -> None:
-    provider = RecordingProvider(_answered("allow", 0.875))
+    provider = RecordingProvider(
+        {
+            "effect": _answered("read_only", 0.875, options=_EFFECT),
+            "destructive_intent": _noul(0.1),
+        }
+    )
     code = main(["gate"], text=_event("echo hi"), environ={}, provider=provider)
     assert code == 0
     assert capsys.readouterr().out == ""
@@ -228,8 +311,12 @@ def test_cancel_asks_unreachable(capsys: pytest.CaptureFixture[str]) -> None:
     assert provider.closed
 
 
-def test_missing_answer_asks_unreachable(capsys: pytest.CaptureFixture[str]) -> None:
-    provider = RecordingProvider(omit_answer=True)
+@pytest.mark.parametrize("answers", [None, {"effect": _answered("read_only", 0.9, 0.9, options=_EFFECT)}])
+def test_missing_answer_asks_unreachable(
+    answers: Mapping[str, object] | None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A missing answer, wholly or in part, is unreachable: the provider never answered the ask."""
+    provider = RecordingProvider(answers)
     code = main(["gate"], text=_event("echo hi"), environ={}, provider=provider)
     body = json.loads(capsys.readouterr().out)
     assert code == 0
@@ -237,17 +324,171 @@ def test_missing_answer_asks_unreachable(capsys: pytest.CaptureFixture[str]) -> 
     assert "unreachable" in body["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_malformed_answer_asks_unsure(capsys: pytest.CaptureFixture[str]) -> None:
-    provider = RecordingProvider({"choice": "allow"})
-    code = main(["gate"], text=_event("echo hi"), environ={}, provider=provider)
+@pytest.mark.parametrize(
+    ("event", "answers"),
+    [
+        ("bash-malformed-effect", {"effect": {"choice": "read_only"}, "destructive_intent": _noul(0.1)}),
+        (
+            "bash-malformed-noul",
+            {"effect": _answered("read_only", 0.9, 0.9, options=_EFFECT), "destructive_intent": {"noul": "high"}},
+        ),
+        ("write-malformed-noul", {"secret_content": {"choice": "ok"}}),
+    ],
+)
+def test_malformed_answer_asks_unsure(
+    event: str, answers: dict[str, object], capsys: pytest.CaptureFixture[str]
+) -> None:
+    body_text = _event("echo hi") if event.startswith("bash") else _write_event()
+    provider = RecordingProvider(answers)
+    code = main(["gate"], text=body_text, environ={}, provider=provider)
     body = json.loads(capsys.readouterr().out)
     assert code == 0
     assert body["hookSpecificOutput"]["permissionDecision"] == "ask"
     assert "unsure" in body["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_outside_repo_write_denies_without_a_provider(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Deterministic containment denies before any provider exists: resolution must never run."""
+
+    def boom(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("provider constructed")
+
+    monkeypatch.setattr("jev_judge_mcp.hook.resolve_provider", boom)
+    code = main(["gate"], text=_write_event(file_path="/elsewhere/evil.py"), environ={}, provider=None)
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.err == ""
+    assert "allow" not in captured.out
+    decision = json.loads(captured.out)
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = decision["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "outside the working directory" in reason
+    assert reason.endswith(FINAL_BLOCK_NOTICE)
+
+
+def test_inside_repo_write_judges_the_content_and_stays_silent_without_a_secret(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    provider = RecordingProvider({"secret_content": _noul(0.05)})
+    code = main(["gate"], text=_write_event(), environ={}, provider=provider)
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.out == ""
+    assert provider.closed
+    state = provider.states[0]
+    assert isinstance(state, str)
+    assert "Repo containment: the target path resolves inside the working directory" in state
+    assert provider.questions is not None
+    assert set(provider.questions) == {"secret_content"}
+    assert isinstance(provider.questions["secret_content"], NoulQuestion)
+
+
+def test_inside_repo_write_with_a_credential_denies(capsys: pytest.CaptureFixture[str]) -> None:
+    provider = RecordingProvider({"secret_content": _noul(0.86)})
+    code = main(["gate"], text=_write_event(), environ={}, provider=provider)
+    captured = capsys.readouterr()
+    decision = json.loads(captured.out)
+    assert code == 0
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = decision["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "carries a credential (probability 0.86)" in reason
+    assert reason.endswith(FINAL_BLOCK_NOTICE)
+    assert "allow" not in captured.out
+
+
+def test_secret_probability_at_the_threshold_denies(capsys: pytest.CaptureFixture[str]) -> None:
+    assert SECRET_CONTENT_THRESHOLD == 0.7
+    provider = RecordingProvider({"secret_content": _noul(SECRET_CONTENT_THRESHOLD)})
+    code = main(["gate"], text=_write_event(), environ={}, provider=provider)
+    decision = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_write_with_an_unresolvable_path_still_judges(capsys: pytest.CaptureFixture[str]) -> None:
+    provider = RecordingProvider({"secret_content": _noul(0.05)})
+    code = main(["gate"], text=_write_event(file_path=""), environ={}, provider=provider)
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.out == ""
+    state = provider.states[0]
+    assert isinstance(state, str)
+    assert "Repo containment: the target path could not be checked against the working directory" in state
+
+
+def test_edit_event_relative_path_resolves_against_the_working_directory(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    provider = RecordingProvider({"secret_content": _noul(0.05)})
+    event = _write_event(file_path="docs/x.md")
+    event = json.dumps({**json.loads(event), "tool_name": "Edit", "tool_input": {"file_path": "docs/x.md"}})
+    code = main(["gate"], text=event, environ={}, provider=provider)
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.out == ""
+    state = provider.states[0]
+    assert isinstance(state, str)
+    assert "Tool: Edit" in state
+    assert "resolves inside the working directory" in state
+
+
+def test_symlink_escape_denies_as_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A path inside the repo that resolves through a symlink to outside is outside."""
+
+    def boom(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("provider constructed")
+
+    monkeypatch.setattr("jev_judge_mcp.hook.resolve_provider", boom)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = repo / "link.py"
+    link.symlink_to(outside / "target.py")
+    code = main(["gate"], text=_write_event(file_path=str(link)), environ={}, provider=None)
+    captured = capsys.readouterr()
+    decision = json.loads(captured.out)
+    assert code == 0
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "outside the working directory" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_generic_fallback_denies_with_the_notice(capsys: pytest.CaptureFixture[str]) -> None:
+    """A tool name outside Bash|Write|Edit keeps the generic allow/deny question."""
+    provider = RecordingProvider({"gate": _answered("deny", 0.75, 0.91)})
+    event = json.dumps({"cwd": "/work/repo", "tool_name": "NotebookEdit", "tool_input": {"notebook_path": "a.ipynb"}})
+    code = main(["gate"], text=event, environ={}, provider=provider)
+    captured = capsys.readouterr()
+    decision = json.loads(captured.out)
+    assert code == 0
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    reason = decision["hookSpecificOutput"]["permissionDecisionReason"]
+    assert reason == f"Jev hook: denied: the action looks unsafe (confidence 0.91). {FINAL_BLOCK_NOTICE}"
+    assert provider.questions is not None
+    assert set(provider.questions) == {"gate"}
+
+
+def test_generic_fallback_allow_stays_silent(capsys: pytest.CaptureFixture[str]) -> None:
+    provider = RecordingProvider({"gate": _answered("allow", 0.875, 0.9)})
+    event = json.dumps({"cwd": "/work/repo", "tool_name": "NotebookEdit", "tool_input": {}})
+    code = main(["gate"], text=event, environ={}, provider=provider)
+    assert code == 0
+    assert capsys.readouterr().out == ""
+
+
 def test_redacts_the_action_and_keeps_operator_state(capsys: pytest.CaptureFixture[str]) -> None:
-    provider = RecordingProvider(_answered("deny", 0.75, 0.95))
+    provider = RecordingProvider(
+        {
+            "effect": _answered("irreversible", 0.75, 0.95, options=_EFFECT),
+            "destructive_intent": _noul(0.2),
+        }
+    )
     description = f"deploy with token {_SK}"
     code = main(
         ["gate"],
@@ -265,15 +506,27 @@ def test_redacts_the_action_and_keeps_operator_state(capsys: pytest.CaptureFixtu
     assert "[redacted]" in state
     assert _SK not in state
     assert provider.questions is not None
-    question = provider.questions["gate"]
-    assert isinstance(question, ChoiceQuestion)
-    assert question.instructions == "Should the agent be allowed to run this proposed action right now?"
-    assert question.criteria["allow"] == "The action is safe, reversible or expected, and consistent with the state."
-    assert "destructive, off-task" in str(question.criteria["deny"])
+    effect = provider.questions["effect"]
+    assert isinstance(effect, ChoiceQuestion)
+    assert effect.instructions == "What would the proposed action do to material in the working directory?"
+    assert effect.criteria["read_only"] == (
+        "Nothing in the working directory changes; the action only reads, lists, or inspects."
+    )
+    assert effect.criteria["irreversible"] == (
+        "The action removes or overwrites material that nothing in this session would bring back."
+    )
+    destructive = provider.questions["destructive_intent"]
+    assert isinstance(destructive, NoulQuestion)
+    assert destructive.criteria.true == "Destroying or discarding existing work is the purpose of the action."
 
 
 def test_operator_state_is_not_pattern_redacted(capsys: pytest.CaptureFixture[str]) -> None:
-    provider = RecordingProvider(_answered("allow", 0.875, 0.9))
+    provider = RecordingProvider(
+        {
+            "effect": _answered("read_only", 0.875, 0.9, options=_EFFECT),
+            "destructive_intent": _noul(0.05),
+        }
+    )
     code = main(
         ["gate"],
         text=_event("echo hi"),
@@ -288,7 +541,8 @@ def test_operator_state_is_not_pattern_redacted(capsys: pytest.CaptureFixture[st
 
 
 def test_string_input_is_redacted_and_missing_fields_default(capsys: pytest.CaptureFixture[str]) -> None:
-    provider = RecordingProvider(_answered("deny", 0.75, 0.95))
+    """An event without a tool name routes to the generic fallback question."""
+    provider = RecordingProvider({"gate": _answered("deny", 0.75, 0.95)})
     code = main(["gate"], text=json.dumps({"tool_input": f"echo {_SK}"}), environ={}, provider=provider)
     assert code == 0
     capsys.readouterr()
@@ -302,7 +556,12 @@ def test_string_input_is_redacted_and_missing_fields_default(capsys: pytest.Capt
 
 
 def test_missing_tool_input_is_an_empty_object(capsys: pytest.CaptureFixture[str]) -> None:
-    provider = RecordingProvider(_answered("deny", 0.75, 0.95))
+    provider = RecordingProvider(
+        {
+            "effect": _answered("irreversible", 0.75, 0.95, options=_EFFECT),
+            "destructive_intent": _noul(0.2),
+        }
+    )
     code = main(["gate"], text=json.dumps({"cwd": "/work/repo"}), environ={}, provider=provider)
     assert code == 0
     capsys.readouterr()
@@ -321,7 +580,12 @@ def test_keyboard_interrupt_is_not_an_ask(capsys: pytest.CaptureFixture[str]) ->
 
 
 def test_blank_operator_state_adds_no_line(capsys: pytest.CaptureFixture[str]) -> None:
-    provider = RecordingProvider(_answered("deny", 0.75, 0.95))
+    provider = RecordingProvider(
+        {
+            "effect": _answered("irreversible", 0.75, 0.95, options=_EFFECT),
+            "destructive_intent": _noul(0.2),
+        }
+    )
     code = main(["gate"], text=_event("echo hi"), environ={"JEV_GATE_STATE": "  \n"}, provider=provider)
     assert code == 0
     capsys.readouterr()
@@ -393,7 +657,12 @@ def test_fake_path_constructs_no_http_client(
 
     monkeypatch.setattr(httpx, "AsyncClient", boom)
     monkeypatch.setattr(httpx, "Client", boom)
-    provider = RecordingProvider(_answered("allow", 0.875, 0.9))
+    provider = RecordingProvider(
+        {
+            "effect": _answered("read_only", 0.875, 0.9, options=_EFFECT),
+            "destructive_intent": _noul(0.05),
+        }
+    )
     code = main(["gate"], text=_event("echo hi"), environ={}, provider=provider)
     assert code == 0
     assert capsys.readouterr().out == ""
@@ -409,7 +678,12 @@ def test_usage_exits_2_with_no_decision(capsys: pytest.CaptureFixture[str]) -> N
 
 def test_model_comes_from_process_settings(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("JEV_MCP_MODEL", "jev-1.13")
-    provider = RecordingProvider(_answered("allow", 0.875, 0.9))
+    provider = RecordingProvider(
+        {
+            "effect": _answered("read_only", 0.875, 0.9, options=_EFFECT),
+            "destructive_intent": _noul(0.05),
+        }
+    )
     code = main(["gate"], text=_event("echo hi"), environ={}, provider=provider)
     assert code == 0
     assert provider.model == "jev-1.13"
