@@ -15,7 +15,7 @@ from jev_judge_mcp.hook import DESTRUCTIVE_ID, EFFECT_ID
 from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.limits import ASK
 from jev_judge_mcp.providers import Evaluation
-from jev_judge_mcp.settings import Settings
+from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from jev_judge_mcp.tools.ask_state import (
@@ -68,8 +68,8 @@ class GatedProvider(FakeProvider):
         return Evaluation(answers, Usage(1, 1), self.name, model)
 
 
-def _toolset(provider: FakeProvider) -> Toolset:
-    return Toolset(Runtime(Settings(), provider_factory=lambda _: provider), TOOLS)
+def _toolset(provider: FakeProvider, settings: Settings | None = None) -> Toolset:
+    return Toolset(Runtime(settings or Settings(), provider_factory=lambda _: provider), TOOLS)
 
 
 def allow_args(**extra: Any) -> dict[str, Any]:
@@ -221,9 +221,10 @@ async def test_the_composed_request_cap_is_a_strict_greater_than(tmp_path: Any, 
 
 async def test_a_refused_command_never_runs_and_never_reaches_the_ask(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JEV_ASK_COMMANDS", "1")
     gate = {"effect": effect_answer("irreversible"), "destructive_intent": {"noul": 0.1}}
     provider = GatedProvider(gate, {"q1": {"noul": 0.9}})
-    toolset = _toolset(provider)
+    toolset = _toolset(provider, load_settings())
     try:
         outcome = await toolset.execute("jev_ask", allow_args())
     finally:
@@ -238,12 +239,13 @@ async def test_a_refused_command_never_runs_and_never_reaches_the_ask(tmp_path: 
 
 async def test_an_allowed_command_runs_after_the_gate(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JEV_ASK_COMMANDS", "1")
     provider = GatedProvider(dict(GATE_ALLOW), {"q1": {"noul": 0.95}})
     args: dict[str, Any] = {
         "questions": {"q1": {"type": "noul", "instructions": "Did it produce output?", "criteria": {}}},
         "command": "printf run-ok > marker.txt; printf print-ok",
     }
-    toolset = _toolset(provider)
+    toolset = _toolset(provider, load_settings())
     try:
         outcome = await toolset.execute("jev_ask", args)
     finally:

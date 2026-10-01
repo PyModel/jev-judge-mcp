@@ -32,6 +32,11 @@ Headless runs need an allow-rule. `acceptEdits` covers file edits. Add the publi
 
 `mcp__jev` allows the whole server in one rule. The installer does not write either form.
 
+`jev_ask` is safe to allow because its `command` argument is off unless the operator sets
+`JEV_ASK_COMMANDS=1` in the server environment: enabling it lets the server run what Jev judges
+read-only without a harness prompt, so decide that in the server's launch configuration, not in a
+permission file.
+
 ## Routing skill
 
 Which tool fits a step is `docs/skills/jev-mcp/SKILL.md`. Building an app on the Jev API, rather than calling these tools, is `src/jev_judge_mcp/skills/jev/SKILL.md`. A connected client reads them at `jev-skill://jev-mcp/SKILL.md` and `jev-skill://jev/SKILL.md`. Do not copy the `jev` skill's cookbook thresholds onto these tools; this server's defaults are `docs/reference/limits.md`. The on-demand rule is in `docs/agent-rules.md`. This repository ships no plugin manifest. A plugin entry is appropriate only when it points at one of those skills and embeds no machine path and no key.

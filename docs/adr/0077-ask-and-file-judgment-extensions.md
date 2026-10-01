@@ -137,6 +137,34 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
   live judgment data says so (`docs/tools.md`); L3 datasets and calibration follow the P7 protocol
   as a fast-follow, and no release card claims more until then.
 
+## Amendment (2026-10-01): command execution is off by default, denylisted, scrubbed, and bounded
+
+The gated command is the one surface where the server does something instead of judging, so its
+default flips and three deterministic defenses land ahead of the gate:
+
+- **Off unless the operator enables it.** With no `JEV_ASK_COMMANDS=1` in the server environment,
+  a `command` argument is the typed `command_disabled` refusal — zero provider construction, zero
+  execution. A read-only effect is not a safe command: `curl -d @.env`, `cat ~/.ssh/id_rsa`, and
+  `printenv` are all read-only by the effect question, so the harness's permission system, not the
+  gate, stays the default control. Enabling the flag lets the server run what Jev judges read-only
+  without a harness prompt — that trade is the operator's, made in the server environment.
+- **A deterministic denylist runs before the gate.** Even when enabled, a command that names a
+  network client (curl, wget, nc/ncat/netcat, ssh, scp, sftp, rsync, ftp, telnet, socat), touches
+  a path `file_state` refuses as a secret store, references `~/.ssh`, `~/.aws`, `~/.config`,
+  `~/.pi`, `~/.claude`, or `~/.codex` (tilde, expanded, or any path carrying one of those names as
+  a directory component), or calls `env`, `printenv`, `set`, or `export` refuses `command_refused`
+  with no provider call. The denylist is a conservative word-and-path match, not a shell parser.
+- **The child env is scrubbed.** The process group runs with every configured secret variable
+  (`Settings.named_secrets()`) removed from its environment, and every configured secret value
+  joins the output redactions — in the judged command text as well as the captured output.
+- **Capture is bounded.** The output pipes are drained with a cap (three bytes per UTF-16 unit —
+  the worst-case encoding — proves the decoded text is over the cap), and the process group is
+  killed as soon as the cap passes: a `yes` flood can no longer buffer until the timeout. An
+  over-cap run refuses `output_too_large` as before, now without the buffering in between.
+
+The `jev_ask` tool stays on the harness allow lists with commands off: the tool is a judgment
+surface; execution is a separate, operator-gated surface inside it.
+
 ## Considered Options
 
 - **A raw `questions_json` string for `jev_ask`** — rejected: stringly typed, off-style, and the

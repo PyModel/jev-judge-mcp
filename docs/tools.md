@@ -250,8 +250,10 @@ answer yourself.
 test failure a real regression and how severe, does this diff carry a credential and which class of
 change is it. Write the questions — noul, choice, or score, keyed by your ids — and compose the
 state: your own framing in `state`, files the server reads in `paths` (the `jev_file_judge` rules),
-and an optional `command` whose redacted output joins the state after the command hook's gate
-judges it read-only with confidence and no destructive intent. The gate judges; the tool does not
+and an optional `command` (only when the operator has enabled command execution with
+`JEV_ASK_COMMANDS=1`; without it `command` refuses `command_disabled` with no run and no call)
+whose redacted output joins the state after a deterministic denylist and the command hook's gate
+judge it read-only with confidence and no destructive intent. The gate judges; the tool does not
 sandbox. Answers come back keyed by your ids, fail-closed per question, with a state summary and
 summed usage.
 
@@ -260,9 +262,12 @@ summed usage.
 **Weak spots.** Nothing truncates: state plus questions is capped at 120,000 UTF-16 units, and an
 over-budget call refuses with every part's size and a first-fit split suggestion naming which parts
 go to which call — re-ask the same questions on each. Own `state` is framing, capped at 20,000
-units; command output is capped at 30,000 units and refuses after the run; the command runs under a
-30-second timeout, in the working directory, with no stdin and no sandbox. A refused command makes
-no execution and no ask call, but the gate judgment itself is one provider call. 1 to 20 questions
+units; command output is capped at 30,000 units and an over-cap run is killed and refused; the
+command runs under a 30-second timeout, in the working directory, with no stdin and no sandbox, in
+an environment scrubbed of the server's configured secrets. Command execution is off unless the
+operator enables it; when enabled, a denylist (network clients, secret stores, private config
+directories, environment readers) refuses before the gate, and a refused command makes no
+execution and no ask call — but the gate judgment itself is one provider call. 1 to 20 questions
 per call, at most 20 paths; questions in one request cannot see each other's answers. Every
 answer is typed: a probability, one option, or a scale position — never an explanation.
 

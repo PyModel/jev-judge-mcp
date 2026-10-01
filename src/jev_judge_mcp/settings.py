@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     telemetry_payloads: bool = Field(default=False, validation_alias="JEV_MCP_TELEMETRY_PAYLOADS")
     # Opt-in cap on concurrent provider requests per process (ADR-0069): 0 (the default) is no cap.
     max_inflight: int = Field(default=0, ge=0, validation_alias="JEV_MCP_MAX_INFLIGHT")
+    # jev_ask command execution (ADR-0077): off unless JEV_ASK_COMMANDS is truthy. Without it, a
+    # `command` argument is the typed `command_disabled` refusal — the server runs nothing.
+    ask_commands: bool = Field(default=False, validation_alias="JEV_ASK_COMMANDS")
 
     @classmethod
     def settings_customise_sources(

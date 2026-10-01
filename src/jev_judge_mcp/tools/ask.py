@@ -19,6 +19,8 @@ from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.ask_state import (
     Part,
+    command_denylist_refusal,
+    command_disabled_refusal,
     command_refusal,
     file_parts,
     gate_questions,
@@ -54,10 +56,14 @@ DEFINITION = define(
     "answers. The state composes from up to three parts: `state`, your own short framing text; `paths`, "
     "files the server reads as state — the file tools' rules apply (inside the working directory, known "
     "secret stores are never read, every read is credential-redacted); and `command`, a shell command the "
-    "server runs only after the command hook's gate judges it: a read-only effect with confidence at the "
-    "floor and no destructive intent. Anything else is the typed `command_refused` refusal carrying the "
-    "reason and the final-block notice, with no execution and no ask call. The gate judges; this tool "
-    "does not sandbox. An allowed command runs with no stdin, a 30-second timeout, and its redacted "
+    "server runs only when the operator has enabled command execution with JEV_ASK_COMMANDS=1 in the "
+    "server environment — without it, sending `command` is the typed `command_disabled` refusal, with no "
+    "run and no call. When enabled, the command runs only after a deterministic denylist (network "
+    "clients, secret stores, private config directories, environment readers) and the command hook's "
+    "gate both pass: a read-only effect with confidence at the floor and no destructive intent. Anything "
+    "else is the typed `command_refused` refusal carrying the reason and the final-block notice, with "
+    "no execution and no ask call. The gate judges; this tool does not sandbox. An allowed command runs "
+    "with no stdin, a 30-second timeout, a secret-scrubbed environment, and its redacted "
     "output becomes state. Nothing is ever truncated: an over-budget composition refuses with each "
     "part's size and a first-fit split suggestion naming which parts go to which call. Answers come "
     "back keyed by your ids, fail-closed per question. Not for exact lookups, counting, math, or "
@@ -98,10 +104,13 @@ DEFINITION = define(
             "command": {
                 "type": "string",
                 "minLength": 1,
-                "description": "A shell command whose redacted output becomes one state part. Judged by "
-                "the command hook's gate first: read-only effect, confidence at the floor, no destructive "
-                "intent — or `command_refused`. The gate judges; this tool does not sandbox. 30-second "
-                "timeout; over-cap output refuses `output_too_large` after the run.",
+                "description": "A shell command whose redacted output becomes one state part. Requires the "
+                "operator's JEV_ASK_COMMANDS=1; without it the call refuses `command_disabled` with no run "
+                "and no provider call. When enabled: a deterministic denylist (network clients, secret "
+                "stores, private config directories, environment readers) and the command hook's gate both "
+                "judge first — read-only effect, confidence at the floor, no destructive intent — or "
+                "`command_refused`. The gate judges; this tool does not sandbox. 30-second timeout; "
+                "over-cap output is killed and refuses `output_too_large`.",
             },
         },
         "required": ["questions"],
@@ -182,6 +191,14 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     parts.extend(file_result)
     units = question_units(questions)
     command = args.get("command")
+    if command is not None:
+        # Two deterministic checks precede any provider call and any run: the operator's
+        # execution flag (off by default, ADR-0077 amendment), then the denylist.
+        if not runtime.settings.ask_commands:
+            raise ToolError(command_disabled_refusal(), code="command_disabled")
+        denylist = command_denylist_refusal(command)
+        if denylist is not None:
+            raise ToolError(denylist, code="command_refused")
     if command is not None and units + sum(part.units for part in parts) > ASK.request_units_max:
         # Hopeless before the gate: even an empty output cannot fit, so the command is not run
         # and no provider is built (deterministic evidence takes precedence).
@@ -194,12 +211,14 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     evaluations: list[Evaluation] = []
     output: Part | None = None
     if command is not None:
-        gate = await runtime.ask({"proposed_action": gate_state(command)}, gate_questions())
+        gate = await runtime.ask(
+            {"proposed_action": gate_state(command, runtime.settings.secret_values())}, gate_questions()
+        )
         evaluations.append(gate)
         reason = command_refusal(gate.answers)
         if reason is not None:
             raise ToolError(reason, code="command_refused")
-        output = await run_gated_command(command)
+        output = await run_gated_command(command, runtime.settings)
         parts.append(output)
     if units + sum(part.units for part in parts) > ASK.request_units_max:
         split_refusal(parts, units)

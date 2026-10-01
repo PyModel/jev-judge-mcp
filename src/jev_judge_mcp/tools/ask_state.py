@@ -2,19 +2,29 @@
 
 Everything here is deterministic and precedes the ask's provider call, and most of it precedes any
 provider call at all: questions are validated by the caller (`ask.py`) before this module runs, a
-file read goes through `file_state.py` with all of its refusals, the command is judged in-process
-with the command hook's Bash questions — imported, never a subprocess of the CLI — before it runs,
-and an over-budget composition refuses with a Split suggestion instead of truncating any part
-(`docs/CONTEXT.md` "Split suggestion"). Every text that reaches the provider through a part is
-credential-redacted on the way: the caller's own state with the ADR-0076 literal detector, command
-output with the hook's shell-command redactor plus the literal detector.
+file read goes through `file_state.py` with all of its refusals, the command is first refused
+deterministically when it matches the denylist — network clients, known secret stores, private
+configuration directories, environment readers — and only then judged in-process with the command
+hook's Bash questions (imported, never a subprocess of the CLI) before it runs, and an over-budget
+composition refuses with a Split suggestion instead of truncating any part (`docs/CONTEXT.md`
+"Split suggestion"). Every text that reaches the provider through a part is credential-redacted on
+the way: the caller's own state with the ADR-0076 literal detector, command output with the hook's
+shell-command redactor, the literal detector, and every configured secret value. The command
+feature is off unless the operator enables it (`JEV_ASK_COMMANDS=1`); the child runs in an
+environment scrubbed of every configured secret variable.
 """
 
+import contextlib
+import os
+import re
+import signal
 import subprocess
+import threading
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NoReturn
+from typing import BinaryIO, NoReturn
 
 import anyio
 
@@ -33,10 +43,11 @@ from jev_judge_mcp.hook import (
 )
 from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.limits import ASK
-from jev_judge_mcp.redact_action import redact_action
+from jev_judge_mcp.redact_action import REDACTED, redact_action
+from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import ToolError
-from jev_judge_mcp.tools.file_state import read_state, resolve_scoped
+from jev_judge_mcp.tools.file_state import is_secret_store, read_state, resolve_scoped
 from jev_judge_mcp.tools.observed import validate_choice, validate_noul
 
 OWN_PART = "state"
@@ -112,10 +123,22 @@ def gate_questions() -> dict[str, Question]:
     }
 
 
-def gate_state(command: str) -> str:
-    """The command, in the hook's own Bash state shape over a synthetic event, `redact_action` applied."""
+def gate_state(command: str, redactions: Sequence[str] = ()) -> str:
+    """The command, in the hook's own Bash state shape over a synthetic event.
+
+    `redact_action` runs as in the hook, and every value in `redactions` (the server's configured
+    secrets) is redacted too, so a command that embeds one never carries it to the judge.
+    """
+
+    def scrub(text: str) -> str:
+        text = redact_action(text)
+        for secret in redactions:
+            if secret:
+                text = text.replace(secret, REDACTED)
+        return text
+
     event: dict[str, object] = {"cwd": str(Path.cwd()), "tool_name": "Bash", "tool_input": command}
-    return event_state(event, None, "unknown", redact_action)
+    return event_state(event, None, "unknown", scrub)
 
 
 def command_refusal(answers: Mapping[str, object]) -> str | None:
@@ -139,39 +162,171 @@ def command_refusal(answers: Mapping[str, object]) -> str | None:
     return None
 
 
-def run_command(command: str, timeout_seconds: int, output_units_max: int) -> Part:
+_NETWORK_CLIENTS = frozenset(
+    {"curl", "wget", "nc", "ncat", "netcat", "ssh", "scp", "sftp", "rsync", "ftp", "telnet", "socat"}
+)
+"""Network clients a refused command may not name: exfiltration does not need a destructive effect."""
+
+_ENVIRONMENT_READERS = frozenset({"env", "printenv", "set", "export"})
+"""Shell words that print or mutate the environment: the child env is scrubbed, and naming these
+is refused outright so a scrubbed run is never probed for what survived."""
+
+_PRIVATE_DIRECTORIES = ("~/.ssh", "~/.aws", "~/.config", "~/.pi", "~/.claude", "~/.codex")
+"""Private configuration trees a refused command may not reference: the tilde form, the expanded
+form, and any path that carries one of these names as a directory component (a `/Users/<other>/.aws`
+spelling names the same tree)."""
+
+_TOKEN_SPLIT = re.compile(r"[\s|;&()<>'\"]+")
+"""Deterministic command tokenization: whitespace and the shell metacharacters that end a word.
+Not a shell parser — a conservative splitter for a denylist, so a path inside quotes is still seen."""
+
+
+def command_denylist_refusal(command: str) -> str | None:
+    """The deterministic refusal for a command the denylist names, before any gate or run.
+
+        A read-only effect is not a safe command: a network client can exfiltrate, a secret-store path
+    can print a credential, and an environment reader can dump what the scrub missed. Every family
+    refuses with the final-block notice and costs no provider call (ADR-0077 amendment, 2026-10-01).
+    """
+    tokens = [token for token in _TOKEN_SPLIT.split(command) if token]
+    words = {os.path.basename(token).lower() for token in tokens}
+    if words & _NETWORK_CLIENTS:
+        return _refused("the command reaches the network")
+    if words & _ENVIRONMENT_READERS:
+        return _refused("the command reads or changes environment variables")
+    lowered = command.lower()
+    private_names = {name.lstrip("~/").lower() for name in _PRIVATE_DIRECTORIES}
+    for directory in _PRIVATE_DIRECTORIES:
+        if directory.lower() in lowered or os.path.expanduser(directory).lower() in lowered:
+            return _refused("the command reaches a private configuration directory")
+    if any(part.lower() in private_names for token in tokens for part in Path(token).parts):
+        return _refused("the command reaches a private configuration directory")
+    for token in tokens:
+        if is_secret_store(Path(token)):
+            return _refused("the command touches a known secret store")
+    return None
+
+
+def command_disabled_refusal() -> str:
+    """The refusal every `command` argument gets while the operator has not enabled execution.
+
+    Zero provider calls, zero execution — the refusal is the whole answer (ADR-0077 amendment,
+    2026-10-01).
+    """
+    return (
+        "command execution is disabled on this server; the operator can enable it with "
+        f"JEV_ASK_COMMANDS=1 in the server environment. {FINAL_BLOCK_NOTICE}"
+    )
+
+
+def scrubbed_environment(settings: Settings) -> dict[str, str]:
+    """The server's environment without every configured secret variable (ADR-0077 amendment).
+
+    The child never inherits a credential by simply being spawned here; `named_secrets` pairs each
+    value with its variable name, so only those variables are dropped.
+    """
+    secret_variables = {name for name, _ in settings.named_secrets()}
+    return {name: value for name, value in os.environ.items() if name not in secret_variables}
+
+
+def run_command(
+    command: str,
+    timeout_seconds: int,
+    output_units_max: int,
+    env: Mapping[str, str] | None = None,
+    redactions: Sequence[str] = (),
+) -> Part:
     """The judged command's redacted output as one part.
 
-    Runs under the system shell with no stdin, in the working directory, killed at the timeout.
-    The output block carries the exit status and both streams, redacted with the hook's shell
-    redactor and the credential-literal detector before it becomes state; an over-cap output
-    refuses after the run (nothing truncates). The gate judged the command string; nothing here
-    sandboxes the run.
+    Runs under the system shell with no stdin, in the working directory, in a scrubbed environment
+    when the caller passes one, and its process group is killed at the timeout or as soon as the
+    captured output passes the cap — the pipes are never allowed to buffer a flood (ADR-0077
+    amendment). The output block carries the exit status and both streams, redacted with the
+    hook's shell redactor, the ADR-0076 credential-literal detector, and every value in
+    `redactions` (the server's own configured secrets) before it becomes state. The gate judged
+    the command string; nothing here sandboxes the run.
     """
+    # Worst-case UTF-16 encoding is three UTF-8 bytes per unit, so crossing this byte bound
+    # proves the decoded text is over the cap: the flood kill is never a false kill.
+    byte_cap = 3 * output_units_max + 3
+    collected: dict[str, bytes] = {"stdout": b"", "stderr": b""}
+    state = {"overflow": False}
     try:
-        completed = subprocess.run(  # noqa: S602 - the caller's shell command is the product (ADR-0077)
+        process = subprocess.Popen(  # noqa: S602 - the caller's shell command is the product (ADR-0077)
             command,
             shell=True,
             stdin=subprocess.DEVNULL,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             cwd=str(Path.cwd()),
-            timeout=timeout_seconds,
-            check=False,
+            env=dict(env) if env is not None else None,
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired:
+    except (OSError, ValueError) as error:
+        # ValueError: a command the OS refuses to spawn at all, such as an embedded NUL byte.
+        raise ToolError(f"the command could not run ({error})", code="command_failed") from None
+
+    if process.stdout is None or process.stderr is None:  # both pipes were requested
+        raise AssertionError("unreachable: Popen(stdout=PIPE, stderr=PIPE)")
+
+    def drain(name: str, stream: BinaryIO) -> None:
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = stream.read(65_536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > byte_cap:
+                state["overflow"] = True
+                break
+        collected[name] = b"".join(chunks)
+        stream.close()
+
+    readers = [
+        threading.Thread(target=drain, args=(name, stream), daemon=True)
+        for name, stream in (("stdout", process.stdout), ("stderr", process.stderr))
+    ]
+    for reader in readers:
+        reader.start()
+    deadline = time.monotonic() + timeout_seconds
+    timed_out = False
+    while True:
+        if state["overflow"]:
+            _kill_group(process)
+            break
+        try:
+            process.wait(timeout=0.05)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        if time.monotonic() > deadline:
+            _kill_group(process)
+            timed_out = True
+            break
+    for reader in readers:
+        reader.join(timeout=5)
+    if timed_out:
         raise ToolError(
             f"the command exceeded the {timeout_seconds}-second timeout and was killed; "
             "run a shorter or quieter command",
             code="command_timeout",
-        ) from None
-    except (OSError, ValueError) as error:
-        # ValueError: a command the OS refuses to spawn at all, such as an embedded NUL byte.
-        raise ToolError(f"the command could not run ({error})", code="command_failed") from None
-    stdout = completed.stdout.decode("utf-8", errors="replace")
-    stderr = completed.stderr.decode("utf-8", errors="replace")
+        )
+    if state["overflow"]:
+        raise ToolError(
+            f"the command output passed the {output_units_max:,}-unit cap and the run was killed; "
+            "run a command that prints less",
+            code="output_too_large",
+        )
+    stdout = collected["stdout"].decode("utf-8", errors="replace")
+    stderr = collected["stderr"].decode("utf-8", errors="replace")
     block = redact_credential_literals(
-        redact_action(f"exit status: {completed.returncode}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}")
+        redact_action(f"exit status: {process.returncode}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}")
     )
+    for secret in redactions:
+        if secret:
+            block = block.replace(secret, REDACTED)
     units = length(block)
     if units > output_units_max:
         raise ToolError(
@@ -182,10 +337,24 @@ def run_command(command: str, timeout_seconds: int, output_units_max: int) -> Pa
     return Part(OUTPUT_PART, block, units)
 
 
-async def run_gated_command(command: str) -> Part:
-    """`run_command` with the ADR-owned budget, off the event loop so a slow run blocks no other call."""
+def _kill_group(process: subprocess.Popen[bytes]) -> None:
+    """Kill the whole process group: the shell dies with its children, so a piped grandchild
+    cannot hold the output pipes open past the kill (the repository is POSIX-only, ADR-0032)."""
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    process.wait()
+
+
+async def run_gated_command(command: str, settings: Settings) -> Part:
+    """`run_command` with the ADR-owned budget, the scrubbed environment, and the server's own
+    secrets added to the output redactions — off the event loop so a slow run blocks no other call."""
     return await anyio.to_thread.run_sync(
-        run_command, command, ASK.command_timeout_seconds, ASK.command_output_units_max
+        run_command,
+        command,
+        ASK.command_timeout_seconds,
+        ASK.command_output_units_max,
+        scrubbed_environment(settings),
+        tuple(settings.secret_values()),
     )
 
 
