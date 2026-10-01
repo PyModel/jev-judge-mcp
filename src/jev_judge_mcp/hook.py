@@ -143,13 +143,17 @@ def main(
     environ: Mapping[str, str] | None = None,
     provider: JevProvider | None = None,
 ) -> int:
-    """Run ``hook gate`` or dispatch ``hook screen``. Exit 0 after a decision or a fail-open. Exit 2 on usage."""
+    """Run ``hook gate`` or dispatch ``hook screen`` and ``hook compact-cut``. Exit 0 after a decision or a fail-open. Exit 2 on usage."""
     args = list(argv or [])
     if args and args[0] == "screen":
         # Imported here so a gate-only process never loads the screen module.
         from jev_judge_mcp.hook_screen import main as screen_main
 
         return screen_main(args[1:], text=text, environ=environ, provider=provider)
+    if args == ["compact-cut"]:
+        from jev_judge_mcp.hook_compact import compact_cut_main
+
+        return compact_cut_main(args, text=text, provider=provider)
     if args != ["gate"]:
         sys.stderr.write(_USAGE)
         return 2

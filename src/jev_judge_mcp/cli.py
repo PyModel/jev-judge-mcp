@@ -21,12 +21,13 @@ import anyio
 
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.hook import fail_open_or_ask, hook_required
+from jev_judge_mcp.hook_compact import judge, parse_turns, render_context, window
 from jev_judge_mcp.hook_render import render_decision
 from jev_judge_mcp.identity import reported_version
 from jev_judge_mcp.keyfile import stored_key_path
 from jev_judge_mcp.policy import POLICY_VERSION, worst_action
 from jev_judge_mcp.policy.actions import Action
-from jev_judge_mcp.providers import JevProvider
+from jev_judge_mcp.providers import JevProvider, ProviderConfigError, resolve_model, resolve_provider
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
@@ -614,4 +615,71 @@ def completion_hook_main(
     if decision.action == "auto":
         return 0
     sys.stdout.write(_completion_ask(decision.action))
+    return 0
+
+
+_COMPACT_USAGE = "jev-judge-mcp hook: usage: jev-judge-mcp hook compact-cut\n"
+_COMPACT_STDIN = "jev-judge-mcp hook: stdin was not hook-event JSON\n"
+
+
+def compact_cut_main(
+    argv: Sequence[str] | None = None,
+    *,
+    text: str | None = None,
+    provider: JevProvider | None = None,
+) -> int:
+    """Opt-in compaction cut point (ADR-0077). Empty stdout abstains; there is no ask surface.
+
+    Claude Code fires SessionStart with source ``compact`` after a compaction. The hook clips
+    the transcript's user turns, asks one Choice keyed by real turn ids, and a confident pick
+    rides back as one additionalContext line. A source other than ``compact``, an unusable
+    transcript, or fewer than two turns abstains before any provider work. A provider failure
+    is silence plus one ``error.code`` stderr line. The cut point reads no hook variable:
+    SessionStart has no ask decision for ``JEV_HOOK_REQUIRED`` to escalate to.
+    """
+    if list(argv or []) != ["compact-cut"]:
+        sys.stderr.write(_COMPACT_USAGE)
+        return 2
+    body = sys.stdin.read() if text is None else text
+    try:
+        parsed = decode_json(body)
+    except ValueError:
+        sys.stderr.write(_COMPACT_STDIN)
+        return 0
+    if not is_json_object(parsed):
+        sys.stderr.write(_COMPACT_STDIN)
+        return 0
+    if parsed.get("hook_event_name") != "SessionStart" or parsed.get("source") != "compact":
+        return 0
+    transcript_path = parsed.get("transcript_path")
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return 0
+    try:
+        transcript = Path(transcript_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError, ValueError):
+        return 0
+    turns = window(parse_turns(transcript))
+    if len(turns) < 2:
+        return 0
+
+    settings = load_settings()
+    # The redacting handler before any provider call can log (ADR-0008), the same wiring hook gate
+    # uses: a misconfigured environment still gets silence or the one line, never a traceback.
+    from jev_judge_mcp.server import configure_logging
+
+    configure_logging(settings.log_level, settings.secret_values())
+    model = resolve_model(settings)
+    chosen = provider
+    if chosen is None:
+        try:
+            chosen = resolve_provider(settings)
+        except ProviderConfigError as error:
+            sys.stderr.write(f"jev-judge-mcp hook compact-cut: fail-open ({error})\n")
+            return 0
+    line, code = judge(chosen, turns, model)
+    if line is None:
+        if code:
+            sys.stderr.write(f"error.code={code}\n")
+        return 0
+    sys.stdout.write(render_context(line) + "\n")
     return 0

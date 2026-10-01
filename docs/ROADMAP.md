@@ -193,7 +193,7 @@ The extension family that makes the server a first-class coding-agent helper; th
 | `jev_files_judge` | extension tool: prune before any call, one call per surviving file under the ADR-0069 in-flight cap, per-path answers and skipped-with-reason | follows `jev_file_judge`; usage sums across calls |
 | `jev_ask` | extension tool: caller-written questions as a typed Noul/Choice/Score union, own state + server-read files + a gate-first optional command; overflow refuses with a Split suggestion, never truncates | follows the file tools and the gate judge; command refusal makes no execution and no call |
 | `hook screen` | opt-in Claude Code PostToolUse annotator, default off, never blocks, other hosts unverified | abstain-on-error pinned; no `JEV_HOOK_REQUIRED` arm |
-| `hook compact-cut` | opt-in Claude Code PreCompact cut point, default off; no turn-end advisor | abstains below two turns or without a usable transcript |
+| `hook compact-cut` | opt-in Claude Code SessionStart(`compact`) cut point returning one additionalContext line (PreCompact cannot inject instructions, ADR-0077), default off; no turn-end advisor | abstains on a non-compact source, below two turns, or without a usable transcript |
 
 **Accept:** each surface lands with its ADR-0077 caps moved into `limits.py` (the page's machine check starts covering it), its pinning and fail-closed tests at the owning boundary, and the dogfood gate (load in Claude Code, exercise the surface end to end) before any release. Until L3 datasets exist, release cards say "no recorded live eval"; calibration follows the P7 protocol as a fast-follow.
 

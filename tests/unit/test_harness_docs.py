@@ -30,6 +30,17 @@ def test_gate_hooks_sample_parses() -> None:
     assert screen_command["command"] == "/absolute/path/to/jev-judge-mcp hook screen"
 
 
+def test_compact_hooks_sample_parses() -> None:
+    """The cut point rides SessionStart(compact), the one documented injection path (ADR-0077)."""
+    payload = json.loads((HARNESS / "compact.hooks.json").read_text(encoding="utf-8"))
+    entry = payload["hooks"]["SessionStart"][0]
+    command = entry["hooks"][0]
+    assert entry["matcher"] == "compact"
+    assert command["type"] == "command"
+    assert command["timeout"] == 30
+    assert command["command"] == "/absolute/path/to/jev-judge-mcp hook compact-cut"
+
+
 def test_harness_tree_has_no_home_path_or_key_marker() -> None:
     files = sorted(path for path in HARNESS.rglob("*") if path.is_file())
     assert {path.name for path in files} == {
@@ -39,6 +50,7 @@ def test_harness_tree_has_no_home_path_or_key_marker() -> None:
         "gate.hooks.json",
         "completion.hooks.json",
         "screen.hooks.json",
+        "compact.hooks.json",
     }
     for path in files:
         text = path.read_text(encoding="utf-8")
@@ -73,7 +85,7 @@ def test_readme_links_harness_docs() -> None:
 
 def test_shipped_hook_fragments_do_not_change_directory() -> None:
     """``uv run --directory`` would make gate judge the checkout, not the caller's repo."""
-    for name in ("gate.hooks.json", "completion.hooks.json", "screen.hooks.json"):
+    for name in ("gate.hooks.json", "completion.hooks.json", "screen.hooks.json", "compact.hooks.json"):
         payload = json.loads((HARNESS / name).read_text(encoding="utf-8"))
         for groups in payload["hooks"].values():
             for group in groups:

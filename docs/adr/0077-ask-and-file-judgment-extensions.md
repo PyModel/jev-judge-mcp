@@ -69,13 +69,23 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
   until proven (the completion-hook convention). Unusable input or a provider error means
   silence: an annotator must fail invisible, never into a gate, and `JEV_HOOK_REQUIRED` does not
   apply to it — a screen cannot ask.
-- **`hook compact-cut` — an opt-in compaction cut point.** `jev-judge-mcp hook compact-cut` reads
-  the PreCompact event, asks one Choice over clipped user-turn summaries — which turn starts the
-  live work — and folds the picked turn into the custom compaction instructions the harness
-  accepts. It abstains without a usable transcript or with fewer than two turns, and emits no
-  prose beyond the fold-in line. Default off. There is no turn-end advisor and no `compact_now`
-  tool: they need harness extension surfaces this repository deliberately does not ship, and an
-  MCP tool cannot see the host's context usage — a fake. Re-opening that needs a new decision.
+- **`hook compact-cut` — an opt-in compaction cut point.** The PreCompact event cannot inject
+  instructions: its documented output contract is block-only — exit code 2 or a top-level
+  `"decision": "block"` — Claude Code discards a PreCompact hook's `systemMessage` and `continue`
+  fields, and `custom_instructions` on that event is input-only, the user's own `/compact`
+  arguments (https://code.claude.com/docs/en/hooks). The cut point therefore rides the one
+  documented injection path: `jev-judge-mcp hook compact-cut` handles the SessionStart event with
+  matcher `compact`, which fires after a compaction completes. It reads the event's
+  `transcript_path`, clips the user turns, asks one Choice keyed by real transcript turn ids —
+  which turn starts the live work — and returns one line of `additionalContext` naming that turn
+  and its text, so the summary keeps the live task. It abstains with no provider call when the
+  source is not `compact`, without a usable transcript, or with fewer than two turns; a provider
+  error, a missing or malformed answer, or a below-floor confidence is silence, never a wrong
+  turn. It emits no prose beyond the one line. Default off; `JEV_HOOK_REQUIRED` does not apply —
+  SessionStart has no ask decision to escalate to. There is no turn-end advisor and no
+  `compact_now` tool: they need harness extension surfaces this repository deliberately does not
+  ship, and an MCP tool cannot see the host's context usage — a fake. Re-opening that needs a new
+  decision.
 - **Caps and thresholds are frozen here, with a reason each.** The tool caps move into `limits.py`
   blocks when each tool ships (the ADR-0014/0048 pattern; `docs/reference/limits.md` carries the
   numbers from today so page and ADR move together), and the hook constants stay hook-local beside
@@ -101,7 +111,7 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
 | `jev_ask` | command timeout | 30 s | the same budget the hook passes its provider call; a longer run belongs in the agent's own shell |
 | `hook screen` | `SCREEN_INPUT_CHARS` | 6,000 | caps the judged prefix of tool output; typical reads are far smaller and the call stays cheap |
 | `hook compact-cut` | `turns_max` | 20 | covers any realistic session segment while bounding the state |
-| `hook compact-cut` | `turn_units_max` | 1,000 | a clipped summary per turn keeps the whole state a small fraction of one request |
+| `hook compact-cut` | `turn_units_max` | 1,000 | a clipped summary per turn keeps the whole state a small fraction of one request; the returned line stays far under the host's 10,000-character inline `additionalContext` window |
 
 - **Registration.** Two divergence entries (`ask-tool-extension`, `file-judge-tools`, surface
   `tool_schema`, same fields as `score-tool-extension`), the CONTEXT terms (*Ask tool*,

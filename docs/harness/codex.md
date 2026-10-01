@@ -30,4 +30,4 @@ Codex hook matching is unverified against https://developers.openai.com/codex/ho
 
 ## Screen hook
 
-`jev-judge-mcp hook screen` is a Claude Code PostToolUse annotator (`docs/harness/claude.md`). Codex PostToolUse matching is unverified against https://developers.openai.com/codex/hooks; do not treat [`screen.hooks.json`](screen.hooks.json) as a Codex hook. Use the CLI tools until the PostToolUse annotation shape is verified for Codex.
+`jev-judge-mcp hook screen` is a Claude Code PostToolUse annotator (`docs/harness/claude.md`). Codex PostToolUse matching is unverified against https://developers.openai.com/codex/hooks; do not treat [`screen.hooks.json`](screen.hooks.json) as a Codex hook. Use the CLI tools until the PostToolUse annotation shape is verified for Codex. The compact cut hook ([`compact.hooks.json`](compact.hooks.json)) is likewise unverified for Codex: it is written against Claude Code's SessionStart contract.

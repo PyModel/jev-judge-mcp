@@ -24,7 +24,7 @@ The judgment is routed by the event's tool name (ADR-0076). A `Bash` action is j
 
 `jev-judge-mcp install` does not merge [`gate.hooks.json`](gate.hooks.json) and does not enable it. That fragment is the sample for a harness that runs a PreToolUse command hook. pi has no extension in this repo that turns the hook on. The sample command is `/absolute/path/to/jev-judge-mcp hook gate`. Real settings need the absolute path of the `jev-judge-mcp` executable. Do not use `uv run --directory`: that flag changes the working directory, so the hook judges the checkout instead of the caller's repo. `uv run --project <repo>` keeps the caller's cwd. The matcher is `Bash|Write|Edit` and the timeout is 30 seconds.
 
-The completion-hook protocol for pi is unverified. Do not treat [`completion.hooks.json`](completion.hooks.json) as a pi hook. The CLI `jev-judge-mcp gate` is the path that does not need a hook. `JEV_MCP_MODEL` pins the model.
+The completion-hook protocol for pi is unverified. Do not treat [`completion.hooks.json`](completion.hooks.json) as a pi hook. The CLI `jev-judge-mcp gate` is the path that does not need a hook. `JEV_MCP_MODEL` pins the model. The compact cut hook ([`compact.hooks.json`](compact.hooks.json)) is likewise unverified for pi: it is written against Claude Code's SessionStart contract.
 
 `jev-judge-mcp hook screen` is a Claude Code PostToolUse annotator (`docs/harness/claude.md`). The PostToolUse annotation protocol for pi is unverified, and this repo ships no pi hook that would run it. The CLI tools stay the path that does not need a hook.
 
