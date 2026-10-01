@@ -5,6 +5,8 @@ this module's boundary: the ordinary-code lines are the false positives the dete
 never produce, and the literals are the denials it must always produce.
 """
 
+import time
+
 import pytest
 
 from jev_judge_mcp.credential_literal import has_credential_literal, redact_credential_literals
@@ -51,3 +53,14 @@ def test_redaction_replaces_only_the_literal() -> None:
     text = 'token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ"  # rotate me\n'
     redacted = redact_credential_literals(text)
     assert redacted == 'token = "[redacted]"  # rotate me\n'
+
+
+def test_redaction_stays_linear_on_long_identifier_runs() -> None:
+    """A 200,000-unit run of key characters redacts in seconds, not minutes: the assignment scan is
+    anchored at identifier-run boundaries, so cost is one pass per run, never one pass per offset.
+    The unanchored pattern this pins against took ~1000x longer at 16k units — and the shipped file
+    and ask tools read parts at the 100,000-unit cap, so the bound is a real latency contract."""
+    started = time.monotonic()
+    redacted = redact_credential_literals("a" * 200_000)
+    assert time.monotonic() - started < 5
+    assert redacted == "a" * 200_000

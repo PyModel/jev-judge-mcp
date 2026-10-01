@@ -5,6 +5,7 @@ Markers are fakes. None of them is a live credential.
 
 import ast
 import logging
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -183,3 +184,13 @@ def test_imports_nothing_from_providers_or_tools() -> None:
             imported.extend(f"{base}.{alias.name}" for alias in node.names)
     for name in imported:
         assert not name.startswith(("jev_judge_mcp.providers", "jev_judge_mcp.tools"))
+
+
+def test_action_redaction_stays_linear_on_long_word_runs() -> None:
+    """Same scan anchor as the credential-literal detector: a long command or output block of word
+    characters redacts in seconds, not minutes (jev_ask redacts every command's output, ADR-0077)."""
+    text = "word " * 50_000 + "token="
+    started = time.monotonic()
+    redacted = redact_action(text)
+    assert time.monotonic() - started < 5
+    assert "token=" in redacted

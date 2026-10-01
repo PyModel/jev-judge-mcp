@@ -37,7 +37,9 @@ _RULES: tuple[re.Pattern[str], ...] = (
         r"""((?:^|\s)(?:-u|--user)[ =]+"?[^\s:"']*:)([^\s"'\\]+)""",
     ),
     _compile(
-        r"""(["']?[\w.-]*(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|"""
+        # The lookbehind anchors the scan at a token boundary, so a long run of word characters
+        # costs one pass instead of one pass per offset (see credential_literal._ASSIGNMENT).
+        r"""((?<![\w.-])[\w.-]*(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|"""
         r"""private[_-]?key|credentials?)["']?\s*[:=]\s*"?)([^\s"',;}\\]+)""",
         ignore_case=True,
     ),

@@ -40,9 +40,12 @@ _FORMATS: tuple[tuple[re.Pattern[str], Callable[[re.Match[str]], bool] | None], 
 )
 
 # The key name ENDS with the secret word: secret_key, api_key, DB_PASSWORD, auth_token count;
-# password_help, token_label, and a bare auth stem do not.
+# password_help, token_label, and a bare auth stem do not. The lookbehind anchors the match at an
+# identifier-run boundary, so a long run of key characters costs one pass, not one pass per
+# offset: the leftmost match of the unanchored pattern always began at that boundary anyway (the
+# greedy run absorbs the same word from there), and only the quoted value's span is used.
 _ASSIGNMENT = re.compile(
-    r"[A-Za-z0-9_-]*(?:password|passwd|secret[_-]?key|api[_-]?key|access[_-]?key|private[_-]?key|"
+    r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]*(?:password|passwd|secret[_-]?key|api[_-]?key|access[_-]?key|private[_-]?key|"
     r"credential|secret|token)s?"
     r"[\"']?\s*[:=]\s*"
     # The opening quote of the value. An f-string prefix never opens the literal.
