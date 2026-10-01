@@ -32,10 +32,11 @@ KIND_REFINEMENT = Refinement(
 """The `.refine` on `kind`: the argument parser takes no enum keyword (ADR-0022), so membership is
 enforced with the arguments, before any handler code."""
 
-_ON_DEMAND_RULE = (
+ON_DEMAND_RULE = (
     "Jev is invoked when an unresolved judgment earns a model decision. Deterministic evidence "
     "takes precedence; Jev is not a mandatory ceremony."
 )
+"""The on-demand rule every ADR-0077 description carries verbatim (the ADR's registration clause)."""
 
 DEFINITION = define(
     "jev_file_judge",
@@ -51,7 +52,7 @@ DEFINITION = define(
     "credential-literal "
     "redacted before it is judged. Use jev_files_judge for many files at once. Not for exact lookups, "
     "counting, math, or questions grep answers — run the command instead. "
-    f"{_ON_DEMAND_RULE}",
+    f"{ON_DEMAND_RULE}",
     {
         "type": "object",
         "properties": {

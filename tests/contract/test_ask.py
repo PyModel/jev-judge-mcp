@@ -206,7 +206,8 @@ def test_jev_ask_is_published_last_and_the_frozen_prefix_is_untouched() -> None:
         "jev_score",
     )
     assert names[11] == "jev_file_judge"
-    assert names[-1] == "jev_ask"
+    assert names[12] == "jev_ask"
+    assert names[-1] == "jev_files_judge"
 
 
 def test_the_question_text_bounds_are_the_file_tool_convention() -> None:

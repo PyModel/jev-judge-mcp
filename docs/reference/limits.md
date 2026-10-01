@@ -53,8 +53,7 @@ block (ADR-0062). The code is set from the exception type or at the return site.
 ## Input caps, per tool
 
 `jev_score`'s caps have no parity-manifest block: ADR-0048 owns them, as ADR-0077 owns the
-extension blocks at the end of this section (`jev_files_judge`'s stays a planned freeze until its
-tool ships). Every other table is the
+extension blocks at the end of this section. Every other table is the
 manifest's `caps` block. `no cap` means the reference deliberately leaves the field open — the
 manifest records null and a bound must not be added.
 
