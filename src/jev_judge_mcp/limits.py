@@ -302,13 +302,18 @@ class FilesJudgeCaps:
     ADR owns every value (the ScoreCaps precedent). The two input caps bound one call's shape: 64
     surviving files, 32 path entries. The per-file budget is the file-judge state cap shared with
     `FILE_JUDGE` — one number to calibrate, so both constants move together — and so is the NUL
-    sniff window; `file_state.read_state` runs under whichever block its caller passes.
+    sniff window; `file_state.read_state` runs under whichever block its caller passes. The two
+    shape bounds keep a huge tree from flooding the call: discovery stops at 8 times the file cap in
+    candidates, and at most 64 skip rows are listed individually before the overflow collapses
+    into one aggregate row per reason (count plus the first few paths).
     """
 
     files_max: int
     patterns_max: int
     file_units_max: int
     binary_sniff_bytes: int
+    discovery_max: int
+    skip_rows_max: int
 
 
 FILE_JUDGE: Final = FileJudgeCaps(
@@ -331,4 +336,11 @@ ASK: Final = AskCaps(
     request_units_max=120_000,
     command_timeout_seconds=30,
 )
-FILES_JUDGE: Final = FilesJudgeCaps(files_max=64, patterns_max=32, file_units_max=100_000, binary_sniff_bytes=8_000)
+FILES_JUDGE: Final = FilesJudgeCaps(
+    files_max=64,
+    patterns_max=32,
+    file_units_max=100_000,
+    binary_sniff_bytes=8_000,
+    discovery_max=512,
+    skip_rows_max=64,
+)

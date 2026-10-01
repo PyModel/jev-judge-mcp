@@ -127,9 +127,12 @@ def test_the_hard_cap_skips_survivors_past_files_max_in_input_order(tmp_path: Pa
         make(tmp_path / f"f{index:02d}.txt")
     survivors, skipped = plan(["*.txt"], tmp_path)
     assert [text for text, _ in survivors] == [f"f{index:02d}.txt" for index in range(FILES_JUDGE.files_max)]
+    # One aggregate row for the overflow — count plus the first few paths — not one row per file.
     assert skipped == [
-        {"path": "f64.txt", "reason": "over_the_file_cap"},
-        {"path": "f65.txt", "reason": "over_the_file_cap"},
+        {
+            "path": "+2 more files over the 64-file cap: f64.txt, f65.txt",
+            "reason": "over_the_file_cap",
+        }
     ]
 
 
@@ -139,6 +142,90 @@ def test_the_content_a_survivor_carries_is_the_redacted_text(tmp_path: Path) -> 
     survivors, _ = plan(["notes.txt"], tmp_path)
     _, content = survivors[0]
     assert literal not in content and "[redacted]" in content
+
+
+def test_reading_stops_at_files_max_even_when_the_tree_is_huge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The review bound: a 500-file tree yields at most files_max reads and one aggregate row."""
+    make(tmp_path / "node_modules/pkg/index.js")
+    for index in range(500):
+        make(tmp_path / f"src/f{index:03d}.txt")
+    calls = monkeypatch_read_counter(monkeypatch)
+    survivors, skipped = plan(["."], tmp_path, recursive=True)
+    assert len(survivors) == FILES_JUDGE.files_max
+    assert calls() == FILES_JUDGE.files_max  # nothing past the cap is read
+    assert skipped == [
+        {
+            "path": "+436 more files over the 64-file cap: src/f064.txt, src/f065.txt, src/f066.txt, …",
+            "reason": "over_the_file_cap",
+        }
+    ]
+    assert all("node_modules" not in row["path"] for row in skipped)
+
+
+def test_a_glob_never_traverses_a_skip_listed_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Glob expansion prunes during the walk: node_modules is neither scanned nor listed."""
+    for index in range(600):
+        make(tmp_path / f"node_modules/pkg/f{index:03d}.js")
+    make(tmp_path / "keep.py")
+    reads = monkeypatch_read_counter(monkeypatch)
+    survivors, skipped = plan(["**/*.py", "**/*.js"], tmp_path)
+    assert [text for text, _ in survivors] == ["keep.py"]
+    assert reads() == 1
+    # The *.js glob matched nothing it may enter: not_found for the pattern, never a scan report.
+    assert skipped == [{"path": "**/*.js", "reason": "not_found"}]
+
+
+def test_discovery_stops_at_its_bound_and_reports_one_aggregate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for index in range(FILES_JUDGE.discovery_max + 40):
+        make(tmp_path / f"f{index:04d}.txt")
+    reads = monkeypatch_read_counter(monkeypatch)
+    survivors, skipped = plan(["*"], tmp_path)
+    assert len(survivors) == FILES_JUDGE.files_max
+    assert reads() == FILES_JUDGE.files_max
+    assert skipped[-1] == {
+        "path": "discovery stopped at the 512-candidate bound; not expanded: f0512.txt, …",
+        "reason": "over_the_file_cap",
+    }
+    assert skipped[0] == {
+        "path": "+448 more files over the 64-file cap: f0064.txt, f0065.txt, f0066.txt, …",
+        "reason": "over_the_file_cap",
+    }
+
+
+def test_skip_rows_collapse_into_one_aggregate_row_per_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for index in range(FILES_JUDGE.skip_rows_max + 20):
+        make(tmp_path / f"b{index:03d}.bin", b"ok\x00 binary")
+    make(tmp_path / "good.txt")
+    reads = monkeypatch_read_counter(monkeypatch)
+    survivors, skipped = plan(["*.bin", "good.txt"], tmp_path)
+    assert [text for text, _ in survivors] == ["good.txt"]
+    individuals = [row for row in skipped if not row["path"].startswith("+")]
+    aggregates = [row for row in skipped if row["path"].startswith("+")]
+    assert len(individuals) == FILES_JUDGE.skip_rows_max
+    assert aggregates == [
+        {
+            "path": "+20 more binary: b064.bin, b065.bin, b066.bin, …",
+            "reason": "binary",
+        }
+    ]
+    assert reads() == FILES_JUDGE.skip_rows_max + 21  # every candidate read: the cap never filled
+
+
+def monkeypatch_read_counter(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """A counting spy on the module's read_state import; returns a zero-argument read total."""
+    import jev_judge_mcp.tools.files_judge as module
+
+    calls = {"n": 0}
+    real = module.read_state
+
+    def counting(path: Any, caps: Any = None) -> str:
+        calls["n"] += 1
+        return real(path, **({} if caps is None else {"caps": caps}))
+
+    monkeypatch.setattr(module, "read_state", counting)
+    return lambda: calls["n"]
 
 
 class CountingProvider(FakeProvider):

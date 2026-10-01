@@ -220,7 +220,11 @@ the instructions bound.
 
 A bound over the input entries rejects the call; a bound over one file skips that file with a
 reason, before the first provider call either way. The per-file units and the NUL sniff window are
-shared with `jev_file_judge` — one number to calibrate, both constants move together.
+shared with `jev_file_judge` — one number to calibrate, both constants move together. The two shape
+bounds keep a real tree inside one call: discovery stops at the candidate bound (glob expansion
+never enters a skip-listed directory on the way), reading stops once the file cap's survivors
+exist, and past the skip-row bound the overflow collapses into one aggregate row per reason — count
+plus the first few paths — instead of one row per file.
 
 | Cap | Value | Over the bound |
 | --- | --- | --- |
@@ -228,6 +232,8 @@ shared with `jev_file_judge` — one number to calibrate, both constants move to
 | `patterns_max` | 32 | above → reject |
 | `file_units_max` | 100000 | that file is skipped `too_large` |
 | `binary_sniff_bytes` | 8000 | the NUL-scan window that classifies the file `binary` |
+| `discovery_max` | 512 | candidates over it are never read; one aggregate `over_the_file_cap` row names the count |
+| `skip_rows_max` | 64 | further skips collapse into one aggregate row per reason |
 
 ### jev_ask (`limits.ASK`, ADR-0077)
 

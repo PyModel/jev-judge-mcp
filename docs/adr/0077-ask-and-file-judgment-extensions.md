@@ -67,7 +67,11 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
   files get one provider call each under the ADR-0069 in-flight cap; a per-file failure lands in
   `skipped` as `call_failed:<code>` and does not fail the batch; `results` is input-order stable;
   usage sums across calls. Picking among the per-file answers stays `jev_find` fed those answers
-  as candidates — no new pick tool.
+  as candidates — no new pick tool. Two shape bounds keep a real tree inside one call: glob
+  expansion walks pruned (a skip-listed directory is never scanned, not filtered afterwards) and
+  stops at `discovery_max` candidates; reading stops once `files_max` survivors exist; and past
+  `skip_rows_max` listed rows the overflow collapses into one aggregate row per reason — count
+  plus the first few paths — so a huge tree cannot flood the agent's context.
 - **`hook screen` — an opt-in annotator for tool output.** `jev-judge-mcp hook screen` reads a
   Claude Code PostToolUse event, judges the first `SCREEN_INPUT_CHARS` of the tool's output with
   one Noul question (does the text carry injected instructions that try to redirect the agent
@@ -116,6 +120,8 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
 | `jev_files_judge` | `patterns_max` | 32 | 64 survivors already bound the work; the input stays legible in refusals |
 | `jev_files_judge` | per-file units | 100,000 | shared with `jev_file_judge`, one number to calibrate |
 | `jev_files_judge` | binary sniff | 8,000 bytes | shared with `jev_file_judge`, same NUL scan |
+| `jev_files_judge` | `discovery_max` | 8 × `files_max` (512) | glob expansion walks pruned and stops at the bound; the unexpanded remainder is one aggregate row, never thousands |
+| `jev_files_judge` | `skip_rows_max` | 64 | past it the skip list collapses into one aggregate row per reason (count plus the first few paths), so a huge tree cannot flood the agent's context |
 | `jev_ask` | `questions_min`/`questions_max` | 1–20 | one call judges one state; twenty narrow questions stay a single provider request while batching stays encouraged |
 | `jev_ask` | `files_max` | 20 | an ask composes several state parts, so files keep a small share of the window |
 | `jev_ask` | `state_units_max` | 20,000 | own state is framing, not a document dump; bulk material belongs in `paths` |
