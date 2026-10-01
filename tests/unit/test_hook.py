@@ -369,11 +369,11 @@ def test_outside_repo_write_denies_without_a_provider(
     assert reason.endswith(FINAL_BLOCK_NOTICE)
 
 
-def test_pattern_matched_write_denies_without_a_provider(
+def test_credential_literal_write_denies_without_a_provider(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Content the redactor would rewrite denies on the match: the credential question never
-    judges a placeholder, and the raw secret never leaves the process."""
+    """A known-format credential literal in the content is deterministic evidence: deny before
+    any provider exists. The raw secret never leaves the process."""
 
     def boom(*args: object, **kwargs: object) -> None:
         del args, kwargs
@@ -389,7 +389,22 @@ def test_pattern_matched_write_denies_without_a_provider(
     decision = json.loads(captured.out)
     assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
     reason = decision["hookSpecificOutput"]["permissionDecisionReason"]
-    assert reason == f"Jev hook: denied: the written content matches a credential pattern. {FINAL_BLOCK_NOTICE}"
+    assert reason == f"Jev hook: denied: the written content contains a credential literal. {FINAL_BLOCK_NOTICE}"
+
+
+def test_ordinary_code_write_is_judged_and_reads_naturally(capsys: pytest.CaptureFixture[str]) -> None:
+    """Code that mentions secret-named keys is judged as written: no literal, no rewrite."""
+    provider = RecordingProvider({"secret_content": _noul(0.05)})
+    event = _write_event(tool_input={"file_path": "src/a.py", "content": 'api_key = os.environ["API_KEY"]\n'})
+    code = main(["gate"], text=event, environ={}, provider=provider)
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.out == ""
+    state = provider.states[0]
+    assert isinstance(state, str)
+    assert "os.environ" in state
+    assert "API_KEY" in state
+    assert "[redacted]" not in state
 
 
 def test_inside_repo_write_judges_the_content_and_stays_silent_without_a_secret(

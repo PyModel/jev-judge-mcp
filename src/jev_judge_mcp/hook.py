@@ -16,12 +16,13 @@ import asyncio
 import contextlib
 import os
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
 import anyio
 
+from jev_judge_mcp.credential_literal import has_credential_literal, redact_credential_literals
 from jev_judge_mcp.domain.answers import ChoiceAnswer
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.domain.questions import ChoiceQuestion, NoulCriteria, NoulQuestion, Question
@@ -114,7 +115,7 @@ class _Plan:
     tool: str
     containment: _Containment
     state: str
-    pattern_matched: bool = False
+    credential_matched: bool = False
 
 
 def hook_required(env: Mapping[str, str]) -> bool:
@@ -162,10 +163,10 @@ def main(
         outside = _Outcome("deny", deny_reason("the write targets a path outside the working directory"))
         sys.stdout.write(_decision(outside) + "\n")
         return 0
-    if plan.pattern_matched:
-        # A redacted value never reaches the provider, so the credential question would judge a
-        # placeholder. The pattern match itself is the evidence; deny on it (ADR-0076).
-        matched = _Outcome("deny", deny_reason("the written content matches a credential pattern"))
+    if plan.credential_matched:
+        # A credential literal in the written content is deterministic evidence; the raw secret
+        # never leaves the process and the judge never sees it (ADR-0076).
+        matched = _Outcome("deny", deny_reason("the written content contains a credential literal"))
         sys.stdout.write(_decision(matched) + "\n")
         return 0
     if required and length(body) > HOOK_INPUT_UNITS:
@@ -300,14 +301,17 @@ def _questions(plan: _Plan) -> dict[str, Question]:
 
 def _plan(event: dict[str, object], extra: str | None) -> _Plan:
     tool = _text(event.get("tool_name"), "unknown")
-    containment: _Containment = _containment(event) if tool in _WRITES else "unknown"
-    pattern_matched = False
-    if tool in _WRITES and containment != "outside":
-        raw = _render_input(event)
-        # The state is built from the redacted action, so a value the redactor would replace must
-        # never be judged by the credential question: the match itself denies first (ADR-0076).
-        pattern_matched = redact_action(raw) != raw
-    return _Plan(tool, containment, _state(event, extra, containment), pattern_matched)
+    writes = tool in _WRITES
+    containment: _Containment = _containment(event) if writes else "unknown"
+    credential_matched = False
+    if writes and containment != "outside":
+        # Strict, high-precision: ordinary code never matches, a known-format literal always
+        # does, and the hit denies before any call (ADR-0076).
+        credential_matched = has_credential_literal(_render_input(event))
+    # The write path is judged as code: only the strict detector may rewrite it, never
+    # redact_action, which is a shell-command redactor (ADR-0076).
+    redactor = redact_credential_literals if writes else redact_action
+    return _Plan(tool, containment, _state(event, extra, containment, redactor), credential_matched)
 
 
 def _containment(event: dict[str, object]) -> _Containment:
@@ -323,7 +327,12 @@ def _containment(event: dict[str, object]) -> _Containment:
     return "inside" if target == base or target.startswith(base + os.sep) else "outside"
 
 
-def _state(event: dict[str, object], extra: str | None, containment: _Containment) -> str:
+def _state(
+    event: dict[str, object],
+    extra: str | None,
+    containment: _Containment,
+    redact: Callable[[str], str],
+) -> str:
     lines = [
         f"An autonomous coding agent is working in: {_text(event.get('cwd'), 'unknown')}",
         f"Permission mode: {_text(event.get('permission_mode'), 'default')}",
@@ -338,8 +347,8 @@ def _state(event: dict[str, object], extra: str | None, containment: _Containmen
         parts.append("Repo containment: the target path could not be checked against the working directory.")
     description = event.get("description")
     if isinstance(description, str) and description:
-        parts.append(f"Description: {redact_action(description)}")
-    parts.append(f"Input: {redact_action(_render_input(event))}")
+        parts.append(f"Description: {redact(description)}")
+    parts.append(f"Input: {redact(_render_input(event))}")
     return "\n".join(lines) + "\n\n--- proposed action ---\n" + "\n".join(parts)
 
 

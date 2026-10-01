@@ -85,7 +85,7 @@ An opt-in process that judges one proposed action — a shell command, or a Writ
 _Avoid_: jev_gate (the completion check), calling the hook a tool
 
 **Guard question**:
-One of the typed questions the command hook sends about one proposed action: an effect Choice and a destructive-intent Noul for a shell command, a credential-in-content Noul for a Write or Edit. Repo containment and a credential-pattern match are not asked; they are computed in code before any call, and a match denies on its own.
+One of the typed questions the command hook sends about one proposed action: an effect Choice and a destructive-intent Noul for a shell command, a credential-in-content Noul for a Write or Edit. Repo containment and a credential-literal match are not asked; they are computed in code before any call, and a match denies on its own. Written code reaches the judge as written: only the strict credential-literal detector may rewrite it.
 _Avoid_: gate question, safety prompt, permission check
 
 **Composite**:

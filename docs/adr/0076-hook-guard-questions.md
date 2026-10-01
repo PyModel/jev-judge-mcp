@@ -12,10 +12,10 @@ observation and the verdict, so its reason could only say "denied" without namin
 
 - **Routing.** The event's tool name routes the judgment. `Bash` gets two questions in one
   provider call: an effect Choice (`read_only` / `reversible` / `irreversible`) and a
-  destructive-intent Noul. `Write` and `Edit` get a deterministic repo-containment check computed
-  in code, a deterministic credential-pattern check on the written content, and — for content
-  that survives both — one credential-in-content Noul. Any other tool name keeps
-  the generic allow/deny Choice, so an operator who widens the matcher still gets judged.
+  destructive-intent Noul. `Write` and `Edit` get two checks computed in code — repo containment
+  and a credential-literal scan — and, for content that survives both, one credential-in-content
+  Noul. Any other tool name keeps the generic allow/deny Choice, so an operator who widens the
+  matcher still gets judged.
 - **Per-question thresholds.** Every question's boundary is a hook constant in
   `src/jev_judge_mcp/hook.py`, documented there and never in `policy/thresholds.py` (ADR-0035).
   The effect question keeps the existing floors: reported confidence escalates below 0.5, a
@@ -40,18 +40,26 @@ observation and the verdict, so its reason could only say "denied" without namin
   (ADR-0035). The fail-open and fail-ask matrix is untouched (ADR-0065). No new environment
   variable. The hook still logs neither the action nor the state, and still passes one 30 second
   budget to its single provider call.
-- **Redaction order.** `redact_action` runs on the action input before the provider sees it
-  (ADR-0034), and a raw secret never leaves the process. That redaction is also evidence: for a
-  judged Write or Edit (containment inside or unknown), input the redactor would change denies
-  outright — "the written content matches a credential pattern", no measure, the final-block
-  notice, and no provider construction. A credential question that judged a `[redacted]`
-  placeholder would be a judgment over erased evidence. Only content the redactor leaves
-  unchanged reaches the credential Noul, which then covers the shapes the patterns miss.
+- **Credential literals are evidence; code is not.** A false positive denies a normal write
+  with no recourse, so the scan is strict and high precision by construction: the detector in
+  `src/jev_judge_mcp/credential_literal.py` hits only well-known token formats (AWS access key
+  ids, GitHub and Slack tokens, OpenAI/Anthropic-style `sk-` keys, PEM private-key blocks, JWTs)
+  and a quoted high-entropy literal assigned to a secret-named key. A bare identifier, a type
+  annotation, a function name, or a reference such as `os.environ[...]`, `settings.x`, or an
+  f-string placeholder is never a hit; both directions are pinned as table tests at the
+  detector's own boundary. A hit denies outright — no provider construction, no provider call —
+  because the raw secret must never leave the process and the judge must never see it even
+  redacted.
+- **The write path is judged as code.** `redact_action` is a shell-command redactor: it rewrites
+  ordinary code (`api_key = os.environ[...]`, `password: str = field(...)`), which would corrupt
+  the very text the credential question judges. Write/Edit state is therefore redacted only by
+  the strict detector — an identity on any content that passed it — and `redact_action` stays on
+  the Bash and generic paths (ADR-0034).
 
 ## Consequences
 
-- An outside-of-repo write, and an in-repo one whose content matches a credential pattern, cost
-  no provider call and cannot hang on a missing key: the deterministic denials happen first. With
+- An outside-of-repo write, and an in-repo one carrying a credential literal, cost no provider
+  call and cannot hang on a missing key: the deterministic denials happen first. With
   `JEV_HOOK_REQUIRED=1` they still deny, because a deny is stronger than the ask the flag would
   have produced.
 - A routine, confident, non-destructive command abstains with no output, exactly as before; the
