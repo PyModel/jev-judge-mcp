@@ -15,13 +15,19 @@ ORDINARY_CODE = [
     "def check_token(token): return token == expected",
     'headers = {"Authorization": f"Bearer {token}"}',
     "secret = settings.secret",
+    'author = "Jane Doe <jane@example.com> 2024"',
+    'password_help = "Must be 12+ chars, incl. Upper & 1 digit"',
+    'token_label = "Your API Token (Step 2)"',
+    'secret_key = "CHANGE-ME-IN-PRODUCTION-2024"',
+    '<div class="sk-folding-cube-container">',
 ]
 
 CREDENTIAL_LITERALS = [
     'aws_id = "AKIAABCDEFGHIJKLMNOP"',
+    'API_KEY = "Zx9$kq2LmP7vRt4WbN"',
     'token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ"',
     'slack = "xoxb-123456789012-abcdefghij"',
-    'key = "sk-ant-api03-abcdef123456"',
+    'key = "sk-ant-api03-Xy7kP9mW2qR5tZ8v"',
     "-----BEGIN RSA PRIVATE KEY-----",
     "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
     'password = "K3fcnVwZaXpT4mQwLr8s"',
@@ -44,4 +50,4 @@ def test_known_format_literals_are_always_a_hit(line: str) -> None:
 def test_redaction_replaces_only_the_literal() -> None:
     text = 'token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ"  # rotate me\n'
     redacted = redact_credential_literals(text)
-    assert redacted == "token = [redacted]  # rotate me\n"
+    assert redacted == 'token = "[redacted]"  # rotate me\n'

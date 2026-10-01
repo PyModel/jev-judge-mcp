@@ -12,28 +12,38 @@ judged text is file content, and mangling it would misjudge the write.
 """
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 REDACTED = "[redacted]"
 """The same harness-facing marker ``redact_action`` uses; defined here so this module stays separate."""
 
-_FORMATS: tuple[re.Pattern[str], ...] = (
+
+def _mixed_case_with_digit(match: re.Match[str]) -> bool:
+    """``sk-`` tokens carry a digit and mixed case after the prefix; CSS class names do not."""
+    token = match.group(0)
+    return any(c.isdigit() for c in token) and any(c.isupper() for c in token) and any(c.islower() for c in token)
+
+
+_FORMATS: tuple[tuple[re.Pattern[str], Callable[[re.Match[str]], bool] | None], ...] = (
     # AWS access key ids.
-    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), None),
     # GitHub tokens.
-    re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
+    (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"), None),
     # Slack tokens.
-    re.compile(r"\bxox[abdeporsu]-[A-Za-z0-9-]{10,}\b"),
-    # OpenAI- and Anthropic-style keys.
-    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
+    (re.compile(r"\bxox[abdeporsu]-[A-Za-z0-9-]{10,}\b"), None),
+    # OpenAI- and Anthropic-style keys: long, and never a lowercase-only CSS class name.
+    (re.compile(r"\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}\b"), _mixed_case_with_digit),
     # PEM private-key blocks.
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), None),
     # JWTs: three base64url segments; the first two start eyJ, the base64 of '{"'.
-    re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"), None),
 )
 
+# The key name ENDS with the secret word: secret_key, api_key, DB_PASSWORD, auth_token count;
+# password_help, token_label, and a bare auth stem do not.
 _ASSIGNMENT = re.compile(
-    r"\b(?:password|passwd|secret|token|api_?key|access_?key|private_?key|credential|auth)[\w-]*"
+    r"[A-Za-z0-9_-]*(?:password|passwd|secret[_-]?key|api[_-]?key|access[_-]?key|private[_-]?key|"
+    r"credential|secret|token)s?"
     r"[\"']?\s*[:=]\s*"
     # The opening quote of the value. An f-string prefix never opens the literal.
     r"(?<![fF])([\"'])",
@@ -42,24 +52,19 @@ _ASSIGNMENT = re.compile(
 
 
 def _high_entropy(value: str) -> bool:
-    """Long enough and drawn from enough character classes to be material, not prose or a name."""
-    if len(value) < 16 or "{" in value or "}" in value:
+    """Long and mixed enough to be material: no whitespace or braces, and lower case, upper
+    case, and a digit all present. Prose carries whitespace; placeholders such as
+    ``CHANGE-ME-IN-PRODUCTION`` never carry all three cases."""
+    if len(value) < 16 or any(c.isspace() for c in value) or "{" in value or "}" in value:
         return False
-    classes = sum(
-        (
-            any(c.islower() for c in value),
-            any(c.isupper() for c in value),
-            any(c.isdigit() for c in value),
-            any(not c.isalnum() for c in value),
-        )
-    )
-    return classes >= 3
+    return any(c.islower() for c in value) and any(c.isupper() for c in value) and any(c.isdigit() for c in value)
 
 
 def _literals(text: str) -> Iterator[tuple[int, int]]:
-    for pattern in _FORMATS:
+    for pattern, check in _FORMATS:
         for match in pattern.finditer(text):
-            yield match.span()
+            if check is None or check(match):
+                yield match.span()
     for match in _ASSIGNMENT.finditer(text):
         quote = match.group(1)
         if quote is None:

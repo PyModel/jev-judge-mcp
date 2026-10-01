@@ -380,7 +380,8 @@ def test_credential_literal_write_denies_without_a_provider(
         raise AssertionError("provider constructed")
 
     monkeypatch.setattr("jev_judge_mcp.hook.resolve_provider", boom)
-    event = _write_event(tool_input={"file_path": "src/a.py", "content": f"api_key = '{_SK}'\n"})
+    literal = "sk-live-A1b2C3d4E5f6G7h8I9j0K1"  # long, mixed case, and carries a digit
+    event = _write_event(tool_input={"file_path": "src/a.py", "content": f"api_key = '{literal}'\n"})
     code = main(["gate"], text=event, environ={}, provider=None)
     captured = capsys.readouterr()
     assert code == 0

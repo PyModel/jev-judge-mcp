@@ -43,13 +43,17 @@ observation and the verdict, so its reason could only say "denied" without namin
 - **Credential literals are evidence; code is not.** A false positive denies a normal write
   with no recourse, so the scan is strict and high precision by construction: the detector in
   `src/jev_judge_mcp/credential_literal.py` hits only well-known token formats (AWS access key
-  ids, GitHub and Slack tokens, OpenAI/Anthropic-style `sk-` keys, PEM private-key blocks, JWTs)
-  and a quoted high-entropy literal assigned to a secret-named key. A bare identifier, a type
-  annotation, a function name, or a reference such as `os.environ[...]`, `settings.x`, or an
-  f-string placeholder is never a hit; both directions are pinned as table tests at the
-  detector's own boundary. A hit denies outright — no provider construction, no provider call —
-  because the raw secret must never leave the process and the judge must never see it even
-  redacted.
+  ids, GitHub and Slack tokens, OpenAI/Anthropic-style `sk-` keys with twenty mixed-case
+  characters and a digit after the prefix so a CSS class name never matches, PEM private-key
+  blocks, JWTs) and a quoted literal that is long, whitespace-free, and carries lower case,
+  upper case, and a digit, assigned to a key name that ENDS with the secret word (`secret_key`,
+  `api_key`, `DB_PASSWORD`, `auth_token` — never `password_help`, `token_label`, or a bare
+  `auth` stem). A bare identifier, a type annotation, a function name, a reference such as
+  `os.environ[...]` or `settings.x`, an f-string placeholder, and a low-variety placeholder
+  such as `CHANGE-ME-IN-PRODUCTION` are never a hit; low-variety values stay with the credential
+  question. Both directions are pinned as table tests at the detector's own boundary. A hit
+  denies outright — no provider construction, no provider call — because the raw secret must
+  never leave the process and the judge must never see it even redacted.
 - **The write path is judged as code.** `redact_action` is a shell-command redactor: it rewrites
   ordinary code (`api_key = os.environ[...]`, `password: str = field(...)`), which would corrupt
   the very text the credential question judges. Write/Edit state is therefore redacted only by
