@@ -375,6 +375,34 @@
       "python_behavior": "jev_score is published after the snapshot ten (the snapshot stays a byte-identical prefix of tools/list): one score question over a caller rubric of 2-10 levels, strict whole-answer validation (validate_rubric_answer), ADR-owned caps in limits.SCORE, and no policy thresholds."
     },
     {
+      "id": "ask-tool-extension",
+      "surface": "tool_schema",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0077-ask-and-file-judgment-extensions.md",
+      "tests": [
+        "tests/contract/test_tools_list.py",
+        "tests/contract/test_docs_alignment.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The reference publishes exactly ten tools, and every tool fixes its own questions server-side; no tool accepts caller-written questions.",
+      "python_behavior": "jev_ask is the registered ask tool: it publishes after the snapshot order (the snapshot stays a byte-identical prefix of tools/list) and takes caller-written questions as a typed Noul/Choice/Score union validated by the frozen validators. Overflow refuses with each part's size and a Split suggestion, never a truncation; the optional command runs only after the gate judges it and refuses typed as command_refused (ADR-0077)."
+    },
+    {
+      "id": "file-judge-tools",
+      "surface": "tool_schema",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0077-ask-and-file-judgment-extensions.md",
+      "tests": [
+        "tests/contract/test_tools_list.py",
+        "tests/contract/test_docs_alignment.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The reference has no tool that reads a caller-named file; all judged state arrives inside the call arguments.",
+      "python_behavior": "jev_file_judge and jev_files_judge are the registered file-judgment tools: they read caller-named files as state inside the server's working directory (answers in the payload, file bytes never), refuse typed with no provider call (not_found, not_a_file, binary_file, file_too_large, path_outside_scope), prune before the first provider call with every prune reported in skipped, and run under the ADR-0077 caps."
+    },
+    {
       "id": "compare-aspect-contradiction-warning",
       "surface": "result",
       "tier": "both",

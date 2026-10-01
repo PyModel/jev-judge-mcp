@@ -530,6 +530,17 @@ def test_wire_arguments_disclose_the_strip_semantics() -> None:
     assert parsed == {"text": "a report"}
 
 
+def test_context_defines_the_extension_terms() -> None:
+    """ADR-0077's vocabulary lives in the glossary: each new term is defined in the house format
+    (term, definition, _Avoid_), so the ADR's words and CONTEXT.md move in one change."""
+    text = (ROOT / "docs" / "CONTEXT.md").read_text(encoding="utf-8")
+    for term in ("Ask tool", "File judgment", "Split suggestion"):
+        marker = f"**{term}**:"
+        assert marker in text, f"CONTEXT.md no longer defines {term!r}"
+        definition = text.split(marker, 1)[1].split("\n\n", 1)[0]
+        assert "_Avoid_:" in definition, f"{term!r} lost its _Avoid_ line"
+
+
 def test_verify_card_discloses_the_single_evidence_attribution_shape() -> None:
     """With exactly one evidence item no source question is asked, so rows carry no `evidence_ids`
     and `supporting_evidence` is null — frozen reference behavior (the replay proves the code;

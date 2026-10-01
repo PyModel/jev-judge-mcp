@@ -183,6 +183,22 @@ A mock parity 100% → B shadow (TS authoritative, Python non-authoritative; mea
 
 ---
 
+### P11 — Coding-agent helper extensions [PY-17] ○ planned (ADR-0077)
+
+The extension family that makes the server a first-class coding-agent helper; the snapshot order stays a frozen prefix (ADR-0048) and every surface below appends with its own divergence entry, caps, and pinning tests. Tool descriptions carry the on-demand rule verbatim; deterministic pre-checks (path scope, binary sniff, size caps, the command gate) always run in code before any provider call.
+
+| Surface | Posture | Ships when |
+|---|---|---|
+| `jev_file_judge` | extension tool: one kind-discriminated judgment over a server-read file; typed zero-call refusals; the file's bytes never reach the payload | ADR-0077 caps in `limits.py`, schema pinning, refusal matrix |
+| `jev_files_judge` | extension tool: prune before any call, one call per surviving file under the ADR-0069 in-flight cap, per-path answers and skipped-with-reason | follows `jev_file_judge`; usage sums across calls |
+| `jev_ask` | extension tool: caller-written questions as a typed Noul/Choice/Score union, own state + server-read files + a gate-first optional command; overflow refuses with a Split suggestion, never truncates | follows the file tools and the gate judge; command refusal makes no execution and no call |
+| `hook screen` | opt-in Claude Code PostToolUse annotator, default off, never blocks, other hosts unverified | abstain-on-error pinned; no `JEV_HOOK_REQUIRED` arm |
+| `hook compact-cut` | opt-in Claude Code PreCompact cut point, default off; no turn-end advisor | abstains below two turns or without a usable transcript |
+
+**Accept:** each surface lands with its ADR-0077 caps moved into `limits.py` (the page's machine check starts covering it), its pinning and fail-closed tests at the owning boundary, and the dogfood gate (load in Claude Code, exercise the surface end to end) before any release. Until L3 datasets exist, release cards say "no recorded live eval"; calibration follows the P7 protocol as a fast-follow.
+
+---
+
 ## CI
 
 `ruff → pyright → unit → property → contract → parity (Node 24 for fixture replay + differential tests) → security → build → MCP smoke`. Live evals are separate (cost, provider availability, model drift) and pin the exact Jev model; production may still default to `jev-latest`.

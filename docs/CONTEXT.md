@@ -68,6 +68,10 @@ _Avoid_: fallback, graceful degradation
 A document the judgment is made over (a doc, diff, claim, or evidence item) that exceeded a cap and was cut before reaching Jev. A judgment over truncated context can never be `auto`. Cut item text (a jev_find or jev_rerank candidate, a jev_classify item or class description) is not Truncated Context: it is reported to telemetry only and does not change the action. jev_extract's capped candidate universe is a separate rule of its own field decision.
 _Avoid_: partial input, clipped
 
+**File judgment**:
+A judgment whose state is a file the server reads at a caller-named path. The answer enters the payload; the file's bytes never do. A read that fails its scope or caps is a typed refusal with no provider call, never a truncated judgment.
+_Avoid_: file read (the refusal is not a read), file analysis
+
 **Reason Code**:
 A stable machine-readable token explaining why a gate reached its action, such as `claims_contradicted`.
 _Avoid_: error code, message
@@ -102,6 +106,10 @@ _Avoid_: option (wire-level term), document, hit
 A hard size bound on an input; exceeding it either rejects the call or truncates, depending on the field.
 _Avoid_: limit, quota
 
+**Split suggestion**:
+The names and sizes of the state parts that overfilled one request, plus a first-fit grouping of them into calls that each fit. It rides the refusal that replaces a truncated judgment; it is advice, not a result.
+_Avoid_: split error, batch hint
+
 **Wire Arguments**:
 The parsed arguments of one `tools/call`. Unknown keys are stripped, not refused, although every published schema says `additionalProperties: false` — the reference's zod strip, kept on purpose (ADR-0022). A missing or ill-typed declared key is the typed `invalid_arguments` refusal.
 _Avoid_: strict validation, schema enforcement (the schema advertises stricter than the runtime parses, by parity)
@@ -131,6 +139,10 @@ _Avoid_: known difference, deviation, bug-compat
 **Extension Tool**:
 A tool this server publishes beyond the Reference Implementation's frozen ten, appended after the snapshot order (ADR-0048). `jev_score`, the caller-supplied rubric, is the first.
 _Avoid_: an eleventh tool (the count is not the invariant; the snapshot prefix is)
+
+**Ask tool**:
+An extension tool whose questions the caller writes: a typed Noul, Choice, or Score union instead of the server's fixed question set. The state is still evidence to evaluate, and the on-demand rule still holds; the caller owns the question, the server still owns validation and the wire.
+_Avoid_: freeform tool (the shapes stay typed), prompt passthrough
 
 **Stored Key**:
 The API key file `jev-judge-mcp setup` writes after proving it live. The environment variable always wins over it.

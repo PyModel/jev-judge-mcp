@@ -52,7 +52,8 @@ block (ADR-0062). The code is set from the exception type or at the return site.
 
 ## Input caps, per tool
 
-`jev_score`'s caps have no parity-manifest block: ADR-0048 owns them. Every other table is the
+`jev_score`'s caps have no parity-manifest block: ADR-0048 owns them, as ADR-0077 owns the planned
+extension blocks at the end of this section. Every other table is the
 manifest's `caps` block. `no cap` means the reference deliberately leaves the field open — the
 manifest records null and a bound must not be added.
 
@@ -193,6 +194,57 @@ Every bound is a schema reject.
 | `subject_min` | 1 | below → reject |
 | `subject_max` | 1500 | above → reject |
 | `context_max` | 12000 | above → reject |
+
+### jev_file_judge (ADR-0077)
+
+Planned, not yet shipped: these numbers are the ADR's freeze. When the tool lands, the block
+moves to a `limits.py` caps owner and this table joins the machine-checked set.
+
+Every bound is a schema reject; the refusal is typed and makes no provider call.
+
+| Cap | Value | Over the bound |
+| --- | --- | --- |
+| `file_units_max` | 100000 | refuse `file_too_large` |
+| `instructions_units_max` | 2000 | refuse |
+| `choice_options_min` | 2 | below → reject |
+| `choice_options_max` | 250 | above → reject |
+| `choice_option_units_max` | 2000 | refuse |
+| `score_levels_min` | 2 | below → reject |
+| `score_levels_max` | 10 | above → reject |
+| `score_level_units_max` | 200 | refuse |
+| `binary_sniff_bytes` | 8000 | the NUL-scan window that classifies the file `binary_file` |
+
+### jev_files_judge (ADR-0077)
+
+Planned, not yet shipped: these numbers are the ADR's freeze. When the tool lands, the block
+moves to a `limits.py` caps owner and this table joins the machine-checked set.
+
+A bound over the input entries rejects the call; a bound over one file skips that file with a
+reason, before the first provider call either way.
+
+| Cap | Value | Over the bound |
+| --- | --- | --- |
+| `patterns_max` | 32 | above → reject |
+| `files_max` | 64 | surviving paths over it are skipped `over_the_file_cap`, before any call |
+| `file_units_max` | 100000 | that file is skipped `too_large` |
+
+### jev_ask (ADR-0077)
+
+Planned, not yet shipped: these numbers are the ADR's freeze. When the tool lands, the block
+moves to a `limits.py` caps owner and this table joins the machine-checked set.
+
+No part truncates: an over-budget call refuses typed, with each part's size and a Split
+suggestion.
+
+| Cap | Value | Over the bound |
+| --- | --- | --- |
+| `questions_min` | 1 | below → reject |
+| `questions_max` | 20 | above → reject |
+| `files_max` | 20 | above → reject |
+| `state_units_max` | 20000 | refuse before any call |
+| `command_output_units_max` | 30000 | refuse `output_too_large` after the run |
+| `request_units_max` | 120000 | strict greater-than refuses with the Split suggestion |
+| `command_timeout_seconds` | 30 | the run is killed and the call refuses |
 
 ### shared caps
 
