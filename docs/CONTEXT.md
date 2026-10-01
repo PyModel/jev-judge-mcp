@@ -81,8 +81,12 @@ An extra Choice option (ask_user, investigate, none) that lets Jev decline to pi
 _Avoid_: abstain option, fallback option
 
 **Command hook**:
-An opt-in process that judges one proposed shell action and may deny it or ask a person to review it. Silence means the hook abstained. It is not a tool.
+An opt-in process that judges one proposed action — a shell command, or a Write or Edit — and may deny it or ask a person to review it. Silence means the hook abstained. It is not a tool.
 _Avoid_: jev_gate (the completion check), calling the hook a tool
+
+**Guard question**:
+One of the typed questions the command hook sends about one proposed action: an effect Choice and a destructive-intent Noul for a shell command, a credential-in-content Noul for a Write or Edit. Repo containment is not asked; it is computed in code before any call. Every deny reason names the failure and ends with the final-block notice.
+_Avoid_: gate question, safety prompt, permission check
 
 **Composite**:
 The weighted 0–1 summary of a patch review's four rubric scores.

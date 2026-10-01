@@ -22,3 +22,11 @@ Fail-ask on bad stdin or missing credentials was the alternative: every watched 
 - Abstaining is not an allow decision from this hook. The harness's own rule still applies.
 - The ten tools' thresholds, fail-closed answers, and `tools/list` shape are unchanged.
 - Tests inject a fake provider. They do not add `JEV_PROVIDER=mock`.
+
+## Amendment (2026-09-29): guard questions route by tool name
+
+The one generic allow/deny Choice is now the fallback for tool names outside `Bash|Write|Edit`.
+Bash is judged by an effect Choice plus a destructive-intent Noul; a Write or Edit gets a
+deterministic containment check and a credential-in-content Noul (ADR-0076). Deny reasons name
+the failure and end with the final-block notice. The stdout contract, the fail-open rules, and
+the 0.5 / 0.4 floors are unchanged.
