@@ -47,9 +47,11 @@ DEFINITION = define(
     "`instructions` against the state's `content` field. The server reads the file as state and returns only "
     "the typed answer; the file's bytes never enter your context. The path must resolve inside the server's "
     "working directory, symlinks followed, with no override. Refusals are typed — not_found, not_a_file, "
-    "binary_file, file_too_large, path_outside_scope — and make no provider call. Use jev_files_judge for many "
-    "files at once. Not for exact lookups, counting, math, or questions grep answers — run the command "
-    f"instead. {_ON_DEMAND_RULE}",
+    "binary_file, secret_file, file_too_large, path_outside_scope — and make no provider call: known secret "
+    "stores (.env, *.pem, *.key, id_rsa, and the like) are never read, and every read is credential-literal "
+    "redacted before it is judged. Use jev_files_judge for many files at once. Not for exact lookups, "
+    "counting, math, or questions grep answers — run the command instead. "
+    f"{_ON_DEMAND_RULE}",
     {
         "type": "object",
         "properties": {

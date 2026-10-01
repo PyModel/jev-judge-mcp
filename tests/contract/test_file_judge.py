@@ -117,10 +117,12 @@ async def test_every_refusal_is_typed_and_makes_no_provider_call(tmp_path: Any, 
     (tmp_path / "binary.bin").write_bytes(b"ok\x00 then garbage")
     (tmp_path / "big.txt").write_text("a" * (FILE_JUDGE.file_units_max + 1), encoding="utf-8")
     (tmp_path / "dir").mkdir()
+    (tmp_path / ".env").write_text("TOKEN=deadbeef", encoding="utf-8")
     cases = [
         (noul_args("missing.txt"), "not_found"),
         (noul_args("dir"), "not_a_file"),
         (noul_args("binary.bin"), "binary_file"),
+        (noul_args(".env"), "secret_file"),
         (noul_args("big.txt"), "file_too_large"),
         (noul_args("../outside.txt"), "path_outside_scope"),
     ]
@@ -129,6 +131,26 @@ async def test_every_refusal_is_typed_and_makes_no_provider_call(tmp_path: Any, 
         assert outcome.is_error, (code, outcome.text)
         assert outcome.code == code, (code, outcome.text)
         assert outcome.requests == [], code
+
+
+async def test_an_env_example_is_read_and_a_literal_reaches_the_provider_redacted(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env.example").write_text("TOKEN=your-token-here", encoding="utf-8")
+    outcome = await call_tool("jev_file_judge", noul_args(".env.example"), {"file": {"noul": 0.9}})
+    assert not outcome.is_error, outcome.text
+    state, _ = outcome.requests[0]
+    content = cast(str, cast(dict[str, object], state)["content"])
+    assert "your-token-here" in content
+
+    literal = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+    (tmp_path / "notes.txt").write_text(f"token: {literal}", encoding="utf-8")
+    outcome = await call_tool("jev_file_judge", noul_args("notes.txt"), {"file": {"noul": 0.9}})
+    assert not outcome.is_error, outcome.text
+    state, _ = outcome.requests[0]
+    content = cast(str, cast(dict[str, object], state)["content"])
+    assert literal not in content and "[redacted]" in content
 
 
 async def test_criteria_broken_for_the_kind_refuses_before_any_call(tmp_path: Any, monkeypatch: Any) -> None:

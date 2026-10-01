@@ -71,6 +71,45 @@ def test_a_directory_is_not_a_file(tmp_path: Path) -> None:
     refuses("not_a_file")(lambda: file_state.read_state(tmp_path / "dir"))
 
 
+def test_a_secret_store_refuses_before_any_read(tmp_path: Path) -> None:
+    make(tmp_path / ".env", "TOKEN=deadbeef")
+    refuses("secret_file")(lambda: file_state.read_state(tmp_path / ".env"))
+
+
+def test_the_secret_store_family_and_the_stand_ins(tmp_path: Path) -> None:
+    refused = (
+        ".env",
+        ".env.production",
+        ".env.local",
+        "server.pem",
+        "ca.key",
+        "cert.p12",
+        "sig.pfx",
+        "id_rsa",
+        "id_ed25519",
+        "id_ecdsa",
+        ".npmrc",
+        ".pypirc",
+        ".netrc",
+    )
+    for name in refused:
+        make(tmp_path / name, "material")
+        assert file_state.is_secret_store(tmp_path / name), name
+    allowed = (".env.example", ".env.sample", ".env.template", "notes.txt", "keys.md")
+    for name in allowed:
+        make(tmp_path / name, "fine to read")
+        assert not file_state.is_secret_store(tmp_path / name), name
+        assert file_state.read_state(tmp_path / name) == "fine to read"
+
+
+def test_a_credential_literal_is_redacted_before_it_becomes_state(tmp_path: Path) -> None:
+    literal = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+    content = file_state.read_state(make(tmp_path / "notes.txt", f"token: {literal}\nkeep: this line"))
+    assert literal not in content
+    assert "[redacted]" in content
+    assert "keep: this line" in content  # text without a literal passes through unchanged
+
+
 def test_a_nul_inside_the_window_is_binary(tmp_path: Path) -> None:
     data = b"a" * (FILE_JUDGE.binary_sniff_bytes - 1) + b"\x00"
     refuses("binary_file")(lambda: file_state.read_state(make(tmp_path / "bin.bin", data)))

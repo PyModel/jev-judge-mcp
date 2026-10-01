@@ -4,20 +4,52 @@ The server reads the caller-named file as state, so the file's bytes never enter
 context or the payload. Everything here is deterministic and precedes any provider call: a refusal
 is a typed verdict about the input, never a judgment. `jev_files_judge` reuses this module for the
 per-file read, so the rules stay in one place: the path scope is the server's working directory
-with no caller override, the binary sniff is a NUL scan of the first `FILE_JUDGE.binary_sniff_bytes`
-bytes, and the size cap is `FILE_JUDGE.file_units_max` measured in UTF-16 units (ADR-0005).
+with no caller override, known secret stores refuse `secret_file` before any read, the binary
+sniff is a NUL scan of the first `FILE_JUDGE.binary_sniff_bytes` bytes, and the size cap is
+`FILE_JUDGE.file_units_max` measured in UTF-16 units (ADR-0005). What does get read is redacted
+with the ADR-0076 credential-literal detector before it becomes state, so a judgment about a
+config file never ships its secrets to the provider.
 """
 
 from pathlib import Path
 from typing import NoReturn
 
+from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.limits import FILE_JUDGE
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import ToolError
 
-REFUSAL_CODES = ("not_found", "not_a_file", "binary_file", "file_too_large", "path_outside_scope")
+REFUSAL_CODES = (
+    "not_found",
+    "not_a_file",
+    "binary_file",
+    "secret_file",
+    "file_too_large",
+    "path_outside_scope",
+)
 """The typed file refusals (ADR-0077). Each one is an `isError` result with this code and no
 provider call behind it; the message names the path and the reason."""
+
+_SECRET_EXACT = frozenset({".env", ".npmrc", ".pypirc", ".netrc", "id_rsa", "id_ed25519", "id_ecdsa"})
+_SECRET_EXTENSIONS = (".pem", ".key", ".p12", ".pfx")
+_SECRET_ENV_STANDINS = frozenset({".env.example", ".env.sample", ".env.template"})
+"""Known secret stores, matched on the resolved file's name (case-folded). The `.env.*` family is
+refused except the checked-in stand-ins, so a real environment file is never read but its redacted
+example is."""
+
+
+def is_secret_store(path: Path) -> bool:
+    """Whether the file's name is a known secret store: such files are never read.
+
+    Matched on the resolved path's name, so a symlink's target name decides; the check is a pure
+    name test and precedes any I/O.
+    """
+    name = path.name.lower()
+    if name in _SECRET_EXACT:
+        return True
+    if name.endswith(_SECRET_EXTENSIONS):
+        return True
+    return name.startswith(".env.") and name not in _SECRET_ENV_STANDINS
 
 
 def refuse(code: str, message: str) -> NoReturn:
@@ -45,11 +77,14 @@ def resolve_scoped(path: str, scope: Path | None = None) -> Path:
 def read_state(path: Path) -> str:
     """The decoded text of a scoped regular file, or its typed refusal; no content is echoed.
 
-    Order is cheapest first: existence and type (`stat`), the byte early-out, then the read with
-    the NUL sniff, then the exact UTF-16 measurement. The caller resolves the path through
-    `resolve_scoped` first, so scope precedes everything by construction, and every refusal here
-    precedes any provider call.
+    Order is cheapest first: the secret-store name test (pure, no I/O), existence and type
+    (`stat`), the byte early-out, then the read with the NUL sniff, then the exact UTF-16
+    measurement, and finally the credential-literal redaction. The caller resolves the path
+    through `resolve_scoped` first, so scope precedes everything by construction, and every
+    refusal here precedes any provider call.
     """
+    if is_secret_store(path):
+        refuse("secret_file", f"{path.name} is a known secret store and is never read")
     try:
         stat = path.stat()
     except FileNotFoundError:
@@ -70,4 +105,6 @@ def read_state(path: Path) -> str:
     content = data.decode("utf-8", errors="replace")
     if length(content) > FILE_JUDGE.file_units_max:
         refuse("file_too_large", f"file exceeds the {FILE_JUDGE.file_units_max:,}-unit state cap: {path}")
-    return content
+    # Redaction is the last step, so the cap measures the file as it is on disk, and a clean file
+    # passes through unchanged (the detector is the identity without a literal).
+    return redact_credential_literals(content)

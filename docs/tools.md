@@ -232,7 +232,10 @@ the state's `content` field.
 
 **Weak spots.** The whole decoded file is the state, capped at 100,000 UTF-16 units; an over-cap or
 binary file refuses typed (`file_too_large`; a NUL byte in the first 8,000 bytes means `binary_file`)
-instead of being judged over a cut read. Paths must resolve inside the server's working directory,
+instead of being judged over a cut read. Known secret stores — `.env` and its real variants, `*.pem`,
+`*.key`, `id_rsa`, `.npmrc`, and the like — refuse `secret_file` before any read (the `.example`/
+`.sample`/`.template` stand-ins do read), and every read is credential-literal redacted before it
+reaches the provider. Paths must resolve inside the server's working directory,
 symlinks followed; there is no override, and an escaping path is refused `path_outside_scope` with no
 provider call. One question per call: several files are several calls (the batched many-file tool is
 planned, ADR-0077).
