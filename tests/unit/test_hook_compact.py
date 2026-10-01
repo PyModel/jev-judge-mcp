@@ -8,12 +8,20 @@ from typing import ClassVar, override
 
 import pytest
 
-from jev_judge_mcp.cli import compact_cut_main
 from jev_judge_mcp.domain import JsonValue, Question, Usage
 from jev_judge_mcp.domain.questions import ChoiceQuestion
 from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.hook import PROVIDER_TIMEOUT_SECONDS
-from jev_judge_mcp.hook_compact import TURN_UNITS_MAX, TURNS_MAX, Turn, parse_turns, window
+from jev_judge_mcp.hook_compact import (
+    TRANSCRIPT_TAIL_BYTES,
+    TURN_UNITS_MAX,
+    TURNS_MAX,
+    Turn,
+    compact_cut_main,
+    parse_turns,
+    read_tail,
+    window,
+)
 from jev_judge_mcp.providers import NO_RETRIES, Evaluation, JevProvider, ProviderError, ProviderTimeoutError
 from jev_judge_mcp.providers.base import ProviderName
 from jev_judge_mcp.server import main as server_main
@@ -167,12 +175,16 @@ def test_broken_transcript_files_abstain(
 def test_fewer_than_two_turns_abstains_without_a_provider(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
-    """One usable user turn cannot define a cut point; assistant lines never count."""
+    """One real user turn plus a summary and meta lines cannot define a cut point."""
     _block_providers(monkeypatch)
-    transcript = _write_transcript(
-        tmp_path,
-        _transcript(("t1", "only turn"), extra=json.dumps({"type": "assistant", "uuid": "a1"}) + "\n"),
+    body = (
+        json.dumps({"type": "user", "uuid": "c1", "isCompactSummary": True, "message": {"content": "old summary"}})
+        + "\n"
+        + json.dumps({"type": "user", "uuid": "m1", "isMeta": True, "message": {"content": "hook reminder"}})
+        + "\n"
+        + _transcript(("t1", "only real turn"), extra=json.dumps({"type": "assistant", "uuid": "a1"}) + "\n")
     )
+    transcript = _write_transcript(tmp_path, body)
     assert compact_cut_main(["compact-cut"], text=_event(transcript)) == 0
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -307,6 +319,16 @@ def test_parse_turns_extracts_usable_user_turns() -> None:
             json.dumps({"type": "user", "message": {"content": "no id"}}),
             json.dumps({"type": "user", "uuid": "u1", "message": {"content": "  hello  "}}),
             " broken line ",
+            json.dumps({"type": "user", "uuid": "m1", "isMeta": True, "message": {"content": "meta line"}}),
+            json.dumps({"type": "user", "uuid": "c1", "isCompactSummary": True, "message": {"content": "the summary"}}),
+            json.dumps({"type": "user", "uuid": "w1", "message": {"content": "<command-name>/run</command-name>"}}),
+            json.dumps(
+                {
+                    "type": "user",
+                    "uuid": "w2",
+                    "message": {"content": "<local-command-stdout>out</local-command-stdout>"},
+                }
+            ),
             json.dumps(
                 {
                     "type": "user",
@@ -332,7 +354,7 @@ def test_server_dispatches_hook_compact_cut(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook", "compact-cut"])
     monkeypatch.setattr("jev_judge_mcp.server.load_settings", _refuse_server)
     monkeypatch.setattr("jev_judge_mcp.server.build_server", _refuse_server)
-    monkeypatch.setattr("jev_judge_mcp.cli.compact_cut_main", fake)
+    monkeypatch.setattr("jev_judge_mcp.hook_compact.compact_cut_main", fake)
     with pytest.raises(SystemExit) as caught:
         server_main()
     assert caught.value.code == 0
@@ -351,3 +373,41 @@ def test_window_keeps_transcript_order() -> None:
     turns = [Turn(id=str(n), text="t") for n in range(5)]
     windowed = window(turns)
     assert [turn.id for turn in windowed] == ["0", "1", "2", "3", "4"]
+
+
+def test_provider_bound_text_is_redacted_and_the_line_is_not(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """The state and the choice descriptions cross to the provider redacted; the fold-in
+    line is the session's own words going back into the same session, so it is verbatim."""
+    _sk = "sk-FAKE000000000000"
+    provider = ScriptedProvider(_answer("t1", 0.9, identifiers=("t1", "t2")))
+    transcript = _write_transcript(tmp_path, _transcript(("t1", f"deploy with token {_sk} now"), ("t2", "other")))
+    code = compact_cut_main(["compact-cut"], text=_event(transcript), provider=provider)
+    assert code == 0
+    captured = capsys.readouterr()
+    state = provider.states[0]
+    assert isinstance(state, str)
+    assert _sk not in state
+    assert "[redacted]" in state
+    assert provider.questions is not None
+    question = provider.questions["cut"]
+    assert isinstance(question, ChoiceQuestion)
+    assert _sk not in str(question.criteria["t1"])
+    decision = json.loads(captured.out)
+    line = decision["hookSpecificOutput"]["additionalContext"]
+    assert _sk in line
+
+
+def test_transcript_read_is_bounded_to_the_newest_tail(tmp_path: Path) -> None:
+    """Over the window the read starts at the last line boundary: the partial first line drops."""
+    tail_lines = (
+        '{"type": "user", "uuid": "t1", "message": {"content": "a"}}\n'
+        '{"type": "user", "uuid": "t2", "message": {"content": "b"}}\n'
+    )
+    path = tmp_path / "big.jsonl"
+    path.write_bytes(b"x" * (TRANSCRIPT_TAIL_BYTES + 4096) + b"\n" + tail_lines.encode())
+    assert read_tail(str(path)) == tail_lines
+    small = tmp_path / "small.jsonl"
+    small.write_bytes(tail_lines.encode())
+    assert read_tail(str(small)) == tail_lines

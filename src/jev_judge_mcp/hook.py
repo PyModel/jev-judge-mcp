@@ -143,7 +143,10 @@ def main(
     environ: Mapping[str, str] | None = None,
     provider: JevProvider | None = None,
 ) -> int:
-    """Run ``hook gate`` or dispatch ``hook screen`` and ``hook compact-cut``. Exit 0 after a decision or a fail-open. Exit 2 on usage."""
+    """Run ``hook gate``, or dispatch ``hook screen`` and ``hook compact-cut``.
+
+    Exit 0 after a decision or a pre-call fail-open. Exit 2 on usage.
+    """
     args = list(argv or [])
     if args and args[0] == "screen":
         # Imported here so a gate-only process never loads the screen module.

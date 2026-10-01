@@ -112,6 +112,7 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
 | `hook screen` | `SCREEN_INPUT_CHARS` | 6,000 | caps the judged prefix of tool output; typical reads are far smaller and the call stays cheap |
 | `hook compact-cut` | `turns_max` | 20 | covers any realistic session segment while bounding the state |
 | `hook compact-cut` | `turn_units_max` | 1,000 | a clipped summary per turn keeps the whole state a small fraction of one request; the returned line stays far under the host's 10,000-character inline `additionalContext` window |
+| `hook compact-cut` | `transcript_tail_bytes` | 8 MiB (8,388,608) | the newest history is what a cut point needs; the read is bounded before any parsing, and a first line cut by the seek drops |
 
 - **Registration.** Two divergence entries (`ask-tool-extension`, `file-judge-tools`, surface
   `tool_schema`, same fields as `score-tool-extension`), the CONTEXT terms (*Ask tool*,
