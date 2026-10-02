@@ -73,9 +73,10 @@
           "setup",
           "keyfile",
           "client",
-          "cli-judge"
+          "cli-judge",
+          "hook-runtime"
         ],
-        "note": "install, hook gate, completion-hook, doctor, and calibrate. judge and gate call tools in-process."
+        "note": "install, the three hooks over one runtime, doctor, and calibrate. judge and gate call tools in-process."
       }
     ]
   },
@@ -112,7 +113,7 @@
       "id": "instructions",
       "type": "backend",
       "label": "Instructions",
-      "sublabel": "names all 11 tools",
+      "sublabel": "names all 14 tools",
       "pos": [
         330,
         28
@@ -167,8 +168,8 @@
     {
       "id": "tools",
       "type": "backend",
-      "label": "Eleven tools",
-      "sublabel": "10 frozen + jev_score",
+      "label": "Fourteen tools",
+      "sublabel": "10 frozen + 4 extensions",
       "pos": [
         700,
         280
@@ -377,8 +378,8 @@
     {
       "id": "hook",
       "type": "backend",
-      "label": "hook gate",
-      "sublabel": "completion-hook",
+      "label": "hook gates",
+      "sublabel": "completion \u00b7 screen \u00b7 compact",
       "pos": [
         200,
         196
@@ -413,6 +414,20 @@
       ],
       "size": [
         168,
+        52
+      ]
+    },
+    {
+      "id": "hook-runtime",
+      "type": "backend",
+      "label": "hook runtime",
+      "sublabel": "prepare \u00b7 judge \u00b7 close",
+      "pos": [
+        200,
+        110
+      ],
+      "size": [
+        150,
         52
       ]
     }
@@ -662,6 +677,12 @@
         900,
         348
       ]
+    },
+    {
+      "from": "hook",
+      "to": "hook-runtime",
+      "label": "prepare \u00b7 judge",
+      "id": "hook-runtime"
     }
   ],
   "cards": [
@@ -670,7 +691,8 @@
       "title": "One registry",
       "items": [
         "list_tools and call_tool share one Toolset",
-        "eleven tools: ten frozen, plus jev_score"
+        "fourteen tools: ten frozen, jev_score, and the ADR-0048 extensions",
+        "jev_ask and the file tools read through one bounded file_state \u00b7 ask_state"
       ]
     },
     {
@@ -678,7 +700,8 @@
       "title": "Fail-closed answers",
       "items": [
         "validation rejects; policy is pure",
-        "verify, gate, review: a malformed confidence never yields auto"
+        "verify, gate, review: a malformed confidence never yields auto",
+        "file lists and hooks share one owner each (ADR-0078)"
       ]
     },
     {
