@@ -6,11 +6,14 @@ string counts as unset, as it is falsy in JS. Vercel keeps its slot but is unsup
 Resolution raises `ProviderConfigError` before any request, so the tools report it per call.
 """
 
+from collections.abc import Callable
+from typing import Final
+
 from pydantic import SecretStr
 
 from jev_judge_mcp import keyfile
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.providers.base import JevProvider, ProviderConfigError
+from jev_judge_mcp.providers.base import JevProvider, ProviderConfigError, ProviderName
 from jev_judge_mcp.providers.cloudflare import CloudflareProvider
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.openrouter import OpenRouterProvider
@@ -19,6 +22,15 @@ from jev_judge_mcp.providers.typesafe import TypeSafeProvider
 from jev_judge_mcp.settings import Settings
 
 DEFAULT_MODEL = "jev-latest"
+
+PRIMARY_CREDENTIAL: Final[dict[ProviderName, str]] = {
+    "typesafe": "TYPESAFE_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "cloudflare": "CLOUDFLARE_API_TOKEN",
+    "compatible": "JEV_API_KEY",
+}
+"""Each selectable provider and the variable that selects it in auto resolution — the catalog
+`doctor` reports from, so the names live here with the resolution they describe."""
 
 VERCEL_UNSUPPORTED = (
     "vercel provider is not supported by the Python server; use typesafe, openrouter, cloudflare or compatible"
@@ -36,7 +48,17 @@ def resolve_model(settings: Settings) -> str:
 
 
 def resolve_provider(settings: Settings, *, retry: RetryPolicy | None = None) -> JevProvider:
-    """The provider `settings` select, or `ProviderConfigError` with the reference's text.
+    """The provider `settings` select, built; `select_provider` decides without building."""
+    _, build = select_provider(settings, retry=retry)
+    return build()
+
+
+def select_provider(
+    settings: Settings, *, retry: RetryPolicy | None = None
+) -> tuple[ProviderName, Callable[[], JevProvider]]:
+    """The provider `settings` select — its name and a builder — or `ProviderConfigError` with the
+    reference's text. Selection builds no client, so a startup gate can ask which provider would
+    run without opening a connection pool it never closes.
 
     A key stored by `jev-judge-mcp setup` stands in for `TYPESAFE_API_KEY` when the variable is
     unset (ADR-0046); the variable always wins. The stored value joins the redaction set for this
@@ -73,13 +95,13 @@ def resolve_provider(settings: Settings, *, retry: RetryPolicy | None = None) ->
         case "typesafe":
             if not typesafe_key:
                 raise ProviderConfigError("JEV_PROVIDER=typesafe but TYPESAFE_API_KEY is not set.")
-            return typesafe()
+            return "typesafe", typesafe
         case "openrouter":
             if not has_openrouter:
                 raise ProviderConfigError(
                     "JEV_PROVIDER=openrouter but OPENROUTER_API_KEY is not set or not an sk-or- key."
                 )
-            return openrouter()
+            return "openrouter", openrouter
         case "vercel":
             raise ProviderConfigError(VERCEL_UNSUPPORTED)
         case "cloudflare":
@@ -88,7 +110,7 @@ def resolve_provider(settings: Settings, *, retry: RetryPolicy | None = None) ->
                     "JEV_PROVIDER=cloudflare but a Cloudflare API token (CLOUDFLARE_API_TOKEN or "
                     "JEV_CLOUDFLARE_API_TOKEN) and CLOUDFLARE_ACCOUNT_ID are not both set."
                 )
-            return cloudflare()
+            return "cloudflare", cloudflare
         case "compatible":
             missing = [name for name, value in (("JEV_API_KEY", api_key), ("JEV_API_BASE_URL", base_url)) if not value]
             if missing:
@@ -97,19 +119,19 @@ def resolve_provider(settings: Settings, *, retry: RetryPolicy | None = None) ->
                     f"JEV_PROVIDER=compatible but {' and '.join(missing)} {verb} not set. "
                     "JEV_MCP_MODEL is optional and defaults to jev-latest."
                 )
-            return compatible()
+            return "compatible", compatible
         case _:
             pass
     if typesafe_key:
-        return typesafe()
+        return "typesafe", typesafe
     if has_openrouter:
-        return openrouter()
+        return "openrouter", openrouter
     if has_cloudflare:
-        return cloudflare()
+        return "cloudflare", cloudflare
     if _value(settings.ai_gateway_api_key):
         raise ProviderConfigError(VERCEL_UNSUPPORTED)
     if api_key and base_url:
-        return compatible()
+        return "compatible", compatible
     raise ProviderConfigError(NO_CREDENTIALS)
 
 

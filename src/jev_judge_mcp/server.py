@@ -30,7 +30,7 @@ from jev_judge_mcp.errors import RedactingFilter, Redactor
 from jev_judge_mcp.http_auth import BearerTokenMiddleware, ensure_http_access_control
 from jev_judge_mcp.identity import reported_version
 from jev_judge_mcp.instructions import server_instructions
-from jev_judge_mcp.providers import ProviderConfigError, resolve_provider
+from jev_judge_mcp.providers import ProviderConfigError, select_provider
 from jev_judge_mcp.providers.typesafe import sdk_importable
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import LogLevel, Settings, load_settings
@@ -160,10 +160,10 @@ def ensure_provider_runnable(settings: Settings) -> None:
     (ADR-0008, `provider.ts:35-77`), and another provider selected imports nothing extra.
     """
     try:
-        provider = resolve_provider(settings)
+        name, _ = select_provider(settings)  # selection only: no client is built for a gate
     except ProviderConfigError:
         return
-    if provider.name == "typesafe" and not sdk_importable():
+    if name == "typesafe" and not sdk_importable():
         raise SystemExit(provider_not_runnable_message()) from None
 
 

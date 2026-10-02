@@ -36,7 +36,7 @@ from jev_judge_mcp.policy.thresholds import (
     SCREEN_RELEVANCE_SKIP_BELOW,
     SCREEN_SUBSTANCE_SKIP_BELOW,
 )
-from jev_judge_mcp.providers import JevProvider, ProviderConfigError, resolve_provider
+from jev_judge_mcp.providers import PRIMARY_CREDENTIAL, JevProvider, ProviderConfigError, resolve_provider
 from jev_judge_mcp.providers.typesafe import sdk_importable
 from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.tools import TOOLS
@@ -59,7 +59,7 @@ _POLICY: tuple[tuple[str, float], ...] = (
     ("EXISTS_FOUND_AT", EXISTS_FOUND_AT),
     ("EXISTS_ABSENT_BELOW", EXISTS_ABSENT_BELOW),
 )
-_KNOWN_EXPLICIT = frozenset({"typesafe", "openrouter", "cloudflare", "compatible"})
+_KNOWN_EXPLICIT = frozenset(PRIMARY_CREDENTIAL)
 
 
 def main(argv: Sequence[str] | None = None, *, home: Path | None = None, cwd: Path | None = None) -> int:
@@ -157,12 +157,8 @@ def _via(settings: Settings, name: str | None) -> str:
 
 def _primary_key(settings: Settings, name: str) -> str:
     if name == "cloudflare":
-        return _cloudflare_token_name(settings) or "CLOUDFLARE_API_TOKEN"
-    return {
-        "typesafe": "TYPESAFE_API_KEY",
-        "openrouter": "OPENROUTER_API_KEY",
-        "compatible": "JEV_API_KEY",
-    }.get(name, name)
+        return _cloudflare_token_name(settings) or PRIMARY_CREDENTIAL["cloudflare"]
+    return PRIMARY_CREDENTIAL[name] if name in PRIMARY_CREDENTIAL else name
 
 
 def _cloudflare_token_name(settings: Settings) -> str | None:
