@@ -42,6 +42,7 @@ from jev_judge_mcp.hook import (
     event_state,
 )
 from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
+from jev_judge_mcp.keyfile import redaction_values
 from jev_judge_mcp.limits import ASK
 from jev_judge_mcp.redact_action import REDACTED, redact_action
 from jev_judge_mcp.settings import Settings
@@ -239,12 +240,13 @@ def run_command(
     """The judged command's redacted output as one part.
 
     Runs under the system shell with no stdin, in the working directory, in a scrubbed environment
-    when the caller passes one, and its process group is killed at the timeout or as soon as the
+    when the caller passes one, and its process group is killed at the timeout, as soon as the
     captured output passes the cap — the pipes are never allowed to buffer a flood (ADR-0077
-    amendment). The output block carries the exit status and both streams, redacted with the
-    hook's shell redactor, the ADR-0076 credential-literal detector, and every value in
-    `redactions` (the server's own configured secrets) before it becomes state. The gate judged
-    the command string; nothing here sandboxes the run.
+    amendment) — and in any case once the shell exits, so a background child it left behind
+    neither holds the output open nor outlives the call. The output block carries the exit status
+    and both streams, redacted with the hook's shell redactor, the ADR-0076 credential-literal
+    detector, and every value in `redactions` (the server's own configured secrets) before it
+    becomes state. The gate judged the command string; nothing here sandboxes the run.
     """
     # Worst-case UTF-16 encoding is three UTF-8 bytes per unit, so crossing this byte bound
     # proves the decoded text is over the cap: the flood kill is never a false kill.
@@ -294,7 +296,6 @@ def run_command(
     timed_out = False
     while True:
         if state["overflow"]:
-            _kill_group(process)
             break
         try:
             process.wait(timeout=0.05)
@@ -302,9 +303,12 @@ def run_command(
         except subprocess.TimeoutExpired:
             pass
         if time.monotonic() > deadline:
-            _kill_group(process)
             timed_out = True
             break
+    # Whatever ended the wait, the whole group dies now. After a normal exit the shell is gone, so
+    # anything still in its group is a background child it left behind: killing it closes the
+    # pipes the readers are blocked on, and the run never outlives the call.
+    _kill_group(process)
     for reader in readers:
         reader.join(timeout=5)
     if timed_out:
@@ -318,6 +322,14 @@ def run_command(
             f"the command output passed the {output_units_max:,}-unit cap and the run was killed; "
             "run a command that prints less",
             code="output_too_large",
+        )
+    if any(reader.is_alive() for reader in readers):
+        # A child that left the group (its own session) still holds a pipe, so the output can never
+        # be read to its end: refuse rather than return a part that is silently incomplete.
+        raise ToolError(
+            "the command left a process holding its output open after it exited; "
+            "run a command whose children exit with it",
+            code="command_failed",
         )
     stdout = collected["stdout"].decode("utf-8", errors="replace")
     stderr = collected["stderr"].decode("utf-8", errors="replace")
@@ -339,9 +351,14 @@ def run_command(
 
 def _kill_group(process: subprocess.Popen[bytes]) -> None:
     """Kill the whole process group: the shell dies with its children, so a piped grandchild
-    cannot hold the output pipes open past the kill (the repository is POSIX-only, ADR-0032)."""
+    cannot hold the output pipes open past the kill (the repository is POSIX-only, ADR-0032).
+
+    `start_new_session=True` made the shell's pid the group id, and a group id stays valid while
+    any member lives — including after the shell itself was reaped — so the pid is used directly;
+    `os.getpgid` fails on a reaped leader and would turn the kill into a no-op.
+    """
     with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        os.killpg(process.pid, signal.SIGKILL)
     process.wait()
 
 
@@ -354,7 +371,7 @@ async def run_gated_command(command: str, settings: Settings) -> Part:
         ASK.command_timeout_seconds,
         ASK.command_output_units_max,
         scrubbed_environment(settings),
-        tuple(settings.secret_values()),
+        tuple(redaction_values(settings)),
     )
 
 

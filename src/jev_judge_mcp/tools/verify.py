@@ -120,7 +120,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         confidence = validated.confidence
         support = source.choice if source is not None and source.choice != "none" else None
         action = "review" if confidence is None else verify_action(confidence, auto_accept)
-        if note_blocks_auto(action, support, evidence):
+        if note_blocks_auto(action, None if source is None else source.choice, evidence):
             action = "review"
         row = {
             "id": claim["id"],

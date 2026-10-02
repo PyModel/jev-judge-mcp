@@ -6,7 +6,14 @@ import httpx
 
 from jev_judge_mcp.domain import JsonValue, is_json_object
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.providers.base import Evaluation, HttpProvider, ProviderName, decode_body, parse_envelope
+from jev_judge_mcp.providers.base import (
+    Evaluation,
+    HttpProvider,
+    ProviderName,
+    decode_body,
+    parse_envelope,
+    request_id_of,
+)
 from jev_judge_mcp.providers.retry import RetryPolicy, retry_after_seconds
 from jev_judge_mcp.serialize import stringify_compact
 
@@ -72,5 +79,6 @@ class CloudflareProvider(HttpProvider):
             envelope.usage,
             self.name,
             envelope.model_or(slug),
-            request_id=envelope.request_id,
+            # A header-only id is kept, as the compatible provider keeps it (ADR-0068).
+            request_id=envelope.request_id or request_id_of({}, response.headers),
         )

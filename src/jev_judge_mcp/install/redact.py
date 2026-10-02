@@ -12,9 +12,12 @@ HASH_PLACEHOLDER = "<redacted>"
 _KEY_NAME = "TYPESAFE_API_KEY"
 
 # A literal JSON or TOML string assigned to TYPESAFE_API_KEY, excluding the reference forms
-# terminal agents store (`${TYPESAFE_API_KEY}`, `{env:TYPESAFE_API_KEY}`).
+# terminal agents store (`${TYPESAFE_API_KEY}`, `{env:TYPESAFE_API_KEY}`). TOML spells the key
+# bare or quoted and the value as a basic ("...") or literal ('...') string; every form is redacted.
 _JSON_LITERAL = re.compile(r'("TYPESAFE_API_KEY"\s*:\s*")(?!\$\{|\{env:)((?:\\.|[^"\\])*)(")')
-_TOML_LITERAL = re.compile(r"(TYPESAFE_API_KEY\s*=\s*\")(?!\$\{|\{env:)((?:\\.|[^\"\\])*)(\")")
+_TOML_KEY = r"(?:\"TYPESAFE_API_KEY\"|'TYPESAFE_API_KEY'|TYPESAFE_API_KEY)"
+_TOML_LITERAL = re.compile(rf"({_TOML_KEY}\s*=\s*\")(?!\$\{{|\{{env:)((?:\\.|[^\"\\])*)(\")")
+_TOML_LITERAL_SINGLE = re.compile(rf"({_TOML_KEY}\s*=\s*')(?!\$\{{|\{{env:)([^']*)(')")
 
 
 def is_reference(value: str) -> bool:
@@ -27,7 +30,8 @@ def redact_text(text: str, secrets: Iterable[str]) -> str:
     for secret in sorted({secret for secret in secrets if secret}, key=len, reverse=True):
         text = text.replace(secret, REDACTED)
     text = _JSON_LITERAL.sub(rf"\1{REDACTED}\3", text)
-    return _TOML_LITERAL.sub(rf"\1{REDACTED}\3", text)
+    text = _TOML_LITERAL.sub(rf"\1{REDACTED}\3", text)
+    return _TOML_LITERAL_SINGLE.sub(rf"\1{REDACTED}\3", text)
 
 
 def redact_tree(value: object) -> object:

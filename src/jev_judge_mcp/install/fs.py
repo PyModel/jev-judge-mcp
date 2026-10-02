@@ -1,5 +1,6 @@
 """Private state files and atomic config writes. New installer files are mode 0600."""
 
+import contextlib
 import hashlib
 import json
 import os
@@ -41,6 +42,31 @@ def read_bytes(path: Path) -> bytes | None:
     return real.read_bytes()
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    """`os.write` may take fewer bytes than offered; loop until every byte is down."""
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view) :]
+
+
+def _write_temporary(directory: Path, prefix: str, data: bytes, mode: int) -> str:
+    """A fully written, synced, mode-set temporary file beside the target, or no file at all:
+    a failure at any step unlinks it before the error propagates."""
+    fd, temporary = tempfile.mkstemp(dir=directory, prefix=prefix)
+    try:
+        try:
+            _write_all(fd, data)
+            os.fsync(fd)
+            os.fchmod(fd, mode)
+        finally:
+            os.close(fd)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
+    return temporary
+
+
 def atomic_write(path: Path, text: str, mode: int, expected: bytes | None) -> None:
     """Write `text` through a symlink onto the real file. Abort if the file changed."""
     real = path.resolve() if path.is_symlink() else path
@@ -48,20 +74,14 @@ def atomic_write(path: Path, text: str, mode: int, expected: bytes | None) -> No
     current = real.read_bytes() if real.exists() else None
     if current != expected:
         raise ConfigChangedError(f"{path}: changed during install, re-run")
-    fd, temporary = tempfile.mkstemp(dir=real.parent, prefix=".jev-install-")
-    try:
-        os.write(fd, text.encode())
-        os.fsync(fd)
-        os.fchmod(fd, mode)
-    finally:
-        os.close(fd)
+    temporary = _write_temporary(real.parent, ".jev-install-", text.encode(), mode)
     try:
         current = real.read_bytes() if real.exists() else None
         if current != expected:
             raise ConfigChangedError(f"{path}: changed during install, re-run")
         os.replace(temporary, real)
-    except Exception:
-        if os.path.exists(temporary):
+    except BaseException:
+        with contextlib.suppress(OSError):
             os.unlink(temporary)
         raise
     os.chmod(real, mode)
@@ -77,7 +97,7 @@ def write_backup(state_dir: Path, stamp: str, target: str, suffix: str, data: by
     destination = directory / f"{target}{suffix or '.txt'}"
     fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.write(fd, data)
+        _write_all(fd, data)
         os.fsync(fd)
     finally:
         os.close(fd)
@@ -111,12 +131,11 @@ def state_hash(state: Mapping[str, object], target: str) -> str | None:
 def write_state(path: Path, state: Mapping[str, object]) -> None:
     ensure_private_dir(path.parent)
     text = json.dumps(state, indent=2, sort_keys=True) + "\n"
-    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".jev-state-")
+    temporary = _write_temporary(path.parent, ".jev-state-", text.encode(), 0o600)
     try:
-        os.write(fd, text.encode())
-        os.fsync(fd)
-        os.fchmod(fd, 0o600)
-    finally:
-        os.close(fd)
-    os.replace(temporary, path)
+        os.replace(temporary, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
     os.chmod(path, 0o600)

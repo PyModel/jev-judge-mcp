@@ -19,6 +19,7 @@ from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.domain.questions import NoulCriteria, NoulQuestion, Question
 from jev_judge_mcp.hook import PROVIDER_TIMEOUT_SECONDS
 from jev_judge_mcp.hook_render import render_annotation
+from jev_judge_mcp.keyfile import redaction_values
 from jev_judge_mcp.providers import (
     JevProvider,
     ProviderConfigError,
@@ -100,7 +101,7 @@ def main(
     # stdin gates: a misconfigured environment still gets a one-line answer, never a traceback.
     from jev_judge_mcp.server import configure_logging
 
-    configure_logging(settings.log_level, settings.secret_values())
+    configure_logging(settings.log_level, redaction_values(settings))
     model = resolve_model(settings)
     chosen = provider
     if chosen is None:

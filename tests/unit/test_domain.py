@@ -1,6 +1,7 @@
 """Canonical questions serialize to the reference's wire shape (`@typesafe-ai/sdk` 0.6.0)."""
 
 import json
+import math
 
 import pytest
 
@@ -76,3 +77,13 @@ def test_decode_json_reads_what_json_parse_reads(text: str, parsed: object) -> N
 def test_decode_json_rejects_what_json_parse_rejects(text: str) -> None:
     with pytest.raises(ValueError):
         decode_json(text)
+
+
+def test_decode_json_reads_an_integer_past_pythons_digit_limit_as_json_parse_does() -> None:
+    """`JSON.parse` has no digit limit: a 4301-digit integer is Infinity (or the nearest double),
+    never a parse error that drops the request on the floor."""
+    huge = "9" * 5000
+    assert decode_json(huge) == math.inf
+    assert decode_json("-" + huge) == -math.inf
+    parsed = decode_json('{"n": ' + huge + ', "k": 12}')
+    assert isinstance(parsed, dict) and parsed["n"] == math.inf and parsed["k"] == 12

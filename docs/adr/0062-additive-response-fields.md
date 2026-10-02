@@ -68,3 +68,15 @@ duplicates: `{"diff": "diff_1"}` names the second item; three: `{"diff": "diff_2
 third, later renames overwriting earlier ones, because the map is keyed by the sent id). The
 field remains additive and the behavior is unchanged; the harness pages state the rule so a
 caller colliding ids can read which physical item a row cites.
+
+## Amendment (2026-10-01): the gate names a diff that carries no hunks
+
+A caller that packs a change summary where the patch belongs gets claims the model cannot support
+and a bare `escalate`; the recovery (re-run with the real hunks and the test log) was learned from
+the escalate, not told. `jev_gate`'s string path now appends one fixed line to `next_checks` when
+the call did not stand (`accepted` absent) and `diff` is plain text — no unified-diff header and
+no `+` line — computed from the argument in code, never judged: `diff carries no patch hunks: pass
+the real diff (git diff output, or a [{path, patch}] list) so claims can rest on it.` A file list
+is a patch by construction and never carries the line; an accepted call never does either. The
+parity expectation applies the same function over the recorded arguments. Reason codes are
+unchanged; the hint is a next check, not a verdict.

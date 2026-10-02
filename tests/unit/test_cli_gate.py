@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from jev_judge_mcp import cli
 from jev_judge_mcp.cli import completion_hook_main, completion_matches, gate_main, judge_main
 from tests.support.jev import FakeProvider
 
@@ -308,3 +309,17 @@ def test_cli_gate_does_not_mark_a_file_it_read_self_reported(
     state = provider.requests[0][0]
     assert isinstance(state, dict)
     assert state.get("tests") == raw.decode("utf-8")
+
+
+def test_a_path_containing_space_b_slash_is_split_at_the_header_midpoint() -> None:
+    """`a/dir b/c b/dir b/c` has two ` b/` markers; the last one names `c`, the midpoint names the
+    file. A rename falls back to the `+++ b/` line (git ends it with a tab when the path has spaces)."""
+    same = "diff --git a/dir b/c b/dir b/c\nindex 1..2 100644\n--- a/dir b/c\n+++ b/dir b/c\t\n@@ -1 +1 @@\n-x\n+y\n"
+    files = cli._split_unified(same)  # pyright: ignore[reportPrivateUsage]
+    assert files is not None and [item["path"] for item in files] == ["dir b/c"]
+    renamed = (
+        "diff --git a/old b/new\nsimilarity index 90%\nrename from old\nrename to new\n"
+        "--- a/old\n+++ b/new\n@@ -1 +1 @@\n-x\n+y\n"
+    )
+    files = cli._split_unified(renamed)  # pyright: ignore[reportPrivateUsage]
+    assert files is not None and [item["path"] for item in files] == ["new"]

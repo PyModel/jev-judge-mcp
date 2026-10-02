@@ -234,11 +234,31 @@ def _split_unified(diff: str) -> list[dict[str, str]] | None:
 
 
 def _path_from_header(chunk: str) -> str | None:
-    first = chunk.splitlines()[0]
-    marker = " b/"
-    if marker not in first:
-        return None
-    path = first.rsplit(marker, 1)[-1]
+    """The post-image path of one `diff --git a/X b/X` header.
+
+    Both halves name the same path unless the file was renamed, so the header is split at its
+    midpoint rather than at the last ` b/`, which a path containing ` b/` would defeat. A rename
+    (`a/old b/new`) has no such symmetry: its `+++ b/` line names the new path when the content
+    changed (git ends that line with a tab when the path holds spaces), else the last ` b/` stands.
+    """
+    lines = chunk.splitlines()
+    first = lines[0]
+    rest = first.removeprefix("diff --git ")
+    path: str | None = None
+    middle = len(rest) // 2
+    if len(rest) % 2 == 1 and rest[middle] == " ":
+        left, right = rest[:middle], rest[middle + 1 :]
+        if left.startswith("a/") and right.startswith("b/") and left[2:] == right[2:]:
+            path = right[2:]
+    if path is None:
+        plus = next((line for line in lines[1:] if line.startswith("+++ b/")), None)
+        if plus is not None:
+            path = plus.removeprefix("+++ b/").rstrip("\t")
+    if path is None:
+        marker = " b/"
+        if marker not in first:
+            return None
+        path = first.rsplit(marker, 1)[-1]
     if not path or path.startswith("/") or ".." in Path(path).parts:
         return None
     return path

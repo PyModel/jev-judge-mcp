@@ -16,6 +16,7 @@ from jev_judge_mcp.server import configure_logging
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools.base import Handler, JevTool, Runtime, ToolError, ToolResult, define
 from jev_judge_mcp.tools.toolset import Toolset
+from tests.support.jev import call_tool
 
 pytestmark = pytest.mark.anyio
 
@@ -85,12 +86,19 @@ async def test_handler_keyerror_reaches_stderr_and_is_an_error(capsys: pytest.Ca
 
 
 @pytest.mark.parametrize(
-    ("error", "outcome"),
-    [(ToolError("owned failure", code="provider"), "tool_error"), (ProviderError("provider down"), "provider_error")],
+    ("error", "outcome", "traced"),
+    [
+        (ToolError(f"owned failure naming {_NOTE}", code="provider"), "tool_error", False),
+        (ProviderError("provider down"), "provider_error", True),
+    ],
 )
 async def test_owned_handler_errors_are_logged_then_returned(
-    capsys: pytest.CaptureFixture[str], error: Exception, outcome: str
+    capsys: pytest.CaptureFixture[str], error: Exception, outcome: str, traced: bool
 ) -> None:
+    """A provider failure logs its traceback (the diagnostic); a refusal the tool owns logs one
+    line of type and code, because its message quotes the caller's arguments. Either way the
+    caller gets the message, and the caller's text never reaches stderr."""
+
     async def handler(_parsed: dict[str, Any], _runtime: Runtime) -> ToolResult:
         raise error
 
@@ -105,8 +113,10 @@ async def test_owned_handler_errors_are_logged_then_returned(
     assert result.is_error
     assert _text(result) == str(error)
     assert toolset.runtime.telemetry.spans.spans[-1].attributes["outcome"] == outcome
-    assert "Traceback (most recent call last):" in err
+    assert ("Traceback (most recent call last):" in err) is traced
     assert "tool boom raised" in err
+    if not traced:
+        assert "ToolError (provider)" in err
     assert _NOTE not in err
 
 
@@ -125,8 +135,9 @@ async def test_rejected_arguments_are_logged_then_returned(capsys: pytest.Captur
     assert result.is_error
     assert "Invalid arguments for tool boom" in _text(result)
     assert toolset.runtime.telemetry.spans.spans[-1].attributes["outcome"] == "arguments_error"
-    assert "Traceback (most recent call last):" in err
-    assert "tool boom raised" in err
+    # One line, no traceback: the issue text names the caller's keys and values, and stays in the result.
+    assert "Traceback (most recent call last):" not in err
+    assert "tool boom raised ArgumentsError (invalid_arguments)" in err
     assert _NOTE not in err
 
 
@@ -231,3 +242,19 @@ async def test_cancelled_error_is_not_caught(capsys: pytest.CaptureFixture[str])
 
     assert "tool boom raised" not in err
     assert _NOTE not in err
+
+
+async def test_a_refusal_logs_its_type_and_code_but_not_the_callers_text(caplog: pytest.LogCaptureFixture) -> None:
+    """A ToolError message quotes the caller's ids and paths; the log gets the type and code only."""
+    with caplog.at_level(logging.ERROR, logger="jev_judge_mcp.telemetry"):
+        outcome = await call_tool(
+            "jev_file_judge",
+            {"path": "../outside-marker.txt", "kind": "noul", "instructions": "q", "criteria": {}},
+            {},
+        )
+    assert outcome.is_error and outcome.code == "path_outside_scope", outcome.text
+    assert "outside-marker" in outcome.text  # the caller still gets the full message
+    records = [record for record in caplog.records if record.name == "jev_judge_mcp.telemetry"]
+    assert records and all("outside-marker" not in record.getMessage() for record in records)
+    assert any("ToolError (path_outside_scope)" in record.getMessage() for record in records)
+    assert all(record.exc_info is None for record in records)

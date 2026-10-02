@@ -214,3 +214,20 @@ def test_one_oversized_family_stays_in_the_selection_split() -> None:
     # the single-row families fill the held-out split exactly.
     assert len(held_out) == 18
     assert len([row for row in selection if row.family == "big"]) == 40
+
+
+def test_pathological_rows_files_exit_two_instead_of_crashing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Exit 1 means no threshold met the budget; a rows file the command cannot read is exit 2 in
+    every shape: undecodable bytes, an integer score wider than a double, nesting past the limit."""
+    binary = tmp_path / "binary.jsonl"
+    binary.write_bytes(b"\xff\xfe not utf-8")
+    assert calibrate.main([str(binary), "--max-error", "0.3"]) == 2
+    assert "could not read" in capsys.readouterr().err
+    huge = rows_file(tmp_path, ['{"score": 1' + "0" * 400 + ', "correct": true}'])
+    assert calibrate.main([str(huge), "--max-error", "0.3"]) == 2
+    assert "finite" in capsys.readouterr().err
+    deep = rows_file(tmp_path, ["[" * 100_000])
+    assert calibrate.main([str(deep), "--max-error", "0.3"]) == 2
+    assert "not one JSON object" in capsys.readouterr().err

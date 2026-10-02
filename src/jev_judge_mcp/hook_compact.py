@@ -25,6 +25,7 @@ from jev_judge_mcp.hook import (
     PROVIDER_TIMEOUT_SECONDS,
     REPORTED_CONFIDENCE_THRESHOLD,
 )
+from jev_judge_mcp.keyfile import redaction_values
 from jev_judge_mcp.providers import (
     JevProvider,
     ProviderConfigError,
@@ -113,7 +114,7 @@ def compact_cut_main(
     # uses: a misconfigured environment still gets silence or the one line, never a traceback.
     from jev_judge_mcp.server import configure_logging
 
-    configure_logging(settings.log_level, settings.secret_values())
+    configure_logging(settings.log_level, redaction_values(settings))
     model = resolve_model(settings)
     chosen = provider
     if chosen is None:

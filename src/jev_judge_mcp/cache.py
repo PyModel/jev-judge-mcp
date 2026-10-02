@@ -28,24 +28,12 @@ import anyio
 
 from jev_judge_mcp import fsutil
 from jev_judge_mcp.domain import JsonValue, Question, Usage, questions_to_wire
-from jev_judge_mcp.providers.base import Evaluation, ProviderName
+from jev_judge_mcp.domain.json import decode_json
+from jev_judge_mcp.providers.base import Evaluation, ProviderName, usage_counts
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.settings import Settings
 
 logger = logging.getLogger("jev_judge_mcp.cache")
-
-_INVALID_COUNTS: tuple[float, float] = (-1.0, -1.0)
-
-
-def _usage_counts(usage: Mapping[str, object]) -> tuple[float, float]:
-    """Both counts as numbers, or the `_INVALID_COUNTS` marker (bool is not a number)."""
-    counts: list[float] = []
-    for key in ("input_tokens", "output_tokens"):
-        value = usage.get(key)
-        if type(value) not in (int, float):
-            return _INVALID_COUNTS
-        counts.append(value)  # type: ignore[reportArgumentType] -- narrowed to a number above
-    return counts[0], counts[1]
 
 
 def _enabled(settings: Settings) -> bool:
@@ -133,7 +121,8 @@ def lookup(
             pass
         return None
     try:
-        parsed: object = json.loads(path.read_text(encoding="utf-8"))
+        # `JSON.parse` rules: a record carrying `NaN` or `Infinity` is corrupt, so it is a miss.
+        parsed: object = decode_json(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(parsed, dict):
@@ -143,15 +132,17 @@ def lookup(
     usage = record.get("usage")
     name = record.get("provider")
     recorded_model = record.get("model")
-    if not isinstance(answers, dict) or not isinstance(usage, dict) or name != provider:
+    if not isinstance(answers, dict) or name != provider:
         return None
-    counts = Usage(*_usage_counts(cast(dict[str, object], usage)))
-    if counts.input_tokens < 0 or counts.output_tokens < 0:
+    # The envelope's own rule (finite, non-negative, bool is not a number): a record that the
+    # provider path would have refused is a miss here, by the same test.
+    counts = usage_counts(usage)
+    if counts is None:
         return None
     logger.info("cache hit for %s model %s", provider, recorded_model)
     return Evaluation(
         answers=cast(dict[str, object], answers),
-        usage=counts,
+        usage=Usage(*counts),
         provider=provider,
         model=recorded_model if isinstance(recorded_model, str) else model,
     )

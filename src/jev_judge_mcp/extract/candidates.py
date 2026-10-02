@@ -13,11 +13,12 @@ from typing import Final, Literal
 
 from jev_judge_mcp.extract.dialect import PatternRejected, from_units, translate
 from jev_judge_mcp.extract.executor import Invalid, Matches, RegexExecutor, Saturated, Timeout, Unavailable
+from jev_judge_mcp.limits import EXTRACT
 
-REGEX_TIMEOUT_S: Final = 1.0
-"""`REGEX_TIMEOUT_MS` (`lib.ts:185`)."""
+REGEX_TIMEOUT_S: Final = EXTRACT.regex_timeout_ms / 1000
+"""`REGEX_TIMEOUT_MS` (`lib.ts:185`), in seconds; the value is `limits.EXTRACT`'s."""
 
-REGEX_TIMEOUT_REASON: Final = "regex timed out after 1000ms; simplify the pattern"
+REGEX_TIMEOUT_REASON: Final = f"regex timed out after {EXTRACT.regex_timeout_ms}ms; simplify the pattern"
 
 REGEX_POOL_SATURATED_REASON: Final = "regex_pool_saturated"
 """ADR-0025: a queue-bound refusal is a capacity signal, not a pattern problem — no timeout

@@ -12,6 +12,7 @@ from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.responses import (
     caller_renames,
     claim_extras,
+    diff_shape,
     next_checks_for,
     renamed_ids_field,
     summary_extras,
@@ -45,6 +46,7 @@ from jev_judge_mcp.validation.caps import (
     CapScope,
     exceeds,
     gate_diff_aggregate_error,
+    gate_diff_files_error,
     gate_evidence_aggregate_error,
     gate_evidence_items_error,
 )
@@ -296,7 +298,8 @@ async def _ask_gate(
         "truncated": truncated,
         "action": action,
         "reason_codes": reason_codes,
-        "next_checks": next_checks_for(reason_codes),
+        # A text diff that did not stand gets the no-hunks hint: computed from the argument, not judged.
+        "next_checks": next_checks_for(reason_codes, diff_shape=diff_shape(args["diff"])),
         "review": review.payload,
         "verification": verification.payload,
         **renamed_ids_field(renamed),
@@ -347,7 +350,7 @@ def _verify_claims(
         action = require_complete_context(
             claim_action(verdict, answer.confidence, thresholds.auto_accept, thresholds.review_at), truncated
         )
-        if note_blocks_auto(action, support, asked_evidence):
+        if note_blocks_auto(action, None if source is None else source.choice, asked_evidence):
             action = "review"
         claim_actions.append(action)
         row: dict[str, object] = {
@@ -399,6 +402,8 @@ async def _handle_file_list(
     total = sum(length(item["patch"]) for item in files)
     if exceeds(total, GATE.aggregate_evidence_units):
         return _refused(gate_diff_aggregate_error(GATE.aggregate_evidence_units))
+    if exceeds(len(files), GATE.files_max):
+        return _refused(gate_diff_files_error(GATE.files_max))
     fitting = [item for item in files if length(str(item["patch"])) <= GATE.doc_units]
     unreviewed = [str(item["path"]) for item in files if length(str(item["patch"])) > GATE.doc_units]
     if not fitting:

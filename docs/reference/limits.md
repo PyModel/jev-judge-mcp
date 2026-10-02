@@ -180,6 +180,7 @@ Candidate caps are the shared `CANDIDATES` table below.
 | `evidence_items` | 16 | over → budget error (`input_too_large`) |
 | `aggregate_evidence_units` | 200000 | over → budget error (`input_too_large`), rendered `200,000` |
 | `doc_units` | 50000 | a string `request`/`diff`/`tests`/evidence item truncates (context scope). A file-list `diff` is reviewed per file under the same cap: a file over it is `unreviewed_files` with reason `incomplete_context`, and the call never stands `auto`; the joined list over the aggregate budget refuses with `input_too_large` (ADR-0066) |
+| `files_max` | 64 | a file-list `diff` with more entries refuses `input_too_large` before any request, for `jev_gate` and `jev_review` alike: one review request runs per file (ADR-0066 amendment) |
 
 ### jev_score (`limits.SCORE`, ADR-0048)
 

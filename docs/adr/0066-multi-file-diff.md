@@ -65,3 +65,17 @@ review half keeps the unclamped worst action, so its mapping always agrees with 
 A path listed twice keeps its worst action, so the mapping cannot soften the headline either.
 The zero-request shapes (every file oversized) omit `file_actions`, as they omit `score_file`
 and `reviewed_files`.
+
+## Amendment (2026-10-01): the file list is bounded in count, not only in bytes
+
+The joined-patches budget bounded the bytes a file list may carry but not the number of files:
+one review request runs per fitting file, so a list of one-unit patches could book up to 200,000
+provider calls under the 200,000-unit aggregate. `GATE.files_max` (64, the same count
+`jev_files_judge` allows per call) now caps a `[{path, patch}]` diff for `jev_gate` and
+`jev_review` alike, checked right after the aggregate and before any request: `jev_gate` returns
+the `isError` refusal `diff exceeds 64 files; split the diff or pass fewer files.` and
+`jev_review` raises it with the `input_too_large` code, the same two shapes the aggregate refusal
+takes. No parity-manifest row exists for the array branch; this ADR owns the value. The same
+amendment makes `jev_review`'s file-list payload report `truncated` as its string path does (a
+cut inside a reviewed file), and reuses `jev_gate`'s aggregate refusal text instead of a second
+copy of the sentence.

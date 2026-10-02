@@ -5,6 +5,7 @@ difference from the reference text is these fields, in this order.
 """
 
 from collections.abc import Mapping, Sequence
+from typing import Literal
 
 from jev_judge_mcp.text import head
 
@@ -26,8 +27,33 @@ NEXT_CHECKS: dict[str, str] = {
     "caller_note_only": "A caller note is not enough for auto. Add a diff or a tool log.",
 }
 
+NO_HUNKS_CHECK = (
+    "diff carries no patch hunks: pass the real diff (git diff output, or a [{path, patch}] list) "
+    "so claims can rest on it."
+)
+"""The deterministic hint a gate that did not stand appends when its `diff` was plain text (ADR-0062
+amendment, 2026-10-01): a summary written in place of the patch is unsupported by construction,
+and the caller should learn that from the payload, not from a bare escalate."""
+
+type DiffShape = Literal["patch", "file_list", "text"]
+
+_HUNK_HEADERS = ("diff --git ", "@@ ", "+++ ", "--- ", "Index: ")
+
 SCORE_SCALE = [0, 2]
 _LEVELS = (0, 1, 2)
+
+
+def diff_shape(diff: object) -> DiffShape:
+    """What the caller sent as `diff`, computed in code, never judged.
+
+    A file list is a patch by construction. A string is a patch when any line carries a unified-diff
+    header or begins with `+` (an added line; `-` alone is also a bullet, so it does not count).
+    Anything else — a change summary, an excerpt — is `text`: nothing a claim can rest on as a patch.
+    """
+    if isinstance(diff, list):
+        return "file_list"
+    lines = diff.splitlines() if isinstance(diff, str) else []
+    return "patch" if any(line.startswith(_HUNK_HEADERS) or line.startswith("+") for line in lines) else "text"
 
 
 def renamed_ids_field(renamed: Mapping[str, str]) -> dict[str, dict[str, str]]:
@@ -75,7 +101,11 @@ def missing_evidence_code(
     verdict: object,
     evidence: Sequence[Mapping[str, object]],
 ) -> str | None:
-    """A fixed code for an unsupported or contradicted claim. Never model prose."""
+    """A fixed code for an unsupported or contradicted claim. Never model prose.
+
+    `None` when the evidence already carries a diff, tests, and a before/after pair: the claim
+    failed on complete evidence, and no fixed code names something to add.
+    """
     if verdict not in ("unsupported", "contradicted"):
         return None
     if len(evidence) < 2:
@@ -89,7 +119,7 @@ def missing_evidence_code(
         return "needs_tests"
     if "before" not in roles or "after" not in roles:
         return "needs_before_after"
-    return "needs_diff"
+    return None
 
 
 def claim_extras(
@@ -119,8 +149,13 @@ def summary_extras(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
     return {"by_verdict": partition(rows, "verdict"), "by_action": partition(rows, "action")}
 
 
-def next_checks_for(codes: Sequence[object]) -> list[str]:
-    return [NEXT_CHECKS[str(code)] for code in codes if str(code) in NEXT_CHECKS]
+def next_checks_for(codes: Sequence[object], *, diff_shape: DiffShape | None = None) -> list[str]:
+    """The fixed next check per reason code, in code order, plus `NO_HUNKS_CHECK` when the call did
+    not stand (`accepted` absent) and its `diff` was plain text."""
+    checks = [NEXT_CHECKS[str(code)] for code in codes if str(code) in NEXT_CHECKS]
+    if diff_shape == "text" and not any(str(code) == "accepted" for code in codes):
+        checks.append(NO_HUNKS_CHECK)
+    return checks
 
 
 def nearest_level(score: object) -> int | None:

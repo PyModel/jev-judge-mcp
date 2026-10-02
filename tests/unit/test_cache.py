@@ -286,3 +286,17 @@ async def test_a_crashed_atomic_write_leftover_is_swept_on_the_next_store(
     names = [path.name for path in cache_env.iterdir()]
     assert len(names) == 2  # two live entries; the staging file is gone
     assert all(name.endswith(".json") for name in names)
+
+
+async def test_a_non_finite_usage_entry_is_a_miss(cache_env: Path) -> None:
+    """`json.dumps` writes NaN and Infinity, `JSON.parse` never reads them: a record carrying either
+    is corrupt by the envelope's own usage rule and must not replay."""
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    await runtime.ask({"subject": "x"}, _question())
+    for entry in cache_env.iterdir():
+        record = json.loads(entry.read_text(encoding="utf-8"))
+        record["usage"] = {"input_tokens": float("nan"), "output_tokens": float("inf")}
+        entry.write_text(json.dumps(record), encoding="utf-8")
+    await runtime.ask({"subject": "x"}, _question())
+    assert len(provider.requests) == 2

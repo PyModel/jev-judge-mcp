@@ -557,3 +557,41 @@ async def test_gate_summary_partitions_and_a_row_stands_only_when_auto() -> None
     assert summary["by_action"] == {"escalate": 1}
     assert sum(summary["by_verdict"].values()) == 1
     assert sum(summary["by_action"].values()) == 1
+
+
+async def test_a_file_list_over_the_file_cap_is_refused_before_any_request() -> None:
+    """One request runs per file, so the count is a budget (ADR-0066 amendment): review raises it
+    typed, gate returns the isError shape, and neither asks anything."""
+    too_many = [{"path": f"f{index}.py", "patch": "+"} for index in range(GATE.files_max + 1)]
+    review = await call_tool("jev_review", {"request": "r", "diff": too_many}, {})
+    assert review.is_error and review.code == "input_too_large", review.text
+    assert f"{GATE.files_max} files" in review.text
+    assert review.requests == []
+    gate = await call_tool("jev_gate", {"request": "r", "diff": too_many, "claims": ["done"], "evidence": "proof"}, {})
+    assert gate.is_error and gate.code == "input_too_large", gate.text
+    assert f"{GATE.files_max} files" in gate.text
+    assert gate.requests == []
+    at_cap = too_many[: GATE.files_max]
+    assert not (await call_tool("jev_review", {"request": "r", "diff": at_cap}, {})).is_error
+
+
+async def test_the_review_file_list_reports_a_cut_as_its_string_path_does() -> None:
+    """A request over the document cap is cut for every file review; the payload says so and the
+    telemetry outcome carries the scope, exactly like a string diff."""
+    answers = {
+        "correctness": {"score": 2, "confidence": 0.95},
+        "spec_match": {"score": 2, "confidence": 0.95},
+        "test_gap": {"score": 0, "confidence": 0.95},
+        "blast_radius": {"score": 0, "confidence": 0.95},
+        "safe_to_apply": {"noul": 0.95},
+    }
+    clean = await call_tool("jev_review", {"request": "fix", "diff": [{"path": "a.py", "patch": "+x"}]}, answers)
+    assert not clean.is_error and clean.payload["truncated"] is False
+    cut = await call_tool(
+        "jev_review",
+        {"request": "r" * (GATE.doc_units + 1), "diff": [{"path": "a.py", "patch": "+x"}]},
+        answers,
+    )
+    assert not cut.is_error, cut.text
+    assert cut.payload["truncated"] is True
+    assert cut.payload["action"] != "auto"

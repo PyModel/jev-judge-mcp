@@ -326,8 +326,11 @@ def _insert(
         cursor -= 1
     comma = "" if masked[cursor] == "," else ","
     parent_pad = _line_indent(text, parent_start)
-    # Replace the gap before the closing brace so the new key sits beside its siblings.
-    tail = comma + "\n" + child_pad + property_text + "\n" + parent_pad
+    # The gap between the last value and the closing brace holds whitespace and comments only
+    # (comments are spaces in the masked copy, so the cursor skipped them): keep the comments,
+    # drop the whitespace, and put the new key after them so it sits beside its siblings.
+    kept = text[cursor + 1 : close].rstrip()
+    tail = comma + kept + "\n" + child_pad + property_text + "\n" + parent_pad
     return text[: cursor + 1] + tail + text[close:]
 
 

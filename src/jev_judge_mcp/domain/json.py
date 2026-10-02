@@ -21,13 +21,23 @@ def decode_json(text: str) -> object:
     Nesting too deep for Python's recursion limit is a `ValueError` too.
     """
     try:
-        return json.loads(text, parse_constant=_reject_constant)
+        return json.loads(text, parse_constant=_reject_constant, parse_int=_parse_int)
     except RecursionError as error:
         raise ValueError("JSON nesting is too deep") from error
 
 
 def _reject_constant(name: str) -> object:
     raise ValueError(f"{name} is not JSON")
+
+
+def _parse_int(digits: str) -> int | float:
+    """An integer literal as `JSON.parse` reads it: exact while Python converts it, a double past
+    Python's digit limit (`sys.get_int_max_str_digits`), where `JSON.parse` has long since rounded
+    to the nearest double or infinity. The limit is a `ValueError` in `int()`, never JSON syntax."""
+    try:
+        return int(digits)
+    except ValueError:
+        return float(digits)
 
 
 def is_json_object(value: object) -> TypeGuard[dict[str, object]]:

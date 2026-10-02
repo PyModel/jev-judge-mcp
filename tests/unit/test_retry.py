@@ -150,3 +150,12 @@ def test_provider_config_error_is_never_transient() -> None:
     error.status = 503  # even a carried status must not make configuration retryable
     provider = _Classifier(Redactor(()))
     assert provider._transient(error) is None  # pyright: ignore[reportPrivateUsage]
+
+
+def test_an_http_date_with_a_minus_zero_zone_is_utc() -> None:
+    """`parsedate_to_datetime` returns a naive datetime for `-0000`; the hint must read it as UTC,
+    not as the host's local time, or it is off by the UTC offset."""
+    gmt = retry_timing.retry_after_seconds({"retry-after": "Wed, 21 Oct 2099 07:28:00 GMT"})
+    naive = retry_timing.retry_after_seconds({"retry-after": "Wed, 21 Oct 2099 07:28:00 -0000"})
+    assert gmt is not None and naive is not None
+    assert abs(gmt - naive) < 1.0

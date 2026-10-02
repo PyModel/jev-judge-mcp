@@ -100,7 +100,12 @@ def read_state(path: Path, caps: FileJudgeCaps | FilesJudgeCaps = FILE_JUDGE) ->
     # UTF-16 unit per four bytes, so a file over four times the unit cap is over-cap unread.
     if stat.st_size > 4 * caps.file_units_max:
         refuse("file_too_large", f"file exceeds the {caps.file_units_max:,}-unit state cap: {path}")
-    data = path.read_bytes()
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        # A file that passed `stat` but refuses the read (mode 000, a device, a race): the same
+        # typed verdict as any other non-readable path, never a bare handler failure.
+        refuse("not_a_file", f"path is not a readable file: {path} ({error.strerror or error})")
     if b"\x00" in data[: caps.binary_sniff_bytes]:
         refuse("binary_file", f"file looks binary (NUL byte in the first {caps.binary_sniff_bytes} bytes): {path}")
     content = data.decode("utf-8", errors="replace")

@@ -21,7 +21,7 @@ from pydantic import SecretStr
 
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.keyfile import stored_key, stored_key_path
+from jev_judge_mcp.keyfile import redaction_values, stored_key, stored_key_path
 from jev_judge_mcp.policy.thresholds import (
     DEFAULT_AUTO_ACCEPT,
     DEFAULT_CLASSIFY_AUTO_ACCEPT,
@@ -84,7 +84,7 @@ def main(argv: Sequence[str] | None = None, *, home: Path | None = None, cwd: Pa
     work = Path.cwd() if cwd is None else cwd
     name, failure = _resolve(settings)
     report = _report(settings, root, work, name, failure)
-    sys.stdout.write(Redactor(settings.secret_values())(report))
+    sys.stdout.write(Redactor(redaction_values(settings))(report))
     return 0 if name is not None else 1
 
 

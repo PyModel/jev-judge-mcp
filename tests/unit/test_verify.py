@@ -10,6 +10,7 @@ from collections.abc import Mapping
 
 import pytest
 
+from jev_judge_mcp.responses import missing_evidence_code
 from tests.support.jev import call_tool
 
 pytestmark = pytest.mark.anyio
@@ -125,3 +126,37 @@ async def test_malformed_source_confidence_does_not_invalidate_the_relation() ->
     assert row["action"] == "review"
     assert row["supporting_evidence"] == "a"
     assert "status" not in row
+
+
+def test_a_claim_that_fails_on_complete_evidence_has_no_missing_evidence_code() -> None:
+    """The fixed codes name what to add; with a diff, tests, and a before/after pair present there
+    is nothing to add, so the row says `None` rather than asking for a diff that is already there."""
+    complete = [
+        {"id": "diff", "text": "+x", "kind": "diff", "role": "after"},
+        {"id": "tests", "text": "1 passed", "kind": "tool_output", "role": "current"},
+        {"id": "old", "text": "y", "role": "before"},
+    ]
+    assert missing_evidence_code(verdict="unsupported", evidence=complete) is None
+    assert missing_evidence_code(verdict="contradicted", evidence=complete) is None
+    without_tests = [item for item in complete if item["id"] != "tests"]
+    assert missing_evidence_code(verdict="unsupported", evidence=without_tests) == "needs_tests"
+    assert missing_evidence_code(verdict="verified", evidence=complete) is None
+
+
+async def test_a_caller_note_literally_named_none_still_blocks_auto() -> None:
+    """The `none` source hatch shares its key with a caller item called `none`; when that item is a
+    caller note, the ADR-0067 rule still holds — the collision never turns the note into auto."""
+    evidence = [
+        {"id": "none", "text": "I ran the tests myself.", "kind": "caller_note"},
+        {"id": "b", "text": "unrelated"},
+    ]
+    answers = {
+        "relation_claim0": _relation(0.97, present=True),
+        "source_claim0": {"choice": "none", "probabilities": {"none": 0.9, "b": 0.1}},
+    }
+    outcome = await call_tool("jev_verify", {"claims": ["Tests pass."], "evidence": evidence}, answers)
+    assert not outcome.is_error, outcome.text
+    row = outcome.payload["results"][0]
+    assert row["verdict"] == "verified" and row["confidence"] == 0.97
+    assert row["action"] == "review"
+    assert row["supporting_evidence"] is None  # the hatch still reads as no source on the wire

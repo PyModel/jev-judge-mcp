@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain import is_json_object
 from jev_judge_mcp.install.documents import (
     json_entry_path,
@@ -267,6 +268,7 @@ def _select(
 ) -> tuple[list[str], list[str], int | None, bool]:
     lines: list[str] = []
     detected = [hit.target for hit in hits]
+    chosen_explicitly = False
     if request.agents and request.select_all:
         selected = list(dict.fromkeys([*detected, *request.agents]))
     elif request.agents:
@@ -286,9 +288,11 @@ def _select(
             if unknown:
                 raise InstallError(f"unknown agent {unknown[0]!r}; choose from {listed}")
             selected = list(chosen)
+            chosen_explicitly = True
 
     pi_failed = False
-    automatic = not request.agents or request.select_all
+    # Automatic means nobody named the agents: neither `--agent` nor the chooser's answer.
+    automatic = (not request.agents and not chosen_explicitly) or request.select_all
     pi_requested = "pi" in selected or (automatic and pi_directory_without_adapter)
     if pi_requested and not pi_adapter_installed(request.layout.pi_settings()):
         lines.append(
@@ -513,9 +517,11 @@ def _other_servers(servers: Mapping[str, object], name: str) -> str:
 
 
 def _diff(path: Path, before: str, after: str, secrets: tuple[str, ...]) -> str:
+    """The redacted dry-run diff. Context lines come from the whole file, so other servers'
+    credentials next to the insertion point are redacted with the ADR-0076 literal detector too."""
     lines = difflib.unified_diff(
-        redact_text(before, secrets).splitlines(),
-        redact_text(after, secrets).splitlines(),
+        redact_credential_literals(redact_text(before, secrets)).splitlines(),
+        redact_credential_literals(redact_text(after, secrets)).splitlines(),
         fromfile=str(path),
         tofile=str(path),
         lineterm="",
@@ -549,9 +555,36 @@ def _diffs(actions: list[_Action]) -> list[str]:
     return [action.diff for action in actions if action.diff]
 
 
+def _record(request: Request, action: _Action) -> dict[str, object]:
+    """The state-file record for an added or updated entry (its `verified` flag is set after the check)."""
+    assert action.entry is not None  # only called for an entry-bearing action
+    return {
+        "path": str(action.path),
+        "name": request.name,
+        "installer_version": _version(),
+        "entry_sha256": entry_hash(action.entry),
+    }
+
+
+def _planned_targets(request: Request, actions: list[_Action], targets: Mapping[str, object]) -> dict[str, object]:
+    """The targets the state file would hold after `actions`, computed before any write."""
+    planned = dict(targets)
+    for action in actions:
+        if action.after is None or action.path is None or not action.ok:
+            continue
+        if action.kind == "remove":
+            planned.pop(action.target, None)
+        elif action.entry is not None:
+            planned[action.target] = _record(request, action)
+    return planned
+
+
 def _apply(request: Request, actions: list[_Action]) -> None:
     state = load_state(request.layout.state_file())
     targets = _mutable_targets(state)
+    # Validate before the irreversible step: the records are computable up front, so a key that
+    # would land in the state file stops the install while no config has been touched.
+    _refuse_secret({"targets": _planned_targets(request, actions, targets)}, request.secrets)
     stamp = request.stamp or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     changed = False
     for action in actions:
@@ -576,12 +609,7 @@ def _apply(request: Request, actions: list[_Action]) -> None:
         if action.kind == "remove":
             targets.pop(action.target, None)
         elif action.entry is not None:
-            record = {
-                "path": str(action.path),
-                "name": request.name,
-                "installer_version": _version(),
-                "entry_sha256": entry_hash(action.entry),
-            }
+            record = _record(request, action)
         warning = _mode_warning(action.path, holds_literal(action.entry) or action.literal)
         if warning and warning not in action.message:
             action.message = (action.message + " " + warning).strip()
@@ -602,9 +630,7 @@ def _apply(request: Request, actions: list[_Action]) -> None:
                 record["verified"] = verified
             targets[action.target] = record
     if changed:
-        payload: dict[str, object] = {"targets": targets}
-        _refuse_secret(payload, request.secrets)
-        write_state(request.layout.state_file(), payload)
+        write_state(request.layout.state_file(), {"targets": targets})
 
 
 def _write_one(request: Request, action: _Action, stamp: str) -> None:

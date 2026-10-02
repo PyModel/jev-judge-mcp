@@ -25,7 +25,13 @@ from typing import Any, cast
 
 from jev_judge_mcp.calibration.families import family_order
 from jev_judge_mcp.calibration.targets import PRECISION_TARGETS, error_budget
-from jev_judge_mcp.calibration.threshold import Certification, OperatingPoint, certify, select_threshold
+from jev_judge_mcp.calibration.threshold import (
+    DEFAULT_CONFIDENCE,
+    Certification,
+    OperatingPoint,
+    certify,
+    select_threshold,
+)
 from jev_judge_mcp.policy import PolicyThresholds, resolve_policy_thresholds
 
 USAGE = "usage: jev-judge-mcp calibrate <rows.jsonl> [--tool TOOL] [--max-error P] [--min-rows N]\n"
@@ -71,7 +77,7 @@ def _row(parsed: dict[str, Any], source: str, number: int) -> ParsedRow:
     if "score" not in parsed or "correct" not in parsed:
         raise CalibrateError(f"{where}: need score and correct")
     score = parsed["score"]
-    if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
+    if isinstance(score, bool) or not isinstance(score, (int, float)) or not _finite(score):
         raise CalibrateError(f"{where}: score must be a finite number")
     if not 0.0 <= score <= 1.0:
         raise CalibrateError(f"{where}: score {score} is outside [0, 1]")
@@ -86,6 +92,14 @@ def _row(parsed: dict[str, Any], source: str, number: int) -> ParsedRow:
         known = ", ".join(PRECISION_TARGETS)
         raise CalibrateError(f"{where}: unknown tool {tool!r} (one of {known})")
     return ParsedRow(float(score), correct, family if family else f"row{number}", tool)
+
+
+def _finite(score: int | float) -> bool:
+    """`math.isfinite` over an integer wider than a double raises; such a score is not finite here."""
+    try:
+        return math.isfinite(float(score))
+    except OverflowError:
+        return False
 
 
 def parse_rows(text: str, source: str) -> list[ParsedRow]:
@@ -104,7 +118,8 @@ def _decoded(line: str, source: str, number: int) -> dict[str, Any]:
     where = f"{source}:{number}"
     try:
         parsed = json.loads(line, parse_constant=_reject_constant)
-    except ValueError as error:
+    except (ValueError, RecursionError) as error:
+        # RecursionError: nesting deeper than the interpreter allows is a bad row, not a crash.
         raise CalibrateError(f"{where}: not one JSON object ({error})") from None
     if not isinstance(parsed, dict):
         raise CalibrateError(f"{where}: not one JSON object")
@@ -257,7 +272,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         selection, held_out = split_rows(rows)
         point = select_threshold([(row.score, row.correct) for row in selection], max_error=budget)
         if point is None:
-            zero_error_min = math.ceil(math.log(0.05) / math.log(1 - budget))
+            zero_error_min = math.ceil(math.log(1 - DEFAULT_CONFIDENCE) / math.log(1 - budget))
             sys.stderr.write(
                 f"no threshold meets the error budget {budget:g} on the {len(selection)} selection rows;"
                 f" a zero-error selection split needs at least {zero_error_min} rows at this budget"
@@ -276,6 +291,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     except CalibrateError as error:
         sys.stderr.write(f"jev-judge-mcp calibrate: {error}\n{USAGE}")
         return 2
-    except OSError as read_error:
+    except (OSError, UnicodeDecodeError) as read_error:
         sys.stderr.write(f"jev-judge-mcp calibrate: could not read the rows file ({read_error})\n")
         return 2

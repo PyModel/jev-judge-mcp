@@ -135,7 +135,7 @@ def parse_envelope(body: object, label: str) -> Envelope:
     usage = Usage()
     raw_usage = envelope.get("usage")
     if raw_usage is not None:
-        counts = _usage_counts(raw_usage)
+        counts = usage_counts(raw_usage)
         if counts is None:
             raise invalid("usage must report finite non-negative input_tokens and output_tokens.")
         usage = Usage(*counts)
@@ -145,7 +145,11 @@ def parse_envelope(body: object, label: str) -> Envelope:
     return Envelope(answers=answers, usage=usage, model=model, request_id=request_id_of(envelope))  # pyright: ignore[reportUnknownArgumentType]
 
 
-def _usage_counts(usage: object) -> tuple[int | float, int | float] | None:
+def usage_counts(usage: object) -> tuple[int | float, int | float] | None:
+    """Both counts as finite, non-negative numbers (bool is not a number), or `None`.
+
+    The envelope's rule; the response cache replays a record only when it passes the same test.
+    """
     if not isinstance(usage, dict):
         return None
     record: dict[str, object] = usage  # pyright: ignore[reportUnknownVariableType]
@@ -378,6 +382,11 @@ class HttpProvider(JevProvider):
             follow_redirects=True,
             event_hooks={"request": [self._reject_cross_origin]},
         )
+        if client is not None:
+            # An injected client is gated like the default one (ADR-0023): the guard is the
+            # provider's, so no transport choice can let a hop leave the origin.
+            hooks = client.event_hooks
+            client.event_hooks = {**hooks, "request": [*hooks["request"], self._reject_cross_origin]}
 
     async def _reject_cross_origin(self, request: httpx.Request) -> None:
         """Async: the client awaits every request hook, redirects included."""

@@ -113,9 +113,12 @@ class ProcessRegexExecutor:
         self._limit = anyio.Semaphore(self.size)
         self._waiting = 0
         self._idle: list[_Slot] = []
+        self._closed = False
 
     async def find(self, pattern: Translated, text: str, *, deadline: float) -> MatchResult:
         """Match `pattern` over unit-space `text`; every stage spends what remains of `deadline`."""
+        if self._closed:
+            return Invalid(Unavailable.NOT_STARTED)
         if self._waiting >= self.queue_bound:
             return Saturated()
         self._waiting += 1
@@ -156,7 +159,7 @@ class ProcessRegexExecutor:
             healthy = True
             return matches
         finally:
-            if healthy:
+            if healthy and not self._closed:
                 self._idle.append(slot)
             else:
                 await slot.kill()
@@ -238,6 +241,10 @@ class ProcessRegexExecutor:
             self._idle.append(await self._start())
 
     async def aclose(self) -> None:
+        """Kill every idle worker. Closed is final: a later `find` refuses with `NOT_STARTED`, and a
+        slot still running when the close happens is killed when it finishes instead of parked,
+        so no worker outlives the pool."""
+        self._closed = True
         idle, self._idle = self._idle, []
         for slot in idle:
             await slot.kill()

@@ -6,6 +6,7 @@ The payload schema, refusal typing at the argument boundary, and registry order 
 here is ask's stricter allow rule over the imported questions, not the hook's outcome logic.
 """
 
+import time
 from typing import Any, cast
 
 import pytest
@@ -137,6 +138,13 @@ def test_command_output_over_the_cap_refuses_after_the_run() -> None:
     assert getattr(raised.value, "code", "") == "output_too_large"
 
 
+def test_a_background_child_never_holds_the_output_open_or_outlives_the_run() -> None:
+    started = time.monotonic()
+    part = run_command("echo first; sleep 30 & echo second", timeout_seconds=10, output_units_max=1_000)
+    assert "first" in part.text and "second" in part.text  # the shell's own output is never lost
+    assert time.monotonic() - started < 5  # the stray child dies with the run; no join backstop fires
+
+
 def test_the_command_refusal_matrix_over_the_gate_answers() -> None:
     malformed = command_refusal({"effect": {"noul": 1}, "destructive_intent": {"noul": 0.1}})
     assert malformed is not None and "malformed" in malformed
@@ -217,6 +225,30 @@ async def test_the_composed_request_cap_is_a_strict_greater_than(tmp_path: Any, 
 
 
 # --- gate-first ordering through the real toolset ------------------------------------------
+
+
+async def test_a_disabled_or_denylisted_command_refuses_before_any_file_is_read(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "a.txt").write_text("alpha", encoding="utf-8")
+
+    def never(_paths: Any) -> Any:
+        raise AssertionError("files were read before the command's deterministic refusal")
+
+    monkeypatch.setattr("jev_judge_mcp.tools.ask.file_parts", never)
+    provider = GatedProvider(dict(GATE_ALLOW), {"q1": {"noul": 0.5}})
+    disabled = _toolset(provider, load_settings())  # JEV_ASK_COMMANDS unset
+    monkeypatch.setenv("JEV_ASK_COMMANDS", "1")
+    enabled = _toolset(provider, load_settings())
+    try:
+        off = await disabled.execute("jev_ask", allow_args(paths=["a.txt"]))
+        denied = await enabled.execute("jev_ask", allow_args(paths=["a.txt"], command="curl http://x"))
+    finally:
+        await disabled.aclose()
+        await enabled.aclose()
+    assert (off.error_code, denied.error_code) == ("command_disabled", "command_refused"), (off.text, denied.text)
+    assert provider.requests == []  # zero provider calls on either refusal
 
 
 async def test_a_refused_command_never_runs_and_never_reaches_the_ask(tmp_path: Any, monkeypatch: Any) -> None:

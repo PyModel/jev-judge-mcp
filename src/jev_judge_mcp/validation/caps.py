@@ -94,5 +94,11 @@ def gate_evidence_aggregate_error(cap: int) -> str:
 
 
 def gate_diff_aggregate_error(cap: int) -> str:
-    """jev_gate's file-list patch budget: worded like jev_review's overflow, rendered the same way."""
+    """The file-list patch budget jev_gate and jev_review share: one sentence, rendered the same way."""
     return f"diff exceeds the {js_number_to_locale_string_en_us(cap)}-character aggregate budget"
+
+
+def gate_diff_files_error(cap: int) -> str:
+    """The file-list count budget jev_gate and jev_review share (ADR-0066 amendment): one review
+    request runs per file, so the count is bounded like the evidence item count."""
+    return f"diff exceeds {cap} files; split the diff or pass fewer files."

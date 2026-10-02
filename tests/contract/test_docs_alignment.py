@@ -36,6 +36,7 @@ _PRUNED = {
     ".ruff_cache",
     ".treehouse",
     ".benchmarks",
+    ".backpass",
     "__pycache__",
     "node_modules",
     "dist",

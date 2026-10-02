@@ -580,3 +580,51 @@ async def test_the_redirect_cap_still_applies_and_is_an_owned_error(router: resp
     await provider.aclose()
     assert_no_secret(str(caught.value))
     assert "request failed" in str(caught.value)
+
+
+async def test_an_injected_client_is_gated_like_the_default_one(router: respx.MockRouter) -> None:
+    """ADR-0023 is the provider's guard, not the default client's: a caller-built client follows
+    the same hook, so no transport choice can let the state leave the origin."""
+    first = router.post("https://jev.example/v1").mock(
+        return_value=httpx.Response(307, headers={"Location": "https://evil.example/v1"})
+    )
+    away = router.post("https://evil.example/v1").mock(return_value=httpx.Response(200, json=REDIRECT_ENVELOPE))
+    provider = CompatibleProvider(
+        REDACT,
+        api_key="jev-secret-0001",
+        base_url="https://jev.example/v1",
+        client=httpx.AsyncClient(follow_redirects=True),
+        retry=NO_RETRIES,
+    )
+    with pytest.raises(ProviderError) as caught:
+        await evaluate(provider, timeout=5)
+    await provider.aclose()
+    assert "origin" in str(caught.value)
+    assert first.called
+    assert not away.called
+
+
+async def test_openrouter_and_cloudflare_keep_a_header_only_request_id(router: respx.MockRouter) -> None:
+    """ADR-0068: a `request-id`/`x-request-id` header is kept when the body carries none, for every
+    provider the same way — not only compatible and typesafe."""
+    envelope = {"answers": ANSWERS, "usage": {"input_tokens": 1, "output_tokens": 2}}
+    router.post("https://openrouter.ai/api/alpha/decisions").mock(
+        return_value=httpx.Response(200, json=envelope, headers={"x-request-id": "or-hdr-1"})
+    )
+    router.post("https://api.cloudflare.com/client/v4/accounts/acct-1/ai/run").mock(
+        return_value=httpx.Response(
+            200,
+            json={"success": True, "result": {"state": "Completed", "result": envelope}},
+            headers={"x-request-id": "cf-hdr-1"},
+        )
+    )
+    openrouter = OpenRouterProvider(REDACT, api_key=SECRETS["OPENROUTER_API_KEY"], retry=NO_RETRIES)
+    cloudflare = CloudflareProvider(
+        REDACT, api_token=SECRETS["JEV_CLOUDFLARE_API_TOKEN"], account_id="acct-1", retry=NO_RETRIES
+    )
+    try:
+        assert (await evaluate(openrouter)).request_id == "or-hdr-1"
+        assert (await evaluate(cloudflare)).request_id == "cf-hdr-1"
+    finally:
+        await openrouter.aclose()
+        await cloudflare.aclose()

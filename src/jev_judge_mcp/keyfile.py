@@ -22,14 +22,34 @@ def stored_key_path(settings: Settings) -> Path:
     return fsutil.xdg_home("config") / "jev-mcp" / "key"
 
 
+KEY_FILE_BYTES_MAX = 4096
+"""Bytes read from the key file at most. A key is a short token; a store larger than this (a wrong
+path, a device, a dump) is not a key and reads as empty, never as a hang or a traceback."""
+
+
 def stored_key(settings: Settings) -> str:
-    """The stored key, or `""`. Missing, unreadable, or blank stores as empty — never an error."""
+    """The stored key, or `""`. Missing, unreadable, undecodable, oversized, or blank stores as
+    empty — never an error."""
     try:
+        with stored_key_path(settings).open("rb") as handle:
+            data = handle.read(KEY_FILE_BYTES_MAX + 1)
+        if len(data) > KEY_FILE_BYTES_MAX:
+            return ""
         # utf-8-sig drops a leading BOM when present and is otherwise plain UTF-8.
-        value = stored_key_path(settings).read_text(encoding="utf-8-sig").strip()
-    except OSError:
+        return data.decode("utf-8-sig").strip()
+    except (OSError, UnicodeDecodeError):
         return ""
-    return value
+
+
+def redaction_values(settings: Settings) -> list[str]:
+    """Every value redaction must cover: the configured secrets plus the stored key (ADR-0017, ADR-0046).
+
+    One owner for the set, so the provider redactor, the log filter, the hooks, and the ask
+    tool's output scrub cannot disagree about what a secret is.
+    """
+    stored = stored_key(settings)
+    values = settings.secret_values()
+    return [*values, stored] if stored else values
 
 
 def store_key(settings: Settings, api_key: str) -> Path:

@@ -14,6 +14,7 @@ Published after the frozen prefix (divergence `ask-tool-extension`); its caps li
 from typing import Any, cast
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question, ScoreQuestion
+from jev_judge_mcp.keyfile import redaction_values
 from jev_judge_mcp.limits import ASK, FILE_JUDGE, SANITIZE_ID_UNITS
 from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.text import length
@@ -185,20 +186,20 @@ def _expected(question: Question) -> tuple[str, ...]:
 
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     questions = _build_questions(args["questions"])
-    own = own_part(args.get("state", ""))
-    parts: list[Part] = [own] if own is not None else []
-    file_result, skipped = file_parts(args.get("paths", []))
-    parts.extend(file_result)
-    units = question_units(questions)
     command = args.get("command")
     if command is not None:
-        # Two deterministic checks precede any provider call and any run: the operator's
-        # execution flag (off by default, ADR-0077 amendment), then the denylist.
+        # Two deterministic checks precede any file read, any run, and any provider call: the
+        # operator's execution flag (off by default, ADR-0077 amendment), then the denylist.
         if not runtime.settings.ask_commands:
             raise ToolError(command_disabled_refusal(), code="command_disabled")
         denylist = command_denylist_refusal(command)
         if denylist is not None:
             raise ToolError(denylist, code="command_refused")
+    own = own_part(args.get("state", ""))
+    parts: list[Part] = [own] if own is not None else []
+    file_result, skipped = file_parts(args.get("paths", []))
+    parts.extend(file_result)
+    units = question_units(questions)
     if command is not None and units + sum(part.units for part in parts) > ASK.request_units_max:
         # Hopeless before the gate: even an empty output cannot fit, so the command is not run
         # and no provider is built (deterministic evidence takes precedence).
@@ -212,7 +213,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     output: Part | None = None
     if command is not None:
         gate = await runtime.ask(
-            {"proposed_action": gate_state(command, runtime.settings.secret_values())}, gate_questions()
+            {"proposed_action": gate_state(command, redaction_values(runtime.settings))}, gate_questions()
         )
         evaluations.append(gate)
         reason = command_refusal(gate.answers)

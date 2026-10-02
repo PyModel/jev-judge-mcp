@@ -7,8 +7,13 @@ Sanctioned Divergence and needs an ADR).
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Final
 
 from jev_judge_mcp.calibration.bounds import Bound, clopper_pearson_upper, upper_error_bound
+
+DEFAULT_CONFIDENCE: Final = 0.95
+"""The one-sided confidence of every bound here: selection, certification, and the row-count
+estimate `calibrate` prints when no threshold is feasible."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +32,7 @@ def select_threshold(
     rows: Sequence[tuple[float, bool]],
     max_error: float,
     bound: Bound = "clopper_pearson",
-    confidence: float = 0.95,
+    confidence: float = DEFAULT_CONFIDENCE,
 ) -> OperatingPoint | None:
     """`rows` are `(score, correct)`. Returns the feasible point with the most AUTO rows, else `None`.
 
@@ -60,7 +65,9 @@ class Certification:
     """One-sided 95% Clopper-Pearson upper bound on the error rate, measured on these rows only."""
 
 
-def certify(point: OperatingPoint, rows: Sequence[tuple[float, bool]], confidence: float = 0.95) -> Certification:
+def certify(
+    point: OperatingPoint, rows: Sequence[tuple[float, bool]], confidence: float = DEFAULT_CONFIDENCE
+) -> Certification:
     """Apply `point` — selected on other rows — to held-out `rows` and bound its error rate there.
 
     Always Clopper-Pearson: a certification claim uses the exact bound. Rows with no evidence bound at

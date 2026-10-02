@@ -5,6 +5,7 @@
 directory) is the production behavior.
 """
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -69,6 +70,17 @@ def test_a_missing_file_is_not_found(tmp_path: Path) -> None:
 def test_a_directory_is_not_a_file(tmp_path: Path) -> None:
     (tmp_path / "dir").mkdir()
     refuses("not_a_file")(lambda: file_state.read_state(tmp_path / "dir"))
+
+
+def test_an_unreadable_file_refuses_typed_instead_of_crashing_the_call(tmp_path: Path) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root reads every file")
+    locked = make(tmp_path / "locked.txt", "shh")
+    locked.chmod(0)
+    try:
+        refuses("not_a_file")(lambda: file_state.read_state(locked))
+    finally:
+        locked.chmod(0o600)
 
 
 def test_a_secret_store_refuses_before_any_read(tmp_path: Path) -> None:

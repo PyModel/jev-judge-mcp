@@ -171,7 +171,7 @@ def test_caps_own_all_three_behaviors() -> None:
 
 def test_extract_regex_timeout_equals_limits() -> None:
     """The candidate caps reach the matcher from `EXTRACT` (`test_regex_executor.py`); the regex
-    deadline is `candidates.py`'s own copy, and drift fails here."""
+    deadline `candidates.py` publishes derives from the same block, and this pins the derivation."""
     assert REGEX_TIMEOUT_S == EXTRACT.regex_timeout_ms / 1000
 
 
@@ -257,6 +257,17 @@ _BUDGET_CALLS = [
         "gate_diff_aggregate_error",
         id="gate_diff_aggregate_error",
     ),
+    pytest.param(
+        "jev_gate",
+        {
+            "request": "fix the parser",
+            "diff": [{"path": f"f{index}.py", "patch": "+x"} for index in range(GATE.files_max + 1)],
+            "claims": ["it works"],
+            "evidence": [{"id": "e0", "text": "line"}],
+        },
+        "gate_diff_files_error",
+        id="gate_diff_files_error",
+    ),
 ]
 
 
@@ -282,6 +293,7 @@ def test_every_frozen_budget_refusal_codes_input_too_large(tool: str, arguments:
         "gate_evidence_items_error": "evidence exceeds 16 items",
         "gate_evidence_aggregate_error": "evidence exceeds the",
         "gate_diff_aggregate_error": "diff exceeds the",
+        "gate_diff_files_error": "files; split the diff",
     }
     assert phrases[scaffold] in outcome.text
 

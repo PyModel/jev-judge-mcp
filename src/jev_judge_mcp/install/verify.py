@@ -11,25 +11,12 @@ from typing import IO, cast
 
 from jev_judge_mcp.domain import is_json_object
 from jev_judge_mcp.install.launch import SERVER_NAME
+from jev_judge_mcp.tools import TOOLS
 
-EXPECTED_TOOLS: tuple[str, ...] = (
-    "jev_verify",
-    "jev_screen",
-    "jev_find",
-    "jev_classify",
-    "jev_decide",
-    "jev_rerank",
-    "jev_compare",
-    "jev_extract",
-    "jev_review",
-    "jev_gate",
-    "jev_score",
-    "jev_file_judge",
-    "jev_ask",
-    "jev_files_judge",
-)
-"""The published tool names: the reference ten in snapshot order, then the extensions (ADR-0048,
-ADR-0077)."""
+EXPECTED_TOOLS: tuple[str, ...] = tuple(tool.name for tool in TOOLS)
+"""The published tool names, in registry order (ADR-0013: one registry): the reference ten in
+snapshot order, then the extensions (ADR-0048, ADR-0077). The parity suite pins that order, so a
+hand copy here would only be a second place to forget."""
 
 STDERR_TAIL_LINES = 5
 """How many of the child's last stderr lines a VerifyError carries (ADR-0053)."""

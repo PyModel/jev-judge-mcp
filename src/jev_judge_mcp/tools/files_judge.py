@@ -377,9 +377,6 @@ def plan(
         except ToolError as error:
             skip(text, _SKIP_REASONS[error.code])
             continue
-        except OSError:
-            skip(text, "not_found")
-            continue
         if not content:
             skip(text, "empty")
             continue

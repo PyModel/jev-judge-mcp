@@ -12,10 +12,11 @@ from shutil import which
 import pytest
 
 from jev_judge_mcp.install import cli as install_cli
+from jev_judge_mcp.install import jsonedit
 from jev_judge_mcp.install import launch as launch_module
 from jev_judge_mcp.install.engine import Request, run
 from jev_judge_mcp.install.errors import InstallError
-from jev_judge_mcp.install.fs import entry_hash, write_state
+from jev_judge_mcp.install.fs import atomic_write, entry_hash, write_state
 from jev_judge_mcp.install.launch import (
     PACKAGE,
     Launch,
@@ -29,6 +30,7 @@ from jev_judge_mcp.install.launch import (
     supported_spec,
 )
 from jev_judge_mcp.install.layout import Layout
+from jev_judge_mcp.install.redact import redact_text
 from jev_judge_mcp.install.verify import EXPECTED_TOOLS, VerifyError, verify_command
 from jev_judge_mcp.server import installer_requested
 from jev_judge_mcp.tools import TOOLS
@@ -1051,3 +1053,82 @@ def _fingerprint(root: Path) -> list[tuple[str, int]]:
 
 def _golden(name: str) -> str:
     return (Path("tests/fixtures/install") / name).read_text(encoding="utf-8")
+
+
+def test_inserting_a_key_keeps_the_comments_before_the_closing_brace() -> None:
+    """Comments between the last sibling and `}` are part of the user's file; the insert keeps them
+    and places the new key after them."""
+    text = '{\n  "mcp": {\n    "other": {"command": ["echo"]} // keep me\n    // and me\n  }\n}\n'
+    updated = jsonedit.assign(text, ["mcp", "jev"], {"command": ["jev"]})
+    assert "// keep me" in updated and "// and me" in updated
+    assert updated.index("// and me") < updated.index('"jev"')
+    parsed = jsonedit.loads(updated)
+    assert isinstance(parsed, dict)
+    assert parsed["mcp"] == {"other": {"command": ["echo"]}, "jev": {"command": ["jev"]}}
+
+
+def test_a_failed_config_write_leaves_no_temporary_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "config.json"
+    target.write_text("{}\n", encoding="utf-8")
+
+    def failing_fsync(fd: int) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "fsync", failing_fsync)
+    with pytest.raises(OSError):
+        atomic_write(target, '{"jev": 1}\n', 0o600, target.read_bytes())
+    assert target.read_text(encoding="utf-8") == "{}\n"
+    assert [entry.name for entry in tmp_path.iterdir()] == ["config.json"]
+    with pytest.raises(OSError):
+        write_state(tmp_path / "state.json", {"targets": {}})
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["config.json"]
+
+
+def test_toml_quoted_keys_and_literal_strings_are_redacted() -> None:
+    assert redact_text("TYPESAFE_API_KEY = 'tsk_single_0001'", ()) == "TYPESAFE_API_KEY = '[redacted]'"
+    assert redact_text('"TYPESAFE_API_KEY" = "tsk_quoted_0001"', ()) == '"TYPESAFE_API_KEY" = "[redacted]"'
+    reference = "TYPESAFE_API_KEY = '{env:TYPESAFE_API_KEY}'"
+    assert redact_text(reference, ()) == reference
+    assert redact_text('TYPESAFE_API_KEY = "${TYPESAFE_API_KEY}"', ()) == 'TYPESAFE_API_KEY = "${TYPESAFE_API_KEY}"'
+
+
+def test_the_dry_run_diff_redacts_other_servers_credentials(tmp_path: Path) -> None:
+    """The unified diff's context lines come from the whole file: a neighbouring server's token
+    must not ride into stdout (and an agent transcript) beside the inserted entry."""
+    token = "ghp_" + "Ab1" * 10
+    config = tmp_path / ".cursor" / "mcp.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        json.dumps({"mcpServers": {"github": {"command": "gh-mcp", "env": {"GITHUB_TOKEN": token}}}}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    code, text = execute(tmp_path, agents=("cursor",), dry_run=True)
+    assert code == 0, text
+    assert token not in text
+    assert config.read_text(encoding="utf-8").count(token) == 1  # the file itself is untouched
+
+
+def test_agents_picked_at_the_prompt_do_not_fail_on_a_missing_pi_adapter(tmp_path: Path) -> None:
+    """A chooser answer names the agents as `--agent` does: a Pi directory without the adapter is
+    then not a failure of the run, because Pi was not chosen."""
+    (tmp_path / ".pi").mkdir()
+    picked: list[str] = []
+
+    def chooser(prompt: str) -> tuple[str, ...]:
+        picked.append(prompt)
+        return ("codex",)
+
+    code, text = _run_raw(
+        Request(
+            layout=layout(tmp_path),
+            launch=LAUNCH,
+            platform="darwin",
+            bins={},
+            chooser=chooser,
+            confirmer=lambda _prompt: True,
+        )
+    )
+    assert picked, "the chooser was never asked"
+    assert code == 0, text
+    assert "Pi needs the MCP adapter" not in text
+    assert (tmp_path / ".codex" / "config.toml").exists()

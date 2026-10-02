@@ -253,10 +253,12 @@ def ensure_secrets_redactable(settings: Settings) -> None:
             )
     stored = keyfile.stored_key(settings)
     if stored and len(stored) < MIN_SECRET_LENGTH:
+        where = f"the key file {keyfile.stored_key_path(settings)}"
+        if settings.key_file is not None:
+            where += " set by JEV_MCP_KEY_FILE"
         raise SystemExit(
-            f"the key file {keyfile.stored_key_path(settings)} set by JEV_MCP_KEY_FILE holds a key shorter "
-            f"than {MIN_SECRET_LENGTH} characters; refusing to start: a secret that short cannot be "
-            "redacted without corrupting text"
+            f"{where} holds a key shorter than {MIN_SECRET_LENGTH} characters; refusing to start: "
+            "a secret that short cannot be redacted without corrupting text"
         )
 
 
@@ -480,7 +482,7 @@ def main() -> None:
         # Logging is configured before the subcommand runs, so a toolset failure reaches stderr
         # through the redacting filter, not through lastResort (ADR-0008). The completion hook
         # keeps its own stdout/stderr handling around gate_main.
-        configure_logging(subcommand_settings.log_level, subcommand_settings.secret_values())
+        configure_logging(subcommand_settings.log_level, keyfile.redaction_values(subcommand_settings))
     if judge_requested(sys.argv):
         from jev_judge_mcp.cli import judge_main
 
@@ -500,7 +502,7 @@ def main() -> None:
     ensure_http_access_control(settings)
     ensure_http_port_free(settings)
     ensure_provider_runnable(settings)
-    configure_logging(settings.log_level, settings.secret_values())
+    configure_logging(settings.log_level, keyfile.redaction_values(settings))
     server = build_server(settings)
     # One line, the same identity `initialize` will report (ADR-0054). Not logged by `--version`.
     logger.info("identity %s %s", server.name, server.version)

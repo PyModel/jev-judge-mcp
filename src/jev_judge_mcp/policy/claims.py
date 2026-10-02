@@ -29,7 +29,12 @@ GATE_REASON_CODES = (
 
 
 def note_blocks_auto(action: str, support: object, evidence: Sequence[Mapping[str, object]]) -> bool:
-    """A claim whose only cited support is a caller note cannot be auto (ADR-0067)."""
+    """A claim whose only cited support is a caller note cannot be auto (ADR-0067).
+
+    `support` is the source answer as given. The `none` hatch names no item — unless a caller
+    item is literally called `none`, in which case a caller note by that name still blocks auto;
+    callers pass the raw choice, not the already-blanked `supporting_evidence`.
+    """
     if action != "auto" or not isinstance(support, str):
         return False
     item = next((entry for entry in evidence if str(entry.get("id")) == support), None)

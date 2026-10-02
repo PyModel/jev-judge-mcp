@@ -16,6 +16,7 @@ import random
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC
 from email.utils import parsedate_to_datetime
 from typing import Literal
 
@@ -158,6 +159,9 @@ def retry_after_seconds(headers: Mapping[str, str]) -> float | None:
             when = parsedate_to_datetime(raw.strip())
         except (ValueError, TypeError, OverflowError):
             return None
+        if when.tzinfo is None:
+            # A `-0000` zone parses naive; an HTTP-date is UTC, never the host's local time.
+            when = when.replace(tzinfo=UTC)
         return max(0.0, when.timestamp() - time.time())
     return None
 

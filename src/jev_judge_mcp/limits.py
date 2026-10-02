@@ -147,7 +147,12 @@ class ReviewCaps:
 
 @dataclass(frozen=True, slots=True)
 class GateCaps:
-    """jev_gate: claim/item/text caps and the two aggregate isError budgets."""
+    """jev_gate: claim/item/text caps and the two aggregate isError budgets.
+
+    `files_max` bounds a `[{path, patch}]` diff for jev_gate and jev_review alike (ADR-0066
+    amendment): one review request runs per file, so the count is capped like the evidence item
+    count; no parity-manifest row exists, the ADR owns the value.
+    """
 
     claims_min: int
     claims_max: int
@@ -155,6 +160,7 @@ class GateCaps:
     evidence_items: int
     aggregate_evidence_units: int
     doc_units: int
+    files_max: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,6 +289,7 @@ GATE: Final = GateCaps(
     evidence_items=16,
     aggregate_evidence_units=200_000,
     doc_units=50_000,
+    files_max=64,
 )
 SCORE: Final = ScoreCaps(
     levels_min=2,
@@ -339,8 +346,9 @@ ASK: Final = AskCaps(
 FILES_JUDGE: Final = FilesJudgeCaps(
     files_max=64,
     patterns_max=32,
-    file_units_max=100_000,
-    binary_sniff_bytes=8_000,
+    # The per-file read is `jev_file_judge`'s, so its two read caps are that block's values.
+    file_units_max=FILE_JUDGE.file_units_max,
+    binary_sniff_bytes=FILE_JUDGE.binary_sniff_bytes,
     discovery_max=512,
     skip_rows_max=64,
 )

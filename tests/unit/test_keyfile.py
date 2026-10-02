@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from jev_judge_mcp.keyfile import store_key, stored_key, stored_key_path
+from jev_judge_mcp.keyfile import KEY_FILE_BYTES_MAX, redaction_values, store_key, stored_key, stored_key_path
 from jev_judge_mcp.settings import Settings, load_settings
 
 
@@ -76,3 +76,29 @@ def test_default_path_follows_xdg_config_home(monkeypatch: pytest.MonkeyPatch, t
     monkeypatch.delenv("XDG_CONFIG_HOME")
     monkeypatch.setenv("HOME", str(tmp_path))
     assert stored_key_path(load_settings()) == tmp_path / ".config" / "jev-mcp" / "key"
+
+
+def test_an_undecodable_or_oversized_key_file_reads_as_empty(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The docstring's promise — never an error — holds for a non-UTF-8 store and for a store that
+    is not a key at all (a device, a dump): both read as empty instead of a traceback or a hang."""
+    path = tmp_path / "key"
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(path))
+    path.write_bytes(b"\xff\xfe\x00k\x00e\x00y")
+    assert stored_key(load_settings()) == ""
+    path.write_bytes(b"k" * (KEY_FILE_BYTES_MAX + 1))
+    assert stored_key(load_settings()) == ""
+    path.write_bytes(b"k" * KEY_FILE_BYTES_MAX)
+    assert stored_key(load_settings()) == "k" * KEY_FILE_BYTES_MAX
+
+
+def test_the_redaction_set_is_the_configured_secrets_plus_the_stored_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / "key"
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(path))
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    assert redaction_values(load_settings()) == load_settings().secret_values()
+    path.write_text("sk-live-stored-0001\n", encoding="utf-8")
+    values = redaction_values(load_settings())
+    assert values[:-1] == load_settings().secret_values()
+    assert values[-1] == "sk-live-stored-0001"

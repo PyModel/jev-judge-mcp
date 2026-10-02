@@ -44,7 +44,7 @@ def resolve_provider(settings: Settings, *, retry: RetryPolicy | None = None) ->
     injects the provider retry policy (ADR-0057); `None` means the default.
     """
     stored = keyfile.stored_key(settings)
-    redact = Redactor([*settings.secret_values(), stored] if stored else settings.secret_values())
+    redact = Redactor(keyfile.redaction_values(settings))
     explicit = settings.jev_provider.lower()
     typesafe_key = _value(settings.typesafe_api_key) or stored
     openrouter_key = _value(settings.openrouter_api_key)

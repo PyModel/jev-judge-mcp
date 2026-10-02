@@ -27,6 +27,7 @@ from jev_judge_mcp.domain.answers import ChoiceAnswer
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.domain.questions import ChoiceQuestion, NoulCriteria, NoulQuestion, Question
 from jev_judge_mcp.hook_render import deny_reason, render_decision
+from jev_judge_mcp.keyfile import redaction_values
 from jev_judge_mcp.providers import (
     Evaluation,
     JevProvider,
@@ -194,7 +195,7 @@ def main(
     # only once it runs for real.
     from jev_judge_mcp.server import configure_logging
 
-    configure_logging(settings.log_level, settings.secret_values())
+    configure_logging(settings.log_level, redaction_values(settings))
     model = resolve_model(settings)
     chosen = provider
     if chosen is None:

@@ -4,9 +4,10 @@
 - A handler failure (a thrown `Error` in the reference): its bare message, as an `isError` result.
 - A handler's own error payload (jev_gate's evidence caps): the serialized payload with `isError`.
 
-Owned failures and any other `Exception` are logged with a traceback before that result; a
-`ProviderConfigError` is an ordinary configuration condition and logs one line instead.
-`CancelledError` is not caught.
+An argument or tool refusal logs one line — tool name, exception type, error code — because its
+message is built from the caller's arguments (ids, paths) and argument text stays out of the log;
+a `ProviderConfigError` is an ordinary configuration condition and logs one line with its text;
+any other `Exception` is logged with a traceback before that result. `CancelledError` is not caught.
 """
 
 import logging
@@ -98,6 +99,10 @@ class Toolset:
                 # An ordinary configuration condition (ADR-0007), not a defect: one line, no traceback.
                 # Tool name only; argument text stays out of the log.
                 logger.error("tool %s raised %s: %s", name, type(error).__name__, error)
+            elif isinstance(error, (ArgumentsError, ToolError)):
+                # A refusal the tool owns: its message quotes the caller's ids and paths, so only
+                # the type and code are logged; the result carries the message to the caller.
+                logger.error("tool %s raised %s (%s)", name, type(error).__name__, code_of(error))
             else:
                 # Tool name only. The traceback is the diagnostic; argument text stays out of the log.
                 logger.exception("tool %s raised", name)

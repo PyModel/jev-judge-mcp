@@ -402,3 +402,15 @@ async def test_saturated_admission_reports_capacity_not_a_pattern_problem() -> N
     assert "simplify the pattern" not in text_of(second)
     assert '"reason": "regex timed out' not in text_of(second)
     del first
+
+
+async def test_a_closed_pool_refuses_and_starts_no_worker() -> None:
+    """Close is final: a later `find` is `Invalid(NOT_STARTED)` with no process spawned, and a
+    second close is a no-op — nothing can outlive the pool."""
+    pool = ProcessRegexExecutor(size=1)
+    await pool.warm()
+    await pool.aclose()
+    result = await pool.find(translate("[A-Z]{3}-\\d+", "g"), to_units(DOCUMENT), deadline=deadline())
+    assert result == Invalid(Unavailable.NOT_STARTED)
+    assert pool._idle == []  # pyright: ignore[reportPrivateUsage]
+    await pool.aclose()

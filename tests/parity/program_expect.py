@@ -14,6 +14,7 @@ from jev_judge_mcp.responses import (
     SCORE_SCALE,
     caller_renames,
     claim_extras,
+    diff_shape,
     nearest_level,
     next_checks_for,
     renamed_ids_field,
@@ -152,7 +153,12 @@ def _rewrite_payload(
         if isinstance(summary, dict):
             summary.update(summary_extras(payload["results"]))
     if tool == "jev_gate" and isinstance(payload.get("reason_codes"), list):
-        _insert_after(payload, "reason_codes", "next_checks", next_checks_for(payload["reason_codes"]))
+        _insert_after(
+            payload,
+            "reason_codes",
+            "next_checks",
+            next_checks_for(payload["reason_codes"], diff_shape=diff_shape(arguments.get("diff"))),
+        )
     _insert_renamed_ids(payload, tool, bodies, arguments)
     return payload
 
