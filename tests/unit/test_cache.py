@@ -193,7 +193,7 @@ async def test_an_entry_past_the_ttl_is_a_miss(cache_env: Path, monkeypatch: pyt
     stale = time.time() - 61
     os.utime(next(iter(cache_env.iterdir())), (stale, stale))
     settings = load_settings()
-    assert cache.lookup(settings, "compatible", "jev-latest", {"subject": "x"}, _question()) is None
+    assert cache.lookup(settings, "compatible", "", "jev-latest", {"subject": "x"}, _question()) is None
     assert not list(cache_env.iterdir())  # the stale entry was removed, not just skipped
     await runtime.ask({"subject": "x"}, _question())
     assert len(provider.requests) == 2
@@ -300,3 +300,20 @@ async def test_a_non_finite_usage_entry_is_a_miss(cache_env: Path) -> None:
         entry.write_text(json.dumps(record), encoding="utf-8")
     await runtime.ask({"subject": "x"}, _question())
     assert len(provider.requests) == 2
+
+
+async def test_two_endpoints_under_one_provider_name_never_replay_each_other(cache_env: Path) -> None:
+    """The key names the endpoint (ADR-0047 amendment): a staging and a production base URL under
+    the same provider name are different entries, so the second asks instead of replaying."""
+    staging = FakeProvider(ANSWERS)
+    staging.cache_scope = "https://staging.example/v1"
+    production = FakeProvider(ANSWERS)
+    production.cache_scope = "https://api.example/v1"
+    await Runtime(load_settings(), provider_factory=lambda _: staging).ask({"subject": "x"}, _question())
+    await Runtime(load_settings(), provider_factory=lambda _: production).ask({"subject": "x"}, _question())
+    assert len(staging.requests) == 1 and len(production.requests) == 1
+    assert len(list(cache_env.iterdir())) == 2
+    same = FakeProvider(ANSWERS)
+    same.cache_scope = "https://api.example/v1"
+    await Runtime(load_settings(), provider_factory=lambda _: same).ask({"subject": "x"}, _question())
+    assert same.requests == []  # the same endpoint replays

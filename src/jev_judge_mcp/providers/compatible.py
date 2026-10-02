@@ -31,7 +31,7 @@ class CompatibleProvider(HttpProvider):
         client: httpx.AsyncClient | None = None,
         retry: RetryPolicy | None = None,
     ) -> None:
-        super().__init__(redact, client, retry=retry)
+        super().__init__(redact, client, retry=retry, cache_scope=base_url)
         self._api_key = api_key
         self._base_url = base_url
 

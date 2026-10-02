@@ -165,14 +165,19 @@ class Runtime:
                 self._provider = self._provider_factory(self.settings)
             span.attributes["provider"] = self._provider.name
             wire_state = cast(JsonValue, state)
-            cached = await cache.alookup(self.settings, self._provider.name, self.model, wire_state, questions)
+            provider = self._provider
+            cached = await cache.alookup(
+                self.settings, provider.name, provider.cache_scope, self.model, wire_state, questions
+            )
             if cached is not None:
                 # A hit spent nothing, so it records no token attributes (the replayed payload's
                 # usage stays verbatim); `tokens{direction}` counts what the provider was billed.
                 span.attributes["cache"] = "hit"
                 return cached
             evaluation = await self._evaluate_capped(self._provider, wire_state, questions)
-            await cache.astore(self.settings, self._provider.name, self.model, wire_state, questions, evaluation)
+            await cache.astore(
+                self.settings, provider.name, provider.cache_scope, self.model, wire_state, questions, evaluation
+            )
             span.attributes["input_tokens"] = evaluation.usage.input_tokens
             span.attributes["output_tokens"] = evaluation.usage.output_tokens
             return evaluation

@@ -1,6 +1,6 @@
 """The optional provider-response cache (ADR-0047): off unless `JEV_MCP_CACHE` is truthy.
 
-An identical request — same provider, model, state, and questions — replays the recorded
+An identical request — same provider, endpoint, model, state, and questions — replays the recorded
 `Evaluation` from a JSON file under the cache directory instead of calling the provider again, at
 zero API cost. Replay is verbatim, so every tool payload built from it is byte-identical to the
 first answer's; the cache never edits a response. Keep it off when decisions must stay fresh.
@@ -47,9 +47,15 @@ def cache_dir(settings: Settings) -> Path:
     return fsutil.xdg_home("cache") / "jev-mcp"
 
 
-def _key(provider: ProviderName, model: str, state: JsonValue, questions: Mapping[str, Question]) -> str:
+def _key(provider: ProviderName, scope: str, model: str, state: JsonValue, questions: Mapping[str, Question]) -> str:
     body = stringify_compact(
-        {"provider": provider, "model": model, "state": state, "questions": questions_to_wire(questions)}
+        {
+            "provider": provider,
+            "endpoint": scope,
+            "model": model,
+            "state": state,
+            "questions": questions_to_wire(questions),
+        }
     )
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
@@ -108,12 +114,17 @@ def _evict(directory: Path, cap: int) -> None:
 
 
 def lookup(
-    settings: Settings, provider: ProviderName, model: str, state: JsonValue, questions: Mapping[str, Question]
+    settings: Settings,
+    provider: ProviderName,
+    scope: str,
+    model: str,
+    state: JsonValue,
+    questions: Mapping[str, Question],
 ) -> Evaluation | None:
     """The recorded evaluation for this exact request, or `None` (also when the cache is off)."""
     if not _enabled(settings):
         return None
-    path = cache_dir(settings) / f"{_key(provider, model, state, questions)}.json"
+    path = cache_dir(settings) / f"{_key(provider, scope, model, state, questions)}.json"
     if _stale(path, settings.cache_ttl_seconds, now=time.time()):
         try:
             path.unlink()
@@ -151,6 +162,7 @@ def lookup(
 def store(
     settings: Settings,
     provider: ProviderName,
+    scope: str,
     model: str,
     state: JsonValue,
     questions: Mapping[str, Question],
@@ -164,7 +176,7 @@ def store(
     if not _enabled(settings):
         return
     directory = cache_dir(settings)
-    digest = _key(provider, model, state, questions)
+    digest = _key(provider, scope, model, state, questions)
     record = {
         "answers": evaluation.answers,
         "usage": {"input_tokens": evaluation.usage.input_tokens, "output_tokens": evaluation.usage.output_tokens},
@@ -180,7 +192,12 @@ def store(
 
 
 async def alookup(
-    settings: Settings, provider: ProviderName, model: str, state: JsonValue, questions: Mapping[str, Question]
+    settings: Settings,
+    provider: ProviderName,
+    scope: str,
+    model: str,
+    state: JsonValue,
+    questions: Mapping[str, Question],
 ) -> Evaluation | None:
     """`lookup` off the event loop: the key serializes the whole state, so neither the hash nor
     the file read stalls concurrent calls while the cache is on (ADR-0047 amendment).
@@ -190,12 +207,13 @@ async def alookup(
     """
     if not _enabled(settings):
         return None
-    return await anyio.to_thread.run_sync(lambda: lookup(settings, provider, model, state, questions))
+    return await anyio.to_thread.run_sync(lambda: lookup(settings, provider, scope, model, state, questions))
 
 
 async def astore(
     settings: Settings,
     provider: ProviderName,
+    scope: str,
     model: str,
     state: JsonValue,
     questions: Mapping[str, Question],
@@ -204,4 +222,4 @@ async def astore(
     """`store` off the event loop, for the same reason as `alookup` (ADR-0047 amendment)."""
     if not _enabled(settings):
         return
-    await anyio.to_thread.run_sync(lambda: store(settings, provider, model, state, questions, evaluation))
+    await anyio.to_thread.run_sync(lambda: store(settings, provider, scope, model, state, questions, evaluation))

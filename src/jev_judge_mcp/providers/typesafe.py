@@ -95,7 +95,7 @@ class TypeSafeProvider(JevProvider):
         transport: "httpx2.AsyncBaseTransport | None" = None,
         retry: RetryPolicy | None = None,
     ) -> None:
-        super().__init__(redact, retry=retry)
+        super().__init__(redact, retry=retry, cache_scope=base_url or "")
         self._api_key = api_key
         self._base_url = base_url
         self._transport = transport

@@ -74,3 +74,12 @@ The cache stays opt-in and replay stays verbatim. Three operational properties c
 Both knobs are read only when `JEV_MCP_CACHE` is on; with the cache off nothing reads or writes
 the directory, exactly as before. Registered divergence: `response-cache-bounds` in
 `docs/reference/divergences.json`.
+
+## Amendment (2026-10-01): the key names the endpoint
+
+The key covered provider, model, state, and questions, so two endpoints under one provider name
+— a staging and a production `JEV_API_BASE_URL`, two `TYPESAFE_BASE_URL`s, two Cloudflare
+accounts — replayed each other's answers. The hashed body now carries `endpoint`: the provider's
+`cache_scope`, which is the base URL (compatible, typesafe), the account id (cloudflare), or empty
+(openrouter, one fixed endpoint). Never a credential. Every existing entry misses once and is
+re-recorded; nothing else changes.

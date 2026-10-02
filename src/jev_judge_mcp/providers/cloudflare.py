@@ -38,7 +38,7 @@ class CloudflareProvider(HttpProvider):
         client: httpx.AsyncClient | None = None,
         retry: RetryPolicy | None = None,
     ) -> None:
-        super().__init__(redact, client, retry=retry)
+        super().__init__(redact, client, retry=retry, cache_scope=account_id)
         self._api_token = api_token
         self._url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run"
 

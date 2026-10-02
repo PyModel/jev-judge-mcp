@@ -214,10 +214,14 @@ class JevProvider(ABC):
     label: ClassVar[str]
     """Prefix of this provider's error messages."""
 
-    def __init__(self, redact: Redactor, *, retry: RetryPolicy | None = None) -> None:
+    def __init__(self, redact: Redactor, *, retry: RetryPolicy | None = None, cache_scope: str = "") -> None:
         self._redact = redact
         # One retry owner (ADR-0057): every provider runs the same bounded policy; `None` means default.
         self._retry = DEFAULT_RETRY_POLICY if retry is None else retry
+        self.cache_scope = cache_scope
+        """What distinguishes this provider's answers from another instance of the same name — the
+        endpoint or account it sends to, never a credential (ADR-0047 amendment). The response
+        cache keys on it, so two endpoints under one provider name never replay each other."""
 
     async def evaluate(
         self, state: JsonValue, questions: Mapping[str, Question], model: str, timeout: float | None
@@ -370,9 +374,14 @@ class HttpProvider(JevProvider):
     """
 
     def __init__(
-        self, redact: Redactor, client: httpx.AsyncClient | None = None, *, retry: RetryPolicy | None = None
+        self,
+        redact: Redactor,
+        client: httpx.AsyncClient | None = None,
+        *,
+        retry: RetryPolicy | None = None,
+        cache_scope: str = "",
     ) -> None:
-        super().__init__(redact, retry=retry)
+        super().__init__(redact, retry=retry, cache_scope=cache_scope)
         # The allowed origin is fixed per instance: it comes from process config (ADR-0008), so the
         # lazy first-request assignment races only with itself, writing the same value.
         self._origin: tuple[str, str, int] | None = None
