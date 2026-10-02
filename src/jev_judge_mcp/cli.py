@@ -545,18 +545,80 @@ _COMPLETION_COMMANDS: tuple[tuple[str, ...], ...] = (
 """The argv prefixes the completion hook judges, tokenized the way the shell reads the command."""
 
 
-def completion_matches(command: str) -> bool:
-    """True only for the completion commands. Not a general shell match.
+_SHELL_OPERATORS = frozenset({"&&", "||", ";", ";;", "|", "&"})
+"""The operators that end one simple command and start the next, as `shlex` with punctuation reads them."""
 
-    `shlex.split` decides the tokens, so `git  push` (extra whitespace) matches and
-    `git pushback` does not. A command that does not tokenize abstains: the shell could not
-    run it either, so there is nothing to gate.
+_GIT_OPTIONS_WITH_VALUE = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"})
+_GIT_FLAGS = frozenset(
+    {"-p", "--paginate", "-P", "--no-pager", "--bare", "--no-replace-objects", "--literal-pathspecs"}
+)
+"""Git's global options, which sit between `git` and its subcommand (`git -C repo push`)."""
+
+
+def completion_matches(command: str) -> bool:
+    """True only when some simple command on the line is a completion command. Not a general shell match.
+
+    The line is read as the shell reads it (ADR-0064 amendment): `cd repo && git push` is two
+    commands and the second matches, `git  push` (extra whitespace) matches, `git pushback` does
+    not, and git's global options before the subcommand (`git -C repo push`) are skipped. A line
+    that does not tokenize abstains: the shell could not run it either, so there is nothing to gate.
     """
     try:
-        argv = tuple(shlex.split(command))
+        tokens = list(shlex.shlex(command, posix=True, punctuation_chars=True))
     except ValueError:
         return False
+    argv: list[str] = []
+    for token in [*tokens, ";"]:
+        if token in _SHELL_OPERATORS or all(character in "&|;" for character in token):
+            if argv and _is_completion_command(tuple(argv)):
+                return True
+            argv = []
+        else:
+            argv.append(token)
+    return False
+
+
+def _is_completion_command(argv: tuple[str, ...]) -> bool:
+    if argv[0] == "git":
+        argv = ("git", *_after_git_options(argv[1:]))
     return any(argv[: len(prefix)] == prefix for prefix in _COMPLETION_COMMANDS)
+
+
+def _after_git_options(rest: tuple[str, ...]) -> tuple[str, ...]:
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        if token in _GIT_OPTIONS_WITH_VALUE:
+            index += 2
+        elif token in _GIT_FLAGS or (token.startswith("--") and "=" in token):
+            index += 1
+        else:
+            break
+    return rest[index:]
+
+
+def completion_range(
+    env: Mapping[str, str], run: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run
+) -> str | None:
+    """The range the completion gate judges: `JEV_COMPLETION_DIFF` when set, else what a push sends.
+
+    Without the variable, the first range git resolves is used: the commits ahead of the upstream
+    (`@{upstream}..HEAD`), else the last commit (`HEAD~1..HEAD`), else the working tree against a
+    root commit (`HEAD`). A range that resolves and is empty means nothing is being pushed, so
+    there is nothing to gate: `None`. When none resolves, `HEAD` is returned and the gate reports
+    what git says (ADR-0064 amendment).
+    """
+    explicit = env.get("JEV_COMPLETION_DIFF")
+    if explicit:
+        return explicit
+    for candidate in ("@{upstream}..HEAD", "HEAD~1..HEAD", "HEAD"):
+        # `--quiet`: exit 1 when the range has differences, 0 when it is empty, 128 when it does not resolve.
+        result = run(["git", "diff", "--quiet", candidate], check=False, capture_output=True)
+        if result.returncode == 1:
+            return candidate
+        if result.returncode == 0:
+            return None
+    return "HEAD"
 
 
 def command_from_hook_event(event: Mapping[str, object]) -> str:
@@ -635,11 +697,15 @@ def completion_hook_main(
         return fail_open_or_ask(required, "", "stdin was not hook-event JSON")
     if not completion_matches(command_from_hook_event(parsed)):
         return 0
-    diff = env.get("JEV_COMPLETION_DIFF", "HEAD")
     claims = env.get("JEV_COMPLETION_CLAIMS")
     tests = env.get("JEV_COMPLETION_TESTS")
     if not claims or not tests:
         return fail_open_or_ask(required, "error.code=invalid_arguments\n", "invalid_arguments")
+    diff = completion_range(env)
+    if diff is None:
+        # The push sends no commits: there is no completion to judge, under either flag setting.
+        sys.stderr.write("jev-judge-mcp completion-hook: nothing to gate; the push sends no commits\n")
+        return 0
     try:
         decision = run_gate(["--diff", diff, "--claims", claims, "--tests", tests], provider=provider)
     except Exception:

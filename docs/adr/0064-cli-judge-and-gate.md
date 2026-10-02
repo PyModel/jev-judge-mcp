@@ -61,3 +61,21 @@ The CLI reads `call_action`. It does not walk extract rows. Other tools still ma
 payload field, as the amendment above describes. `judge` and `gate` take a Python `provider=`
 argument, the same kind of seam `hook.main(provider=)` and `Runtime(provider_factory=)` already
 have. It is not a CLI flag.
+
+## Amendment (2026-10-01): the completion hook gates what the push sends, and reads the line as the shell does
+
+Two gaps left ordinary pushes ungated. The default range was `HEAD` — the working tree against
+the last commit — which is empty on the clean tree a push is made from, so the gate reported
+`git diff was empty` and the push went through (silently without `JEV_HOOK_REQUIRED=1`, as an
+ask with it, never as a judgment). And the matcher read the whole line as one argv, so
+`cd repo && git push` and `git -C repo push` did not match at all.
+
+- The range, when `JEV_COMPLETION_DIFF` is unset, is the first git resolves of `@{upstream}..HEAD`
+  (the commits the push sends), `HEAD~1..HEAD` (no upstream yet), and `HEAD` (a root commit). A
+  range that resolves and is empty means the push sends nothing, so the hook abstains with one
+  stderr line — under either flag setting, since there is no completion to judge. An explicit
+  variable is used as given, as before.
+- The matcher splits the line on the shell's operators (`&&`, `||`, `;`, `|`, `&`) and matches
+  each simple command, skipping git's global options (`-C <dir>`, `-c <k=v>`, `--git-dir=…`, and
+  the flag-only ones) before the subcommand. `git pushback`, `GIT PUSH`, and a line that does
+  not tokenize still abstain.

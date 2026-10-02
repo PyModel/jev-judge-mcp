@@ -274,6 +274,12 @@ def test_the_asks_reason_states_the_gate_action_as_a_fact(
         pytest.param("gh pr checkout", False, id="other-pr-verb"),
         pytest.param("GIT PUSH", False, id="case-sensitive"),
         pytest.param('git push -m "unterminated', False, id="untokenizable-abstains"),
+        pytest.param("cd repo && git push", True, id="after-and"),
+        pytest.param("make test; git push origin HEAD", True, id="after-semicolon"),
+        pytest.param("git -C repo push", True, id="git-dash-C"),
+        pytest.param("git -c core.hooksPath=x --no-pager push", True, id="git-globals"),
+        pytest.param("echo 'git push'", False, id="quoted-is-an-argument"),
+        pytest.param("git status | grep push", False, id="pipe-into-grep"),
     ],
 )
 def test_completion_matching_reads_tokens_not_a_string_prefix(command: str, matches: bool) -> None:
@@ -323,3 +329,47 @@ def test_a_path_containing_space_b_slash_is_split_at_the_header_midpoint() -> No
     )
     files = cli._split_unified(renamed)  # pyright: ignore[reportPrivateUsage]
     assert files is not None and [item["path"] for item in files] == ["new"]
+
+
+def test_the_completion_range_is_what_the_push_sends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without `JEV_COMPLETION_DIFF`: the commits ahead of the upstream, else the last commit; an
+    empty range means nothing is being pushed and the hook abstains (ADR-0064 amendment)."""
+    repo = _repo_with_diff(tmp_path)
+    monkeypatch.chdir(repo)
+    assert cli.completion_range({"JEV_COMPLETION_DIFF": "HEAD~1"}) == "HEAD~1"
+    assert cli.completion_range({}) == "HEAD~1..HEAD"  # no upstream yet: the last commit
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    subprocess.run(["git", "branch", "base", "HEAD~1"], check=True, capture_output=True)
+    subprocess.run(["git", "branch", "--set-upstream-to=base", branch], check=True, capture_output=True)
+    assert cli.completion_range({}) == "@{upstream}..HEAD"  # one commit ahead of the upstream
+    subprocess.run(["git", "branch", "-f", "base", "HEAD"], check=True, capture_output=True)
+    assert cli.completion_range({}) is None  # up to date: the push sends nothing
+
+
+def test_an_up_to_date_push_abstains(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = _repo_with_diff(tmp_path)
+    monkeypatch.chdir(repo)
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    subprocess.run(["git", "branch", "base", "HEAD"], check=True, capture_output=True)
+    subprocess.run(["git", "branch", "--set-upstream-to=base", branch], check=True, capture_output=True)
+    claims = repo / "claims.txt"
+    claims.write_text("it works\n", encoding="utf-8")
+    code = completion_hook_main(
+        [],
+        text=json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push"}}),
+        environ={
+            "JEV_COMPLETION_CLAIMS": str(claims),
+            "JEV_COMPLETION_TESTS": str(repo / "tests.log"),
+            "JEV_HOOK_REQUIRED": "1",
+        },
+        provider=FakeProvider({}),
+    )
+    captured = capsys.readouterr()
+    assert code == 0 and captured.out == ""
+    assert "nothing to gate" in captured.err
