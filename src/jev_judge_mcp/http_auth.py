@@ -82,8 +82,14 @@ class BearerTokenMiddleware:
         self._token = token.get_secret_value().encode()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        if scope["type"] == "lifespan":
             await self.app(scope, receive, send)
+            return
+        if scope["type"] != "http":
+            # No websocket route exists; a handshake is refused rather than passed through unchecked.
+            await receive()
+            logger.warning("rejected a %s connection: only authenticated HTTP is served", scope["type"])
+            await send({"type": "websocket.close", "code": 1008})
             return
         authorization = Headers(scope=scope).get("authorization", "")
         scheme, _, credential = authorization.partition(" ")

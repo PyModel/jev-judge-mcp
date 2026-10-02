@@ -13,7 +13,7 @@ import httpx
 import pytest
 from pydantic import SecretStr
 from starlette.applications import Starlette
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from jev_judge_mcp.http_auth import (
     HTTP_TOKEN_MIN_LENGTH,
@@ -249,3 +249,27 @@ def test_http_asgi_app_wraps_only_when_a_token_is_set(monkeypatch: pytest.Monkey
     wrapped = http_asgi_app(build_server(settings), settings)
     assert isinstance(wrapped, BearerTokenMiddleware)
     assert isinstance(wrapped.app, Starlette)
+
+
+@pytest.mark.anyio
+async def test_a_websocket_handshake_is_refused_and_lifespan_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The bearer gate covers every connection kind the server does not serve: a websocket is
+    closed with 1008 before any inner app sees it, while the lifespan scope passes through."""
+    seen: list[str] = []
+
+    async def inner(scope: Scope, receive: Receive, send: Send) -> None:
+        seen.append(scope["type"])
+
+    middleware = BearerTokenMiddleware(inner, SecretStr("tok-0123456789"))
+    sent: list[Message] = []
+
+    async def receive() -> Message:
+        return {"type": "websocket.connect"}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    await middleware({"type": "websocket", "path": "/mcp", "headers": []}, receive, send)
+    assert sent == [{"type": "websocket.close", "code": 1008}]
+    await middleware({"type": "lifespan"}, receive, send)
+    assert seen == ["lifespan"]
