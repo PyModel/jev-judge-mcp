@@ -40,3 +40,14 @@ Decision (landed):
   missing only because `TOOLS` was frozen at P3, follow as a separate change.
 - `tools/screen.py`'s invalid path, which hardcodes `review` plus a reason string, is the other
   leak the review found. It moves behind a policy helper in the same stream.
+
+## Amendment (2026-10-01): four more decisions move into `policy/`
+
+The 2026-10-01 review found four Action decisions still computed in tools, outside the branch gate:
+jev_verify's "unknown confidence reviews" plus the ADR-0067 caller-note demotion (`verify.py`), the
+same demotion after `claim_action` and cut-context handling in jev_gate (`gate.py`), the "never auto
+while a file is unreviewed" clamp in both file-list paths (`review.py`, `gate.py`), and jev_extract's
+call headline (`extract.py`). They are now `policy.verify_claim_action`, `policy.gate_claim_action`,
+`policy.file_list_action`, and `policy.extract_call_action`; the tools project them. The caller-note
+rule receives the raw source answer, so a caller item literally named `none` still blocks auto. No
+wire change; ADR-0078 records the module moves made alongside.

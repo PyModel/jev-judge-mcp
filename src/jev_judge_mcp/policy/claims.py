@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from jev_judge_mcp.policy.actions import Action
+from jev_judge_mcp.policy.actions import Action, require_complete_context, verify_action
 from jev_judge_mcp.policy.thresholds import PolicyThresholds
 
 type ClaimVerdict = Literal["verified", "contradicted", "unsupported"]
@@ -39,6 +39,32 @@ def note_blocks_auto(action: str, support: object, evidence: Sequence[Mapping[st
         return False
     item = next((entry for entry in evidence if str(entry.get("id")) == support), None)
     return item is not None and item.get("kind") == "caller_note"
+
+
+def verify_claim_action(
+    confidence: float | None, auto_accept: float, source: object, evidence: Sequence[Mapping[str, object]]
+) -> Action:
+    """jev_verify's row action: review for an unknown confidence (ADR-0043), `verify_action` otherwise,
+    and never auto on a caller note alone (ADR-0067). `source` is the raw source answer."""
+    action: Action = "review" if confidence is None else verify_action(confidence, auto_accept)
+    return "review" if note_blocks_auto(action, source, evidence) else action
+
+
+def gate_claim_action(
+    verdict: ClaimVerdict,
+    confidence: float | None,
+    thresholds: PolicyThresholds,
+    *,
+    truncated: bool,
+    source: object,
+    evidence: Sequence[Mapping[str, object]],
+) -> Action:
+    """jev_gate's row action: `claim_action` under the thresholds, never auto over cut context, and
+    never auto on a caller note alone (ADR-0067). `source` is the raw source answer."""
+    action = require_complete_context(
+        claim_action(verdict, confidence, thresholds.auto_accept, thresholds.review_at), truncated
+    )
+    return "review" if note_blocks_auto(action, source, evidence) else action
 
 
 def claim_action(verdict: ClaimVerdict, confidence: float | None, auto_accept: float, review_at: float) -> Action:

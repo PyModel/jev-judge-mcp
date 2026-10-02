@@ -12,33 +12,26 @@ inside. Any other tool name keeps the generic allow/deny question, so a widened 
 gets judged.
 """
 
-import asyncio
-import contextlib
 import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-import anyio
-
 from jev_judge_mcp.credential_literal import has_credential_literal, redact_credential_literals
 from jev_judge_mcp.domain.answers import ChoiceAnswer
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.domain.questions import ChoiceQuestion, NoulCriteria, NoulQuestion, Question
 from jev_judge_mcp.hook_render import deny_reason, render_decision
-from jev_judge_mcp.keyfile import redaction_values
+from jev_judge_mcp.hook_runtime import PROVIDER_TIMEOUT_SECONDS as PROVIDER_TIMEOUT_SECONDS
+from jev_judge_mcp.hook_runtime import HookFailure, judge, prepare
 from jev_judge_mcp.providers import (
     Evaluation,
     JevProvider,
-    ProviderConfigError,
-    ProviderError,
-    resolve_model,
     resolve_provider,
 )
 from jev_judge_mcp.redact_action import redact_action
 from jev_judge_mcp.serialize import stringify_compact
-from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.text import length
 from jev_judge_mcp.validation.choice import margin, validate_choice
 from jev_judge_mcp.validation.noul import validate_noul
@@ -56,10 +49,6 @@ Hook-only; not a tool threshold (ADR-0076)."""
 SECRET_CONTENT_THRESHOLD = 0.7
 """Deny an in-repo Write or Edit when the credential-in-content noul reaches this.
 Hook-only; not a tool threshold (ADR-0076)."""
-
-PROVIDER_TIMEOUT_SECONDS = 30.0
-"""Bound on this process's provider call. Retries run inside it (ADR-0057); whatever survives the
-budget is still ``unreachable``."""
 
 HOOK_INPUT_UNITS = 100_000
 """Stdin over this, when ``JEV_HOOK_REQUIRED=1``, asks instead of being judged or staying silent."""
@@ -188,51 +177,17 @@ def main(
     if required and length(body) > HOOK_INPUT_UNITS:
         return fail_open_or_ask(True, "", "input_too_large")
 
-    settings = load_settings()
-    # The redacting handler before any provider call can log (ADR-0008), and after the usage and
-    # stdin gates: a misconfigured environment still gets their one-line answers, never a
-    # settings traceback. Imported here so the short-lived hook process loads the server module
-    # only once it runs for real.
-    from jev_judge_mcp.server import configure_logging
-
-    configure_logging(settings.log_level, redaction_values(settings))
-    model = resolve_model(settings)
-    chosen = provider
-    if chosen is None:
-        try:
-            chosen = resolve_provider(settings)
-        except ProviderConfigError as error:
-            return fail_open_or_ask(required, f"jev-judge-mcp hook: fail-open ({error})\n", "auth")
-
-    outcome = _run(chosen, plan, model)
+    prepared = prepare(provider, resolve=resolve_provider)
+    if isinstance(prepared, HookFailure):
+        return fail_open_or_ask(required, f"jev-judge-mcp hook: fail-open ({prepared.detail})\n", "auth")
+    chosen, model = prepared
+    judged = judge(chosen, plan.state, _questions(plan), model)
+    # Any failure past the wiring — timeout, provider error, a cancelled loop — is `unreachable`.
+    outcome = _Outcome("ask", _ask_reason("unreachable")) if isinstance(judged, HookFailure) else _outcome(plan, judged)
     if outcome.kind == "allow":
         return 0
     sys.stdout.write(_decision(outcome) + "\n")
     return 0
-
-
-def _run(provider: JevProvider, plan: _Plan, model: str) -> _Outcome:
-    try:
-        return anyio.run(_judge, provider, plan, model)
-    except BaseException as error:
-        # The cancel type is only available inside the loop that just exited.
-        if isinstance(error, asyncio.CancelledError) or type(error).__name__ == "Cancelled":
-            return _Outcome("ask", _ask_reason("unreachable"))
-        raise
-
-
-async def _judge(provider: JevProvider, plan: _Plan, model: str) -> _Outcome:
-    try:
-        try:
-            evaluation = await provider.evaluate(plan.state, _questions(plan), model, PROVIDER_TIMEOUT_SECONDS)
-        except ProviderError:
-            return _Outcome("ask", _ask_reason("unreachable"))
-        else:
-            return _outcome(plan, evaluation)
-    finally:
-        with anyio.CancelScope(shield=True):
-            with contextlib.suppress(Exception):
-                await provider.aclose()
 
 
 def _outcome(plan: _Plan, evaluation: Evaluation) -> _Outcome:

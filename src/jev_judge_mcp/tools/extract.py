@@ -6,7 +6,7 @@ makes no provider request (and so never resolves the provider); an incomplete ca
 """
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question
 from jev_judge_mcp.extract.candidates import Refused, find_candidates
@@ -17,7 +17,6 @@ from jev_judge_mcp.policy import (
     DEFAULT_MINIMUM_MARGIN,
     ExtractFieldEvidence,
     ExtractJudgment,
-    worst_action,
 )
 from jev_judge_mcp.policy.actions import Action
 from jev_judge_mcp.serialize import quote
@@ -33,7 +32,12 @@ from jev_judge_mcp.tools.base import (
     frame,
     headline,
 )
-from jev_judge_mcp.tools.observed import decide_extract_field, fail_closed, validate_extract_choice
+from jev_judge_mcp.tools.observed import (
+    decide_extract_field,
+    extract_call_action,
+    fail_closed,
+    validate_extract_choice,
+)
 from jev_judge_mcp.validation import margin, top_probability
 from jev_judge_mcp.validation.caps import CapLedger, candidate_budget_error, exceeds
 
@@ -282,20 +286,8 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
 
 
 def _headlines(results: list[dict[str, object]], item_actions: tuple[Action, ...]) -> ExtractHeadlines:
-    """Both headlines, from the rows. The CLI does not walk them again (ADR-0064 amendment)."""
-    item_action = headline(item_actions)
-    actions: list[Action] = []
-    for row in results:
-        status = row.get("status")
-        if status == "auto" or status == "review":
-            actions.append(cast(Action, status))
-        elif status in ("invalid_pattern", "invalid_response"):
-            actions.append("review")
-        elif status != "not_found":
-            return ExtractHeadlines(item_action, None)
-    if not actions:
-        return ExtractHeadlines(item_action, "auto")
-    return ExtractHeadlines(item_action, worst_action(actions))
+    """Both headlines, projected from the rows; policy decides them (ADR-0064 amendment)."""
+    return ExtractHeadlines(headline(item_actions), extract_call_action(row.get("status") for row in results))
 
 
 TOOL = JevTool(DEFINITION, handle)

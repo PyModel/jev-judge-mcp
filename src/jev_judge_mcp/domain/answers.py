@@ -1,7 +1,12 @@
 """Validated answers. Raw answers are whatever JSON the provider returned; validation turns them into these."""
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal
+
+RUBRIC_SCORE_MAX: Final = 2
+"""The fixed rubric a Score answer is read on: `0..2`, three levels (`validateScoreAnswer`,
+`index.ts:1161`). One owner for the number the validator bounds, the composite clamps, and the
+payload states as `score_scale`."""
 
 type RawAnswer = object
 """One answer as parsed from the provider envelope, before validation. Anything may arrive."""

@@ -6,11 +6,14 @@ from jev_judge_mcp.domain import ChoiceQuestion, Question
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import VERIFY
 from jev_judge_mcp.policy import DEFAULT_AUTO_ACCEPT
-from jev_judge_mcp.policy.claims import note_blocks_auto
 from jev_judge_mcp.responses import caller_renames, claim_extras, renamed_ids_field, summary_extras
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, caller_actions, define, frame, headline
 from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items
-from jev_judge_mcp.tools.observed import fail_closed, validate_choice, verify_action
+from jev_judge_mcp.tools.observed import (
+    fail_closed,
+    validate_choice,
+    verify_claim_action,
+)
 from jev_judge_mcp.tools.review import ANTI_INJECTION
 
 RELATION_TO_VERDICT = {"supports": "verified", "contradicts": "contradicted", "says_nothing": "unsupported"}
@@ -119,9 +122,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             continue
         confidence = validated.confidence
         support = source.choice if source is not None and source.choice != "none" else None
-        action = "review" if confidence is None else verify_action(confidence, auto_accept)
-        if note_blocks_auto(action, None if source is None else source.choice, evidence):
-            action = "review"
+        action = verify_claim_action(confidence, auto_accept, None if source is None else source.choice, evidence)
         row = {
             "id": claim["id"],
             "claim": claim["text"],

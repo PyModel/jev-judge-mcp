@@ -16,8 +16,10 @@ from jev_judge_mcp.policy.claims import (
     RequirementCheck,
     claim_action,
     contradicts_recommendation,
+    gate_claim_action,
     gate_reason_codes,
     note_blocks_auto,
+    verify_claim_action,
 )
 from jev_judge_mcp.policy.extract import (
     EXTRACT_REASON_CODES,
@@ -27,9 +29,16 @@ from jev_judge_mcp.policy.extract import (
     ExtractReasonCode,
     ExtractStatus,
     decide_extract_field,
+    extract_call_action,
 )
 from jev_judge_mcp.policy.ranking import ExistsVerdict, exists_verdict, rank_candidates, rerank_by_score
-from jev_judge_mcp.policy.review import REVIEW_WEIGHTS, min_confidence, review_action, review_composite
+from jev_judge_mcp.policy.review import (
+    REVIEW_WEIGHTS,
+    file_list_action,
+    min_confidence,
+    review_action,
+    review_composite,
+)
 from jev_judge_mcp.policy.screen import ScreenAction, ScreenRecommendation, screen_fail_closed, screen_recommendation
 from jev_judge_mcp.policy.thresholds import (
     DEFAULT_AUTO_ACCEPT,
@@ -88,7 +97,10 @@ __all__ = [
     "contradicts_recommendation",
     "decide_extract_field",
     "exists_verdict",
+    "extract_call_action",
     "fail_closed",
+    "file_list_action",
+    "gate_claim_action",
     "gate_reason_codes",
     "min_confidence",
     "note_blocks_auto",
@@ -102,5 +114,6 @@ __all__ = [
     "screen_recommendation",
     "validate_policy_thresholds",
     "verify_action",
+    "verify_claim_action",
     "worst_action",
 ]

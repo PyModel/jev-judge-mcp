@@ -4,10 +4,11 @@ Validation has already accepted the answer (or the field had no candidates to as
 failures and invalid answers never reach here. The tool projects the decision into its payload.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
-from jev_judge_mcp.policy.actions import classification_decision
+from jev_judge_mcp.policy.actions import Action, classification_decision, worst_action
 
 type ExtractStatus = Literal["auto", "review", "not_found"]
 
@@ -74,3 +75,21 @@ def decide_extract_field(evidence: ExtractFieldEvidence, *, threshold: float, ma
             return ExtractFieldDecision("not_found", "none_matched")
         return ExtractFieldDecision("review", "none_matched_ambiguous")
     return ExtractFieldDecision(decision, None)
+
+
+def extract_call_action(statuses: Iterable[object]) -> Action | None:
+    """The call headline the CLI reports (ADR-0064 amendment), from the rows' statuses.
+
+    `not_found` is neutral, a broken row (`invalid_pattern`, `invalid_response`) counts as `review`,
+    and every field `not_found` settles as `auto`. A status outside that set leaves the call
+    unresolved: `None`.
+    """
+    actions: list[Action] = []
+    for status in statuses:
+        if status == "auto":
+            actions.append("auto")
+        elif status in ("review", "invalid_pattern", "invalid_response"):
+            actions.append("review")
+        elif status != "not_found":
+            return None
+    return "auto" if not actions else worst_action(actions)

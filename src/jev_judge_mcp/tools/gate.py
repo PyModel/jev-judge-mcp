@@ -22,18 +22,17 @@ from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.arguments import Refinement
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, define, frame
 from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items, has_non_empty_evidence, normalize_evidence
-from jev_judge_mcp.tools.files import combined, file_actions, file_patches
+from jev_judge_mcp.tools.files import combined, file_list_refusal, file_patches, review_file_list
 from jev_judge_mcp.tools.observed import (
-    claim_action,
     fail_closed,
+    file_list_action,
+    gate_claim_action,
     gate_reason_codes,
-    require_complete_context,
     validate_choice,
     worst_action,
 )
-from jev_judge_mcp.tools.review import (
+from jev_judge_mcp.tools.review_half import (
     ANTI_INJECTION,
-    ReviewHalf,
     ReviewSettings,
     project_review,
     review_docs,
@@ -45,8 +44,6 @@ from jev_judge_mcp.validation.caps import (
     CapLedger,
     CapScope,
     exceeds,
-    gate_diff_aggregate_error,
-    gate_diff_files_error,
     gate_evidence_aggregate_error,
     gate_evidence_items_error,
 )
@@ -347,11 +344,14 @@ def _verify_claims(
             else None
         )
         support = source.choice if source is not None and source.choice != "none" else None
-        action = require_complete_context(
-            claim_action(verdict, answer.confidence, thresholds.auto_accept, thresholds.review_at), truncated
+        action = gate_claim_action(
+            verdict,
+            answer.confidence,
+            thresholds,
+            truncated=truncated,
+            source=None if source is None else source.choice,
+            evidence=asked_evidence,
         )
-        if note_blocks_auto(action, None if source is None else source.choice, asked_evidence):
-            action = "review"
         claim_actions.append(action)
         row: dict[str, object] = {
             "claim": claim,
@@ -384,6 +384,14 @@ def _verify_claims(
     return VerificationHalf(verification, verification_action, judgments, caller_note)
 
 
+_FILE_REVIEW_PURPOSE = (
+    "Review one file of the proposed multi-file patch against the request; tests is reported "
+    "test output. Completion claims are checked against the evidence in a separate step, "
+    "and this review is not evidence for them."
+)
+"""The per-file review state's framing: no claims ride with a file review (ADR-0066 amendment)."""
+
+
 async def _handle_file_list(
     args: dict[str, Any],
     runtime: Runtime,
@@ -394,59 +402,27 @@ async def _handle_file_list(
     """Per-file review plus one claims verification (ADR-0066 and its amendment).
 
     A file over the cap is unreviewed. The call never returns auto while any file is unreviewed.
-    Each fitting file is asked the review rubric alone; the claims and source questions are asked
-    once, after the files, with the evidence sent once, so the verification rows are canonical
-    and the action is the worst of what the rows and the file reviews actually say.
+    Each fitting file is asked the review rubric alone (`files.review_file_list`); the claims and
+    source questions are asked once, after the files, with the evidence sent once, so the
+    verification rows are canonical and the action is the worst of what the rows and the file
+    reviews actually say.
     """
     files = file_patches(args["diff"])
-    total = sum(length(item["patch"]) for item in files)
-    if exceeds(total, GATE.aggregate_evidence_units):
-        return _refused(gate_diff_aggregate_error(GATE.aggregate_evidence_units))
-    if exceeds(len(files), GATE.files_max):
-        return _refused(gate_diff_files_error(GATE.files_max))
-    fitting = [item for item in files if length(str(item["patch"])) <= GATE.doc_units]
-    unreviewed = [str(item["path"]) for item in files if length(str(item["patch"])) > GATE.doc_units]
-    if not fitting:
+    refusal = file_list_refusal(files)
+    if refusal is not None:
+        return _refused(refusal)
+    reviewed = await review_file_list(
+        files, args, runtime, settings, purpose=_FILE_REVIEW_PURPOSE, doc_units=GATE.doc_units
+    )
+    if not reviewed.halves:
         unasked: dict[str, object] = {
             "action": "review",
             "partial": True,
-            "unreviewed_files": unreviewed,
+            "unreviewed_files": reviewed.unreviewed,
             "reason_codes": ["incomplete_context"],
             "next_checks": next_checks_for(["incomplete_context"]),
         }
         return ToolResult(frame("jev_gate", None, unasked, model=runtime.model), action="review")
-    # Each fitting file is under the cap. Do not join them back into a string that would be cut.
-    halves: list[ReviewHalf] = []
-    evaluations: list[Evaluation] = []
-    reviewed_paths: list[str] = []
-    unhashed_tests = False
-    truncated = False
-    scopes: frozenset[CapScope] = frozenset()
-    for item in fitting:
-        file_args = {**args, "diff": item["patch"]}
-        ledger = CapLedger()
-        docs = review_docs(file_args, ledger, GATE.doc_units)
-        # No claims ride with a file review: the claim questions get their own ask, on the evidence.
-        evaluation = await runtime.ask(
-            {
-                "purpose": (
-                    "Review one file of the proposed multi-file patch against the request; tests is reported "
-                    "test output. Completion claims are checked against the evidence in a separate step, "
-                    "and this review is not evidence for them."
-                ),
-                "request": docs.request,
-                "diff": docs.diff,
-                "tests": docs.tests,
-            },
-            review_questions(),
-        )
-        halves.append(project_review(evaluation.answers, settings, ledger.context_cut))
-        evaluations.append(evaluation)
-        reviewed_paths.append(str(item["path"]))
-        if docs.tests and not args.get("tests_sha256"):
-            unhashed_tests = True
-        truncated = truncated or ledger.context_cut
-        scopes |= ledger.scopes
     # One verification ask: every claim and source question once, the evidence sent once. The
     # fitting files join the evidence as one implicit diff item per file, so a claim can rest on
     # a file's patch the same way a claim rests on the string diff.
@@ -458,7 +434,10 @@ async def _handle_file_list(
     sent_claims = [ledger.text(claim, GATE.claim_units, "context") for claim in claims]
     sent_evidence = [_sent_evidence_item(item, ledger) for item in evidence]
     implicit = [
-        *({"id": f"diff:{item['path']}", "text": item["patch"], "kind": "diff", "role": "after"} for item in fitting),
+        *(
+            {"id": f"diff:{item['path']}", "text": item["patch"], "kind": "diff", "role": "after"}
+            for item in reviewed.fitting
+        ),
         *_implicit_evidence(None, tests),
     ]
     asked_evidence = ensure_unique_ids([*sent_evidence, *implicit], "evidence").items
@@ -484,27 +463,20 @@ async def _handle_file_list(
     verification = _verify_claims(
         evaluation.answers, claims, asked_evidence, evidence_ids, settings.thresholds, ledger.context_cut
     )
-    evaluations.append(evaluation)
-    truncated = truncated or ledger.context_cut
-    scopes |= ledger.scopes
+    truncated = reviewed.truncated or ledger.context_cut
+    scopes = reviewed.scopes | ledger.scopes
 
-    review_action = worst_action([half.action for half in halves])
-    review_payload = dict(halves[0].payload)
-    review_payload["action"] = review_action
-    review_payload["score_file"] = reviewed_paths[0]
-    review_payload["reviewed_files"] = reviewed_paths
-    review_payload["file_actions"] = file_actions(zip(reviewed_paths, [half.action for half in halves], strict=True))
-    if unhashed_tests:
+    review_action = worst_action([half.action for half in reviewed.halves])
+    review_payload = reviewed.review_half(review_action)
+    if reviewed.unhashed_tests:
         review_payload["tests_weight"] = "self_reported"
-    action = worst_action([review_action, verification.action])
-    if unreviewed and action == "auto":
-        action = "review"
+    action = file_list_action([review_action, verification.action], bool(reviewed.unreviewed))
     # An unreviewed file is incomplete context even when nothing was cut: the clamp to review
     # must name why. The payload's own `truncated` field below stays cut-honest (false).
     reason_codes = gate_reason_codes(
-        truncated=truncated or bool(unreviewed),
+        truncated=truncated or bool(reviewed.unreviewed),
         review_action=review_action,
-        review_invalid=any(half.invalid for half in halves),
+        review_invalid=any(half.invalid for half in reviewed.halves),
         claims=verification.judgments,
         action=action,
         thresholds=settings.thresholds,
@@ -518,10 +490,12 @@ async def _handle_file_list(
         "review": review_payload,
         "verification": verification.payload,
         **renamed_ids_field(renamed),
-        "partial": bool(unreviewed),
-        "unreviewed_files": unreviewed,
+        "partial": bool(reviewed.unreviewed),
+        "unreviewed_files": reviewed.unreviewed,
     }
-    return ToolResult(frame("jev_gate", combined(evaluations), payload), action=action, truncated=scopes)
+    return ToolResult(
+        frame("jev_gate", combined([*reviewed.evaluations, evaluation]), payload), action=action, truncated=scopes
+    )
 
 
 TOOL = JevTool(DEFINITION, handle, {"evidence": EVIDENCE_NOT_EMPTY})

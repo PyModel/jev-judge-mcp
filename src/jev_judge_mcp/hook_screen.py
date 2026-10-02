@@ -6,30 +6,21 @@ hook abstains, or one PostToolUse annotation carrying additional context (ADR-00
 does not log the output or the state.
 """
 
-import asyncio
-import contextlib
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import PurePath
 from typing import cast
 
-import anyio
-
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.domain.questions import NoulCriteria, NoulQuestion, Question
-from jev_judge_mcp.hook import PROVIDER_TIMEOUT_SECONDS
 from jev_judge_mcp.hook_render import render_annotation
-from jev_judge_mcp.keyfile import redaction_values
+from jev_judge_mcp.hook_runtime import HookFailure, judge, prepare
 from jev_judge_mcp.providers import (
     JevProvider,
-    ProviderConfigError,
-    ProviderError,
-    resolve_model,
     resolve_provider,
 )
 from jev_judge_mcp.redact_action import redact_action
 from jev_judge_mcp.serialize import stringify_compact
-from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.text import head
 from jev_judge_mcp.validation.noul import validate_noul
 
@@ -96,21 +87,15 @@ def main(
         return 0
     judged = redact_action(prefix)
 
-    settings = load_settings()
-    # The redacting handler before any provider call can log (ADR-0008), and after the usage and
-    # stdin gates: a misconfigured environment still gets a one-line answer, never a traceback.
-    from jev_judge_mcp.server import configure_logging
-
-    configure_logging(settings.log_level, redaction_values(settings))
-    model = resolve_model(settings)
-    chosen = provider
-    if chosen is None:
-        try:
-            chosen = resolve_provider(settings)
-        except ProviderConfigError as error:
-            return _abstain(f"jev-judge-mcp hook screen: fail-open ({error})\n")
-
-    probability = _run(chosen, _state(parsed, judged), model)
+    prepared = prepare(provider, resolve=resolve_provider)
+    if isinstance(prepared, HookFailure):
+        return _abstain(f"jev-judge-mcp hook screen: fail-open ({prepared.detail})\n")
+    chosen, model = prepared
+    evaluation = judge(chosen, _state(parsed, judged), _questions(), model)
+    if isinstance(evaluation, HookFailure):
+        # A provider failure gets the one stderr note; a cancelled loop stays silent.
+        return _abstain("" if evaluation.kind == "cancelled" else _FAIL_PROVIDER)
+    probability = validate_noul(evaluation.answers.get(_QUESTION_ID))
     if probability is None or probability < SCREEN_FLAG_AT:
         return 0
     sys.stdout.write(render_annotation(_banner(probability)) + "\n")
@@ -162,31 +147,6 @@ def _state(event: Mapping[str, object], judged: str) -> str:
 
 def _questions() -> dict[str, Question]:
     return {_QUESTION_ID: NoulQuestion(instructions=_QUESTION, criteria=NoulCriteria(true=_TRUE, false=_FALSE))}
-
-
-def _run(provider: JevProvider, state: str, model: str) -> float | None:
-    """The validated noul probability, or None on any provider failure. A cancel stays silent."""
-    try:
-        return anyio.run(_judge, provider, state, model)
-    except BaseException as error:
-        # The cancel type is only available inside the loop that just exited.
-        if isinstance(error, asyncio.CancelledError) or type(error).__name__ == "Cancelled":
-            return None
-        raise
-
-
-async def _judge(provider: JevProvider, state: str, model: str) -> float | None:
-    try:
-        try:
-            evaluation = await provider.evaluate(state, _questions(), model, PROVIDER_TIMEOUT_SECONDS)
-        except ProviderError:
-            sys.stderr.write(_FAIL_PROVIDER)
-            return None
-        return validate_noul(evaluation.answers.get(_QUESTION_ID))
-    finally:
-        with anyio.CancelScope(shield=True):
-            with contextlib.suppress(Exception):
-                await provider.aclose()
 
 
 def _banner(probability: float) -> str:

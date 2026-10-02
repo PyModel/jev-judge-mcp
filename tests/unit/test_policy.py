@@ -24,7 +24,10 @@ from jev_judge_mcp.policy import (
     contradicts_recommendation,
     decide_extract_field,
     exists_verdict,
+    extract_call_action,
     fail_closed,
+    file_list_action,
+    gate_claim_action,
     gate_reason_codes,
     min_confidence,
     rank_candidates,
@@ -37,6 +40,7 @@ from jev_judge_mcp.policy import (
     screen_recommendation,
     validate_policy_thresholds,
     verify_action,
+    verify_claim_action,
     worst_action,
 )
 
@@ -481,3 +485,42 @@ def test_extract_reason_codes_are_the_closed_set() -> None:
         "none_matched",
         "none_matched_ambiguous",
     )
+
+
+# ── the actions the tools used to compute (ADR-0002: policy decides, tools project) ──────────
+
+_NOTE = [{"id": "note", "text": "I ran it", "kind": "caller_note"}, {"id": "log", "text": "1 passed"}]
+
+
+def test_verify_claim_action_reviews_unknown_confidence_and_blocks_a_lone_caller_note() -> None:
+    assert verify_claim_action(None, DEFAULT_AUTO_ACCEPT, None, _NOTE) == "review"
+    assert verify_claim_action(0.95, DEFAULT_AUTO_ACCEPT, "log", _NOTE) == "auto"
+    assert verify_claim_action(0.95, DEFAULT_AUTO_ACCEPT, "note", _NOTE) == "review"
+    assert verify_claim_action(0.5, DEFAULT_AUTO_ACCEPT, "log", _NOTE) == "review"
+
+
+def test_gate_claim_action_applies_thresholds_cut_context_and_the_caller_note_rule() -> None:
+    thresholds = PolicyThresholds(auto_accept=0.8, review_at=0.5)
+    assert gate_claim_action("verified", 0.95, thresholds, truncated=False, source="log", evidence=_NOTE) == "auto"
+    assert gate_claim_action("verified", 0.95, thresholds, truncated=True, source="log", evidence=_NOTE) == "review"
+    assert gate_claim_action("verified", 0.95, thresholds, truncated=False, source="note", evidence=_NOTE) == "review"
+    assert (
+        gate_claim_action("contradicted", 0.95, thresholds, truncated=False, source=None, evidence=_NOTE) == "escalate"
+    )
+
+
+def test_file_list_action_is_the_worst_file_and_never_auto_while_a_file_is_unreviewed() -> None:
+    assert file_list_action(["auto", "auto"], unreviewed=False) == "auto"
+    assert file_list_action(["auto", "auto"], unreviewed=True) == "review"
+    assert file_list_action(["auto", "escalate"], unreviewed=True) == "escalate"
+    assert file_list_action(["review"], unreviewed=False) == "review"
+
+
+def test_extract_call_action_reads_the_rows_statuses() -> None:
+    assert extract_call_action([]) == "auto"
+    assert extract_call_action(["not_found", "not_found"]) == "auto"
+    assert extract_call_action(["auto", "not_found"]) == "auto"
+    assert extract_call_action(["auto", "review"]) == "review"
+    assert extract_call_action(["auto", "invalid_pattern"]) == "review"
+    assert extract_call_action(["auto", "invalid_response"]) == "review"
+    assert extract_call_action(["auto", "something_else"]) is None

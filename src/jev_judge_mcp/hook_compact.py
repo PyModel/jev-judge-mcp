@@ -7,36 +7,24 @@ so the summary keeps the live task. Stdout is empty when the hook abstains.
 PreCompact cannot inject compaction instructions (ADR-0077); this is the documented path.
 """
 
-import asyncio
-import contextlib
 import os
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
-import anyio
-
 from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.domain.questions import ChoiceQuestion, Question
-from jev_judge_mcp.hook import (
-    ESTIMATED_CONFIDENCE_THRESHOLD,
-    PROVIDER_TIMEOUT_SECONDS,
-    REPORTED_CONFIDENCE_THRESHOLD,
-)
-from jev_judge_mcp.keyfile import redaction_values
+from jev_judge_mcp.hook import ESTIMATED_CONFIDENCE_THRESHOLD, REPORTED_CONFIDENCE_THRESHOLD
+from jev_judge_mcp.hook_runtime import HookFailure, prepare
+from jev_judge_mcp.hook_runtime import judge as judge_once
 from jev_judge_mcp.providers import (
     JevProvider,
-    ProviderConfigError,
-    ProviderError,
-    ProviderTimeoutError,
-    resolve_model,
     resolve_provider,
 )
 from jev_judge_mcp.redact_action import redact_action
 from jev_judge_mcp.serialize import stringify_compact
-from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.text import head
 from jev_judge_mcp.validation.choice import margin, validate_choice
 
@@ -109,20 +97,11 @@ def compact_cut_main(
     if len(turns) < 2:
         return 0
 
-    settings = load_settings()
-    # The redacting handler before any provider call can log (ADR-0008), the same wiring hook gate
-    # uses: a misconfigured environment still gets silence or the one line, never a traceback.
-    from jev_judge_mcp.server import configure_logging
-
-    configure_logging(settings.log_level, redaction_values(settings))
-    model = resolve_model(settings)
-    chosen = provider
-    if chosen is None:
-        try:
-            chosen = resolve_provider(settings)
-        except ProviderConfigError as error:
-            sys.stderr.write(f"jev-judge-mcp hook compact-cut: fail-open ({error})\n")
-            return 0
+    prepared = prepare(provider, resolve=resolve_provider)
+    if isinstance(prepared, HookFailure):
+        sys.stderr.write(f"jev-judge-mcp hook compact-cut: fail-open ({prepared.detail})\n")
+        return 0
+    chosen, model = prepared
     line, code = judge(chosen, turns, model)
     if line is None:
         if code:
@@ -235,32 +214,11 @@ def render_context(line: str) -> str:
 
 def judge(provider: JevProvider, turns: list[Turn], model: str) -> tuple[str | None, str]:
     """One provider call: ``(line, code)``. Any provider failure is ``(None, code)`` — silence."""
-    try:
-        return anyio.run(_ask, provider, turns, model)
-    except BaseException as error:
-        # The cancel type is only available inside the loop that just exited (hook.py's pattern).
-        if isinstance(error, asyncio.CancelledError) or type(error).__name__ == "Cancelled":
-            return None, "provider"
-        raise
-
-
-async def _ask(provider: JevProvider, turns: list[Turn], model: str) -> tuple[str | None, str]:
-    try:
-        try:
-            evaluation = await provider.evaluate(
-                build_state(turns), build_question(turns), model, PROVIDER_TIMEOUT_SECONDS
-            )
-        except ProviderTimeoutError:
-            return None, "timeout"
-        except ProviderError:
-            return None, "provider"
-        else:
-            picked = pick(evaluation.answers.get(_QUESTION_ID), turns)
-            return (None, "") if picked is None else (context_line(picked), "")
-    finally:
-        with anyio.CancelScope(shield=True):
-            with contextlib.suppress(Exception):
-                await provider.aclose()
+    evaluation = judge_once(provider, build_state(turns), build_question(turns), model)
+    if isinstance(evaluation, HookFailure):
+        return None, "timeout" if evaluation.kind == "timeout" else "provider"
+    picked = pick(evaluation.answers.get(_QUESTION_ID), turns)
+    return (None, "") if picked is None else (context_line(picked), "")
 
 
 def _redacted(text: str) -> str:

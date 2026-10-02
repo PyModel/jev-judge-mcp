@@ -7,6 +7,7 @@ difference from the reference text is these fields, in this order.
 from collections.abc import Mapping, Sequence
 from typing import Literal
 
+from jev_judge_mcp.domain.answers import RUBRIC_SCORE_MAX
 from jev_judge_mcp.text import head
 
 EXCERPT_UNITS = 200
@@ -39,8 +40,8 @@ type DiffShape = Literal["patch", "file_list", "text"]
 
 _HUNK_HEADERS = ("diff --git ", "@@ ", "+++ ", "--- ", "Index: ")
 
-SCORE_SCALE = [0, 2]
-_LEVELS = (0, 1, 2)
+SCORE_SCALE = [0, RUBRIC_SCORE_MAX]
+_LEVELS = tuple(range(RUBRIC_SCORE_MAX + 1))
 
 
 def diff_shape(diff: object) -> DiffShape:

@@ -2,14 +2,15 @@
 
 import math
 
-from jev_judge_mcp.domain.answers import RawAnswer, RubricAnswer, ScoreAnswer
+from jev_judge_mcp.domain.answers import RUBRIC_SCORE_MAX, RawAnswer, RubricAnswer, ScoreAnswer
 from jev_judge_mcp.domain.json import as_number, is_json_object
 from jev_judge_mcp.serialize import js_key_order
 from jev_judge_mcp.validation.choice import PROBABILITY_SUM_TOLERANCE
 from jev_judge_mcp.validation.numbers import confidence_of
 
-MAX_SCORE = 2
-"""Hardcoded in `validateScoreAnswer` (`index.ts:1161`), independent of the question's rubric length."""
+MAX_SCORE = RUBRIC_SCORE_MAX
+"""Hardcoded in `validateScoreAnswer` (`index.ts:1161`), independent of the question's rubric length;
+the number is the domain's `RUBRIC_SCORE_MAX`."""
 
 
 def validate_score(answer: RawAnswer) -> ScoreAnswer | None:

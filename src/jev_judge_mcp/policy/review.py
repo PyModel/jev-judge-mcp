@@ -1,9 +1,13 @@
 """Patch-review policy: the weighted composite and the review action (`lib.ts:245-337`, `index.ts:1254-1257`)."""
 
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
-from jev_judge_mcp.policy.actions import Action
+from jev_judge_mcp.domain.answers import RUBRIC_SCORE_MAX
+from jev_judge_mcp.policy.actions import Action, worst_action
+
+_SCALE = float(RUBRIC_SCORE_MAX)
+"""The rubric's top score as the float64 the reference divides by."""
 
 REVIEW_WEIGHTS: dict[str, float] = {
     "correctness": 0.4,
@@ -27,10 +31,10 @@ def review_composite(correctness: float, spec_match: float, test_gap: float, bla
     Inputs are clamped to [0, 2] first. The sum is written out left to right so each float64 add
     happens in the reference's order.
     """
-    c = _clamp(_clamp(correctness, 0.0, 2.0) / 2, 0.0, 1.0)
-    s = _clamp(_clamp(spec_match, 0.0, 2.0) / 2, 0.0, 1.0)
-    t = _clamp(1 - _clamp(test_gap, 0.0, 2.0) / 2, 0.0, 1.0)
-    b = _clamp(1 - _clamp(blast_radius, 0.0, 2.0) / 2, 0.0, 1.0)
+    c = _clamp(_clamp(correctness, 0.0, _SCALE) / _SCALE, 0.0, 1.0)
+    s = _clamp(_clamp(spec_match, 0.0, _SCALE) / _SCALE, 0.0, 1.0)
+    t = _clamp(1 - _clamp(test_gap, 0.0, _SCALE) / _SCALE, 0.0, 1.0)
+    b = _clamp(1 - _clamp(blast_radius, 0.0, _SCALE) / _SCALE, 0.0, 1.0)
     return (
         REVIEW_WEIGHTS["correctness"] * c
         + REVIEW_WEIGHTS["spec_match"] * s
@@ -49,6 +53,16 @@ def min_confidence(confidences: Iterable[float | None]) -> float | None:
     if any(value is None for value in values):
         return None
     return min((value for value in values if value is not None), default=math.inf)
+
+
+def file_list_action(actions: Sequence[Action], unreviewed: bool) -> Action:
+    """A file list's headline (ADR-0066): the worst of `actions`, and never auto while a file is unreviewed.
+
+    `actions` is the reviewed files' actions (jev_review), or the files' worst action beside the
+    verification action (jev_gate).
+    """
+    action = worst_action(actions)
+    return "review" if unreviewed and action == "auto" else action
 
 
 def review_action(
