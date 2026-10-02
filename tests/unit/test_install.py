@@ -884,6 +884,24 @@ def test_verify_drains_a_flooding_stderr_before_the_child_answers(tmp_path: Path
     verify_command([sys.executable, str(script)], timeout=10)
 
 
+def test_verify_reads_a_reply_that_arrived_with_an_earlier_line(tmp_path: Path) -> None:
+    """Both replies in one chunk: `readline` buffers the second past the first, where a wait on
+    the pipe would never see it. The line reader hands it over instead of timing out."""
+    script = tmp_path / "eager_server.py"
+    names = ", ".join(f'"{name}"' for name in EXPECTED_TOOLS)
+    script.write_text(
+        "import json,sys\n"
+        "init = json.loads(sys.stdin.readline())\n"
+        f"tools = [{{'name': name}} for name in [{names}]]\n"
+        "sys.stdout.write(json.dumps({'jsonrpc':'2.0','id':init['id'],'result':{'serverInfo':{'name':'jev-mcp'}}})+'\\n'\n"
+        "  + json.dumps({'jsonrpc':'2.0','id':init['id'] + 1,'result':{'tools':tools}})+'\\n')\n"
+        "sys.stdout.flush()\n"
+        "sys.stdin.read()\n",
+        encoding="utf-8",
+    )
+    verify_command([sys.executable, str(script)], timeout=5)
+
+
 def test_the_stderr_tail_is_capped(tmp_path: Path) -> None:
     """One enormous stderr line must not flood the installer's summary (ADR-0053)."""
     script = tmp_path / "one_long_line.py"

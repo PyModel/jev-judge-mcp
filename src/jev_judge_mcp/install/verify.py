@@ -1,7 +1,7 @@
 """Confirm a freshly written server answers initialize and tools/list. No provider call."""
 
 import json
-import select
+import queue
 import subprocess
 import threading
 import time
@@ -85,15 +85,17 @@ def verify_command(command: list[str], *, timeout: float = 30.0) -> None:
         stdout = process.stdout
         if stdin is None or stdout is None:
             raise VerifyError("could not talk to the server")
+        reader = _LineReader(stdout)
+        reader.start()
         _send(stdin, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _initialize_params()})
-        initialized = _read_response(stdout, 1, timeout)
+        initialized = _read_response(reader, 1, timeout)
         info = initialized.get("serverInfo")
         name = info.get("name") if is_json_object(info) else None
         if name != SERVER_NAME:
             raise VerifyError("serverInfo.name is not jev-mcp")
         _send(stdin, {"jsonrpc": "2.0", "method": "notifications/initialized"})
         _send(stdin, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        listed = _read_response(stdout, 2, timeout)
+        listed = _read_response(reader, 2, timeout)
         tools = listed.get("tools")
         if not isinstance(tools, list):
             raise VerifyError("tools/list did not return tools")
@@ -149,16 +151,44 @@ def _send(stdin: IO[str], message: Mapping[str, object]) -> None:
     stdin.flush()
 
 
-def _read_response(stdout: IO[str], request_id: int, timeout: float) -> dict[str, object]:
+class _LineReader:
+    """The child's stdout lines, handed over from a daemon thread.
+
+    `readline` buffers past the line it returns, so a reply that arrived in the same chunk as an
+    earlier line is already in the buffer where `select` on the pipe can never see it; a thread
+    reading lines onto a queue has no such blind spot, and every wait here is bounded.
+    """
+
+    def __init__(self, stream: IO[str]) -> None:
+        self._lines: queue.Queue[str | None] = queue.Queue()
+        self._thread = threading.Thread(target=self._drain, args=(stream,), daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def _drain(self, stream: IO[str]) -> None:
+        try:
+            for line in stream:
+                self._lines.put(line)
+        except (OSError, ValueError):
+            pass  # the pipe closed under us during teardown
+        self._lines.put(None)
+
+    def line(self, timeout: float) -> str | None:
+        """The next line, `None` at EOF; `VerifyError` when `timeout` passes first."""
+        try:
+            return self._lines.get(timeout=max(0.0, timeout))
+        except queue.Empty:
+            raise VerifyError("timed out waiting for the server") from None
+
+
+def _read_response(reader: _LineReader, request_id: int, timeout: float) -> dict[str, object]:
     # A line that is not our reply (a notification, a log) is ignored until the id matches.
     # The body is never returned to the caller, so a secret in it cannot reach the summary.
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        ready, _, _ = select.select([stdout], [], [], deadline - time.monotonic())
-        if not ready:
-            raise VerifyError("timed out waiting for the server")
-        line = stdout.readline()
-        if line == "":
+        line = reader.line(deadline - time.monotonic())
+        if line is None:
             raise VerifyError("server closed stdout")
         try:
             parsed: object = json.loads(line)
