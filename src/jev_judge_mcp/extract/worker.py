@@ -108,8 +108,8 @@ class ProcessRegexExecutor:
 
     def __init__(self, size: int | None = None, queue_bound: int | None = None, caps: ExtractCaps = EXTRACT) -> None:
         self._caps = caps
-        self.size = size or min(8, os.cpu_count() or 1)
-        self.queue_bound = queue_bound if queue_bound is not None else 8 * self.size
+        self.size = size or min(caps.pool_size_max, os.cpu_count() or 1)
+        self.queue_bound = queue_bound if queue_bound is not None else caps.queue_bound_per_slot * self.size
         self._limit = anyio.Semaphore(self.size)
         self._waiting = 0
         self._idle: list[_Slot] = []

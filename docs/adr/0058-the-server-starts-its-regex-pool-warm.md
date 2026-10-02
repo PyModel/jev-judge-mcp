@@ -61,3 +61,11 @@ CPU) and holds `size` resident small interpreters instead of one — the pool wa
 hold that many under load. The one-CPU storm is now rerun through the production startup path on
 every push, red on the pre-fix code (the production-shaped storm without the warm failed 2-of-3),
 green after.
+
+## Amendment (2026-10-01): the pool's bounds are caps
+
+The pool size (`min(8, cpu_count)`) and the admission queue (eight waiters per worker) were
+literals in `extract/worker.py`. They are bounds on something that can grow, so they now live
+with every other bound as `limits.EXTRACT.pool_size_max` and `queue_bound_per_slot`, stated on
+`docs/reference/limits.md` like the rest; the worker reads them from its caps block. The values
+are unchanged. No parity-manifest row exists for either; this ADR owns them.

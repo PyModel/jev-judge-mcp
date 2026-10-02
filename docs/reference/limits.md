@@ -162,7 +162,9 @@ Candidate caps are the shared `CANDIDATES` table below.
 | `candidates_per_field` | 20 | the matcher's per-field candidate limit |
 | `candidate_units` | 2000 | over → the match is skipped and counted `tooLong`, never truncated |
 | `aggregate_candidate_units` | 50000 | over → budget error (`input_too_large`) |
-| `regex_timeout_ms` | 1000 | a pattern over it returns `invalid_pattern` (its own copy lives in `extract/candidates.py`) |
+| `regex_timeout_ms` | 1000 | a pattern over it returns `invalid_pattern` (`extract/candidates.py` derives its seconds from this) |
+| `pool_size_max` | 8 | regex worker processes at most; a smaller host runs one per CPU (no manifest row; ADR-0058) |
+| `queue_bound_per_slot` | 8 | callers allowed to wait per worker; past it a pattern is refused `regex_pool_saturated` (ADR-0025; no manifest row) |
 
 ### jev_review (`limits.REVIEW`)
 

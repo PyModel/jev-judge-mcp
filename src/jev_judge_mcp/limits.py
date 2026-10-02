@@ -136,6 +136,10 @@ class ExtractCaps:
     candidate_units: int
     aggregate_candidate_units: int
     regex_timeout_ms: int
+    pool_size_max: int
+    """Worker processes at most (fewer on a smaller host): no manifest row, ADR-0058 owns it."""
+    queue_bound_per_slot: int
+    """Callers allowed to wait per worker before `regex_pool_saturated` (ADR-0025, ADR-0058)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,6 +284,8 @@ EXTRACT: Final = ExtractCaps(
     candidate_units=2000,
     aggregate_candidate_units=50_000,
     regex_timeout_ms=1000,
+    pool_size_max=8,
+    queue_bound_per_slot=8,
 )
 REVIEW: Final = ReviewCaps(doc_units=50_000)
 GATE: Final = GateCaps(
