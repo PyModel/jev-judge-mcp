@@ -2,8 +2,9 @@
 
 `jev_score` is an extension published after the ten snapshot tools (ADR-0048, divergence
 `score-tool-extension`), `jev_file_judge` after it, `jev_ask` after that (ADR-0077, divergence
-`ask-tool-extension`), and `jev_files_judge` after that (ADR-0077, divergence `file-judge-tools`):
-the snapshot order is preserved as a prefix and each extension is pinned by its own contract tests.
+`ask-tool-extension`), `jev_files_judge` after that (ADR-0077, divergence `file-judge-tools`), and
+`jev_gate_range` after that (ADR-0080): the snapshot order is preserved as a prefix and each
+extension is pinned by its own contract tests.
 """
 
 from jev_judge_mcp.tools import (
@@ -16,6 +17,7 @@ from jev_judge_mcp.tools import (
     files_judge,
     find,
     gate,
+    gate_range,
     rerank,
     review,
     score,
@@ -40,6 +42,7 @@ TOOLS: tuple[JevTool, ...] = (
     file_judge.TOOL,
     ask.TOOL,
     files_judge.TOOL,
+    gate_range.TOOL,
 )
 
 __all__ = ["TOOLS", "JevTool", "Runtime", "ToolError", "ToolResult", "Toolset"]

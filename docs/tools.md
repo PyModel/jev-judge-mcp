@@ -301,3 +301,24 @@ answer is typed: a probability, one option, or a scale position — never an exp
 
 **Not for** exact lookups, counting, math, or anything grep answers — run that in your own shell
 and read the result; `command` is for output you want judged, not output you want to read.
+
+## jev_gate_range — did the work finish, read from git
+
+**Use when** the change is in git and you would otherwise paste its diff into `jev_gate`. Name the
+range (`main..HEAD`, or `HEAD` for uncommitted work against the last commit); each end must name a
+commit or a tree. The server reads `git diff <range> -- .` in its working directory, so nothing
+outside that directory is sent, and runs jev_gate's
+handler on the file list, so the review sees the whole patch, never an excerpt you typed
+(ADR-0080).
+
+**Measured.** No recorded live eval; the judgment is jev_gate's.
+
+**Weak spots.** Everything on the jev_gate card applies: the same caps, thresholds, fail-closed
+paths, and payload; only `tool` names this tool. A secret store in the range (`.env`, keys) is
+never sent and is listed in `skipped` as `secret_file`; credential literals in other patches are
+redacted. A range of only secret stores refuses `secret_file`; a bad range, an empty diff, no
+repository, or headers git quoted so they do not split refuse `invalid_arguments`; a diff past the
+gate's aggregate budget is killed mid-read and refuses `input_too_large`; all before any provider
+call. `tests_path` is read under jev_file_judge's path rules and is not self-reported.
+
+**Not for** a patch that is not in the working tree or its history — use jev_gate.

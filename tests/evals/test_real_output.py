@@ -44,6 +44,7 @@ GOLD: dict[str, Json] = {
     "jev_file_judge": {"level": 0},
     "jev_ask": {"answer_id": "q1", "level": 0},
     "jev_files_judge": {"level": 0},
+    "jev_gate_range": {"safe": True, "claims": ["verified"], "reason_codes": ["accepted"]},
 }
 PARAMS: dict[str, Json] = {"jev_screen": {"max_false_block_rate": 0.0}}
 
@@ -58,7 +59,16 @@ EMPTY_INVALID = {
     "jev_files_judge": 1,
 }
 """The scorers that report `invalid` (evals/README.md), each counting its one empty-answer row."""
-AUTO_TIER = {"jev_verify", "jev_screen", "jev_classify", "jev_compare", "jev_extract", "jev_review", "jev_gate"}
+AUTO_TIER = {
+    "jev_verify",
+    "jev_screen",
+    "jev_classify",
+    "jev_compare",
+    "jev_extract",
+    "jev_review",
+    "jev_gate",
+    "jev_gate_range",
+}
 """Tools with an AUTO decision; find, rerank, decide, and score have none."""
 ANSWERS = ("permissive", "hostile", "empty")
 
@@ -94,7 +104,8 @@ async def test_empty_answers_are_invalid_where_the_docs_say(tool: str) -> None:
     assert score.metrics.get("invalid") == EMPTY_INVALID.get(tool)
     found = judgments(tool, [example])
     assert not any(j.auto for j in found)
-    assert {j.predicted for j in found} == ({"unsafe"} if tool == "jev_gate" else {None})  # gate fails closed: escalate
+    gates = ("jev_gate", "jev_gate_range")
+    assert {j.predicted for j in found} == ({"unsafe"} if tool in gates else {None})  # gate fails closed: escalate
 
 
 @pytest.mark.parametrize("tool", list(SCORERS))

@@ -222,10 +222,10 @@ def test_policy_line_uses_threshold_constants(
 def test_allow_names_are_the_published_tools(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The reference ten plus the extensions (ADR-0048, ADR-0077): one allow rule per published tool."""
+    """The reference ten plus the extensions (ADR-0048, ADR-0077, ADR-0080): one allow rule per published tool."""
     monkeypatch.setenv("TYPESAFE_API_KEY", MARKER)
     main([])
-    assert len(ALLOW_RULES) == 14
+    assert len(ALLOW_RULES) == 15
     assert _field(capsys.readouterr().out, "allow").split() == list(ALLOW_RULES)
 
 

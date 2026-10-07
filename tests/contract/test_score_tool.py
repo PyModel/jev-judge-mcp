@@ -152,6 +152,6 @@ def test_the_schema_carries_the_adr_owned_caps() -> None:
 
 def test_score_is_published_after_the_snapshot_ten() -> None:
     names = tuple(tool.name for tool in TOOLS)
-    # first extension (ADR-0048); the ADR-0077 extensions follow
+    # first extension (ADR-0048); the ADR-0077 and ADR-0080 extensions follow
     assert names[10] == "jev_score"
-    assert len(names) == 14
+    assert len(names) == 15

@@ -375,6 +375,20 @@
       "python_behavior": "jev_score is published after the snapshot ten (the snapshot stays a byte-identical prefix of tools/list): one score question over a caller rubric of 2-10 levels, strict whole-answer validation (validate_rubric_answer), ADR-owned caps in limits.SCORE, and no policy thresholds."
     },
     {
+      "id": "gate-range-tool-extension",
+      "surface": "tool_schema",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0080-gate-range-reads-the-diff-server-side.md",
+      "tests": [
+        "tests/contract/test_tools_list.py",
+        "tests/contract/test_gate_range.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "No tool reads a git range; a caller pastes the diff into jev_gate.",
+      "python_behavior": "jev_gate_range is published after the other extensions. The server reads git diff <range> from the repository containing its working directory, with canonical flags, skips secret-store patches and redacts credential literals in the rest, optionally reads a scoped tests_path log, and runs the jev_gate handler unchanged; only the payload's tool field and an optional skipped list differ (ADR-0080)."
+    },
+    {
       "id": "ask-tool-extension",
       "surface": "tool_schema",
       "tier": "both",

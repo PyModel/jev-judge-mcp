@@ -9,6 +9,8 @@ import pytest
 
 from jev_judge_mcp import cli
 from jev_judge_mcp.cli import completion_hook_main, completion_matches, gate_main, judge_main
+from jev_judge_mcp.git_diff import split_unified
+from tests.support.git_repo import repo_with_diff
 from tests.support.jev import FakeProvider
 
 _PUSH = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push origin main"}})
@@ -37,55 +39,6 @@ def _clear_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JEV_MCP_KEY_FILE", "/nonexistent/jev-mcp-key")
     monkeypatch.delenv("GIT_DIR", raising=False)
     monkeypatch.delenv("GIT_WORK_TREE", raising=False)
-
-
-def _repo_with_diff(tmp_path: Path) -> Path:
-    """Two commits so ``git diff HEAD~1`` is a real patch, not an empty range."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
-    (repo / "x.py").write_text("x = 1\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "x.py"], check=True, capture_output=True)
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(repo),
-            "-c",
-            "user.email=gate@example.invalid",
-            "-c",
-            "user.name=gate test",
-            "commit",
-            "-qm",
-            "init",
-        ],
-        check=True,
-        capture_output=True,
-    )
-    (repo / "x.py").write_text("x = 2\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "x.py"], check=True, capture_output=True)
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(repo),
-            "-c",
-            "user.email=gate@example.invalid",
-            "-c",
-            "user.name=gate test",
-            "commit",
-            "-qm",
-            "set x to 2",
-        ],
-        check=True,
-        capture_output=True,
-    )
-    (repo / "claims.json").write_text(
-        json.dumps({"request": "Set x to 2", "claims": ["The patch sets x to 2."]}),
-        encoding="utf-8",
-    )
-    (repo / "tests.log").write_text("1 passed\n", encoding="utf-8")
-    return repo
 
 
 def test_gate_refuses_an_undecodable_tests_file(
@@ -160,7 +113,7 @@ def test_required_completion_hook_asks_on_a_keyless_push(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The dogfood reproduction: key unset, flag set, a git push event, stdout is ask."""
-    repo = _repo_with_diff(tmp_path)
+    repo = repo_with_diff(tmp_path)
     _clear_credentials(monkeypatch)
     monkeypatch.chdir(repo)
     code = completion_hook_main(
@@ -240,7 +193,7 @@ def test_the_asks_reason_states_the_gate_action_as_a_fact(
     permissionDecisionReason — was read by a host model as a possible prompt injection. A reason
     states the gate's action as a fact and nothing else; the decision is the permissionDecision
     field, so a directive in the reason has nowhere legitimate to live."""
-    repo = _repo_with_diff(tmp_path)
+    repo = repo_with_diff(tmp_path)
     monkeypatch.chdir(repo)
     code = completion_hook_main(
         [],
@@ -299,7 +252,7 @@ def test_cli_gate_does_not_mark_a_file_it_read_self_reported(
     The digest is not on the wire. The observable is `tests_weight` absent, and the provider
     state carrying the file text, so an unread file cannot pass.
     """
-    repo = _repo_with_diff(tmp_path)
+    repo = repo_with_diff(tmp_path)
     monkeypatch.chdir(repo)
     raw = (repo / "tests.log").read_bytes()
     provider = FakeProvider({})
@@ -321,20 +274,20 @@ def test_a_path_containing_space_b_slash_is_split_at_the_header_midpoint() -> No
     """`a/dir b/c b/dir b/c` has two ` b/` markers; the last one names `c`, the midpoint names the
     file. A rename falls back to the `+++ b/` line (git ends it with a tab when the path has spaces)."""
     same = "diff --git a/dir b/c b/dir b/c\nindex 1..2 100644\n--- a/dir b/c\n+++ b/dir b/c\t\n@@ -1 +1 @@\n-x\n+y\n"
-    files = cli._split_unified(same)  # pyright: ignore[reportPrivateUsage]
+    files = split_unified(same)
     assert files is not None and [item["path"] for item in files] == ["dir b/c"]
     renamed = (
         "diff --git a/old b/new\nsimilarity index 90%\nrename from old\nrename to new\n"
         "--- a/old\n+++ b/new\n@@ -1 +1 @@\n-x\n+y\n"
     )
-    files = cli._split_unified(renamed)  # pyright: ignore[reportPrivateUsage]
+    files = split_unified(renamed)
     assert files is not None and [item["path"] for item in files] == ["new"]
 
 
 def test_the_completion_range_is_what_the_push_sends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Without `JEV_COMPLETION_DIFF`: the commits ahead of the upstream, else the last commit; an
     empty range means nothing is being pushed and the hook abstains (ADR-0064 amendment)."""
-    repo = _repo_with_diff(tmp_path)
+    repo = repo_with_diff(tmp_path)
     monkeypatch.chdir(repo)
     assert cli.completion_range({"JEV_COMPLETION_DIFF": "HEAD~1"}) == "HEAD~1"
     assert cli.completion_range({}) == "HEAD~1..HEAD"  # no upstream yet: the last commit
@@ -351,7 +304,7 @@ def test_the_completion_range_is_what_the_push_sends(tmp_path: Path, monkeypatch
 def test_an_up_to_date_push_abstains(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    repo = _repo_with_diff(tmp_path)
+    repo = repo_with_diff(tmp_path)
     monkeypatch.chdir(repo)
     branch = subprocess.run(
         ["git", "branch", "--show-current"], check=True, capture_output=True, text=True

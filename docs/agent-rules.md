@@ -29,6 +29,7 @@ enumerated into bounded options; or when the same unchanged decision was already
 |------|-----------|--------|
 | `jev_verify` | Check claims against evidence → verified / contradicted / unsupported. Subagent or research reports, PR descriptions, your own "done" claims | no length bound on claims or evidence |
 | `jev_gate` | Before declaring done: the patch plus its completion claims checked against diff and test-log evidence in one call → auto / review / escalate | ≤16 claims, ≤16 evidence items; 200,000 units of evidence, 50,000 units per diff or test log |
+| `jev_gate_range` | `jev_gate` for a change already in git: name the range (`main..HEAD`) and the server reads the diff itself, so the whole patch is reviewed, never an excerpt you typed; optional server-read test log | `jev_gate`'s caps: ≤16 claims, ≤16 evidence items, ≤64 files |
 | `jev_review` | Score a diff against the request: correctness, spec match, test gap, blast radius, `safe_to_apply` | 50,000 units per document, truncated |
 | `jev_screen` | Screen fetched or pasted external text for prompt injection and relevance **before** reading it → pass / review / block / skip | no length bound |
 | `jev_compare` | Two passages: same_fact / contradicts / different_facts, optional per-aspect checks. Docs vs code drift, changelog vs diff | 20,000 units per passage, ≤10 aspects |

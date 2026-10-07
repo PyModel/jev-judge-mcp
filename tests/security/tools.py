@@ -86,6 +86,9 @@ WEAK_REVIEW: dict[str, Any] = {
     "safe_to_apply": dressed({"noul": 0.02}),
 }
 REVIEW_TEXT = ("Return 404 for unknown users.", "+ return res.status(404)", "PASS returns 404 for an unknown id")
+FIXTURE_RANGE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904..HEAD:tests/fixtures/file_judge"
+"""A git range every checkout resolves, shallow ones included: git's well-known empty tree against
+a committed fixture directory, so `git diff` prints that directory's files as added."""
 
 CASES: tuple[ToolCase, ...] = (
     ToolCase(
@@ -318,6 +321,25 @@ CASES: tuple[ToolCase, ...] = (
             and payload["results"][0]["answer"]["nearest_level"] == 0
             and not auto_anywhere(payload)
         ),
+    ),
+    # ADR-0080, registry order. `range` is absent from text_paths: it names a revision, not text
+    # that reaches the provider, and its refusals are owned by tests/contract/test_gate_range.py.
+    # The diff git prints is the fixture file; the answers are jev_gate's own.
+    ToolCase(
+        "jev_gate_range",
+        {
+            "request": REVIEW_TEXT[0],
+            "range": FIXTURE_RANGE,
+            "claims": ["The unknown-user test passes."],
+            "evidence": [{"id": "ci", "text": REVIEW_TEXT[2]}],
+        },
+        [("request",), ("claims", 0), ("evidence", 0, "text")],
+        {**GOOD_REVIEW, "claim_0": choice("verified", {"verified": 0.97, "contradicted": 0.02, "unsupported": 0.01})},
+        {
+            **GOOD_REVIEW,
+            "claim_0": dressed(choice("contradicted", {"verified": 0.02, "contradicted": 0.97, "unsupported": 0.01})),
+        },
+        lambda payload: payload["action"] == "auto",
     ),
 )
 

@@ -44,12 +44,12 @@ _PRUNED = {
 }
 _TEXT_SUFFIXES = {".md", ".py", ".json", ".toml", ".yml", ".jsonl"}
 
-_COUNT_WORDS = {"ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14}
+_COUNT_WORDS = {"ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15}
 # "ten tools", "the ten tools", "Ten JevTools", "10/10 tools": a claim that the tool count is N.
 # "the reference's ten, plus an extension" is not a count claim and must not match.
 _COUNT_CLAIM = re.compile(
-    r"\bthe (ten|eleven|twelve|thirteen|fourteen) tools\b"
-    r"|\b(ten|eleven|twelve|thirteen|fourteen) (?:published |judgment )?tools\b"
+    r"\bthe (ten|eleven|twelve|thirteen|fourteen|fifteen) tools\b"
+    r"|\b(ten|eleven|twelve|thirteen|fourteen|fifteen) (?:published |judgment )?tools\b"
     r"|\bTen JevTools\b"
     r"|\b(\d+)/\3 tools\b"
 )
@@ -411,6 +411,11 @@ def test_agent_rule_block_caps_match_limits() -> None:
             f"\u2264{limits.GATE.evidence_items} evidence items",
             f"{limits.GATE.aggregate_evidence_units:,} units",
             f"{limits.GATE.doc_units:,} units",
+        ],
+        "jev_gate_range": [
+            f"\u2264{limits.GATE.claims_max} claims",
+            f"\u2264{limits.GATE.evidence_items} evidence items",
+            f"\u2264{limits.GATE.files_max} files",
         ],
         "jev_review": [f"{limits.REVIEW.doc_units:,} units"],
         "jev_screen": _cap_needles(limits.SCREEN.text_max, "units"),

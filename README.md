@@ -13,7 +13,7 @@
 
 </div>
 
-An MCP server that gives your coding agent fourteen judgment tools backed by TypeSafe's Jev model. The agent hands a tool some evidence and a question it can enumerate: is this claim supported, is this page safe to read, which of these files answers the question, did this patch finish the task. Jev answers with probabilities, usually in under a second (median 464.6 ms round trip in the recorded bench), for about $0.025 per 1,000 decisions on the recorded classify run — and on that benchmark every answer the policy auto-accepted was correct, with the misses routed to review instead of through. Policy turns the probabilities into one of three actions: `auto` (proceed), `review` (check it another way), or `escalate` (stop). The numbers and their sources: [Measured results](#measured-results).
+An MCP server that gives your coding agent fifteen judgment tools backed by TypeSafe's Jev model. The agent hands a tool some evidence and a question it can enumerate: is this claim supported, is this page safe to read, which of these files answers the question, did this patch finish the task. Jev answers with probabilities, usually in under a second (median 464.6 ms round trip in the recorded bench), for about $0.025 per 1,000 decisions on the recorded classify run — and on that benchmark every answer the policy auto-accepted was correct, with the misses routed to review instead of through. Policy turns the probabilities into one of three actions: `auto` (proceed), `review` (check it another way), or `escalate` (stop). The numbers and their sources: [Measured results](#measured-results).
 
 Use it for checks that have a fixed set of answers. When the step needs new text, code, or options you cannot list, the agent should write it itself.
 
@@ -202,6 +202,7 @@ enumerated into bounded options; or when the same unchanged decision was already
 |------|-----------|--------|
 | `jev_verify` | Check claims against evidence → verified / contradicted / unsupported. Subagent or research reports, PR descriptions, your own "done" claims | no length bound on claims or evidence |
 | `jev_gate` | Before declaring done: the patch plus its completion claims checked against diff and test-log evidence in one call → auto / review / escalate | ≤16 claims, ≤16 evidence items; 200,000 units of evidence, 50,000 units per diff or test log |
+| `jev_gate_range` | `jev_gate` for a change already in git: name the range (`main..HEAD`) and the server reads the diff itself, so the whole patch is reviewed, never an excerpt you typed; optional server-read test log | `jev_gate`'s caps: ≤16 claims, ≤16 evidence items, ≤64 files |
 | `jev_review` | Score a diff against the request: correctness, spec match, test gap, blast radius, `safe_to_apply` | 50,000 units per document, truncated |
 | `jev_screen` | Screen fetched or pasted external text for prompt injection and relevance **before** reading it → pass / review / block / skip | no length bound |
 | `jev_compare` | Two passages: same_fact / contradicts / different_facts, optional per-aspect checks. Docs vs code drift, changelog vs diff | 20,000 units per passage, ≤10 aspects |

@@ -21,6 +21,7 @@ from jev_judge_mcp.domain import JsonValue, Usage
 from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
+from tests.security.tools import BY_TOOL
 from tests.support.jev import FakeProvider, text_of
 
 pytestmark = pytest.mark.anyio
@@ -55,6 +56,7 @@ INPUTS["jev_ask"] = {
     "state": "The payment service listens on port 8080 and retries twice.",
 }
 INPUTS["jev_files_judge"] = {"paths": ["tests/fixtures/file_judge/notes.txt"], **INPUTS["jev_file_judge"]}
+INPUTS["jev_gate_range"] = dict(BY_TOOL["jev_gate_range"].arguments)
 """jev_score and the ADR-0077 extension tools have no bench150 corpus: one representative input
 each stands in so the contract run still exercises the published tools."""
 
@@ -136,7 +138,7 @@ def gold_for(tool: str) -> Json:
             return {"fields": {_first_id(tool, "fields"): None}}
         case "jev_review":
             return {"defective": False}
-        case "jev_gate":
+        case "jev_gate" | "jev_gate_range":
             return {"safe": True, "claims": ["verified"] * len(INPUTS[tool]["claims"]), "reason_codes": ["accepted"]}
         case "jev_score" | "jev_file_judge" | "jev_files_judge":
             return {"level": 2}  # the confident score answer tops a 3-level rubric at level 2

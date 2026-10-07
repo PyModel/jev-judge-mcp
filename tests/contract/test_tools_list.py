@@ -22,11 +22,11 @@ from tests.support.tools_list import field_mismatches, load_snapshot, order_mism
 pytestmark = pytest.mark.anyio
 
 SNAPSHOT_TOOL_COUNT = 10
-EXTENSION_TOOLS = ("jev_score", "jev_file_judge", "jev_ask", "jev_files_judge")
+EXTENSION_TOOLS = ("jev_score", "jev_file_judge", "jev_ask", "jev_files_judge", "jev_gate_range")
 """Published after the snapshot ten, in this order (ADR-0048 divergence `score-tool-extension`,
-ADR-0077 divergences `ask-tool-extension` and `file-judge-tools`): the frozen surface stays a
-prefix; each extension carries its own pinning tests (`test_score_tool.py`, `test_file_judge.py`,
-`test_ask.py`, `test_files_judge.py`)."""
+ADR-0077 divergences `ask-tool-extension` and `file-judge-tools`, ADR-0080): the frozen surface
+stays a prefix; each extension carries its own pinning tests (`test_score_tool.py`,
+`test_file_judge.py`, `test_ask.py`, `test_files_judge.py`, `test_gate_range.py`)."""
 
 # Runs the real server over stdio, publishing the snapshot definitions through a stub Toolset —
 # the one registry, with no callable behavior behind it.
@@ -160,7 +160,8 @@ def test_initialize_names_each_tool_and_the_gate_rule() -> None:
         server.close_stdin()
         server.wait()
     instructions = reply["result"]["instructions"]
-    inventory = instructions.split(". ", 1)[0]
+    inventory = instructions.split(". ", 1)[0].removeprefix("Tools: ").split(", ")
+    # Whole names: `jev_gate` is a prefix of `jev_gate_range`, so a substring count double-counts it.
     for tool in TOOLS:
         assert inventory.count(tool.name) == 1
     assert "recommended final judgment" in instructions

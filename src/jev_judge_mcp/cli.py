@@ -20,6 +20,7 @@ from typing import Any
 import anyio
 
 from jev_judge_mcp.domain.json import decode_json, is_json_object
+from jev_judge_mcp.git_diff import GitDiffError, diff_argument, repo_root
 from jev_judge_mcp.hook import fail_open_or_ask, hook_required
 from jev_judge_mcp.hook_render import render_decision
 from jev_judge_mcp.identity import reported_version
@@ -132,13 +133,15 @@ def _gate_arguments(options: Mapping[str, str]) -> dict[str, object]:
     except (OSError, UnicodeDecodeError) as error:
         raise CliError("invalid_arguments", "could not read a local file", exit_code=2) from error
     request, claims = _claims(claims_text, options.get("request"))
-    diff = _git_diff(repo, options["diff"])
-    files = _split_unified(diff)
+    try:
+        diff = diff_argument(repo, options["diff"])
+    except GitDiffError as error:
+        raise CliError("invalid_arguments", str(error), exit_code=2) from error
     # The hash is set here because this reader read the file (ADR-0067). The MCP tool does not hash
     # a string the caller typed.
     return {
         "request": request,
-        "diff": files if files is not None else diff,
+        "diff": diff,
         "claims": claims,
         "evidence": [{"id": "cli", "text": "Read by jev-judge-mcp gate from the local repo."}],
         "tests": tests_text,
@@ -147,15 +150,10 @@ def _gate_arguments(options: Mapping[str, str]) -> dict[str, object]:
 
 
 def _repo_root() -> Path:
-    run = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],  # noqa: S607
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if run.returncode != 0 or not run.stdout.strip():
-        raise CliError("invalid_arguments", "gate refuses to run outside a git repo", exit_code=2)
-    return Path(run.stdout.strip()).resolve()
+    try:
+        return repo_root(Path.cwd())
+    except GitDiffError as error:
+        raise CliError("invalid_arguments", str(error), exit_code=2) from error
 
 
 def _inside_repo(path: Path, repo: Path, key: Path) -> Path:
@@ -199,69 +197,6 @@ def _claims(text: str, request: str | None) -> tuple[str, list[str]]:
     if request is None or not request.strip() or not claims:
         raise CliError("invalid_arguments", "plain claims need --request and one claim per line", exit_code=2)
     return request, claims
-
-
-def _git_diff(repo: Path, rev_range: str) -> str:
-    if not rev_range or rev_range.startswith("-") or "\x00" in rev_range:
-        raise CliError("invalid_arguments", "refusing that git range", exit_code=2)
-    run = subprocess.run(  # noqa: S603 - range is checked above; git is a fixed argv0
-        ["git", "-C", str(repo), "diff", rev_range],  # noqa: S607
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if run.returncode != 0:
-        raise CliError("invalid_arguments", "git diff failed", exit_code=2)
-    if not run.stdout.strip():
-        raise CliError("invalid_arguments", "git diff was empty", exit_code=2)
-    return run.stdout
-
-
-def _split_unified(diff: str) -> list[dict[str, str]] | None:
-    if "diff --git " not in diff:
-        return None
-    parts = diff.split("\ndiff --git ")
-    files: list[dict[str, str]] = []
-    for index, part in enumerate(parts):
-        chunk = part if index == 0 else "diff --git " + part
-        if not chunk.strip():
-            continue
-        path = _path_from_header(chunk)
-        if path is None:
-            return None
-        files.append({"path": path, "patch": chunk if chunk.endswith("\n") else chunk + "\n"})
-    return files or None
-
-
-def _path_from_header(chunk: str) -> str | None:
-    """The post-image path of one `diff --git a/X b/X` header.
-
-    Both halves name the same path unless the file was renamed, so the header is split at its
-    midpoint rather than at the last ` b/`, which a path containing ` b/` would defeat. A rename
-    (`a/old b/new`) has no such symmetry: its `+++ b/` line names the new path when the content
-    changed (git ends that line with a tab when the path holds spaces), else the last ` b/` stands.
-    """
-    lines = chunk.splitlines()
-    first = lines[0]
-    rest = first.removeprefix("diff --git ")
-    path: str | None = None
-    middle = len(rest) // 2
-    if len(rest) % 2 == 1 and rest[middle] == " ":
-        left, right = rest[:middle], rest[middle + 1 :]
-        if left.startswith("a/") and right.startswith("b/") and left[2:] == right[2:]:
-            path = right[2:]
-    if path is None:
-        plus = next((line for line in lines[1:] if line.startswith("+++ b/")), None)
-        if plus is not None:
-            path = plus.removeprefix("+++ b/").rstrip("\t")
-    if path is None:
-        marker = " b/"
-        if marker not in first:
-            return None
-        path = first.rsplit(marker, 1)[-1]
-    if not path or path.startswith("/") or ".." in Path(path).parts:
-        return None
-    return path
 
 
 def _run_tool(name: str, arguments: Mapping[str, object], *, provider: JevProvider | None) -> Decision:
@@ -317,7 +252,7 @@ _ACTIONS: tuple[Action, ...] = ("auto", "review", "escalate")
 
 
 def _top_action(payload: object) -> tuple[str | None, bool]:
-    """jev_gate and jev_review: the payload's own top-level `action`."""
+    """jev_gate, jev_gate_range, and jev_review: the payload's own top-level `action`."""
     action = payload.get("action") if isinstance(payload, dict) else None
     if not isinstance(action, str):
         return None, True
@@ -406,6 +341,7 @@ TOOL_DECISIONS: Mapping[str, Callable[[object], tuple[str | None, bool]]] = {
     "jev_file_judge": _score_clean,
     "jev_ask": _score_clean,
     "jev_files_judge": _files_clean,
+    "jev_gate_range": _top_action,
 }
 """Payload decision fields → (`action`, `unresolved`), in registry order.
 

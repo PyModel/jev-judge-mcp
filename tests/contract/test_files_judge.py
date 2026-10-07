@@ -168,4 +168,4 @@ def test_the_schema_pins_the_adr_owned_caps_and_no_override() -> None:
 
 def test_files_judge_is_published_after_jev_file_judge() -> None:
     names = tuple(tool.name for tool in TOOLS)
-    assert names[-1] == "jev_files_judge"
+    assert names[names.index("jev_file_judge") + 2] == "jev_files_judge"

@@ -530,8 +530,10 @@ def _judge_gate(example: Example) -> Iterator[Judgment]:
     yield Judgment(example.id, "safe" if example.gold["safe"] else "unsafe", predicted, None, action == "auto")
 
 
-def score_gate(examples: Sequence[Example], params: Json) -> ToolScore:
+def score_gate(examples: Sequence[Example], params: Json, *, tool: str = "jev_gate") -> ToolScore:
     """Gold `{"safe": bool, "claims"?: [verdict per claim, in order], "reason_codes"?: [code]}`.
+
+    jev_gate_range scores under its own name: its payload is jev_gate's (ADR-0080).
 
     False-AUTO rate is P(not safe | AUTO); the 1.0 gate accepts it on its upper bound, reported here as
     the one-sided 95% Clopper-Pearson bound.
@@ -553,7 +555,7 @@ def score_gate(examples: Sequence[Example], params: Json) -> ToolScore:
             codes_predicted.append(frozenset(cast(list[object], raw)) if isinstance(raw, list) else None)
     errors, n = sum(auto_unsafe), len(auto_unsafe)
     return ToolScore(
-        "jev_gate",
+        tool,
         "false_auto_rate",
         len(examples),
         {
@@ -766,8 +768,10 @@ SCORERS: dict[str, Scorer] = {
     "jev_file_judge": lambda examples, params: _rubric_score("jev_file_judge", examples, _answer_of),
     "jev_ask": lambda examples, params: _rubric_score("jev_ask", examples, _ask_answer_of),
     "jev_files_judge": score_jev_files_judge,
+    "jev_gate_range": lambda examples, params: score_gate(examples, params, tool="jev_gate_range"),
 }
-"""Snapshot order, one scorer per tool; the ADR-0048 and ADR-0077 extensions follow the snapshot ten."""
+"""Snapshot order, one scorer per tool; the ADR-0048, ADR-0077, and ADR-0080 extensions follow the
+snapshot ten."""
 
 _JUDGES: dict[str, Callable[[Example], Iterator[Judgment]]] = {
     "jev_verify": _judge_verify,
@@ -784,6 +788,7 @@ _JUDGES: dict[str, Callable[[Example], Iterator[Judgment]]] = {
     "jev_file_judge": lambda example: _rubric_judgment(example, _answer_of(example)),
     "jev_ask": lambda example: _rubric_judgment(example, _ask_answer_of(example)),
     "jev_files_judge": _judge_files_judge,
+    "jev_gate_range": _judge_gate,
 }
 
 

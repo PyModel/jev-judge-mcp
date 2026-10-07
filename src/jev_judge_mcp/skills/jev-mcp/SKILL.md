@@ -56,6 +56,7 @@ through `jev_decide`, and traversing a catalog too big for one call.
 | A value sitting in a document | `jev_extract` | Your regex proposes the matches. Jev picks. The value is one of those matches, or null. |
 | Is this patch acceptable | `jev_review` | Pull-request triage. The diff against the request. |
 | Did the work finish | `jev_gate` | The patch, the completion claims, and the test logs. The recommended final judgment before claiming done on a diff and before opening or merging a pull request, unless tests, type checks, build, lint, or another explicit acceptance criterion already settle completion. Diff and tests are evidence. This is the ship check. |
+| Did the work finish, and the change is in git | `jev_gate_range` | The git range instead of a pasted diff: the server reads `git diff <range>` and reviews the whole patch, with an optional `tests_path` log it reads too. Secret stores are skipped and credential literals redacted. Prefer it over `jev_gate` whenever the change is in git. |
 | Is this shell command safe to run | `jev-judge-mcp hook gate` | Opt-in process. Separate from the published tools. See below. |
 | A verdict blended from several factors | `jev_score` per factor, you blend | One graded call per factor; weights and arithmetic stay in your code, never in a call (`docs/guidance.md`). |
 | Which agent or harness takes a step | `jev_decide` | Handlers as options, task facts as state, escape hatches for "none fits". Ambiguity is a second question in the same call. The server never picks models: that is process config (ADR-0008). |
@@ -63,6 +64,17 @@ through `jev_decide`, and traversing a catalog too big for one call.
 | New text, code, or options you cannot list | you | You write it. |
 
 A typed in-set choice is what `jev_decide` and `jev_classify` already return: one of the options you supplied, an escape hatch, or `invalid_response`.
+
+## Packing a patch for `jev_gate` and `jev_review`
+
+These tools read no files. The review judges exactly the `diff` you send, and the claims rest only on the evidence you send. When the change is in git, `jev_gate_range` reads the range itself and none of the packing below applies to the diff.
+
+- `diff` holds the real `git diff` output. Never send an excerpt, a paraphrase, an elided `...`, a hand-written "key structure", a path, or "see evidence item". A trimmed patch is reviewed as written and scores low while every claim verifies. New files and deletions are included: `git diff` already prints their lines.
+- Size: `jev_gate` sends the diff and the tests log twice, once to the review and once as claim evidence. The model's window is much smaller than the sum of the caps. Measure first (`git diff | wc -c`). A small change goes as one string. A larger one goes as a `[{path, patch}]` list, where each file is reviewed in its own request. If that is still too big, or a call returns `input_too_large`, split by concern into separate calls ("Part N of M" in `request`), each with only its own claims and evidence.
+- Evidence is raw output with `kind: tool_output`: the test runner's pass/fail lines, a grep count, a hash. Never your summary of it. Write one claim per invariant, each with the item that proves it. A "tests pass" claim comes from one clean full run on the final code.
+- The diff cannot show callers or tests. When `blast_radius` or `test_gap` is the weak score, add the caller grep or the test output as evidence.
+
+`next_checks` is computed from your arguments, not judged. If it says the diff has no hunks or looks trimmed, or that every claim stands and only the review failed, re-pack and send once more. A re-sent call with the full diff is a new call, not a re-ask. An escalate on the full diff is a real finding: re-read the flagged code.
 
 ## Honor the action
 
@@ -80,7 +92,7 @@ Unknown confidence never meets a threshold, so the action stays off `auto`. A do
 
 ## Clients
 
-Any MCP client uses the published tools (the reference ten plus `jev_score`, `jev_file_judge`, `jev_ask`, and `jev_files_judge`). pi reaches them through the MCP gateway.
+Any MCP client uses the published tools (the reference ten plus `jev_score`, `jev_file_judge`, `jev_ask`, `jev_files_judge`, and `jev_gate_range`). pi reaches them through the MCP gateway.
 
 ## Command hook
 

@@ -25,7 +25,8 @@ Headless runs need an allow-rule. `acceptEdits` covers file edits. Add the publi
       "mcp__jev__jev_score",
       "mcp__jev__jev_file_judge",
       "mcp__jev__jev_ask",
-      "mcp__jev__jev_files_judge"
+      "mcp__jev__jev_files_judge",
+      "mcp__jev__jev_gate_range"
     ]
   }
 }

@@ -24,7 +24,8 @@
           "providers",
           "validation",
           "policy",
-          "serialize"
+          "serialize",
+          "git-diff"
         ],
         "note": "One tools/call: typed args in, a Jev answer back, action text out, over stdio or streamable-http."
       },
@@ -74,7 +75,8 @@
           "keyfile",
           "client",
           "cli-judge",
-          "hook-runtime"
+          "hook-runtime",
+          "git-diff"
         ],
         "note": "install, the three hooks over one runtime, doctor, and calibrate. judge and gate call tools in-process."
       }
@@ -113,7 +115,7 @@
       "id": "instructions",
       "type": "backend",
       "label": "Instructions",
-      "sublabel": "names all 14 tools",
+      "sublabel": "names all 15 tools",
       "pos": [
         330,
         28
@@ -168,8 +170,8 @@
     {
       "id": "tools",
       "type": "backend",
-      "label": "Fourteen tools",
-      "sublabel": "10 frozen + 4 extensions",
+      "label": "Fifteen tools",
+      "sublabel": "10 frozen + 5 extensions",
       "pos": [
         700,
         280
@@ -414,6 +416,20 @@
       ],
       "size": [
         168,
+        52
+      ]
+    },
+    {
+      "id": "git-diff",
+      "type": "backend",
+      "label": "git_diff",
+      "sublabel": "range \u2192 file list",
+      "pos": [
+        520,
+        360
+      ],
+      "size": [
+        150,
         52
       ]
     },
@@ -683,6 +699,23 @@
       "to": "hook-runtime",
       "label": "prepare \u00b7 judge",
       "id": "hook-runtime"
+    },
+    {
+      "id": "cli-range",
+      "from": "cli-judge",
+      "to": "git-diff",
+      "label": "gate range",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "tool-range",
+      "from": "tools",
+      "to": "git-diff",
+      "label": "jev_gate_range",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "top"
     }
   ],
   "cards": [
@@ -691,8 +724,9 @@
       "title": "One registry",
       "items": [
         "list_tools and call_tool share one Toolset",
-        "fourteen tools: ten frozen, jev_score, and the ADR-0048 extensions",
-        "jev_ask and the file tools read through one bounded file_state \u00b7 ask_state"
+        "fifteen tools: ten frozen, jev_score, and the ADR-0048 extensions",
+        "jev_ask and the file tools read through one bounded file_state \u00b7 ask_state",
+        "the gate CLI and jev_gate_range read git through one git_diff (ADR-0080)"
       ]
     },
     {

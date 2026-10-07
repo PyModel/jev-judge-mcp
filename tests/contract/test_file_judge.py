@@ -202,6 +202,7 @@ def test_the_schema_carries_the_adr_owned_caps_and_no_override() -> None:
 
 
 def test_file_judge_sits_between_score_and_the_rest_of_the_extensions() -> None:
-    """The extension suffix order is pinned: score, file_judge, ask, files_judge (ADR-0077)."""
+    """The extension suffix order is pinned: score, file_judge, ask, files_judge (ADR-0077), gate_range
+    (ADR-0080)."""
     names = tuple(tool.name for tool in TOOLS)
-    assert names[-4:] == ("jev_score", "jev_file_judge", "jev_ask", "jev_files_judge")
+    assert names[10:] == ("jev_score", "jev_file_judge", "jev_ask", "jev_files_judge", "jev_gate_range")
