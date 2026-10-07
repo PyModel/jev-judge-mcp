@@ -49,8 +49,9 @@ DEFINITION = define(
             },
             "diff": {
                 "description": (
-                    "Proposed patch, file excerpt, change summary, or a file list of {path, patch} objects. "
-                    f"A string is truncated at {REVIEW.doc_units} chars."
+                    "Proposed patch (prefer the real git diff output), or a file list of {path, patch} objects. "
+                    f"A string is truncated at {REVIEW.doc_units} chars. A file excerpt or change summary is "
+                    "reviewed as written, so it scores lower than the full patch."
                 ),
                 "anyOf": [
                     {"type": "string", "minLength": 1},

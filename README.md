@@ -224,6 +224,10 @@ Rules:
   answer to.
 - **Evidence in, not your verdict.** State holds raw diffs, logs, and excerpts — not your
   conclusion. A conclusion written into state gets agreement, not a judgment.
+- **Pack the real diff.** `jev_gate` and `jev_review` judge exactly the `diff` you send, and they
+  read no files. Paste the real `git diff` output, never an excerpt, a paraphrase, an elided
+  `...`, a path, or "see evidence item". A large change goes as a `[{path, patch}]` file list or
+  as separate calls split by concern. Test evidence is the raw pass/fail lines.
 - **Act on `action`:** `auto` → proceed · `review` → confirm with tests, source reading, or a
   stronger check · `escalate` → stop and surface it. `invalid_response` → the row is unjudged;
   leave it without a verdict.
@@ -234,7 +238,9 @@ Rules:
 - **Batch.** One call with every claim, candidate, or item beats many calls; questions inside one
   request cannot see each other's answers.
 - **No re-asks.** Do not re-ask an unchanged question hoping for a better answer; gather better
-  evidence instead.
+  evidence instead. Re-sending with the full diff or the raw logs is a new call, not a re-ask:
+  when `next_checks` says the escalate came from how you packed the call, re-pack once before
+  you report.
 - **Failures are one line.** Tool error or missing key (`TYPESAFE_API_KEY`): say so in one line,
   then fall back to normal checks.
 - **Two skills.** `docs/skills/jev-mcp/SKILL.md` says which tool fits a step. The packaged jev skill

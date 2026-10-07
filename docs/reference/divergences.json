@@ -665,6 +665,19 @@
       "python_behavior": "The description of every array-typed argument states its item shape plainly: claims, requirements, aspects, and rubric levels are plain strings; evidence items, classify items and classes, decide and find/rerank candidates, extract fields, and review/gate file lists are objects with named keys. A caller that pattern-matches from another jev surface cannot mis-shape its first call. No constraint changes: the items schemas are untouched and jev_screen stays byte-identical (ADR-0013 amendment, 2026-09-25)."
     },
     {
+      "id": "patch-packing-descriptions",
+      "surface": "tool_schema",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0013-one-registry-one-execution-kernel-ten-tool-definitions.md",
+      "tests": [
+        "tests/contract/test_tools_list.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The jev_gate description tells callers to put supporting diff excerpts in evidence, and the jev_review diff description accepts a file excerpt or change summary.",
+      "python_behavior": "The jev_gate description and both tools' diff descriptions ask for the real git diff, whole or as a {path, patch} file list, and say an excerpt is judged as written and scores low. The jev_gate description also says the diff and tests are sent twice, so a diff near its cap can overflow the model's window. No constraint changes (ADR-0013 amendment, 2026-10-07)."
+    },
+    {
       "id": "error-code-content-block",
       "surface": "result",
       "tier": "both",

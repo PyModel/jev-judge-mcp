@@ -84,3 +84,15 @@ descriptions now say the shape before that rejection. No constraint changes: the
 schemas are untouched, `jev_screen` stays byte-pinned, and
 `tests/contract/test_tools_list.py` keeps pinning name, title, and execution for the affected
 tools (`SCHEMA_DIVERGENCE`).
+
+
+## Amendment (2026-10-07): patch descriptions ask for the real diff
+
+A second text-level divergence is sanctioned (`patch-packing-descriptions`). The frozen jev_gate
+description told callers to "put supporting diff excerpts" in evidence, and jev_review's `diff`
+invited a "file excerpt, change summary". Callers followed it: an excerpt passed as `diff` is
+reviewed as written, scores low, and escalates while every claim verifies. The jev_gate description
+and both tools' `diff` descriptions now ask for the real git diff, whole or as a file list, and say
+an excerpt is judged as written. The jev_gate description also says the diff and tests are sent
+twice (ADR-0063), so a diff near its cap can overflow the model's window (ADR-0079). No constraint
+changes; name, title, and execution stay pinned (`SCHEMA_DIVERGENCE`).

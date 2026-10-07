@@ -139,6 +139,18 @@ def test_served_tools_match_snapshot() -> None:
     assert all("outputSchema" not in tool for tool in served)  # ADR-0006
 
 
+def test_patch_descriptions_ask_for_the_real_diff() -> None:
+    """Divergence `patch-packing-descriptions` (ADR-0013 amendment, 2026-10-07): the frozen text told
+    callers to send diff excerpts, which the review then scored low. The served text asks for the
+    real diff and names the excerpt cost; the reference's invitation is gone."""
+    served = {tool["name"]: tool for tool in served_tools()}
+    gate, review = served["jev_gate"], served["jev_review"]
+    assert "diff excerpts" not in gate["description"]
+    for tool in (gate, review):
+        assert "git diff" in tool["inputSchema"]["properties"]["diff"]["description"]
+    assert "sent twice" in gate["description"]
+
+
 def test_initialize_names_each_tool_and_the_gate_rule() -> None:
     """ADR-0061: deferred clients load this string, not a tools/list."""
     from jev_judge_mcp.tools import TOOLS

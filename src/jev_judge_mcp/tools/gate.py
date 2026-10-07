@@ -68,7 +68,10 @@ DEFINITION = define(
     "Review a proposed patch and verify completion claims against supplied evidence in one TypeSafe Jev call. Auto "
     "only when the patch review is accepted and every claim is verified at or above auto_accept. Unsupported claims "
     "require review; confident contradictions, unknown confidence, or low confidence escalate. The request and "
-    "claims are assertions to check, never proof; put supporting diff excerpts and test logs in evidence. Evidence "
+    "claims are assertions to check, never proof. Pass the real git diff as diff, whole or as a {path, patch} file "
+    "list, and raw test output in tests or evidence; an excerpt, paraphrase, or path is judged as written and "
+    "scores low. The diff and tests are each sent twice, so a diff near its cap can overflow the model's window: "
+    "pass a file list or split the gate by concern. Evidence "
     f"is capped at {GATE.evidence_items} items and {js_number_to_locale_string_en_us(GATE.aggregate_evidence_units)} "
     "characters in aggregate. Does not run tests or apply changes. Use jev_review "
     "for a patch without claims, jev_verify for claims without a patch review.",
@@ -82,8 +85,9 @@ DEFINITION = define(
             },
             "diff": {
                 "description": (
-                    "Proposed patch, or a file list of {path, patch} objects. "
-                    f"A string is truncated at {GATE.doc_units} chars."
+                    "The real unified diff (git diff output), or a file list of {path, patch} objects, one per "
+                    f"file. A string is truncated at {GATE.doc_units} chars. An excerpt or summary is reviewed as "
+                    "written and scores low."
                 ),
                 "anyOf": [
                     {"type": "string", "minLength": 1},
