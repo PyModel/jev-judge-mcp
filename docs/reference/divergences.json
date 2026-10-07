@@ -691,6 +691,19 @@
       "fixtures": [],
       "reference_behavior": "The reference has no typed error code. A 401 is the same error text as any other HTTP failure.",
       "python_behavior": "An isError whose text is a provider status 401 ({label} 401:) carries code auth. 403, 404, and 422 stay provider, as does a 401 that appears only in the body. The error text is unchanged (ADR-0072)."
+    },
+    {
+      "id": "upstream-context-overflow-is-input-too-large",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0079-upstream-context-overflow-is-input-too-large.md",
+      "tests": [
+        "tests/unit/test_providers.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The reference has no typed error code. A 400 the model returns for a request over its context window is the same error text as any other HTTP failure.",
+      "python_behavior": "An isError from a provider 400 whose JSON body carries detail.error_type max_tokens_exceeded carries code input_too_large, so the caller splits the call. Another error_type, a body that only names the token as a string, or another status stays provider. The error text is unchanged (ADR-0079)."
     }
   ]
 }

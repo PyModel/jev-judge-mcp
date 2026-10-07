@@ -44,8 +44,8 @@ backticked paths. Two rules follow:
 - **Send what the question needs, and no more.** Extra unrelated state lowers accuracy. The API
   budget is 64k tokens for the request and 32k for `state` plus the longest question
   (https://docs.typesafe.ai/models.md). An input inside this server's UTF-16 caps can still exceed
-  that window. The server does not count tokens, so that failure comes back as `provider`,
-  not `input_too_large`. This server also truncates some inputs at a UTF-16 cap and marks the cut
+  that window. The server does not count tokens; when the API refuses the request as over its
+  window, the code is `input_too_large` (ADR-0079): split the call. This server also truncates some inputs at a UTF-16 cap and marks the cut
   ([`docs/reference/limits.md`](reference/limits.md)); a judgment over cut context never gets action
   `auto`. When you must cut, cut at a boundary you can defend — a section, a function, a message —
   not a blind character count.

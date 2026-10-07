@@ -10,10 +10,11 @@ retried under one bounded policy that `evaluate` owns for all four providers (AD
 
 import logging
 import math
+import re
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Literal, override
+from typing import ClassVar, Literal, cast, override
 from urllib.parse import urlsplit
 
 import anyio
@@ -37,6 +38,8 @@ logger = logging.getLogger("jev_judge_mcp.providers")
 
 ERROR_BODY_UNITS = 200
 """Error bodies are cut to `.slice(0, 200)` UTF-16 units (`provider.ts:146,172,247`)."""
+_ERROR_TYPE = re.compile(r"[a-z][a-z0-9_]{0,63}")
+"""An upstream `detail.error_type` kept on a status error: a bare identifier only (ADR-0079)."""
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -64,6 +67,10 @@ class ProviderError(Exception):
     retry_after: float | None = None
     """A retryable status error's `Retry-After` hint in seconds; `None` otherwise."""
 
+    error_type: str | None = None
+    """The upstream body's `detail.error_type` identifier on a status error, read from the body's
+    structure at the raise site (ADR-0079); `None` when the body carries none."""
+
 
 class ProviderConfigError(ProviderError):
     """Provider resolution failed before any request (`provider.ts:35-77`). Code `auth`."""
@@ -89,6 +96,7 @@ def _redacted(error: ProviderError, redact: Redactor) -> ProviderError:
     redacted = type(error)(redact(str(error)))
     redacted.status = error.status
     redacted.retry_after = error.retry_after
+    redacted.error_type = error.error_type
     return redacted
 
 
@@ -188,6 +196,21 @@ def decode_body(content: bytes) -> object | None:
         return decode_json(decode_text(content))
     except ValueError:
         return None
+
+
+def upstream_error_type(body: str) -> str | None:
+    """`detail.error_type` of a JSON error body when it is a bare identifier, else `None` (ADR-0079).
+
+    Only a short lowercase token is kept, so a body that reflects caller text or a credential into
+    that field cannot carry it onto the error.
+    """
+    try:
+        parsed = decode_json(body)
+    except ValueError:
+        return None
+    detail = cast("dict[str, object]", parsed).get("detail") if isinstance(parsed, dict) else None
+    value = cast("dict[str, object]", detail).get("error_type") if isinstance(detail, dict) else None
+    return value if isinstance(value, str) and _ERROR_TYPE.fullmatch(value) else None
 
 
 def refuse_credentials_in_url(url: str, label: str) -> None:
@@ -345,6 +368,7 @@ class JevProvider(ABC):
         if isinstance(status, int):
             error.status = status
             error.retry_after = retry_after
+            error.error_type = upstream_error_type(body)
         return error
 
     @abstractmethod

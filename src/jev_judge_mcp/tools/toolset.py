@@ -129,7 +129,9 @@ def code_of(error: BaseException) -> str:
     """The one error-code mapping. It reads the exception type and status, never the text.
 
     ProviderConfigError is `auth` for every provider, including a malformed OpenRouter key.
-    A 401 is `auth` and a 429 is `quota` from `ProviderError.status` (ADR-0072). A timeout is
+    A 401 is `auth` and a 429 is `quota` from `ProviderError.status` (ADR-0072). A 400 whose body
+    carried `error_type` `max_tokens_exceeded` is `input_too_large`: the model's context window, which
+    the caller fixes by splitting (ADR-0079). A timeout is
     `timeout`. Argument errors are `invalid_arguments`. A ToolError carries the code its raise
     site set. Everything else a provider raised is `provider`.
     """
@@ -142,6 +144,8 @@ def code_of(error: BaseException) -> str:
             return "auth"
         if error.status == 429:
             return "quota"
+        if error.status == 400 and error.error_type == "max_tokens_exceeded":
+            return "input_too_large"
         return "provider"
     if isinstance(error, ArgumentsError):
         return "invalid_arguments"

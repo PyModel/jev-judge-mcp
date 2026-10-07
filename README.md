@@ -215,7 +215,7 @@ enumerated into bounded options; or when the same unchanged decision was already
 | `jev_ask` | Your own questions (noul, choice, score) over one composed state: framing text, server-read files, a gate-judged command's output. Typed answers keyed by your ids; overflow refuses with a split suggestion | 1–20 questions, ≤20 paths, 120,000 units of state plus questions |
 | `jev_files_judge` | The same judgment over many files: glob patterns, directories, and paths in, one call per surviving file, skips reported with reasons | ≤64 files, ≤32 path entries |
 
-Caps are UTF-16 code units, frozen in the server's `limits.py`. "no length bound" is not a token budget: Jev's context is 64k tokens per request, and an input inside the table can still come back as `provider`, not `input_too_large`.
+Caps are UTF-16 code units, frozen in the server's `limits.py`. "no length bound" is not a token budget: Jev's context is 64k tokens per request (32k for state), and an input inside the table can still overflow it. `jev_gate` sends the diff and the test log twice. An overflow comes back as `input_too_large` (ADR-0079): split the call.
 
 Rules:
 

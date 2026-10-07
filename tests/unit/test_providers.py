@@ -318,6 +318,35 @@ async def test_an_upstream_status_error_codes_as_adr_0072_says(status: int, code
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("status", "body", "code"),
+    [
+        (400, {"detail": {"error_type": "max_tokens_exceeded"}}, "input_too_large"),
+        (400, {"detail": {"error_type": "invalid_request"}}, "provider"),
+        (400, {"detail": "max_tokens_exceeded"}, "provider"),
+        (422, {"detail": {"error_type": "max_tokens_exceeded"}}, "provider"),
+    ],
+)
+async def test_an_upstream_context_overflow_codes_input_too_large(status: int, body: object, code: str) -> None:
+    """A 400 whose structured body says `max_tokens_exceeded` is the model's context window, not a
+    provider fault (ADR-0079): the caller splits the call. The type is read from the body's structure
+    at the boundary, never from the error text, so a bare string naming the token is still `provider`.
+    """
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        del request
+        return httpx2.Response(status, json=body)
+
+    provider = typesafe(handler, NO_RETRIES)
+    try:
+        with pytest.raises(ProviderError) as raised:
+            await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
+    finally:
+        await provider.aclose()
+    assert code_of(raised.value) == code
+
+
+@pytest.mark.anyio
 async def test_typesafe_without_the_sdk_installed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "typesafe_sdk", None)
     provider = TypeSafeProvider(Redactor([]), api_key="typesafe-test-key", base_url=None)

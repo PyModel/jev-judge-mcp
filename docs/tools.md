@@ -20,7 +20,7 @@ The `model` field is the requested model on the TypeSafe provider (`jev-latest` 
 The compatible and Cloudflare providers report the body's `model` when it has one. A `jev-latest`
 caller on TypeSafe cannot see which version answered (ADR-0001 parity). UTF-16 caps below are not Jev's context
 window (64k tokens per request, 32k for state plus the longest question). An input inside every cap
-can still exceed that window and come back as `provider`, not `input_too_large`.
+can still exceed that window and come back as `input_too_large` (ADR-0079): split the call.
 
 Every tool's schema advertises `additionalProperties: false`; the runtime keeps the reference's
 zod strip: unknown keys are stripped, not refused — a missing or ill-typed declared key is refused
@@ -39,7 +39,7 @@ questions; no accuracy claim beyond them.
 
 **Weak spots.** Claims, evidence, and their lengths are deliberately uncapped, so cost and latency
 scale with what you send (README § Operator notes). That is not a token budget: an input inside the
-missing cap can still exceed 64k tokens and come back as `provider`, not `input_too_large`. Policy has two tiers only — `auto` and
+missing cap can still exceed 64k tokens and come back as `input_too_large` (ADR-0079): split the call. Policy has two tiers only — `auto` and
 `review`; there is no escalate (manifest `policy.verify_action`). An unsupported or contradicted
 claim can carry a `missing_evidence` code (`single_item_no_source`, `needs_diff`, `needs_tests`,
 `needs_before_after`) that names what evidence would settle it. With exactly one evidence item no
@@ -62,7 +62,7 @@ default, so instructions in it can move the answer
 (https://docs.typesafe.ai/model-jaggedness/jev-1.13.md). The injection score is a signal, not a
 guarantee. ADR-0068 adds that warning to verify's question; this card is the screen warning, and
 the question text is unchanged. Text length has no UTF-16 cap, and an over-long page can still
-exceed the 64k token window and come back as `provider`, not `input_too_large`. The `skip`
+exceed the 64k token window and come back as `input_too_large` (ADR-0079): split the call. The `skip`
 thresholds for substance and relevance are hardcoded at 0.3 in the reference and are not call
 arguments (ROADMAP P7 notes this as the current hardcoding case); `block_at` and `review_at` are
 call arguments. A malformed answer fail-closes to `review`, not `block`. This is a triage of one
@@ -198,8 +198,8 @@ the gate off `auto`. A file-list `diff` is reviewed per file with the claims ver
 over the cap lands in `unreviewed_files` with reason `incomplete_context` and the whole gate
 turns on the worst file (ADR-0066). Evidence is capped at 16 items and 200,000 aggregate UTF-16
 units; over either is an `input_too_large` error telling you to split the gate. Those UTF-16 caps
-are not the 64k token window: a gate state inside them can still come back as `provider`,
-not `input_too_large`. The claim half also receives the diff and the tests again as implicit evidence (ADR-0063), so those bytes are in the state twice: about 100k extra UTF-16 units when both are at the 50,000 cap.
+are not the 64k token window: a gate state inside them can still come back as `input_too_large` (ADR-0079):
+split the call. The claim half also receives the diff and the tests again as implicit evidence (ADR-0063), so those bytes are in the state twice: about 100k extra UTF-16 units when both are at the 50,000 cap.
 
 **Not for** a substitute for CI or tests — it judges the claims you pass against the evidence you
 pass, and never runs anything itself.

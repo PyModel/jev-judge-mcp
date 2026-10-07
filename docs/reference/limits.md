@@ -14,8 +14,10 @@ Astral-plane characters (emoji, some CJK) count as two.
 
 These caps are not Jev's context window. The model accepts 64k tokens per request and 32k for
 `state` plus the longest question (https://docs.typesafe.ai/models.md). An input inside every cap
-on this page can still exceed that window. The server does not count tokens, so that failure comes
-back as `provider`, not `input_too_large`.
+on this page can still exceed that window: jev_gate sends the diff and the tests log twice, once in
+the review state and once as evidence (ADR-0063), so budget about twice their size. The server does
+not count tokens. When the API refuses a request as over its window (a 400 with `error_type`
+`max_tokens_exceeded`), the code is `input_too_large` and the remedy is to split the call (ADR-0079).
 
 ## The three behaviors at a bound
 
@@ -42,11 +44,11 @@ block (ADR-0062). The code is set from the exception type or at the return site.
 | Code | Produced by |
 | --- | --- |
 | `invalid_arguments` | a schema reject (every row marked reject below); an unknown tool; duplicate caller ids; a decide candidate id colliding with an escape hatch; a diff that is not the file-list shape; a broken `auto_accept`/`review_at` pair (the frozen text `Thresholds must satisfy 0 <= review_at <= auto_accept <= 1.`) |
-| `input_too_large` | every frozen budget refusal marked error below: the aggregate character budgets, jev_gate's item-count budget, and the file-list diff budget. `tests/contract/test_limits.py` pins each frozen budget text to this code |
+| `input_too_large` | every frozen budget refusal marked error below: the aggregate character budgets, jev_gate's item-count budget, and the file-list diff budget. `tests/contract/test_limits.py` pins each frozen budget text to this code. Also an upstream 400 whose body carries `error_type` `max_tokens_exceeded` (ADR-0079) |
 | `auth` | `ProviderConfigError` (no credentials, including an explicit provider with a missing or malformed key); an upstream 401 (`ProviderError.status`), which is code `auth` |
 | `timeout` | `ProviderTimeoutError` |
 | `quota` | HTTP 429 (`ProviderError.status`) |
-| `provider` | any other provider failure. 403, 404, and 422 stay here; a 401 that appears only in the body does too |
+| `provider` | any other provider failure. 403, 404, and 422 stay here; a 401 that appears only in the body does too, and so does any other 400 |
 
 `529 Overloaded` is retried as a 5xx (`providers/retry.py`). A final failure is `provider` or `timeout`, not its own code.
 

@@ -517,11 +517,11 @@ def test_uncapped_inputs_disclose_the_token_window() -> None:
     """L1/T2: an input inside a null UTF-16 cap can still miss Jev's token window.
 
     The caps stay null (ADR-0014). The defect is a doc that calls that "within caps" and never
-    says the resulting failure is `provider`, not `input_too_large`.
+    says what the resulting failure is: `input_too_large` from the API's overflow 400 (ADR-0079).
     """
     assert limits.VERIFY.claims_max is None
     assert limits.SCREEN.text_max is None
-    needle = "not `input_too_large`"
+    needle = "ADR-0079"
     for path in (_LIMITS_PAGE, _TOOL_CARDS, _RULES_FILE, _GUIDANCE):
         text = path.read_text(encoding="utf-8")
         assert "64k" in text, path.name
