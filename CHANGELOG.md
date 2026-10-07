@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.9.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.8.0...v0.9.0) (2026-10-07)
+
+
+### Features
+
+* add jev_gate_range, which reads the gate's diff from git ([47d27da](https://github.com/PyModel/jev-judge-mcp/commit/47d27da8bb5c027e185d7609f22f622e3d92fe84))
+* flag trimmed diffs and review-only failures in gate hints ([f9a0ddb](https://github.com/PyModel/jev-judge-mcp/commit/f9a0ddbc467b68596e79882c3142c5393dc7ac72))
+
+
+### Bug Fixes
+
+* code an upstream context overflow as input_too_large ([1e875e3](https://github.com/PyModel/jev-judge-mcp/commit/1e875e3ebb50134aad2bc09b401399b8761af8e9))
+* gate what the push sends and read the hook command as the shell does ([33cfe7d](https://github.com/PyModel/jev-judge-mcp/commit/33cfe7dd196b736a6195d54dcff7f48dc76dd1ed))
+* key the response cache on the provider's endpoint ([be05ead](https://github.com/PyModel/jev-judge-mcp/commit/be05ead48a18990602550f9971d56eb16576649f))
+* let limits own the regex pool bounds ([8d07eee](https://github.com/PyModel/jev-judge-mcp/commit/8d07eee3ba1244e020944ea73cf02ffdd4634b12))
+* read the verified server's replies off a thread, not the pipe ([0e7ce69](https://github.com/PyModel/jev-judge-mcp/commit/0e7ce692b48808032a907f48bf54cddaf7215d92))
+* refuse non-HTTP connections at the bearer gate ([d87a4ab](https://github.com/PyModel/jev-judge-mcp/commit/d87a4ab6841196e556f8c7e12ffc42862e80058f))
+* repair the defects found in the 2026-10-01 code audit ([068872a](https://github.com/PyModel/jev-judge-mcp/commit/068872a52f28620cca2f07a464be6b643dad457f))
+* select the provider in the startup gate without building a client ([734663c](https://github.com/PyModel/jev-judge-mcp/commit/734663c610b76bf4099914f574cbddbd8bf332f7))
+
+
+### Documentation
+
+* ask for the real diff in the gate and review descriptions ([d6b6ea1](https://github.com/PyModel/jev-judge-mcp/commit/d6b6ea1eec5b02bbea6d8c0f89806f18df66d808))
+* bring the module map up to date ([167e7fb](https://github.com/PyModel/jev-judge-mcp/commit/167e7fbee6de4ecb5566549c8ce85885c23c5cd2))
+
 ## [0.8.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.7.0...v0.8.0) (2026-10-01)
 
 
