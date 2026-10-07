@@ -295,7 +295,7 @@ async def _ask_gate(
         "truncated": truncated,
         "action": action,
         "reason_codes": reason_codes,
-        # A text diff that did not stand gets the no-hunks hint: computed from the argument, not judged.
+        # A text or trimmed diff that did not stand gets its hint: computed from the argument, not judged.
         "next_checks": next_checks_for(reason_codes, diff_shape=diff_shape(args["diff"])),
         "review": review.payload,
         "verification": verification.payload,
@@ -486,7 +486,7 @@ async def _handle_file_list(
         "truncated": truncated,
         "action": action,
         "reason_codes": reason_codes,
-        "next_checks": next_checks_for(reason_codes),
+        "next_checks": next_checks_for(reason_codes, diff_shape=diff_shape(args["diff"])),
         "review": review_payload,
         "verification": verification.payload,
         **renamed_ids_field(renamed),

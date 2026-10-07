@@ -4,8 +4,9 @@ The parity expectation applies this same function to a recorded payload so the o
 difference from the reference text is these fields, in this order.
 """
 
+import re
 from collections.abc import Mapping, Sequence
-from typing import Literal
+from typing import Literal, cast
 
 from jev_judge_mcp.domain.answers import RUBRIC_SCORE_MAX
 from jev_judge_mcp.text import head
@@ -36,9 +37,38 @@ NO_HUNKS_CHECK = (
 amendment, 2026-10-01): a summary written in place of the patch is unsupported by construction,
 and the caller should learn that from the payload, not from a bare escalate."""
 
-type DiffShape = Literal["patch", "file_list", "text"]
+EXCERPT_CHECK = (
+    "diff looks trimmed by hand: a hunk's lines do not match its @@ header. The review scores only "
+    "what it sees, so an excerpt scores low. Pass the real git diff output, or a [{path, patch}] list "
+    "split by concern."
+)
+"""The deterministic hint a gate that did not stand appends when a patch's hunk headers disagree with
+the lines under them (ADR-0062 amendment, 2026-10-07): an excerpt or paraphrase shaped like a patch."""
+
+REVIEW_ONLY_CHECK = (
+    "Every claim stands; the patch review did not. Read the review scores: low correctness or "
+    "spec_match on a partial diff means send the full diff; low test_gap or blast_radius confidence "
+    "means the diff cannot show tests or callers, so add the test output or a caller grep as evidence."
+)
+"""The deterministic hint a gate appends when its review half failed and no claim code fired
+(ADR-0062 amendment, 2026-10-07), so the caller re-packs instead of reading the call as mostly done."""
+
+_REVIEW_CODES = frozenset({"review_escalated", "review_required"})
+_CLAIM_CODES = frozenset(
+    {
+        "invalid_response",
+        "claims_contradicted",
+        "claims_unsupported",
+        "claim_confidence_low",
+        "claim_confidence_below_auto_accept",
+        "caller_note_only",
+    }
+)
+
+type DiffShape = Literal["patch", "file_list", "text", "excerpt"]
 
 _HUNK_HEADERS = ("diff --git ", "@@ ", "+++ ", "--- ", "Index: ")
+_HUNK_COUNTS = re.compile(r"@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 
 SCORE_SCALE = [0, RUBRIC_SCORE_MAX]
 _LEVELS = tuple(range(RUBRIC_SCORE_MAX + 1))
@@ -49,12 +79,61 @@ def diff_shape(diff: object) -> DiffShape:
 
     A file list is a patch by construction. A string is a patch when any line carries a unified-diff
     header or begins with `+` (an added line; `-` alone is also a bullet, so it does not count).
-    Anything else — a change summary, an excerpt — is `text`: nothing a claim can rest on as a patch.
+    Anything else — a change summary — is `text`: nothing a claim can rest on as a patch. A patch, or
+    any file-list patch, whose hunk headers disagree with the lines under them is `excerpt`.
     """
     if isinstance(diff, list):
-        return "file_list"
-    lines = diff.splitlines() if isinstance(diff, str) else []
-    return "patch" if any(line.startswith(_HUNK_HEADERS) or line.startswith("+") for line in lines) else "text"
+        patches = [
+            cast("Mapping[str, object]", item).get("patch")
+            for item in cast("list[object]", diff)
+            if isinstance(item, Mapping)
+        ]
+        return "excerpt" if any(isinstance(patch, str) and _trimmed(patch) for patch in patches) else "file_list"
+    if not isinstance(diff, str):
+        return "text"
+    if not any(line.startswith(_HUNK_HEADERS) or line.startswith("+") for line in diff.split("\n")):
+        return "text"
+    return "excerpt" if _trimmed(diff) else "patch"
+
+
+def _trimmed(patch: str) -> bool:
+    """Whether a hunk header disagrees with the lines under it: a header git never writes, a hunk
+    that ends early or overruns, or a line inside a hunk that is not context, removal, or addition.
+
+    Lines split on `\\n` alone, as git writes them: `str.splitlines` also breaks on form feeds and
+    Unicode separators inside a source line, which would miscount a real hunk. Text with no `@@ `
+    header has no counts to check and is never called trimmed; an added line
+    after a complete hunk and outside any new one is an overrun; a context line
+    whose leading space was stripped still counts as context.
+    """
+    old = new = 0
+    seen = False
+    for raw in patch.split("\n"):
+        line = raw.removesuffix("\r")  # a diff pasted with CRLF endings is still the same patch
+        if old == 0 and new == 0:
+            if line.startswith("@@ "):
+                counts = _HUNK_COUNTS.match(line)
+                if counts is None:
+                    return True
+                old = 1 if counts.group(1) is None else int(counts.group(1))
+                new = 1 if counts.group(2) is None else int(counts.group(2))
+                seen = True
+            elif seen and line.startswith("+") and not line.startswith("+++ "):
+                return True
+            continue
+        if line.startswith("\\"):
+            continue
+        if line.startswith(" ") or not line:
+            old, new = old - 1, new - 1
+        elif line.startswith("-"):
+            old -= 1
+        elif line.startswith("+"):
+            new -= 1
+        else:
+            return True
+        if old < 0 or new < 0:
+            return True
+    return old != 0 or new != 0
 
 
 def renamed_ids_field(renamed: Mapping[str, str]) -> dict[str, dict[str, str]]:
@@ -151,11 +230,18 @@ def summary_extras(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
 
 
 def next_checks_for(codes: Sequence[object], *, diff_shape: DiffShape | None = None) -> list[str]:
-    """The fixed next check per reason code, in code order, plus `NO_HUNKS_CHECK` when the call did
-    not stand (`accepted` absent) and its `diff` was plain text."""
+    """The fixed next check per reason code, in code order; then `REVIEW_ONLY_CHECK` when the review
+    half failed and no claim code fired; then, when the call did not stand (`accepted` absent),
+    `NO_HUNKS_CHECK` for a plain-text `diff` or `EXCERPT_CHECK` for a trimmed one."""
+    names = {str(code) for code in codes}
     checks = [NEXT_CHECKS[str(code)] for code in codes if str(code) in NEXT_CHECKS]
-    if diff_shape == "text" and not any(str(code) == "accepted" for code in codes):
-        checks.append(NO_HUNKS_CHECK)
+    if names & _REVIEW_CODES and not names & _CLAIM_CODES:
+        checks.append(REVIEW_ONLY_CHECK)
+    if "accepted" not in names:
+        if diff_shape == "text":
+            checks.append(NO_HUNKS_CHECK)
+        elif diff_shape == "excerpt":
+            checks.append(EXCERPT_CHECK)
     return checks
 
 
