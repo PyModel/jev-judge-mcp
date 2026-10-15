@@ -95,8 +95,11 @@ were even asked.
   default. That cap still applies on top, so `JEV_MCP_MAX_INFLIGHT` below 8 lowers it further. A
   429 inside the burst is retried under ADR-0057 before it can fail the call.
 - One failed review still fails the call: it cancels the sibling reviews, so no paid request keeps
-  running, and the failure of the lowest-indexed file is re-raised outside the group so the kernel
-  maps its error code exactly as before. The claims are asked after the reviews, unchanged.
+  running, and the lowest-indexed failure among the reviews that failed before the cancel is
+  re-raised outside the group, so the kernel maps that error, never an `ExceptionGroup`. With one
+  failure this is the sequential pass's error; with several, it can be a later file's error where the
+  sequential pass would have stopped on an earlier one, so which code a multi-failure call reports
+  is not pinned. The claims are asked after the reviews, unchanged.
 - No whole-call deadline was added: `Runtime.ask`'s per-attempt and per-sequence bounds and the
   client's cancellation stay the recovery path (ADR-0057, ADR-0011).
 - No recorded parity fixture carries a file list (the shape is an extension), so request order is

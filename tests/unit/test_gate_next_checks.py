@@ -12,11 +12,9 @@ from jev_judge_mcp.responses import (
     NO_HUNKS_CHECK,
     REVIEW_ONLY_CHECK,
     REVIEW_SAW_TESTS_CHECK,
-    TESTS_IN_EVIDENCE_CHECK,
-    ReviewTests,
     diff_shape,
     next_checks_for,
-    review_tests,
+    review_saw_tests,
 )
 from tests.support.jev import call_tool
 
@@ -138,41 +136,38 @@ async def test_a_file_list_gate_checks_each_patch_for_trimming() -> None:
     assert EXCERPT_CHECK in outcome.payload["next_checks"]
 
 
-def test_review_tests_is_computed_from_the_arguments() -> None:
-    """Only `tests` reaches the patch review; tool output in `evidence` reaches the claims alone."""
+def test_only_the_tests_argument_reaches_the_review() -> None:
+    """Evidence of any kind feeds the claims; the review reads `request`, `diff`, and `tests` only."""
     log = {"id": "ci", "text": "5 passed", "kind": "tool_output"}
-    assert review_tests({"tests": "5 passed", "evidence": [log]}) == "tests"
-    assert review_tests({"evidence": [log]}) == "evidence_only"
-    assert review_tests({"evidence": log}) == "evidence_only"
-    assert review_tests({"evidence": "5 passed"}) == "none"  # a plain string is raw, not tool output
-    assert review_tests({"evidence": [{"text": "x", "kind": "raw"}]}) == "none"
-    assert review_tests({"tests": "", "evidence": "x"}) == "none"
+    assert review_saw_tests({"tests": "5 passed", "evidence": [log]})
+    assert not review_saw_tests({"evidence": [log]})
+    assert not review_saw_tests({"tests": "", "evidence": "5 passed"})
 
 
-@pytest.mark.parametrize(
-    ("seen", "check"),
-    [("tests", REVIEW_SAW_TESTS_CHECK), ("evidence_only", TESTS_IN_EVIDENCE_CHECK), ("none", REVIEW_ONLY_CHECK)],
-)
-def test_the_review_only_hint_follows_where_the_tests_went(seen: ReviewTests, check: str) -> None:
-    checks = next_checks_for(["review_escalated"], review_tests=seen)
-    assert check in checks
-    others = {REVIEW_ONLY_CHECK, REVIEW_SAW_TESTS_CHECK, TESTS_IN_EVIDENCE_CHECK} - {check}
-    assert not others & set(checks)
+def test_the_review_only_hint_follows_whether_the_review_saw_tests() -> None:
+    assert next_checks_for(["review_escalated"], review_saw_tests=True)[-1] == REVIEW_SAW_TESTS_CHECK
+    unseen = next_checks_for(["review_escalated"])
+    assert unseen[-1] == REVIEW_ONLY_CHECK
+    assert REVIEW_SAW_TESTS_CHECK not in unseen
+    assert "pass the log as tests or tests_path" in REVIEW_ONLY_CHECK
+    assert "evidence reaches the claims, not the review" in REVIEW_ONLY_CHECK
 
 
-async def test_a_gate_whose_test_log_sat_in_evidence_says_the_review_never_saw_it() -> None:
+async def test_a_gate_whose_test_log_sat_in_evidence_is_told_to_pass_it_as_tests() -> None:
     log = {"id": "ci", "text": "5 passed", "kind": "tool_output"}
     args = {"request": "add the cache", "diff": _PATCH, "claims": ["the cache is wired"], "evidence": [log]}
     outcome = await call_tool("jev_gate", args, {**_REVIEW_LOW, **_VERIFIED})
     assert not outcome.is_error, outcome.text
     assert outcome.payload["action"] == "escalate"
-    assert outcome.payload["next_checks"][-1] == TESTS_IN_EVIDENCE_CHECK
+    assert outcome.payload["next_checks"][-1] == REVIEW_ONLY_CHECK
 
 
-async def test_a_gate_that_sent_tests_to_the_review_does_not_ask_for_them_again() -> None:
+@pytest.mark.parametrize("diff", [_PATCH, [{"path": "p.py", "patch": _PATCH}]], ids=["string", "file_list"])
+async def test_a_gate_that_sent_tests_to_the_review_does_not_ask_for_them_again(diff: object) -> None:
+    """The same text fits a string diff, which has no file_actions, and a file list, which does."""
     args = {
         "request": "add the cache",
-        "diff": _PATCH,
+        "diff": diff,
         "tests": "5 passed",
         "claims": ["the cache is wired"],
         "evidence": "x",

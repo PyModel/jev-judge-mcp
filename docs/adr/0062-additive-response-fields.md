@@ -81,22 +81,24 @@ is a patch by construction and never carries the line; an accepted call never do
 parity expectation applies the same function over the recorded arguments. Reason codes are
 unchanged; the hint is a next check, not a verdict.
 
-## Amendment (2026-10-15): the review-only hint follows where the tests went
+## Amendment (2026-10-15): the review-only hint follows whether the review saw the tests
 
-The review half reads `request`, `diff`, and `tests` only; tool output passed in `evidence` reaches
-the claims and never the review. A caller that put its passing test log in `evidence` therefore got
-a low-confidence `test_gap` and a hint telling it to "add the test output" it had already added.
+The review half reads `request`, `diff`, and `tests` only; anything in `evidence`, of any kind,
+reaches the claims and never the review. A caller that put its passing test log in `evidence`
+therefore got a low-confidence `test_gap`, and `REVIEW_ONLY_CHECK` told it to "add the test output
+or a caller grep as evidence", which it had already done and which could never reach the review.
 
-- `responses.review_tests` computes, from the arguments and never by judgment, where the test
-  output went: `tests` (the review read it), `evidence_only` (only `tool_output` evidence carries
-  it), or `none`.
-- The review-only line picks one of three fixed texts from that value: `TESTS_IN_EVIDENCE_CHECK`
-  names the `tests` / `tests_path` argument, `REVIEW_SAW_TESTS_CHECK` points at `file_actions`
-  instead of asking for the tests again, and `REVIEW_ONLY_CHECK` stays as it was for `none`.
+- `responses.review_saw_tests` computes from the arguments, never by judgment, whether `tests`
+  reached the review. The review-only line is `REVIEW_SAW_TESTS_CHECK` when it did (read the scores,
+  and `file_actions` for a file list; do not re-send the same tests) and `REVIEW_ONLY_CHECK`
+  otherwise.
+- `REVIEW_ONLY_CHECK` now names `tests` / `tests_path` for a weak `test_gap`, says test output in
+  evidence reaches the claims and not the review, and says a weak `blast_radius` is settled only by
+  reading the callers. The `jev_gate` description, the rule block (`docs/agent-rules.md`, README),
+  and the routing skill say the same.
+- Both texts fit a string diff, which has no `file_actions`, and a file list. Evidence is not
+  inspected for test-like items: a `tool_output` grep count is not a test log, and an untyped log is
+  still a log, so the only computable fact is whether `tests` was passed.
 - The parity expectation (`tests/parity/program_expect.py`) applies the same function, so recorded
   fixtures differ from the reference only by these additive lines; `tests/unit/test_gate_next_checks.py`
-  pins all three arms.
-- `REVIEW_ONLY_CHECK` itself told the caller to "add the test output or a caller grep as evidence",
-  which reaches the claims and never the review. It now names `tests` / `tests_path` for a weak
-  `test_gap` and says a weak `blast_radius` is settled only by reading the callers. The rule block
-  (`docs/agent-rules.md`, README) and the routing skill say the same.
+  pins both arms over both diff shapes.

@@ -18,7 +18,7 @@ from jev_judge_mcp.responses import (
     nearest_level,
     next_checks_for,
     renamed_ids_field,
-    review_tests,
+    review_saw_tests,
     summary_extras,
 )
 from jev_judge_mcp.serialize import stringify
@@ -161,7 +161,7 @@ def _rewrite_payload(
             next_checks_for(
                 payload["reason_codes"],
                 diff_shape=diff_shape(arguments.get("diff")),
-                review_tests=review_tests(arguments),
+                review_saw_tests=review_saw_tests(arguments),
             ),
         )
     _insert_renamed_ids(payload, tool, bodies, arguments)
