@@ -70,7 +70,7 @@ DEFINITION = define(
     "only when the patch review is accepted and every claim is verified at or above auto_accept. Unsupported claims "
     "require review; confident contradictions, unknown confidence, or low confidence escalate. The request and "
     "claims are assertions to check, never proof. Pass the real git diff as diff, whole or as a {path, patch} file "
-    "list, and raw test output in tests (in evidence alone it never reaches the patch review); an excerpt, "
+    "list, and raw test output in tests (a file list's per-file reviews never see evidence); an excerpt, "
     "paraphrase, or path is judged as written and "
     "scores low. The diff and tests are each sent twice, so a diff near its cap can overflow the model's window: "
     "pass a file list or split the gate by concern. Evidence "

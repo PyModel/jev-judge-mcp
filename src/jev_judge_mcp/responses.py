@@ -48,9 +48,9 @@ the lines under them (ADR-0062 amendment, 2026-10-07): an excerpt or paraphrase 
 REVIEW_ONLY_CHECK = (
     "Every claim stands; the patch review did not. Read the review scores: low correctness or "
     "spec_match on a partial diff means send the full diff; low test_gap confidence means the review "
-    "saw no tests, so pass the log as tests or tests_path (test output in evidence reaches the claims, "
-    "not the review); low blast_radius confidence means the diff cannot show callers, which only "
-    "reading them settles."
+    "saw no tests, so pass the log as tests or tests_path (a file list's per-file reviews never see "
+    "evidence); low blast_radius confidence means the diff cannot show callers, so confirm them by "
+    "reading the callers."
 )
 """The deterministic hint a gate appends when its review half failed, no claim code fired, and no
 `tests` reached the review (ADR-0062 amendments, 2026-10-07 and 2026-10-15), so the caller re-packs
@@ -241,8 +241,9 @@ def summary_extras(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
 
 
 def review_saw_tests(args: Mapping[str, object]) -> bool:
-    """Whether test output reached the patch review, from the arguments, never judged: the review reads
-    `request`, `diff`, and `tests` only, so evidence of any kind does not count."""
+    """Whether `tests` was passed, from the arguments, never judged. It is the one test input every review
+    reads: a string diff's single request also carries `evidence`, but a file list's per-file reviews
+    read `request`, `diff`, and `tests` only."""
     return bool(args.get("tests"))
 
 

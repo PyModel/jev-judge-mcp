@@ -66,8 +66,8 @@ and the stored key was never consulted — the exact GUI case this ADR exists fo
   answer. A real key never has that shape; a value that merely contains `${` is kept.
 - Only that variable. It is the one a stored key can fill; turning any other secret unset would
   change what the server does rather than surface the mistake: an unset `JEV_MCP_HTTP_TOKEN` lets
-  a loopback bind serve without auth where the reference-shaped token is refused as too short
-  (ADR-0050), and an unset base URL sends the real key to the default endpoint. Those keep the
+  a loopback bind serve without auth, where the reference-shaped literal stays a token the ADR-0050
+  gate judges (refused under 32 characters), and an unset base URL sends the real key to the default endpoint. Those keep the
   literal and the gate that judges it.
 - With no stored key, the unset variable behaves as unset everywhere, including auto resolution:
   a configured OpenRouter, Cloudflare, or compatible provider is selected next, with the startup

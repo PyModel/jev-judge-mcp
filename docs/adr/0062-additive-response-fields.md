@@ -83,18 +83,19 @@ unchanged; the hint is a next check, not a verdict.
 
 ## Amendment (2026-10-15): the review-only hint follows whether the review saw the tests
 
-The review half reads `request`, `diff`, and `tests` only; anything in `evidence`, of any kind,
-reaches the claims and never the review. A caller that put its passing test log in `evidence`
-therefore got a low-confidence `test_gap`, and `REVIEW_ONLY_CHECK` told it to "add the test output
-or a caller grep as evidence", which it had already done and which could never reach the review.
+A file list's per-file reviews — and so every `jev_gate_range` — read `request`, `diff`, and `tests`
+only; `evidence` reaches the claims and never those reviews. (A string diff's single request carries
+`evidence` too.) A caller that put its passing test log in `evidence` on a file list therefore got a
+low-confidence `test_gap`, and `REVIEW_ONLY_CHECK` told it to "add the test output or a caller grep
+as evidence", which it had already done and which could not reach the review.
 
 - `responses.review_saw_tests` computes from the arguments, never by judgment, whether `tests`
   reached the review. The review-only line is `REVIEW_SAW_TESTS_CHECK` when it did (read the scores,
   and `file_actions` for a file list; do not re-send the same tests) and `REVIEW_ONLY_CHECK`
   otherwise.
-- `REVIEW_ONLY_CHECK` now names `tests` / `tests_path` for a weak `test_gap`, says test output in
-  evidence reaches the claims and not the review, and says a weak `blast_radius` is settled only by
-  reading the callers. The `jev_gate` description, the rule block (`docs/agent-rules.md`, README),
+- `REVIEW_ONLY_CHECK` now names `tests` / `tests_path` for a weak `test_gap`, says a file list's
+  per-file reviews never see evidence, and says to confirm a weak `blast_radius` by reading the
+  callers. The `jev_gate` description, the rule block (`docs/agent-rules.md`, README),
   and the routing skill say the same.
 - Both texts fit a string diff, which has no `file_actions`, and a file list. Evidence is not
   inspected for test-like items: a `tool_output` grep count is not a test log, and an untyped log is

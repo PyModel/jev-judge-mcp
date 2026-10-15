@@ -229,7 +229,7 @@ Rules:
   read no files. Paste the real `git diff` output, never an excerpt, a paraphrase, an elided
   `...`, a path, or "see evidence item". A large change goes as a `[{path, patch}]` file list or
   as separate calls split by concern. Test logs go in `tests` (`tests_path` for
-  `jev_gate_range`) as the raw pass/fail lines; in `evidence` they reach the claims, not the review.
+  `jev_gate_range`) as the raw pass/fail lines; a file list's per-file reviews never see `evidence`.
 - **Act on `action`:** `auto` → proceed · `review` → confirm with tests, source reading, or a
   stronger check · `escalate` → stop and surface it. `invalid_response` → the row is unjudged;
   leave it without a verdict.

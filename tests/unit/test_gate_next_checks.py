@@ -150,7 +150,7 @@ def test_the_review_only_hint_follows_whether_the_review_saw_tests() -> None:
     assert unseen[-1] == REVIEW_ONLY_CHECK
     assert REVIEW_SAW_TESTS_CHECK not in unseen
     assert "pass the log as tests or tests_path" in REVIEW_ONLY_CHECK
-    assert "evidence reaches the claims, not the review" in REVIEW_ONLY_CHECK
+    assert "a file list's per-file reviews never see evidence" in REVIEW_ONLY_CHECK
 
 
 async def test_a_gate_whose_test_log_sat_in_evidence_is_told_to_pass_it_as_tests() -> None:
