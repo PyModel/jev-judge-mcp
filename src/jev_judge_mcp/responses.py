@@ -47,8 +47,9 @@ the lines under them (ADR-0062 amendment, 2026-10-07): an excerpt or paraphrase 
 
 REVIEW_ONLY_CHECK = (
     "Every claim stands; the patch review did not. Read the review scores: low correctness or "
-    "spec_match on a partial diff means send the full diff; low test_gap or blast_radius confidence "
-    "means the diff cannot show tests or callers, so add the test output or a caller grep as evidence."
+    "spec_match on a partial diff means send the full diff; low test_gap confidence means the review "
+    "saw no tests, so pass the log as tests or tests_path; low blast_radius confidence means the diff "
+    "cannot show callers, which only reading them settles."
 )
 """The deterministic hint a gate appends when its review half failed and no claim code fired
 (ADR-0062 amendment, 2026-10-07), so the caller re-packs instead of reading the call as mostly done."""

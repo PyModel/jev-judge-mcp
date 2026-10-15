@@ -96,3 +96,7 @@ a low-confidence `test_gap` and a hint telling it to "add the test output" it ha
 - The parity expectation (`tests/parity/program_expect.py`) applies the same function, so recorded
   fixtures differ from the reference only by these additive lines; `tests/unit/test_gate_next_checks.py`
   pins all three arms.
+- `REVIEW_ONLY_CHECK` itself told the caller to "add the test output or a caller grep as evidence",
+  which reaches the claims and never the review. It now names `tests` / `tests_path` for a weak
+  `test_gap` and says a weak `blast_radius` is settled only by reading the callers. The rule block
+  (`docs/agent-rules.md`, README) and the routing skill say the same.
