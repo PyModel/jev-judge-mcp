@@ -79,3 +79,24 @@ takes. No parity-manifest row exists for the array branch; this ADR owns the val
 amendment makes `jev_review`'s file-list payload report `truncated` as its string path does (a
 cut inside a reviewed file), and reuses `jev_gate`'s aggregate refusal text instead of a second
 copy of the sentence.
+
+## Amendment (2026-10-15): the per-file reviews run concurrently
+
+The per-file pass awaited each review before sending the next, so a file list cost the sum of its
+review latencies — up to `files_max` (64) bounded provider sequences end to end — before the claims
+were even asked.
+
+- `files.review_file_list` sends every fitting file's review at once in one task group and folds
+  the results in input order, so `reviewed_files`, `file_actions`, the shown half, and the summed
+  usage are exactly what the sequential pass produced.
+- The overlap is bounded by the ADR-0069 in-flight cap in `Runtime.ask`, the same bound
+  `jev_files_judge` relies on; no second per-call knob was added. With the cap off (the default)
+  a call may hold up to `files_max` requests open, which the cap exists to limit.
+- One failed review still fails the call: it cancels the sibling reviews, so no paid request keeps
+  running, and the failure of the lowest-indexed file is re-raised outside the group so the kernel
+  maps its error code exactly as before. The claims are asked after the reviews, unchanged.
+- No whole-call deadline was added: `Runtime.ask`'s per-attempt and per-sequence bounds and the
+  client's cancellation stay the recovery path (ADR-0057, ADR-0011).
+- No recorded parity fixture carries a file list (the shape is an extension), so request order is
+  not pinned by replay; `tests/unit/test_file_diff.py` pins the overlap, the cap, the input order,
+  and the cancel-on-failure arm.

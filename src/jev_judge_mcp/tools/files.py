@@ -10,6 +10,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
+import anyio
+
 from jev_judge_mcp.domain import Usage
 from jev_judge_mcp.limits import GATE, GateCaps
 from jev_judge_mcp.policy import Action
@@ -17,7 +19,14 @@ from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import Runtime, ToolError
 from jev_judge_mcp.tools.observed import worst_action
-from jev_judge_mcp.tools.review_half import ReviewHalf, ReviewSettings, project_review, review_docs, review_questions
+from jev_judge_mcp.tools.review_half import (
+    ReviewDocs,
+    ReviewHalf,
+    ReviewSettings,
+    project_review,
+    review_docs,
+    review_questions,
+)
 from jev_judge_mcp.validation.caps import CapLedger, CapScope, exceeds, gate_diff_aggregate_error, gate_diff_files_error
 
 
@@ -105,23 +114,48 @@ async def review_file_list(
 
     Each fitting file is asked the plain rubric over its own documents through its own ledger, so a
     cut in one file is recorded without joining the files back into a string that would be cut.
-    `purpose` is the asking tool's own framing of the state.
+    `purpose` is the asking tool's own framing of the state. The requests run concurrently and the
+    results fold in input order (ADR-0066 amendment, 2026-10-15).
     """
     fitting = [dict(item) for item in files if length(item["patch"]) <= doc_units]
     unreviewed = [item["path"] for item in files if length(item["patch"]) > doc_units]
+    asked: list[tuple[CapLedger, ReviewDocs, Evaluation] | None] = [None] * len(fitting)
+    failures: list[tuple[int, Exception]] = []
+
+    async def review(index: int) -> None:
+        ledger = CapLedger()
+        try:
+            docs = review_docs({**args, "diff": fitting[index]["patch"]}, ledger, doc_units)
+            evaluation = await runtime.ask(
+                {"purpose": purpose, "request": docs.request, "diff": docs.diff, "tests": docs.tests},
+                review_questions(),
+            )
+        except Exception as error:
+            # One failed file fails the call, as the sequential pass did. Cancel the siblings so no
+            # paid review keeps running, and re-raise outside the group so the kernel maps the error
+            # itself, not an ExceptionGroup around it.
+            failures.append((index, error))
+            task_group.cancel_scope.cancel()
+            return
+        asked[index] = (ledger, docs, evaluation)
+
+    # One request per fitting file at once; the ADR-0069 in-flight cap in `runtime.ask` bounds the
+    # overlap, as for jev_files_judge.
+    async with anyio.create_task_group() as task_group:
+        for index in range(len(fitting)):
+            task_group.start_soon(review, index)
+    if failures:
+        raise min(failures, key=lambda failure: failure[0])[1]
+
     halves: list[ReviewHalf] = []
     evaluations: list[Evaluation] = []
     reviewed_paths: list[str] = []
     unhashed_tests = False
     truncated = False
     scopes: frozenset[CapScope] = frozenset()
-    for item in fitting:
-        ledger = CapLedger()
-        docs = review_docs({**args, "diff": item["patch"]}, ledger, doc_units)
-        evaluation = await runtime.ask(
-            {"purpose": purpose, "request": docs.request, "diff": docs.diff, "tests": docs.tests},
-            review_questions(),
-        )
+    for item, result in zip(fitting, asked, strict=True):
+        assert result is not None  # every task either stored its result or recorded a failure
+        ledger, docs, evaluation = result
         halves.append(project_review(evaluation.answers, settings, ledger.context_cut))
         evaluations.append(evaluation)
         reviewed_paths.append(item["path"])

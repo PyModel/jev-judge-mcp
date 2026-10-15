@@ -4,12 +4,13 @@ import json
 from collections.abc import Mapping
 from typing import Any, cast, override
 
+import anyio
 import pytest
 from mcp.types import CallToolResult, TextContent
 
 from jev_judge_mcp.domain import JsonValue, Usage
 from jev_judge_mcp.limits import GATE
-from jev_judge_mcp.providers import Evaluation
+from jev_judge_mcp.providers import Evaluation, ProviderError
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from tests.support.jev import FakeProvider, Outcome, call_tool
@@ -595,3 +596,82 @@ async def test_the_review_file_list_reports_a_cut_as_its_string_path_does() -> N
     assert not cut.is_error, cut.text
     assert cut.payload["truncated"] is True
     assert cut.payload["action"] != "auto"
+
+
+class SlowReviewProvider(FakeProvider):
+    """Holds each review call open long enough to overlap; a patch containing `low` answers with a
+    low-confidence rubric, and one containing `down` fails as a provider outage would."""
+
+    def __init__(self) -> None:
+        super().__init__(_GATE_ANSWERS)
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.cancelled = 0
+
+    @override
+    async def _send(
+        self, state: JsonValue, questions: dict[str, JsonValue], model: str, timeout: float | None
+    ) -> Evaluation:
+        self.requests.append((state, questions))
+        diff = str(cast(dict[str, JsonValue], state).get("diff", ""))
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            await anyio.sleep(0.02 if "down" not in diff else 0.005)
+            if "down" in diff:
+                raise ProviderError("the provider is down")
+            answers: dict[str, Any] = dict(_GATE_ANSWERS)
+            if "low" in diff:
+                answers["correctness"] = {"score": 1, "confidence": 0.2}
+            return Evaluation(answers, Usage(1, 1), self.name, model)
+        except anyio.get_cancelled_exc_class():
+            self.cancelled += 1
+            raise
+        finally:
+            self.in_flight -= 1
+
+
+async def _call_slow(provider: SlowReviewProvider, files: list[str]) -> CallToolResult:
+    arguments = {
+        "request": "fix the parser",
+        "diff": [{"path": f"src/{index}.py", "patch": patch} for index, patch in enumerate(files)],
+        "claims": ["the files changed"],
+        "evidence": [{"id": "log", "text": "2 passed"}],
+    }
+    toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: provider), TOOLS)
+    try:
+        return await toolset.call("jev_gate", arguments)
+    finally:
+        await toolset.aclose()
+
+
+async def test_file_reviews_overlap_and_keep_the_input_order() -> None:
+    """Per-file reviews run together, not one after another; each action stays on its own file."""
+    provider = SlowReviewProvider()
+    result = await _call_slow(provider, ["+ a", "+ low", "+ c", "+ d"])
+    payload = json.loads(cast(TextContent, result.content[0]).text)
+    assert not result.is_error, payload
+    assert provider.max_in_flight == 4
+    assert payload["review"]["reviewed_files"] == ["src/0.py", "src/1.py", "src/2.py", "src/3.py"]
+    assert payload["review"]["file_actions"]["src/1.py"] == "escalate"
+    assert {payload["review"]["file_actions"][path] for path in ("src/0.py", "src/2.py", "src/3.py")} == {"auto"}
+    assert len(provider.requests) == 5  # four reviews, then the claims once
+
+
+async def test_the_inflight_cap_bounds_the_file_reviews(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JEV_MCP_MAX_INFLIGHT", "2")
+    provider = SlowReviewProvider()
+    result = await _call_slow(provider, ["+ a", "+ b", "+ c", "+ d"])
+    assert not result.is_error
+    assert provider.max_in_flight == 2
+
+
+async def test_one_failed_file_review_fails_the_call_and_cancels_the_rest() -> None:
+    """The call fails as one sequential failure would, and no sibling review stays in flight."""
+    provider = SlowReviewProvider()
+    result = await _call_slow(provider, ["+ a", "+ down", "+ c"])
+    assert result.is_error
+    assert "the provider is down" in cast(TextContent, result.content[0]).text
+    assert provider.cancelled == 2
+    assert provider.in_flight == 0
+    assert len(provider.requests) == 3  # the claims are never asked
