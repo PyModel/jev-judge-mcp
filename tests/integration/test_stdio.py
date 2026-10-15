@@ -35,6 +35,16 @@ def test_initialize_reports_the_build_identity() -> None:
     assert stderr.count(f"identity jev-mcp {identity}") == 1
 
 
+def test_an_unexpanded_credential_reference_is_warned_once_by_name() -> None:
+    """A harness that passed `${TYPESAFE_API_KEY}` through unexpanded is told so at startup (ADR-0046)."""
+    with StdioServer(env={"TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}"}) as server:
+        server.initialize()
+        server.close_stdin()
+        returncode, stderr = server.wait()
+    assert returncode == 0, stderr
+    assert stderr.count("TYPESAFE_API_KEY holds an unexpanded reference and counts as unset") == 1
+
+
 def test_stdout_carries_only_protocol_frames() -> None:
     with StdioServer() as server:
         server.initialize()

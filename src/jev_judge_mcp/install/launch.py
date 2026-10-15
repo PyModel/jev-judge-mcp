@@ -24,6 +24,8 @@ PACKAGE = "jev-judge-mcp"
 SERVER_NAME = "jev-mcp"
 REFERENCE = "${TYPESAFE_API_KEY}"
 OPENCODE_REFERENCE = "{env:TYPESAFE_API_KEY}"
+# Cursor expands only `${env:NAME}` in mcp.json; a bare `${NAME}` reaches the server verbatim.
+CURSOR_REFERENCE = "${env:TYPESAFE_API_KEY}"
 EXTRA = "typesafe"
 # pi-mcp-adapter resourceNameToToolName("jev-mcp/SKILL.md") with a get_ prefix.
 PI_SKILL_TOOL = "get_jev_mcp_skill_md"
@@ -191,7 +193,7 @@ def claude_desktop_entry(launch: Launch, key: str) -> dict[str, object]:
 
 
 def cursor_entry(launch: Launch) -> dict[str, object]:
-    return {"command": launch.uvx, "args": launch.args(), "env": {"TYPESAFE_API_KEY": REFERENCE}}
+    return {"command": launch.uvx, "args": launch.args(), "env": {"TYPESAFE_API_KEY": CURSOR_REFERENCE}}
 
 
 def opencode_entry(launch: Launch) -> dict[str, object]:

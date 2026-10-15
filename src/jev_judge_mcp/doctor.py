@@ -37,8 +37,9 @@ from jev_judge_mcp.policy.thresholds import (
     SCREEN_SUBSTANCE_SKIP_BELOW,
 )
 from jev_judge_mcp.providers import PRIMARY_CREDENTIAL, JevProvider, ProviderConfigError, resolve_provider
+from jev_judge_mcp.providers.resolver import KeySource, typesafe_key
 from jev_judge_mcp.providers.typesafe import sdk_importable
-from jev_judge_mcp.settings import Settings, load_settings
+from jev_judge_mcp.settings import Settings, load_settings, unexpanded_references
 from jev_judge_mcp.tools import TOOLS
 
 _BARE_SERVER = "mcp__jev"
@@ -103,11 +104,18 @@ def _report(settings: Settings, home: Path, cwd: Path, name: str | None, failure
     covered = _covered(paths)
     missing = tuple(rule for rule in ALLOW_RULES if rule not in covered)
     stored = stored_key(settings) != ""
+    _, source = typesafe_key(settings)
     lines = [
         _line("provider", name if name is not None else _UNSET),
-        _line("via", _via(settings, name)),
+        _line("via", _via(settings, name, source)),
         _line("key", " ".join(keys) if keys else _UNSET),
-        _line("key file", f"{'present' if stored else 'absent'} at {stored_key_path(settings)} (env wins)"),
+        _line(
+            "key file", f"{'present' if stored else 'absent'} at {stored_key_path(settings)}{_KEY_FILE_ROLE[source]}"
+        ),
+        *(
+            _line("warning", f"{variable} holds an unexpanded reference and counts as unset")
+            for variable in unexpanded_references()
+        ),
         _line(
             "sdk",
             "typesafe-sdk importable" if sdk_importable() else "typesafe-sdk missing (install jev-judge-mcp[typesafe])",
@@ -124,6 +132,14 @@ def _report(settings: Settings, home: Path, cwd: Path, name: str | None, failure
         lines.append(_line("missing", " ".join(missing)))
         lines.append(_line("snippet", _snippet(missing)))
     return "".join(lines)
+
+
+_KEY_FILE_ROLE: dict[KeySource, str] = {
+    "environment": " (env wins)",
+    "key_file": " (fills TYPESAFE_API_KEY)",
+    "none": "",
+}
+"""What the key file is doing, from the source resolution reports (ADR-0046)."""
 
 
 def _line(label: str, value: str) -> str:
@@ -146,12 +162,14 @@ async def _close(provider: JevProvider) -> None:
     await provider.aclose()
 
 
-def _via(settings: Settings, name: str | None) -> str:
+def _via(settings: Settings, name: str | None, source: KeySource) -> str:
     if name is None:
         return "unconfigured"
     explicit = settings.jev_provider.lower()
     if explicit == name and explicit in _KNOWN_EXPLICIT:
         return f"explicit: {name}"
+    if name == "typesafe" and source == "key_file":
+        return "auto: key file"
     return f"auto: {_primary_key(settings, name)} found"
 
 

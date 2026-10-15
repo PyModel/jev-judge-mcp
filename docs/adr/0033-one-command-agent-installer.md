@@ -28,8 +28,9 @@ Agents each keep their own MCP config, and several of those files are shared wit
 
 ## Amendment (2026-09-24): Cursor is a target, and reads tolerate a UTF-8 BOM
 
-- **Cursor.** `~/.cursor/mcp.json` gains the same terminal-agent entry as pi (a
-  `${TYPESAFE_API_KEY}` reference, never a literal). Detection is the `~/.cursor` directory or the
+- **Cursor.** `~/.cursor/mcp.json` gains the same terminal-agent entry as pi, never a literal,
+  except the reference is `${env:TYPESAFE_API_KEY}`: Cursor's config interpolation expands only
+  `${env:NAME}` and would pass `${TYPESAFE_API_KEY}` through verbatim (corrected 2026-10-15). Detection is the `~/.cursor` directory or the
   `cursor` binary on PATH; the check line says to restart Cursor, because no CLI query command is
   documented.
 - **BOM tolerance.** An existing config is decoded `utf-8-sig`: a UTF-8 BOM (files authored on or

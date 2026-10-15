@@ -52,3 +52,24 @@ surface the ADR closes.
 - `doctor` and `install` behavior are unchanged; the installer still writes references, not keys,
   for terminal agents.
 - Registered divergence: `key-file-fallback` in `docs/reference/divergences.json`.
+
+## Amendment (2026-10-15): an unexpanded reference reads as unset
+
+A harness that does not expand the reference form it was given passes it to the server verbatim:
+Cursor expands only `${env:NAME}`, so a `${TYPESAFE_API_KEY}` entry arrived as that literal. The
+literal is non-empty, so "the variable always wins" sent it as the key, every call failed auth,
+and the stored key was never consulted — the exact GUI case this ADR exists for.
+
+- `settings.py` owns the rule at the environment boundary: a credential (`SecretStr`) variable
+  whose whole value is `${NAME}`, `${env:NAME}`, or `{env:NAME}` loads as unset, like an empty
+  value. Every reader — resolution, redaction, `doctor` — therefore sees one answer. A real
+  credential never has that shape; a value that merely contains `${` is kept.
+- Silently falling back would hide the misconfigured harness (ADR-0075's concern), so the server
+  logs one stderr warning naming each such variable at startup, and `doctor` prints the same line.
+  The value is never printed.
+- `doctor` reports where the TypeSafe key came from through `resolver.typesafe_key`, the one owner
+  of "the variable wins, the file fills an unset variable": `via: auto: key file` and
+  `key file: … (fills TYPESAFE_API_KEY)` when the file is in use, `(env wins)` only when the
+  variable is set.
+- Tests: `tests/unit/test_settings.py`, `tests/unit/test_resolver.py`, `tests/unit/test_doctor.py`,
+  and the startup line in `tests/integration/test_stdio.py`.

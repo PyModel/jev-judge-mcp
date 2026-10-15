@@ -33,7 +33,7 @@ from jev_judge_mcp.instructions import server_instructions
 from jev_judge_mcp.providers import ProviderConfigError, select_provider
 from jev_judge_mcp.providers.typesafe import sdk_importable
 from jev_judge_mcp.serialize import stringify
-from jev_judge_mcp.settings import LogLevel, Settings, load_settings
+from jev_judge_mcp.settings import LogLevel, Settings, load_settings, unexpanded_references
 from jev_judge_mcp.skills import attach as attach_skills
 from jev_judge_mcp.stdio import stdio_streams
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
@@ -236,6 +236,12 @@ def _bind_http(host: str, port: int) -> None:
     raises `EADDRINUSE`."""
     for sock in _bind_http_sockets(host, port):
         sock.close()
+
+
+def warn_unexpanded_references() -> None:
+    """Name each credential the harness passed through unexpanded; it was read as unset (ADR-0046)."""
+    for variable in unexpanded_references():
+        logger.warning("%s holds an unexpanded reference and counts as unset", variable)
 
 
 def ensure_secrets_redactable(settings: Settings) -> None:
@@ -483,6 +489,7 @@ def main() -> None:
         # through the redacting filter, not through lastResort (ADR-0008). The completion hook
         # keeps its own stdout/stderr handling around gate_main.
         configure_logging(subcommand_settings.log_level, keyfile.redaction_values(subcommand_settings))
+        warn_unexpanded_references()
     if judge_requested(sys.argv):
         from jev_judge_mcp.cli import judge_main
 
@@ -503,6 +510,7 @@ def main() -> None:
     ensure_http_port_free(settings)
     ensure_provider_runnable(settings)
     configure_logging(settings.log_level, keyfile.redaction_values(settings))
+    warn_unexpanded_references()
     server = build_server(settings)
     # One line, the same identity `initialize` will report (ADR-0054). Not logged by `--version`.
     logger.info("identity %s %s", server.name, server.version)

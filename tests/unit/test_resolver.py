@@ -217,3 +217,19 @@ def test_an_empty_file_still_reports_no_credentials(monkeypatch: pytest.MonkeyPa
     monkeypatch.delenv("JEV_PROVIDER")
     with pytest.raises(ProviderConfigError, match=re.escape(NO_CREDENTIALS)):
         resolve(monkeypatch)
+
+
+@pytest.mark.parametrize("reference", ["${TYPESAFE_API_KEY}", "{env:TYPESAFE_API_KEY}"])
+def test_an_unexpanded_reference_falls_back_to_the_stored_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, reference: str
+) -> None:
+    """A GUI harness that passes `${TYPESAFE_API_KEY}` through literally must not send it as the key."""
+    _stored_key_file(monkeypatch, tmp_path, "sk-file-key")
+    provider = resolve(monkeypatch, {"TYPESAFE_API_KEY": reference})
+    assert isinstance(provider, TypeSafeProvider)
+    assert provider._api_key == "sk-file-key"  # pyright: ignore[reportPrivateUsage] -- which key is sent IS the behavior
+
+
+def test_an_unexpanded_reference_without_a_stored_key_reports_no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(ProviderConfigError, match=re.escape(NO_CREDENTIALS)):
+        resolve(monkeypatch, {"TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}"})

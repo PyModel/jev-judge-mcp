@@ -331,3 +331,33 @@ def test_doctor_source_has_no_hand_copied_thresholds() -> None:
     text = _DOCTOR.read_text(encoding="utf-8")
     assert "httpx" not in text
     assert "--live" not in text
+
+
+@pytest.mark.parametrize("env_value", ["", "${TYPESAFE_API_KEY}"])
+def test_a_stored_key_filling_an_unset_variable_is_reported_as_the_source(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, env_value: str
+) -> None:
+    """The report names the source resolution actually uses, never "env wins" over an unset variable."""
+    calls = _spy(monkeypatch)
+    present = tmp_path / "key"
+    present.write_text("sk-stored-doctor\n", encoding="utf-8")
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(present))
+    monkeypatch.setenv("TYPESAFE_API_KEY", env_value)
+    assert main([]) == 0
+    out = capsys.readouterr().out
+    assert _field(out, "provider") == "typesafe"
+    assert _field(out, "via") == "auto: key file"
+    assert _field(out, "key") == "(unset)"
+    assert _field(out, "key file") == f"present at {present} (fills TYPESAFE_API_KEY)"
+    assert "sk-stored-doctor" not in out
+    assert calls == []
+
+
+def test_an_unexpanded_reference_is_named_without_its_value(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "${TYPESAFE_API_KEY}")
+    assert main([]) == 1
+    out = capsys.readouterr().out
+    assert _field(out, "warning") == "TYPESAFE_API_KEY holds an unexpanded reference and counts as unset"
+    assert _field(out, "key file") == "absent at /nonexistent/jev-mcp-key"

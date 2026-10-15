@@ -8,7 +8,7 @@
         "jev-judge-mcp"
       ],
       "env": {
-        "TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}"
+        "TYPESAFE_API_KEY": "${env:TYPESAFE_API_KEY}"
       }
     }
   }

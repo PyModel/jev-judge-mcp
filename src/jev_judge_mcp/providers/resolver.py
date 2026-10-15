@@ -7,7 +7,7 @@ Resolution raises `ProviderConfigError` before any request, so the tools report 
 """
 
 from collections.abc import Callable
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import SecretStr
 
@@ -47,6 +47,19 @@ def resolve_model(settings: Settings) -> str:
     return DEFAULT_MODEL if settings.jev_judge_mcp_model is None else settings.jev_judge_mcp_model
 
 
+type KeySource = Literal["environment", "key_file", "none"]
+
+
+def typesafe_key(settings: Settings) -> tuple[str, KeySource]:
+    """The TypeSafe key resolution sends, and where it came from: the variable always wins, the
+    stored key fills an unset variable (ADR-0046). `doctor` reports the source from here."""
+    if value := _value(settings.typesafe_api_key):
+        return value, "environment"
+    if stored := keyfile.stored_key(settings):
+        return stored, "key_file"
+    return "", "none"
+
+
 def resolve_provider(settings: Settings, *, retry: RetryPolicy | None = None) -> JevProvider:
     """The provider `settings` select, built; `select_provider` decides without building."""
     _, build = select_provider(settings, retry=retry)
@@ -65,10 +78,9 @@ def select_provider(
     resolver's providers, so it is covered exactly like a configured secret (ADR-0017). `retry`
     injects the provider retry policy (ADR-0057); `None` means the default.
     """
-    stored = keyfile.stored_key(settings)
     redact = Redactor(keyfile.redaction_values(settings))
     explicit = settings.jev_provider.lower()
-    typesafe_key = _value(settings.typesafe_api_key) or stored
+    typesafe_key_value, _ = typesafe_key(settings)
     openrouter_key = _value(settings.openrouter_api_key)
     has_openrouter = openrouter_key.startswith("sk-or-")
     cloudflare_token = _value(settings.jev_cloudflare_api_token) or _value(settings.cloudflare_api_token)
@@ -79,7 +91,7 @@ def select_provider(
 
     def typesafe() -> JevProvider:
         return TypeSafeProvider(
-            redact, api_key=typesafe_key, base_url=_value(settings.typesafe_base_url) or None, retry=retry
+            redact, api_key=typesafe_key_value, base_url=_value(settings.typesafe_base_url) or None, retry=retry
         )
 
     def openrouter() -> JevProvider:
@@ -93,7 +105,7 @@ def select_provider(
 
     match explicit:
         case "typesafe":
-            if not typesafe_key:
+            if not typesafe_key_value:
                 raise ProviderConfigError("JEV_PROVIDER=typesafe but TYPESAFE_API_KEY is not set.")
             return "typesafe", typesafe
         case "openrouter":
@@ -122,7 +134,7 @@ def select_provider(
             return "compatible", compatible
         case _:
             pass
-    if typesafe_key:
+    if typesafe_key_value:
         return "typesafe", typesafe
     if has_openrouter:
         return "openrouter", openrouter

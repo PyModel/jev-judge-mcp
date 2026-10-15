@@ -6,7 +6,7 @@ import pytest
 from pydantic import SecretStr
 
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.settings import Settings, load_settings
+from jev_judge_mcp.settings import Settings, load_settings, unexpanded_references
 from tests.support.secrets import is_secret_field, secret_env
 from tests.support.stdio import server_env
 
@@ -128,3 +128,22 @@ def test_redactor_covers_the_normalized_form_of_a_url_secret() -> None:
     # The exact configured form is still covered, and a non-URL value adds no variants.
     assert redact("https://TS.Example/v1?ticket=xyz") == "[redacted]"
     assert Redactor(["plain-token"])("plain-token") == "[redacted]"
+
+
+@pytest.mark.parametrize("reference", ["${TYPESAFE_API_KEY}", "${env:TYPESAFE_API_KEY}", "{env:TYPESAFE_API_KEY}"])
+@pytest.mark.parametrize("name", sorted(SECRETS))
+def test_an_unexpanded_reference_is_unset(monkeypatch: pytest.MonkeyPatch, name: str, reference: str) -> None:
+    """A harness that does not expand `${NAME}` hands the reference through verbatim; it is not a value."""
+    monkeypatch.setenv(name, reference)
+    settings = load_settings()
+    assert settings.secret_values() == []
+    assert unexpanded_references() == [name]
+
+
+@pytest.mark.parametrize("value", ["sk-${x}", "$TYPESAFE_API_KEY", "${a}${b}", "${", "env:KEY"])
+def test_only_a_whole_reference_is_unexpanded(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", value)
+    settings = load_settings()
+    assert settings.typesafe_api_key is not None
+    assert settings.typesafe_api_key.get_secret_value() == value
+    assert unexpanded_references() == []
