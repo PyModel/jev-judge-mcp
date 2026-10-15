@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.9.1](https://github.com/PyModel/jev-judge-mcp/compare/v0.9.0...v0.9.1) (2026-10-15)
+
+
+### Bug Fixes
+
+* choose the review-only gate hint by whether tests reached the review ([7c85ca9](https://github.com/PyModel/jev-judge-mcp/commit/7c85ca92fc5f11d0d0fedcbc647adf5f4303f669))
+* hold at most eight file reviews open per file list ([3b28e9d](https://github.com/PyModel/jev-judge-mcp/commit/3b28e9d31fb073bec084b5ed452f1af856cb144b))
+* limit the unexpanded-reference rule to TYPESAFE_API_KEY ([96fecd9](https://github.com/PyModel/jev-judge-mcp/commit/96fecd91ae912135b724071a4f499612192dc74f))
+* point the review-only gate hint at where the tests went ([3b6d313](https://github.com/PyModel/jev-judge-mcp/commit/3b6d31386013820e9a83e575f4015ca597c99406))
+* read an unexpanded key reference as unset ([639302a](https://github.com/PyModel/jev-judge-mcp/commit/639302a6dc995548aee941d1ea669cfaa4bbfc98))
+
+
+### Performance Improvements
+
+* run a file list's per-file reviews concurrently ([8f06322](https://github.com/PyModel/jev-judge-mcp/commit/8f0632222374b47826431fb9afcc50c98ab0ec4d))
+
+
+### Documentation
+
+* scope the evidence-never-reaches-the-review wording to file lists ([3c66967](https://github.com/PyModel/jev-judge-mcp/commit/3c669671e84f7546d6dc06a30b41859c5b62117a))
+* send test logs in tests, where the patch review reads them ([05ecda5](https://github.com/PyModel/jev-judge-mcp/commit/05ecda5d1c6b398755ed380f891d7db77ae6eb46))
+
 ## [0.9.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.8.0...v0.9.0) (2026-10-07)
 
 
