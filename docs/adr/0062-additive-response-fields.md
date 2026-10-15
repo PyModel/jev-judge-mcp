@@ -80,3 +80,19 @@ the real diff (git diff output, or a [{path, patch}] list) so claims can rest on
 is a patch by construction and never carries the line; an accepted call never does either. The
 parity expectation applies the same function over the recorded arguments. Reason codes are
 unchanged; the hint is a next check, not a verdict.
+
+## Amendment (2026-10-15): the review-only hint follows where the tests went
+
+The review half reads `request`, `diff`, and `tests` only; tool output passed in `evidence` reaches
+the claims and never the review. A caller that put its passing test log in `evidence` therefore got
+a low-confidence `test_gap` and a hint telling it to "add the test output" it had already added.
+
+- `responses.review_tests` computes, from the arguments and never by judgment, where the test
+  output went: `tests` (the review read it), `evidence_only` (only `tool_output` evidence carries
+  it), or `none`.
+- The review-only line picks one of three fixed texts from that value: `TESTS_IN_EVIDENCE_CHECK`
+  names the `tests` / `tests_path` argument, `REVIEW_SAW_TESTS_CHECK` points at `file_actions`
+  instead of asking for the tests again, and `REVIEW_ONLY_CHECK` stays as it was for `none`.
+- The parity expectation (`tests/parity/program_expect.py`) applies the same function, so recorded
+  fixtures differ from the reference only by these additive lines; `tests/unit/test_gate_next_checks.py`
+  pins all three arms.

@@ -7,7 +7,17 @@ appended after them, when they appear, and when they must not.
 
 import pytest
 
-from jev_judge_mcp.responses import EXCERPT_CHECK, NO_HUNKS_CHECK, REVIEW_ONLY_CHECK, diff_shape, next_checks_for
+from jev_judge_mcp.responses import (
+    EXCERPT_CHECK,
+    NO_HUNKS_CHECK,
+    REVIEW_ONLY_CHECK,
+    REVIEW_SAW_TESTS_CHECK,
+    TESTS_IN_EVIDENCE_CHECK,
+    ReviewTests,
+    diff_shape,
+    next_checks_for,
+    review_tests,
+)
 from tests.support.jev import call_tool
 
 pytestmark = pytest.mark.anyio
@@ -126,3 +136,47 @@ async def test_a_file_list_gate_checks_each_patch_for_trimming() -> None:
     outcome = await call_tool("jev_gate", args, {**_REVIEW_LOW, **_VERIFIED})
     assert not outcome.is_error, outcome.text
     assert EXCERPT_CHECK in outcome.payload["next_checks"]
+
+
+def test_review_tests_is_computed_from_the_arguments() -> None:
+    """Only `tests` reaches the patch review; tool output in `evidence` reaches the claims alone."""
+    log = {"id": "ci", "text": "5 passed", "kind": "tool_output"}
+    assert review_tests({"tests": "5 passed", "evidence": [log]}) == "tests"
+    assert review_tests({"evidence": [log]}) == "evidence_only"
+    assert review_tests({"evidence": log}) == "evidence_only"
+    assert review_tests({"evidence": "5 passed"}) == "none"  # a plain string is raw, not tool output
+    assert review_tests({"evidence": [{"text": "x", "kind": "raw"}]}) == "none"
+    assert review_tests({"tests": "", "evidence": "x"}) == "none"
+
+
+@pytest.mark.parametrize(
+    ("seen", "check"),
+    [("tests", REVIEW_SAW_TESTS_CHECK), ("evidence_only", TESTS_IN_EVIDENCE_CHECK), ("none", REVIEW_ONLY_CHECK)],
+)
+def test_the_review_only_hint_follows_where_the_tests_went(seen: ReviewTests, check: str) -> None:
+    checks = next_checks_for(["review_escalated"], review_tests=seen)
+    assert check in checks
+    others = {REVIEW_ONLY_CHECK, REVIEW_SAW_TESTS_CHECK, TESTS_IN_EVIDENCE_CHECK} - {check}
+    assert not others & set(checks)
+
+
+async def test_a_gate_whose_test_log_sat_in_evidence_says_the_review_never_saw_it() -> None:
+    log = {"id": "ci", "text": "5 passed", "kind": "tool_output"}
+    args = {"request": "add the cache", "diff": _PATCH, "claims": ["the cache is wired"], "evidence": [log]}
+    outcome = await call_tool("jev_gate", args, {**_REVIEW_LOW, **_VERIFIED})
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["action"] == "escalate"
+    assert outcome.payload["next_checks"][-1] == TESTS_IN_EVIDENCE_CHECK
+
+
+async def test_a_gate_that_sent_tests_to_the_review_does_not_ask_for_them_again() -> None:
+    args = {
+        "request": "add the cache",
+        "diff": _PATCH,
+        "tests": "5 passed",
+        "claims": ["the cache is wired"],
+        "evidence": "x",
+    }
+    outcome = await call_tool("jev_gate", args, {**_REVIEW_LOW, **_VERIFIED})
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["next_checks"][-1] == REVIEW_SAW_TESTS_CHECK

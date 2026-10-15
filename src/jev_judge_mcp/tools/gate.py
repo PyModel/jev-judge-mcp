@@ -15,6 +15,7 @@ from jev_judge_mcp.responses import (
     diff_shape,
     next_checks_for,
     renamed_ids_field,
+    review_tests,
     summary_extras,
 )
 from jev_judge_mcp.serialize import js_number_to_locale_string_en_us
@@ -300,7 +301,9 @@ async def _ask_gate(
         "action": action,
         "reason_codes": reason_codes,
         # A text or trimmed diff that did not stand gets its hint: computed from the argument, not judged.
-        "next_checks": next_checks_for(reason_codes, diff_shape=diff_shape(args["diff"])),
+        "next_checks": next_checks_for(
+            reason_codes, diff_shape=diff_shape(args["diff"]), review_tests=review_tests(args)
+        ),
         "review": review.payload,
         "verification": verification.payload,
         **renamed_ids_field(renamed),
@@ -490,7 +493,9 @@ async def _handle_file_list(
         "truncated": truncated,
         "action": action,
         "reason_codes": reason_codes,
-        "next_checks": next_checks_for(reason_codes, diff_shape=diff_shape(args["diff"])),
+        "next_checks": next_checks_for(
+            reason_codes, diff_shape=diff_shape(args["diff"]), review_tests=review_tests(args)
+        ),
         "review": review_payload,
         "verification": verification.payload,
         **renamed_ids_field(renamed),

@@ -74,7 +74,7 @@ These tools read no files. The review judges exactly the `diff` you send, and th
 - Evidence is raw output with `kind: tool_output`: the test runner's pass/fail lines, a grep count, a hash. Never your summary of it. Write one claim per invariant, each with the item that proves it. A "tests pass" claim comes from one clean full run on the final code.
 - The diff cannot show callers or tests. When `blast_radius` or `test_gap` is the weak score, add the caller grep or the test output as evidence.
 
-`next_checks` is computed from your arguments, not judged. If it says the diff has no hunks or looks trimmed, or that every claim stands and only the review failed, re-pack and send once more. A re-sent call with the full diff is a new call, not a re-ask. An escalate on the full diff is a real finding: re-read the flagged code.
+`next_checks` is computed from your arguments, not judged. If it says the diff has no hunks or looks trimmed, or that every claim stands and only the review failed, re-pack and send once more. Test output belongs in `tests` (or `tests_path`): in `evidence` it reaches the claims, not the review. When the hint says the review already read the tests, read `file_actions` and confirm those files instead of re-sending. A re-sent call with the full diff is a new call, not a re-ask. An escalate on the full diff is a real finding: re-read the flagged code.
 
 ## Honor the action
 

@@ -53,6 +53,29 @@ REVIEW_ONLY_CHECK = (
 """The deterministic hint a gate appends when its review half failed and no claim code fired
 (ADR-0062 amendment, 2026-10-07), so the caller re-packs instead of reading the call as mostly done."""
 
+TESTS_IN_EVIDENCE_CHECK = (
+    "Test output passed in evidence reaches the claims, not the patch review. Pass the log as tests "
+    "(jev_gate) or tests_path (jev_gate_range) so the review's test_gap can read it."
+)
+"""The review-only hint when the caller's tool output sat in `evidence` and no `tests` was passed
+(ADR-0062 amendment, 2026-10-15): the review half reads `request`, `diff`, and `tests` only."""
+
+REVIEW_SAW_TESTS_CHECK = (
+    "Every claim stands and the review read the tests, yet the patch review did not stand. Each file "
+    "is reviewed alone, so a docs or test file cannot show correctness or callers: read file_actions, "
+    "confirm the files that did not stand by reading them, and do not re-send the same tests."
+)
+"""The review-only hint when `tests` reached the review (ADR-0062 amendment, 2026-10-15): asking
+for the test output again would send the caller round the same loop."""
+
+type ReviewTests = Literal["tests", "evidence_only", "none"]
+
+_REVIEW_ONLY_CHECKS: dict[ReviewTests, str] = {
+    "tests": REVIEW_SAW_TESTS_CHECK,
+    "evidence_only": TESTS_IN_EVIDENCE_CHECK,
+    "none": REVIEW_ONLY_CHECK,
+}
+
 _REVIEW_CODES = frozenset({"review_escalated", "review_required"})
 _CLAIM_CODES = frozenset(
     {
@@ -229,14 +252,30 @@ def summary_extras(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
     return {"by_verdict": partition(rows, "verdict"), "by_action": partition(rows, "action")}
 
 
-def next_checks_for(codes: Sequence[object], *, diff_shape: DiffShape | None = None) -> list[str]:
-    """The fixed next check per reason code, in code order; then `REVIEW_ONLY_CHECK` when the review
-    half failed and no claim code fired; then, when the call did not stand (`accepted` absent),
-    `NO_HUNKS_CHECK` for a plain-text `diff` or `EXCERPT_CHECK` for a trimmed one."""
+def review_tests(args: Mapping[str, object]) -> ReviewTests:
+    """Where the caller's test output went, computed from the arguments, never judged: `tests` is the
+    only test text the patch review reads; `tool_output` evidence reaches the claims alone."""
+    if args.get("tests"):
+        return "tests"
+    evidence = args.get("evidence")
+    items = cast("list[object]", evidence) if isinstance(evidence, list) else [evidence]
+    return "evidence_only" if any(_is_tool_output(item) for item in items) else "none"
+
+
+def _is_tool_output(item: object) -> bool:
+    return isinstance(item, Mapping) and cast("Mapping[str, object]", item).get("kind") == "tool_output"
+
+
+def next_checks_for(
+    codes: Sequence[object], *, diff_shape: DiffShape | None = None, review_tests: ReviewTests = "none"
+) -> list[str]:
+    """The fixed next check per reason code, in code order; then the review-only hint for where the
+    tests went when the review half failed and no claim code fired; then, when the call did not stand
+    (`accepted` absent), `NO_HUNKS_CHECK` for a plain-text `diff` or `EXCERPT_CHECK` for a trimmed one."""
     names = {str(code) for code in codes}
     checks = [NEXT_CHECKS[str(code)] for code in codes if str(code) in NEXT_CHECKS]
     if names & _REVIEW_CODES and not names & _CLAIM_CODES:
-        checks.append(REVIEW_ONLY_CHECK)
+        checks.append(_REVIEW_ONLY_CHECKS[review_tests])
     if "accepted" not in names:
         if diff_shape == "text":
             checks.append(NO_HUNKS_CHECK)
