@@ -89,14 +89,16 @@ were even asked.
 - `files.review_file_list` sends every fitting file's review at once in one task group and folds
   the results in input order, so `reviewed_files`, `file_actions`, the shown half, and the summed
   usage are exactly what the sequential pass produced.
-- The overlap is bounded by the ADR-0069 in-flight cap in `Runtime.ask`, the same bound
-  `jev_files_judge` relies on; no second per-call knob was added. With the cap off (the default)
-  a call may hold up to `files_max` requests open, which the cap exists to limit.
+- One file list holds at most `REVIEW_FANOUT` (8) reviews open at once, a fixed constant in
+  `files.py`, not a setting. The sequential pass held one; opening all 64 at once would be a paid
+  burst never measured against the provider's rate limit, and the ADR-0069 process cap is off by
+  default. That cap still applies on top, so `JEV_MCP_MAX_INFLIGHT` below 8 lowers it further. A
+  429 inside the burst is retried under ADR-0057 before it can fail the call.
 - One failed review still fails the call: it cancels the sibling reviews, so no paid request keeps
   running, and the failure of the lowest-indexed file is re-raised outside the group so the kernel
   maps its error code exactly as before. The claims are asked after the reviews, unchanged.
 - No whole-call deadline was added: `Runtime.ask`'s per-attempt and per-sequence bounds and the
   client's cancellation stay the recovery path (ADR-0057, ADR-0011).
 - No recorded parity fixture carries a file list (the shape is an extension), so request order is
-  not pinned by replay; `tests/unit/test_file_diff.py` pins the overlap, the cap, the input order,
+  not pinned by replay; `tests/unit/test_file_diff.py` pins the overlap, the fan-out bound, the process cap, the input order,
   and the cancel-on-failure arm.

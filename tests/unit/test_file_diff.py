@@ -13,6 +13,7 @@ from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.providers import Evaluation, ProviderError
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
+from jev_judge_mcp.tools.files import REVIEW_FANOUT
 from tests.support.jev import FakeProvider, Outcome, call_tool
 
 pytestmark = pytest.mark.anyio
@@ -656,6 +657,14 @@ async def test_file_reviews_overlap_and_keep_the_input_order() -> None:
     assert payload["review"]["file_actions"]["src/1.py"] == "escalate"
     assert {payload["review"]["file_actions"][path] for path in ("src/0.py", "src/2.py", "src/3.py")} == {"auto"}
     assert len(provider.requests) == 5  # four reviews, then the claims once
+
+
+async def test_one_call_never_holds_more_than_the_fan_out_bound() -> None:
+    """With the process cap off (the default), one file list still opens at most REVIEW_FANOUT reviews."""
+    provider = SlowReviewProvider()
+    result = await _call_slow(provider, [f"+ {index}" for index in range(REVIEW_FANOUT + 4)])
+    assert not result.is_error
+    assert provider.max_in_flight == REVIEW_FANOUT
 
 
 async def test_the_inflight_cap_bounds_the_file_reviews(monkeypatch: pytest.MonkeyPatch) -> None:

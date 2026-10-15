@@ -29,6 +29,11 @@ from jev_judge_mcp.tools.review_half import (
 )
 from jev_judge_mcp.validation.caps import CapLedger, CapScope, exceeds, gate_diff_aggregate_error, gate_diff_files_error
 
+REVIEW_FANOUT = 8
+"""Per-file reviews one file list holds open at once. The sequential pass this replaced held one; a
+64-file list at once would be a paid burst the provider's rate limit was never measured against.
+The ADR-0069 process cap (`JEV_MCP_MAX_INFLIGHT`) still applies on top (ADR-0066 amendment)."""
+
 
 def file_patches(diff: object) -> list[dict[str, str]]:
     """A file-list `diff` as sent: one `{path, patch}` record per item, or a `ToolError`."""
@@ -122,14 +127,17 @@ async def review_file_list(
     asked: list[tuple[CapLedger, ReviewDocs, Evaluation] | None] = [None] * len(fitting)
     failures: list[tuple[int, Exception]] = []
 
+    fan_out = anyio.CapacityLimiter(REVIEW_FANOUT)
+
     async def review(index: int) -> None:
         ledger = CapLedger()
         try:
             docs = review_docs({**args, "diff": fitting[index]["patch"]}, ledger, doc_units)
-            evaluation = await runtime.ask(
-                {"purpose": purpose, "request": docs.request, "diff": docs.diff, "tests": docs.tests},
-                review_questions(),
-            )
+            async with fan_out:
+                evaluation = await runtime.ask(
+                    {"purpose": purpose, "request": docs.request, "diff": docs.diff, "tests": docs.tests},
+                    review_questions(),
+                )
         except Exception as error:
             # One failed file fails the call, as the sequential pass did. Cancel the siblings so no
             # paid review keeps running, and re-raise outside the group so the kernel maps the error
@@ -139,8 +147,8 @@ async def review_file_list(
             return
         asked[index] = (ledger, docs, evaluation)
 
-    # One request per fitting file at once; the ADR-0069 in-flight cap in `runtime.ask` bounds the
-    # overlap, as for jev_files_judge.
+    # One task per fitting file; `REVIEW_FANOUT` bounds how many ask at once, and the ADR-0069
+    # process cap in `runtime.ask` still applies on top.
     async with anyio.create_task_group() as task_group:
         for index in range(len(fitting)):
             task_group.start_soon(review, index)
