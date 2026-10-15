@@ -273,3 +273,17 @@ async def test_a_websocket_handshake_is_refused_and_lifespan_passes_through(monk
     assert sent == [{"type": "websocket.close", "code": 1008}]
     await middleware({"type": "lifespan"}, receive, send)
     assert seen == ["lifespan"]
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "192.0.2.1"])
+def test_an_unexpanded_token_is_refused_not_dropped(monkeypatch: pytest.MonkeyPatch, host: str) -> None:
+    """A `${...}` token the harness never expanded is a short token, refused, never an unset one that
+    would let a loopback bind serve without auth."""
+    settings = settings_with(
+        monkeypatch,
+        JEV_MCP_TRANSPORT="streamable-http",
+        JEV_MCP_HTTP_HOST=host,
+        JEV_MCP_HTTP_TOKEN="${env:JEV_MCP_HTTP_TOKEN}",
+    )
+    with pytest.raises(SystemExit, match="JEV_MCP_HTTP_TOKEN"):
+        ensure_http_access_control(settings)

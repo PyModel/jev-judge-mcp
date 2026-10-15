@@ -4,7 +4,8 @@ The environment is the only source: no `.env` file, no secrets dir, no construct
 overrides, no CLI flags. Provider variables keep the reference's names exactly, so
 each field carries its own alias and there is no prefix. Values are kept raw;
 provider resolution and the model default belong to the resolver (P4). The one exception is
-a credential holding an unexpanded harness reference, which reads as unset (ADR-0046 amendment).
+`TYPESAFE_API_KEY` holding an unexpanded harness reference, which reads as unset so the stored
+key can fill it (ADR-0046 amendment).
 """
 
 import os
@@ -13,7 +14,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal, cast, get_args
 
-from pydantic import Field, SecretStr, ValidationInfo, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic.aliases import AliasChoices
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
@@ -28,6 +29,13 @@ verbatim, and a real credential never has this shape."""
 
 def is_unexpanded_reference(value: str) -> bool:
     return _UNEXPANDED_REFERENCE.fullmatch(value) is not None
+
+
+_UNSET_WHEN_UNEXPANDED = ("typesafe_api_key",)
+"""The fields an unexpanded reference leaves unset: only the key a stored key can fill (ADR-0046).
+Any other secret keeps the reference verbatim, so the gate that judges it still runs: a bearer token
+that became unset would let a loopback bind serve without auth, and a base URL that became unset
+would send the key to the default endpoint."""
 
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -76,20 +84,12 @@ class Settings(BaseSettings):
     # `command` argument is the typed `command_disabled` refusal — the server runs nothing.
     ask_commands: bool = Field(default=False, validation_alias="JEV_ASK_COMMANDS")
 
-    @field_validator("*", mode="before")
+    @field_validator(*_UNSET_WHEN_UNEXPANDED, mode="before")
     @classmethod
-    def _unexpanded_reference_is_unset(cls, value: object, info: ValidationInfo) -> object:
+    def _unexpanded_reference_is_unset(cls, value: object) -> object:
         """Sending `${TYPESAFE_API_KEY}` as the key fails every call and hides the stored key, so a
         reference left unexpanded counts as unset, like an empty value (ADR-0046 amendment)."""
-        field_name = info.field_name
-        if (
-            isinstance(value, str)
-            and field_name is not None
-            and _is_secret(cls.model_fields[field_name])
-            and is_unexpanded_reference(value)
-        ):
-            return None
-        return value
+        return None if isinstance(value, str) and is_unexpanded_reference(value) else value
 
     @classmethod
     def settings_customise_sources(
@@ -131,13 +131,10 @@ class Settings(BaseSettings):
 
 
 def unexpanded_references(environ: Mapping[str, str] = os.environ) -> list[str]:
-    """Credential variables whose value is an unexpanded reference, by name — the values were
-    dropped at load, so the startup warning and `doctor` read the names here (ADR-0046 amendment)."""
-    return [
-        _env_var_name(name, field)
-        for name, field in Settings.model_fields.items()
-        if _is_secret(field) and is_unexpanded_reference(environ.get(_env_var_name(name, field), ""))
-    ]
+    """Variables an unexpanded reference left unset, by name — the values were dropped at load, so
+    the startup warning and `doctor` read the names here (ADR-0046 amendment)."""
+    variables = [_env_var_name(name, Settings.model_fields[name]) for name in _UNSET_WHEN_UNEXPANDED]
+    return [variable for variable in variables if is_unexpanded_reference(environ.get(variable, ""))]
 
 
 def _is_secret(field: FieldInfo) -> bool:

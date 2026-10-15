@@ -131,13 +131,24 @@ def test_redactor_covers_the_normalized_form_of_a_url_secret() -> None:
 
 
 @pytest.mark.parametrize("reference", ["${TYPESAFE_API_KEY}", "${env:TYPESAFE_API_KEY}", "{env:TYPESAFE_API_KEY}"])
-@pytest.mark.parametrize("name", sorted(SECRETS))
-def test_an_unexpanded_reference_is_unset(monkeypatch: pytest.MonkeyPatch, name: str, reference: str) -> None:
-    """A harness that does not expand `${NAME}` hands the reference through verbatim; it is not a value."""
-    monkeypatch.setenv(name, reference)
+def test_an_unexpanded_typesafe_key_is_unset(monkeypatch: pytest.MonkeyPatch, reference: str) -> None:
+    """A harness that does not expand `${NAME}` hands the reference through verbatim; it is not a key."""
+    monkeypatch.setenv("TYPESAFE_API_KEY", reference)
     settings = load_settings()
+    assert settings.typesafe_api_key is None
     assert settings.secret_values() == []
-    assert unexpanded_references() == [name]
+    assert unexpanded_references() == ["TYPESAFE_API_KEY"]
+
+
+@pytest.mark.parametrize("name", sorted({*SECRETS, "JEV_MCP_HTTP_TOKEN"} - {"TYPESAFE_API_KEY"}))
+def test_other_secrets_keep_an_unexpanded_reference_verbatim(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    """Only the key with a stored fallback reads a reference as unset. A bearer token or base URL that
+    became unset would change what the server does (start unauthenticated, call another endpoint), so
+    those keep the reference's value and the gates that judge it (ADR-0046 amendment)."""
+    monkeypatch.setenv(name, "${env:" + name + "}")
+    settings = load_settings()
+    assert "${env:" + name + "}" in settings.secret_values()
+    assert unexpanded_references() == []
 
 
 @pytest.mark.parametrize("value", ["sk-${x}", "$TYPESAFE_API_KEY", "${a}${b}", "${", "env:KEY"])

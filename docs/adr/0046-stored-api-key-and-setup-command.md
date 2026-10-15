@@ -60,10 +60,18 @@ Cursor expands only `${env:NAME}`, so a `${TYPESAFE_API_KEY}` entry arrived as t
 literal is non-empty, so "the variable always wins" sent it as the key, every call failed auth,
 and the stored key was never consulted — the exact GUI case this ADR exists for.
 
-- `settings.py` owns the rule at the environment boundary: a credential (`SecretStr`) variable
-  whose whole value is `${NAME}`, `${env:NAME}`, or `{env:NAME}` loads as unset, like an empty
-  value. Every reader — resolution, redaction, `doctor` — therefore sees one answer. A real
-  credential never has that shape; a value that merely contains `${` is kept.
+- `settings.py` owns the rule at the environment boundary: `TYPESAFE_API_KEY` whose whole value
+  is `${NAME}`, `${env:NAME}`, or `{env:NAME}` loads as unset, like an empty value. Every reader —
+  resolution, redaction, `doctor`, and the installer's own environment read — therefore sees one
+  answer. A real key never has that shape; a value that merely contains `${` is kept.
+- Only that variable. It is the one a stored key can fill; turning any other secret unset would
+  change what the server does rather than surface the mistake: an unset `JEV_MCP_HTTP_TOKEN` lets
+  a loopback bind serve without auth where the reference-shaped token is refused as too short
+  (ADR-0050), and an unset base URL sends the real key to the default endpoint. Those keep the
+  literal and the gate that judges it.
+- With no stored key, the unset variable behaves as unset everywhere, including auto resolution:
+  a configured OpenRouter, Cloudflare, or compatible provider is selected next, with the startup
+  warning naming the variable.
 - Silently falling back would hide the misconfigured harness (ADR-0075's concern), so the server
   logs one stderr warning naming each such variable at startup, and `doctor` prints the same line.
   The value is never printed.

@@ -317,11 +317,13 @@
         "tests/unit/test_settings.py",
         "tests/unit/test_doctor.py",
         "tests/unit/test_setup.py",
+        "tests/unit/test_http_auth.py",
+        "tests/unit/test_install.py",
         "tests/integration/test_stdio.py"
       ],
       "fixtures": [],
       "reference_behavior": "Only environment variables provide credentials; a missing TYPESAFE_API_KEY fails resolution with the frozen no-credentials text, and any non-empty value, including an unexpanded `${TYPESAFE_API_KEY}`, is sent as the key.",
-      "python_behavior": "A key stored by `jev-judge-mcp setup` (0600 file, live-verified before storing) fills the typesafe slot when the variable is unset; the variable always wins unless its whole value is an unexpanded `${NAME}`, `${env:NAME}`, or `{env:NAME}` reference, which reads as unset with one startup warning naming it (ADR-0046 amendment); blank or missing files behave exactly as before, and the stored value joins the redaction set when read."
+      "python_behavior": "A key stored by `jev-judge-mcp setup` (0600 file, live-verified before storing) fills the typesafe slot when the variable is unset; the variable always wins unless its whole value is an unexpanded `${NAME}`, `${env:NAME}`, or `{env:NAME}` reference, which reads as unset with one startup warning naming it, so the stored key fills it or, with none, auto resolution continues to the next configured provider (ADR-0046 amendment; other secrets keep the literal); blank or missing files behave exactly as before, and the stored value joins the redaction set when read."
     },
     {
       "id": "response-cache",

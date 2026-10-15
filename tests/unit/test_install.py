@@ -1150,3 +1150,14 @@ def test_agents_picked_at_the_prompt_do_not_fail_on_a_missing_pi_adapter(tmp_pat
     assert code == 0, text
     assert "Pi needs the MCP adapter" not in text
     assert (tmp_path / ".codex" / "config.toml").exists()
+
+
+def test_an_unexpanded_environment_key_is_never_stored_as_the_desktop_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`${TYPESAFE_API_KEY}` in the environment is no key (ADR-0046 amendment): it is not written into a
+    GUI config, and it does not join the redaction set, which would mask every real reference."""
+    from jev_judge_mcp.install import cli
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    key, secrets = cli._desktop_key(True, {"TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}"})  # pyright: ignore[reportPrivateUsage] -- the env read IS the boundary under test
+    assert key == ""
+    assert secrets == ()

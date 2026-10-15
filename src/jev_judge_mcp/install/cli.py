@@ -13,6 +13,7 @@ from jev_judge_mcp.install.errors import InstallError
 from jev_judge_mcp.install.launch import checkout_launch, local_install_warning, pypi_launch, require_checkout_uvx
 from jev_judge_mcp.install.layout import Layout, layout_from_env
 from jev_judge_mcp.install.verify import verify_command
+from jev_judge_mcp.settings import is_unexpanded_reference
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -73,7 +74,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 secrets=secrets,
                 platform=sys.platform,
                 bins=_bins(),
-                key_in_environment=bool(environ.get("TYPESAFE_API_KEY")),
+                key_in_environment=bool(_environment_key(environ)),
                 confirmer=confirmer,
                 chooser=_chooser(parsed.yes, parsed.dry_run),
                 verify=None if parsed.dry_run or parsed.remove else verify_command,
@@ -90,9 +91,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     return result.code
 
 
+def _environment_key(environ: Mapping[str, str]) -> str:
+    """`TYPESAFE_API_KEY` as the server reads it: an unexpanded reference is no key (ADR-0046)."""
+    value = environ.get("TYPESAFE_API_KEY", "")
+    return "" if is_unexpanded_reference(value) else value
+
+
 def _desktop_key(consent: bool, environ: Mapping[str, str]) -> tuple[str | None, tuple[str, ...]]:
     """Read the key from the environment or a hidden prompt. Never from argv, never printed."""
-    existing = environ.get("TYPESAFE_API_KEY", "")
+    existing = _environment_key(environ)
     secrets = (existing,) if existing else ()
     if not consent:
         return None, secrets
