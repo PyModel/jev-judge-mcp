@@ -319,6 +319,10 @@ never sent and is listed in `skipped` as `secret_file`; credential literals in o
 redacted. A range of only secret stores refuses `secret_file`; a bad range, an empty diff, no
 repository, or headers git quoted so they do not split refuse `invalid_arguments`; a diff past the
 gate's aggregate budget is killed mid-read and refuses `input_too_large`; all before any provider
-call. `tests_path` is read under jev_file_judge's path rules and is not self-reported.
+call. `tests_path` is read under jev_file_judge's path rules and is not self-reported. The working
+directory is wherever the harness started the server: an entry that moves it
+(`uv run --directory <checkout>`) reads that checkout from every project, so a range from your
+project refuses; launch a checkout with `uv run --project <checkout>`, which keeps the working
+directory. Git refusals name the server's working directory so the mismatch shows.
 
 **Not for** a patch that is not in the working tree or its history — use jev_gate.

@@ -94,3 +94,13 @@ the last extension, with its own pinning tests, and nothing in a frozen tool cha
   git repo` for the lookup, `git diff failed` for the diff) instead of a traceback or a hang.
 - The security corpus gains one `ToolCase`; its range is git's empty tree against a committed
   fixture directory, so it resolves in a shallow clone.
+
+## Amendment (2026-10-19): git refusals name the server's working directory
+
+The repository is the one containing the server's working directory, and the harness, not the
+caller, picks that directory. An entry launched with `uv run --directory <checkout>` therefore
+reads the checkout from every project, and the caller saw only `refusing that git range`. The
+tool's git refusals (`invalid_arguments`) now end with `(server working directory: <path>)`, so
+the caller can tell a wrong range from a server started outside its project. The CLI's refusal
+text is unchanged: it runs in the operator's own shell, where the directory is already known.
+The path names the local process's directory and reaches only the client, never the provider.

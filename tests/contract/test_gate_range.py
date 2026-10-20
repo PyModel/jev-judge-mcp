@@ -85,7 +85,8 @@ async def test_a_range_git_cannot_diff_is_refused_without_a_provider_call(rev_ra
     outcome = await call_tool("jev_gate_range", gate_args(rev_range), {})
     assert outcome.is_error
     assert outcome.code == "invalid_arguments"
-    assert outcome.text == message
+    # The directory is named so a caller can see a server launched outside its project.
+    assert outcome.text == f"{message} (server working directory: {Path.cwd()})"
     assert outcome.requests == []
 
 
@@ -97,7 +98,7 @@ async def test_outside_a_git_repo_is_refused_without_a_provider_call(
     outcome = await call_tool("jev_gate_range", gate_args(), {})
     assert outcome.is_error
     assert outcome.code == "invalid_arguments"
-    assert outcome.text == "gate refuses to run outside a git repo"
+    assert outcome.text == f"gate refuses to run outside a git repo (server working directory: {Path.cwd()})"
     assert outcome.requests == []
 
 

@@ -81,7 +81,9 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     except GitDiffTooLarge as error:
         raise ToolError(str(error), code="input_too_large") from error
     except GitDiffError as error:
-        raise ToolError(str(error), code="invalid_arguments") from error
+        # The harness picks this directory, not the caller; naming it shows a server launched
+        # outside the caller's project (a `uv run --directory` entry) instead of a bare refusal.
+        raise ToolError(f"{error} (server working directory: {Path.cwd()})", code="invalid_arguments") from error
     files, skipped = _guarded(diff)
     passed["diff"] = files
     result = await gate.handle(passed, runtime)
