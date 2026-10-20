@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.2](https://github.com/PyModel/jev-judge-mcp/compare/v0.9.1...v0.9.2) (2026-10-20)
+
+
+### Bug Fixes
+
+* name the server's working directory in jev_gate_range git refusals ([bee6e76](https://github.com/PyModel/jev-judge-mcp/commit/bee6e76d2d5050dfef0807390bff695308aeac2f))
+
 ## [0.9.1](https://github.com/PyModel/jev-judge-mcp/compare/v0.9.0...v0.9.1) (2026-10-15)
 
 
