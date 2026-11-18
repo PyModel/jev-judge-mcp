@@ -236,7 +236,7 @@ async def test_gate_reviews_a_file_list_per_file() -> None:
 
 
 async def test_file_list_gate_asks_the_claims_once_not_per_file() -> None:
-    """J4: each fitting file is asked the review rubric alone; the claims and evidence are sent once.
+    """J4: each fitting file receives review context; claims and source questions are asked once.
 
     The split path once re-asked the full rubric plus every claim and source question per file,
     billing N requests that each carried the whole evidence and discarding N-1 claim verdicts.
@@ -267,7 +267,15 @@ async def test_file_list_gate_asks_the_claims_once_not_per_file() -> None:
     for request in file_reviews:
         state = state_of(request)
         assert "diff" in state
-        assert "evidence" not in state
+        assert state["request"] == "fix the parser"
+        assert state["evidence"] == [{"id": "log", "text": "2 passed"}]
+        peer = (
+            {"path": "limits.py", "patch": "+ cap"}
+            if state["diff"] == "+ add"
+            else {"path": "mathutil.py", "patch": "+ add"}
+        )
+        assert state["related_files"] == [peer]
+        assert state["path"] != peer["path"]
         assert not any(key.startswith(("claim_", "source_")) for key in request[1])
     verification_request = next(request for request in outcome.requests if "claims" in state_of(request))
     state = state_of(verification_request)
@@ -300,7 +308,9 @@ async def test_an_oversized_file_clamps_auto_to_review_and_names_incomplete_cont
     assert outcome.payload["action"] == "review"
     assert outcome.payload["partial"] is True
     assert outcome.payload["unreviewed_files"] == ["src/big.py"]
-    assert outcome.payload["reason_codes"] == ["incomplete_context"]
+    assert "incomplete_context" in outcome.payload["reason_codes"]
+    assert outcome.payload["blockers"][0]["path"] == "src/big.py"
+    assert outcome.payload["blockers"][0]["threshold"] == GATE.doc_units
     assert outcome.payload["next_checks"]
     assert outcome.payload["truncated"] is False
     assert len(outcome.requests) == 2
@@ -684,3 +694,43 @@ async def test_one_failed_file_review_fails_the_call_and_cancels_the_rest() -> N
     assert provider.cancelled == 2
     assert provider.in_flight == 0
     assert len(provider.requests) == 3  # the claims are never asked
+
+
+async def test_gate_explains_the_second_files_confidence_at_the_requested_threshold() -> None:
+    outcome = await _call_gate_drift(
+        {
+            "request": "fix the parser",
+            "diff": [{"path": "a", "patch": "+ a"}, {"path": "b", "patch": "+ b"}],
+            "claims": ["parser fixed"],
+            "evidence": "output",
+            "review_at": 0.6,
+        },
+        [_REVIEW_ANSWERS, {**_REVIEW_ANSWERS, "spec_match": {"score": 1.9, "confidence": 0.59}}, _GATE_ANSWERS],
+    )
+    assert outcome.payload["action"] == "escalate"
+    assert outcome.payload["review"]["score_file"] == "a"
+    (blocker,) = outcome.payload["blockers"]
+    assert (blocker["path"], blocker["field"], blocker["value"], blocker["threshold"]) == (
+        "b",
+        "spec_match.confidence",
+        0.59,
+        0.6,
+    )
+    assert blocker["level_assessment"] == "favorable"
+    assert blocker["code"] in outcome.payload["reason_codes"]
+    assert blocker["next_check"] in outcome.payload["next_checks"]
+
+
+async def test_context_that_cannot_fit_is_named_and_cannot_clear_the_file() -> None:
+    args = {
+        "request": "fix the parser",
+        "diff": [{"path": "a", "patch": "+ a"}],
+        "claims": ["parser fixed"],
+        "evidence": [{"id": "large", "text": "x" * GATE.doc_units}],
+    }
+    outcome = await call_tool("jev_gate", args, _GATE_ANSWERS)
+    assert outcome.payload["action"] == "review"
+    assert outcome.payload["blockers"][0]["omitted"] == ["evidence[0]"]
+    assert outcome.payload["blockers"][0]["field"] == "file_context"
+    assert outcome.payload["blockers"][0]["path"] == "a"
+    assert outcome.payload["blockers"][0]["value"] > outcome.payload["blockers"][0]["threshold"]

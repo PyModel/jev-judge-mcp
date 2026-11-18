@@ -25,7 +25,7 @@ GATE_REASON_CODES = (
     "caller_note_only",
     "accepted",
 )
-"""Every gate reason code, in the frozen order they are emitted (`parity-manifest.json` `policy`)."""
+"""Summary gate reason codes, in their frozen order (`parity-manifest.json` `policy`)."""
 
 
 def note_blocks_auto(action: str, support: object, evidence: Sequence[Mapping[str, object]]) -> bool:

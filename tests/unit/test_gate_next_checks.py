@@ -108,7 +108,31 @@ async def test_a_gate_over_a_summary_names_the_missing_hunks() -> None:
     assert not outcome.is_error, outcome.text
     assert outcome.payload["action"] != "auto"
     assert outcome.payload["next_checks"][-1] == NO_HUNKS_CHECK
-    assert "claims_unsupported" in outcome.payload["reason_codes"]  # the codes are untouched
+    assert "claims_unsupported" in outcome.payload["reason_codes"]
+    (blocker,) = outcome.payload["blockers"]
+    assert (blocker["claim_id"], blocker["value"], blocker["confidence"]) == ("claim0", "unsupported", 0.9)
+    assert blocker["next_check"] in outcome.payload["next_checks"]
+
+
+async def test_high_confidence_adverse_levels_explain_a_composite_only_hold() -> None:
+    args = {"request": "add the cache", "diff": _PATCH, "claims": ["the cache is wired"], "evidence": "x = 1 set"}
+    answers = {
+        **_REVIEW,
+        **_VERIFIED,
+        "correctness": {"score": 0, "confidence": 0.99},
+        "test_gap": {"score": 2, "confidence": 0.99},
+    }
+    outcome = await call_tool("jev_gate", args, answers)
+    assert outcome.payload["action"] == "review"
+    (blocker,) = outcome.payload["blockers"]
+    assert blocker["code"] == "composite_below_floor"
+    assert blocker["value"] == pytest.approx(0.45)
+    assert blocker["threshold"] == 0.7
+    assert {k for k, row in blocker["rubrics"].items() if row["level_assessment"] == "adverse"} == {
+        "correctness",
+        "test_gap",
+    }
+    assert blocker["next_check"] in outcome.payload["next_checks"]
 
 
 async def test_a_real_patch_or_an_accepted_call_carries_no_hint() -> None:
@@ -136,8 +160,8 @@ async def test_a_file_list_gate_checks_each_patch_for_trimming() -> None:
     assert EXCERPT_CHECK in outcome.payload["next_checks"]
 
 
-def test_only_the_tests_argument_reaches_the_review() -> None:
-    """Evidence of any kind feeds the claims; the review reads `request`, `diff`, and `tests` only."""
+def test_the_dedicated_test_log_is_distinguished_from_general_evidence() -> None:
+    """General evidence has no dedicated test-log provenance."""
     log = {"id": "ci", "text": "5 passed", "kind": "tool_output"}
     assert review_saw_tests({"tests": "5 passed", "evidence": [log]})
     assert not review_saw_tests({"evidence": [log]})
@@ -150,7 +174,6 @@ def test_the_review_only_hint_follows_whether_the_review_saw_tests() -> None:
     assert unseen[-1] == REVIEW_ONLY_CHECK
     assert REVIEW_SAW_TESTS_CHECK not in unseen
     assert "pass the log as tests or tests_path" in REVIEW_ONLY_CHECK
-    assert "a file list's per-file reviews never see evidence" in REVIEW_ONLY_CHECK
 
 
 async def test_a_gate_whose_test_log_sat_in_evidence_is_told_to_pass_it_as_tests() -> None:

@@ -18,11 +18,12 @@ _HONOR = (
     "auto means the row stands and you may proceed. "
     "review means you still own the row and must confirm it before proceeding. "
     "escalate means stop and decide yourself. This server does not call another model. "
-    "Ignoring escalate is not a pass."
+    "Read blockers for the failing file or claim, the comparison, and the next check. Ignoring escalate is not a pass."
 )
 _PACK = (
     "For a change in git, jev_gate_range reads the range itself. jev_gate and jev_review read no files: "
     "pass the real git diff, whole or as a {path, patch} file list, never an excerpt or summary. "
+    "File reviews receive bounded evidence and sibling patches. "
     "Re-sending with the full diff or raw logs is a new call, not a re-ask."
 )
 ON_DEMAND = (

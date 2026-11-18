@@ -54,6 +54,30 @@ def expect_program(
     return rewritten_bodies, stringify(payload), is_error
 
 
+def frozen_review_fields(actual: str, expected: str) -> str:
+    """Compare the recorded wire independently of ADR-0081's additive diagnostics.
+
+    Keep the original action, fields, order, reason codes and checks. Only the extensions declared
+    by a held response's blockers are allowed. The gate boundary tests own their semantic content.
+    """
+    if not expected.startswith("{"):
+        return actual
+    original = json.loads(expected)
+    if original.get("tool") not in ("jev_gate", "jev_review") or original.get("action") not in ("escalate", "review"):
+        return actual
+    observed = json.loads(actual)
+    assert stringify(observed) == actual
+    blockers = observed.pop("blockers")
+    assert blockers and all(row["field"] and row["next_check"] for row in blockers)
+    if original["tool"] == "jev_gate":
+        codes = original["reason_codes"]
+        checks = original["next_checks"]
+        assert observed["reason_codes"] == list(dict.fromkeys([*codes, *(row["code"] for row in blockers)]))
+        assert observed["next_checks"] == list(dict.fromkeys([*(row["next_check"] for row in blockers), *checks]))
+        observed.update(reason_codes=codes, next_checks=checks)
+    return stringify(observed)
+
+
 def _rewrite_body(body: Any) -> Any:
     if not isinstance(body, dict) or "questions" not in body:
         return body

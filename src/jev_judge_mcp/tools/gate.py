@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question
+from jev_judge_mcp.gate_diagnostics import explain_gate, input_cuts, review_blockers
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.policy import Action, ClaimJudgment, ClaimVerdict, PolicyThresholds
@@ -70,7 +71,7 @@ DEFINITION = define(
     "only when the patch review is accepted and every claim is verified at or above auto_accept. Unsupported claims "
     "require review; confident contradictions, unknown confidence, or low confidence escalate. The request and "
     "claims are assertions to check, never proof. Pass the real git diff as diff, whole or as a {path, patch} file "
-    "list, and raw test output in tests (a file list's per-file reviews never see evidence); an excerpt, "
+    "list, and raw test output in tests. File reviews include bounded caller evidence and sibling patches. An excerpt, "
     "paraphrase, or path is judged as written and "
     "scores low. The diff and tests are each sent twice, so a diff near its cap can overflow the model's window: "
     "pass a file list or split the gate by concern. Evidence "
@@ -309,6 +310,8 @@ async def _ask_gate(
         "verification": verification.payload,
         **renamed_ids_field(renamed),
     }
+    cuts = input_cuts(args, evidence) if truncated else []
+    explain_gate(body, [*review_blockers(review.payload), *cuts], verification_cut=truncated)
     return GateAsk(body, action, evaluation, ledger.scopes)
 
 
@@ -394,7 +397,8 @@ def _verify_claims(
 
 _FILE_REVIEW_PURPOSE = (
     "Review one file of the proposed multi-file patch against the request; tests is reported "
-    "test output. Completion claims are checked against the evidence in a separate step, "
+    "test output. Judge the target path and diff using related_files and evidence as context. "
+    "Completion claims are checked against the evidence in a separate step, "
     "and this review is not evidence for them."
 )
 """The per-file review state's framing: no claims ride with a file review (ADR-0066 amendment)."""
@@ -420,7 +424,7 @@ async def _handle_file_list(
     if refusal is not None:
         return _refused(refusal)
     reviewed = await review_file_list(
-        files, args, runtime, settings, purpose=_FILE_REVIEW_PURPOSE, doc_units=GATE.doc_units
+        files, args, runtime, settings, purpose=_FILE_REVIEW_PURPOSE, doc_units=GATE.doc_units, evidence=evidence
     )
     if not reviewed.halves:
         unasked: dict[str, object] = {
@@ -430,6 +434,7 @@ async def _handle_file_list(
             "reason_codes": ["incomplete_context"],
             "next_checks": next_checks_for(["incomplete_context"]),
         }
+        explain_gate(unasked, reviewed.blockers)
         return ToolResult(frame("jev_gate", None, unasked, model=runtime.model), action="review")
     # One verification ask: every claim and source question once, the evidence sent once. The
     # fitting files join the evidence as one implicit diff item per file, so a claim can rest on
@@ -503,6 +508,8 @@ async def _handle_file_list(
         "partial": bool(reviewed.unreviewed),
         "unreviewed_files": reviewed.unreviewed,
     }
+    cuts = input_cuts(args, evidence) if ledger.context_cut else []
+    explain_gate(payload, [*reviewed.blockers, *cuts], verification_cut=ledger.context_cut)
     return ToolResult(
         frame("jev_gate", combined([*reviewed.evaluations, evaluation]), payload), action=action, truncated=scopes
     )

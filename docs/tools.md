@@ -182,6 +182,10 @@ the call `partial`, and keeps it off `auto` (ADR-0066).
 **Not for** producing a rewritten patch, style review, or replacing the test run — it reads what
 you pass (ADR-0063: diff and tests count as evidence when you do not pass them explicitly).
 
+A held review includes `blockers` with the triggering field, observed value, applicable threshold,
+and a next check. Rubric confidence blockers also show the score, nearest level and whether that
+level is favorable, intermediate or adverse.
+
 ## jev_gate — did the work finish
 
 **Use when** a patch plus completion claims plus test logs should produce one ship decision with
@@ -200,6 +204,19 @@ turns on the worst file (ADR-0066). Evidence is capped at 16 items and 200,000 a
 units; over either is an `input_too_large` error telling you to split the gate. Those UTF-16 caps
 are not the 64k token window: a gate state inside them can still come back as `input_too_large` (ADR-0079):
 split the call. The claim half also receives the diff and the tests again as implicit evidence (ADR-0063), so those bytes are in the state twice: about 100k extra UTF-16 units when both are at the 50,000 cap.
+
+**Reading a held gate.** Use `blockers` for file-by-file and claim-by-claim comparisons. For
+example, `spec_match_confidence_below_review_at` can report a favorable level, confidence 0.49
+and threshold 0.5. Check the requirement against its implementation. Existing summary reason
+codes remain. A file review receives the request, target path and patch, and tests. Complete
+caller evidence items and sibling patches share a supplemental UTF-16 budget per review. If
+anything is omitted, `file_context_over_budget` identifies what needs inspection and prevents
+auto. Claims are still verified once. See [ADR-0081](adr/0081-gate-diagnostics-and-file-context.md).
+
+From another git worktree run `jev-judge-mcp gate --diff BASE..HEAD --claims claims.txt
+--tests test.log --request "requirement"` in that worktree. A range over the aggregate input budget returns `input_too_large` before a judgment. The same admission caps apply.
+For changes exceeding the caps, separate concern-level decisions require an independent
+cross-file review.
 
 **Not for** a substitute for CI or tests — it judges the claims you pass against the evidence you
 pass, and never runs anything itself.

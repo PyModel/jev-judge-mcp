@@ -1,0 +1,39 @@
+---
+status: accepted
+---
+# ADR-0081. Explain held gates and bound the context shared between file reviews
+
+## Context
+
+The frozen review returns the worst action across safety, rubric confidence and the composite.
+A file list can publish a different file's score vector from the file that caused that action.
+The rubric on an implementation file could not see a sibling regression test or caller evidence.
+
+## Decision
+
+Extend ADR-0062's response fields and amend the per-file state in ADR-0066. A non-auto gate
+publishes ordered `blockers`. Each identifies its field, value, comparison and threshold where
+applicable, a focused next check, and its file or claim where applicable. Rubric confidence
+includes the observed score and its interpreted level. A composite miss includes all levels.
+Invalid responses name the missing usable field. Truncations report UTF-16 lengths and limits.
+The gate adds specific codes and next checks alongside existing summaries. A review also
+publishes its own blockers. Numeric policy, claim policy and aggregation remain owned by ADR-0002.
+
+Each fitting file receives its own complete patch, request and dedicated tests. Supplemental
+context includes its path, complete caller evidence records in order, and complete fitting
+sibling patches in input order. Use the existing budgets: per review the allowance is the
+smaller of one document and the aggregate divided by the number of fitting files, rounded down.
+Count the compact JSON in UTF-16 including delimiters. Skip records too large for the remaining
+allowance and continue packing shorter records. Missing records index `evidence` and
+`reviewed_files` in input order. Report missing entries and apply the existing
+incomplete-context clamp. Oversized primary patches keep their separate unreviewed disposition.
+Completion claims and source questions still run once against the canonical evidence.
+
+## Consequences
+
+At most one existing aggregate allowance of supplemental context is replicated across file
+reviews. Output can grow with the number of held files and claims. A low confidence can coexist
+with a favorable level. A next check identifies evidence to inspect. Only an independent check
+can establish the specific defect. The server's git boundary and provider token limit still apply.
+The local CLI can read a different working tree from its own process. Its bounded git reader
+returns `input_too_large` on overflow, matching the range tool and the CLI's other budget errors.

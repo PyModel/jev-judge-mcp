@@ -13,9 +13,11 @@ from typing import Any, cast
 import anyio
 
 from jev_judge_mcp.domain import Usage
+from jev_judge_mcp.gate_diagnostics import Blocker, review_blockers, size_blocker
 from jev_judge_mcp.limits import GATE, GateCaps
 from jev_judge_mcp.policy import Action
 from jev_judge_mcp.providers import Evaluation
+from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import Runtime, ToolError
 from jev_judge_mcp.tools.observed import worst_action
@@ -92,6 +94,8 @@ class FileListReview:
     """Whether any file's documents were cut; an unreviewed file is `partial`, never a cut."""
     scopes: frozenset[CapScope]
 
+    blockers: list[Blocker]
+
     def review_half(self, action: Action) -> dict[str, object]:
         """The review half both tools publish: the first reviewed file's half under `action`, then
         `score_file`, `reviewed_files`, and `file_actions` (ADR-0066 amendment). `tests_weight` is
@@ -106,6 +110,45 @@ class FileListReview:
         return payload
 
 
+def _wire_units(value: object) -> int:
+    return length(stringify_compact(value))
+
+
+def _file_context(
+    index: int,
+    peers: Sequence[tuple[dict[str, str], int]],
+    sources: Sequence[tuple[Mapping[str, object], int]],
+    limit: int,
+) -> tuple[dict[str, object], int, list[str]]:
+    """Pack complete supplemental records. Count the encoded keys, separators and UTF-16 text."""
+    path = peers[index][0]["path"]
+    context: dict[str, object] = {"path": "", "evidence": [], "related_files": []}
+    used = _wire_units(context)
+    path_units = _wire_units(path) - 2
+    required = used + path_units
+    omitted: list[str] = []
+    if required <= limit:
+        context["path"] = path
+        used = required
+    else:
+        omitted.append("path")
+    for field, items in (("evidence", sources), ("related_files", [*peers[:index], *peers[index + 1 :]])):
+        packed: list[Mapping[str, object]] = []
+        for position, (item, units) in enumerate(items):
+            required += units + int(position > 0)
+            cost = units + int(bool(packed))
+            if used + cost <= limit:
+                packed.append(item)
+                used += cost
+            elif field == "related_files":
+                sibling = position if position < index else position + 1
+                omitted.append(f"reviewed_files[{sibling}]")
+            else:
+                omitted.append(f"evidence[{position}]")
+        context[field] = packed
+    return context, required, omitted
+
+
 async def review_file_list(
     files: Sequence[Mapping[str, str]],
     args: dict[str, Any],
@@ -114,6 +157,7 @@ async def review_file_list(
     *,
     purpose: str,
     doc_units: int,
+    evidence: Sequence[Mapping[str, object]] = (),
 ) -> FileListReview:
     """One review request per file under `doc_units`; a file over it is unreviewed (ADR-0066).
 
@@ -128,14 +172,22 @@ async def review_file_list(
     failures: list[tuple[int, Exception]] = []
 
     fan_out = anyio.CapacityLimiter(REVIEW_FANOUT)
+    context_limit = min(doc_units, GATE.aggregate_evidence_units // max(1, len(fitting)))
+    peers = [(file, _wire_units(file)) for file in fitting]
+    sources = [(item, _wire_units(item)) for item in evidence]
+    omitted: dict[int, Blocker] = {}
 
     async def review(index: int) -> None:
         ledger = CapLedger()
         try:
             docs = review_docs({**args, "diff": fitting[index]["patch"]}, ledger, doc_units)
+            extra, required, missing = _file_context(index, peers, sources, context_limit)
+            if required > context_limit:
+                ledger.note("context")
+                omitted[index] = {**size_blocker("file_context", required, context_limit), "omitted": missing}
             async with fan_out:
                 evaluation = await runtime.ask(
-                    {"purpose": purpose, "request": docs.request, "diff": docs.diff, "tests": docs.tests},
+                    {"purpose": purpose, "request": docs.request, "diff": docs.diff, "tests": docs.tests, **extra},
                     review_questions(),
                 )
         except Exception as error:
@@ -161,17 +213,30 @@ async def review_file_list(
     unhashed_tests = False
     truncated = False
     scopes: frozenset[CapScope] = frozenset()
-    for item, result in zip(fitting, asked, strict=True):
+    blockers: list[Blocker] = []
+    for index, (item, result) in enumerate(zip(fitting, asked, strict=True)):
         assert result is not None  # every task either stored its result or recorded a failure
         ledger, docs, evaluation = result
-        halves.append(project_review(evaluation.answers, settings, ledger.context_cut))
+        half = project_review(evaluation.answers, settings, ledger.context_cut)
+        halves.append(half)
+        reasons = review_blockers(half.payload)
+        if index in omitted:
+            reasons.append(omitted[index])
+        blockers.extend({**reason, "path": item["path"]} for reason in reasons)
         evaluations.append(evaluation)
         reviewed_paths.append(item["path"])
         if docs.tests and not args.get("tests_sha256"):
             unhashed_tests = True
         truncated = truncated or ledger.context_cut
         scopes |= ledger.scopes
-    return FileListReview(halves, evaluations, reviewed_paths, unreviewed, fitting, unhashed_tests, truncated, scopes)
+    blockers.extend(
+        {**size_blocker("patch", units, doc_units), "path": item["path"]}
+        for item in files
+        if (units := length(item["patch"])) > doc_units
+    )
+    return FileListReview(
+        halves, evaluations, reviewed_paths, unreviewed, fitting, unhashed_tests, truncated, scopes, blockers
+    )
 
 
 def combined(evaluations: list[Evaluation]) -> Evaluation:

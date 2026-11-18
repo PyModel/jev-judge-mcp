@@ -7,6 +7,7 @@ Both are re-exported here for their callers.
 
 from typing import Any
 
+from jev_judge_mcp.gate_diagnostics import input_cuts, review_blockers
 from jev_judge_mcp.limits import REVIEW
 from jev_judge_mcp.responses import SCORE_SCALE
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
@@ -119,6 +120,9 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     }
     evaluation = await runtime.ask(state, review_questions())
     review = project_review(evaluation.answers, settings, truncated)
+    if review.action != "auto":
+        cuts = input_cuts(args, [], REVIEW.doc_units) if truncated else []
+        review.payload["blockers"] = [*review_blockers(review.payload), *cuts]
     if docs.tests and not args.get("tests_sha256"):
         review.payload["tests_weight"] = "self_reported"
     return ToolResult(
@@ -148,6 +152,7 @@ async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: Re
             "partial": True,
             "unreviewed_files": reviewed.unreviewed,
             "score_scale": list(SCORE_SCALE),
+            "blockers": reviewed.blockers,
         }
         return ToolResult(frame("jev_review", None, payload, model=runtime.model), action="review")
     action = file_list_action([half.action for half in reviewed.halves], bool(reviewed.unreviewed))
@@ -155,6 +160,9 @@ async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: Re
     payload = {"truncated": reviewed.truncated, **reviewed.review_half(action)}
     payload["partial"] = bool(reviewed.unreviewed)
     payload["unreviewed_files"] = reviewed.unreviewed
+    if action != "auto":
+        cuts = input_cuts(args, [], REVIEW.doc_units) if reviewed.truncated else []
+        payload["blockers"] = [*reviewed.blockers, *cuts]
     if reviewed.unhashed_tests:
         payload["tests_weight"] = "self_reported"
     return ToolResult(
