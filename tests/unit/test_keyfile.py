@@ -10,13 +10,6 @@ from jev_judge_mcp.keyfile import KEY_FILE_BYTES_MAX, redaction_values, store_ke
 from jev_judge_mcp.settings import Settings, load_settings
 
 
-@pytest.fixture(autouse=True)
-def isolated_key_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    path = tmp_path / "config" / "key"
-    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(path))
-    return path
-
-
 def settings() -> Settings:
     return load_settings()
 
