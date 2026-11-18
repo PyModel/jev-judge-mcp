@@ -24,9 +24,13 @@ context includes its path, complete caller evidence records in order, and comple
 sibling patches in input order. Use the existing budgets: per review the allowance is the
 smaller of one document and the aggregate divided by the number of fitting files, rounded down.
 Count the compact JSON in UTF-16 including delimiters. Skip records too large for the remaining
-allowance and continue packing shorter records. Missing records index `evidence` and
-`reviewed_files` in input order. Report missing entries and apply the existing
-incomplete-context clamp. Oversized primary patches keep their separate unreviewed disposition.
+allowance and continue packing shorter records. When a supplemental record is omitted, the
+review publishes an informational `context_omissions` list in reviewed-file order. Each row gives
+the target `path` and `reviewed_file_index`, the full `required_units` and `limit_units` in UTF-16,
+and the omitted `path`, `evidence[i]` or `reviewed_files[i]` entries. A gate returns this list in
+its `review` object. Supplemental omissions leave actions, summary codes, next checks and coverage
+flags unchanged for the same judgments. Cuts to primary documents still mark truncation.
+Oversized primary patches keep their separate unreviewed disposition.
 Completion claims and source questions still run once against the canonical evidence.
 
 ## Consequences

@@ -229,7 +229,7 @@ Rules:
   read no files. Paste the real `git diff` output, never an excerpt, a paraphrase, an elided
   `...`, a path, or "see evidence item". A large change goes as a `[{path, patch}]` file list or
   as separate calls split by concern. Test logs go in `tests` (`tests_path` for
-  `jev_gate_range`) as the raw pass/fail lines. Per-file gates also read bounded caller evidence and sibling patches.
+  `jev_gate_range`) as the raw pass/fail lines. Per-file gates read caller evidence and sibling patches as space permits. The review lists optional omissions in `context_omissions`.
 - **Act on `action`:** `auto` → proceed · `review` → confirm with tests, source reading, or a
   stronger check · `escalate` → stop and surface it. `invalid_response` → the row is unjudged;
   leave it without a verdict.

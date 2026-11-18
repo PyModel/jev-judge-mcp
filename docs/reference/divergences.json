@@ -749,7 +749,7 @@
       ],
       "fixtures": [],
       "reference_behavior": "Review thresholds are applied to the returned scores. Gate reasons summarize the review action.",
-      "python_behavior": "Held reviews and gates report each failing comparison and next check, also for sibling files. The file-list extension shares bounded evidence and peer patches. String fixture projections extend program-response-fields."
+      "python_behavior": "Held reviews and gates report each failing comparison and next check, also for sibling files. The file-list extension shares bounded evidence and peer patches and reports optional omissions separately from the decision. String fixture projections extend program-response-fields."
     }
   ]
 }

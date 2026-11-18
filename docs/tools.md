@@ -208,10 +208,12 @@ split the call. The claim half also receives the diff and the tests again as imp
 **Reading a held gate.** Use `blockers` for file-by-file and claim-by-claim comparisons. For
 example, `spec_match_confidence_below_review_at` can report a favorable level, confidence 0.49
 and threshold 0.5. Check the requirement against its implementation. Existing summary reason
-codes remain. A file review receives the request, target path and patch, and tests. Complete
-caller evidence items and sibling patches share a supplemental UTF-16 budget per review. If
-anything is omitted, `file_context_over_budget` identifies what needs inspection and prevents
-auto. Claims are still verified once. See [ADR-0081](adr/0081-gate-diagnostics-and-file-context.md).
+codes remain. The request, target patch and tests are the primary review inputs. The target path,
+caller evidence items and sibling patches share a supplemental UTF-16 budget. When any of these
+are omitted, `jev_review.context_omissions` or the gate’s `review.context_omissions` lists each
+target path and index, required and allowed units, and omitted entries. This field is informational
+on every action, including auto. Coverage flags and decisions still follow the primary inputs and
+judgments. Claims are verified once against the canonical evidence. See [ADR-0081](adr/0081-gate-diagnostics-and-file-context.md).
 
 From another git worktree run `jev-judge-mcp gate --diff BASE..HEAD --claims claims.txt
 --tests test.log --request "requirement"` in that worktree. A range over the aggregate input budget returns `input_too_large` before a judgment. The same admission caps apply.

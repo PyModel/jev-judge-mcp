@@ -95,6 +95,7 @@ class FileListReview:
     scopes: frozenset[CapScope]
 
     blockers: list[Blocker]
+    context_omissions: list[dict[str, object]]
 
     def review_half(self, action: Action) -> dict[str, object]:
         """The review half both tools publish: the first reviewed file's half under `action`, then
@@ -107,6 +108,8 @@ class FileListReview:
         payload["file_actions"] = file_actions(
             zip(self.reviewed_paths, [half.action for half in self.halves], strict=True)
         )
+        if self.context_omissions:
+            payload["context_omissions"] = self.context_omissions
         return payload
 
 
@@ -175,16 +178,21 @@ async def review_file_list(
     context_limit = min(doc_units, GATE.aggregate_evidence_units // max(1, len(fitting)))
     peers = [(file, _wire_units(file)) for file in fitting]
     sources = [(item, _wire_units(item)) for item in evidence]
-    omitted: dict[int, Blocker] = {}
+    omissions: dict[int, dict[str, object]] = {}
 
     async def review(index: int) -> None:
         ledger = CapLedger()
         try:
             docs = review_docs({**args, "diff": fitting[index]["patch"]}, ledger, doc_units)
             extra, required, missing = _file_context(index, peers, sources, context_limit)
-            if required > context_limit:
-                ledger.note("context")
-                omitted[index] = {**size_blocker("file_context", required, context_limit), "omitted": missing}
+            if missing:
+                omissions[index] = {
+                    "path": fitting[index]["path"],
+                    "reviewed_file_index": index,
+                    "required_units": required,
+                    "limit_units": context_limit,
+                    "omitted": missing,
+                }
             async with fan_out:
                 evaluation = await runtime.ask(
                     {"purpose": purpose, "request": docs.request, "diff": docs.diff, "tests": docs.tests, **extra},
@@ -214,15 +222,12 @@ async def review_file_list(
     truncated = False
     scopes: frozenset[CapScope] = frozenset()
     blockers: list[Blocker] = []
-    for index, (item, result) in enumerate(zip(fitting, asked, strict=True)):
+    for item, result in zip(fitting, asked, strict=True):
         assert result is not None  # every task either stored its result or recorded a failure
         ledger, docs, evaluation = result
         half = project_review(evaluation.answers, settings, ledger.context_cut)
         halves.append(half)
-        reasons = review_blockers(half.payload)
-        if index in omitted:
-            reasons.append(omitted[index])
-        blockers.extend({**reason, "path": item["path"]} for reason in reasons)
+        blockers.extend({**reason, "path": item["path"]} for reason in review_blockers(half.payload))
         evaluations.append(evaluation)
         reviewed_paths.append(item["path"])
         if docs.tests and not args.get("tests_sha256"):
@@ -235,7 +240,16 @@ async def review_file_list(
         if (units := length(item["patch"])) > doc_units
     )
     return FileListReview(
-        halves, evaluations, reviewed_paths, unreviewed, fitting, unhashed_tests, truncated, scopes, blockers
+        halves,
+        evaluations,
+        reviewed_paths,
+        unreviewed,
+        fitting,
+        unhashed_tests,
+        truncated,
+        scopes,
+        blockers,
+        [omissions[index] for index in sorted(omissions)],
     )
 
 

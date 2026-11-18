@@ -721,7 +721,43 @@ async def test_gate_explains_the_second_files_confidence_at_the_requested_thresh
     assert blocker["next_check"] in outcome.payload["next_checks"]
 
 
-async def test_context_that_cannot_fit_is_named_and_cannot_clear_the_file() -> None:
+def _patches(count: int, units: int) -> list[dict[str, str]]:
+    return [{"path": f"src/f{i}.py", "patch": "+" + "x" * (units - 1)} for i in range(count)]
+
+
+async def test_gate_keeps_the_accepted_decision_across_file_list_sizes() -> None:
+    # Pack all seven admitted changes. Four exhaust the optional peer budget on each file.
+    for count, units in ((2, 2000), (4, 4000), (6, 6000), (10, 3000), (10, 7000), (20, 2000), (30, 1000)):
+        args = {
+            "request": "fix the parser",
+            "diff": _patches(count, units),
+            "tests": "2 passed",
+            "claims": ["parser fixed"],
+            "evidence": [{"id": "log", "text": "2 passed"}],
+        }
+        outcome = await call_tool("jev_gate", args, _GATE_ANSWERS)
+        body = outcome.payload
+        assert (body["action"], body["reason_codes"]) == ("auto", ["accepted"]), (count, units)
+        assert body["next_checks"] == ["The row stands. Proceed."]
+        assert "blockers" not in body
+        assert body["truncated"] is False and body["partial"] is False
+        if count == 10 and units == 3000:
+            assert [row["path"] for row in body["review"]["context_omissions"]] == [f"src/f{i}.py" for i in range(10)]
+
+
+async def test_review_stands_when_only_supplemental_siblings_do_not_fit() -> None:
+    args = {"request": "fix the parser", "diff": _patches(10, 3000), "tests": "2 passed"}
+    outcome = await call_tool("jev_review", args, _REVIEW_ANSWERS)
+    body = outcome.payload
+    assert body["action"] == "auto"
+    assert body["truncated"] is False and body["partial"] is False
+    assert "blockers" not in body
+    first = body["context_omissions"][0]
+    assert first["path"] == "src/f0.py"
+    assert first["omitted"] == ["reviewed_files[7]", "reviewed_files[8]", "reviewed_files[9]"]
+
+
+async def test_omitted_supplemental_evidence_is_named_on_an_accepted_gate() -> None:
     args = {
         "request": "fix the parser",
         "diff": [{"path": "a", "patch": "+ a"}],
@@ -729,8 +765,15 @@ async def test_context_that_cannot_fit_is_named_and_cannot_clear_the_file() -> N
         "evidence": [{"id": "large", "text": "x" * GATE.doc_units}],
     }
     outcome = await call_tool("jev_gate", args, _GATE_ANSWERS)
-    assert outcome.payload["action"] == "review"
-    assert outcome.payload["blockers"][0]["omitted"] == ["evidence[0]"]
-    assert outcome.payload["blockers"][0]["field"] == "file_context"
-    assert outcome.payload["blockers"][0]["path"] == "a"
-    assert outcome.payload["blockers"][0]["value"] > outcome.payload["blockers"][0]["threshold"]
+    assert outcome.payload["action"] == "auto"
+    assert outcome.payload["reason_codes"] == ["accepted"]
+    assert outcome.payload["next_checks"] == ["The row stands. Proceed."]
+    assert "blockers" not in outcome.payload
+    (omission,) = outcome.payload["review"]["context_omissions"]
+    assert omission["path"] == "a"
+    assert omission["omitted"] == ["evidence[0]"]
+    assert omission["required_units"] > omission["limit_units"] == GATE.doc_units
+    file_state, claim_state = outcome.requests[0][0], outcome.requests[-1][0]
+    assert isinstance(file_state, dict) and file_state["evidence"] == []
+    assert isinstance(claim_state, dict) and isinstance(claim_state["evidence"], list)
+    assert {"id": "large", "text": "x" * GATE.doc_units} in claim_state["evidence"]
