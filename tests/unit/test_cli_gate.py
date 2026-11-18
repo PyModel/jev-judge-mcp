@@ -10,6 +10,7 @@ import pytest
 from jev_judge_mcp import cli
 from jev_judge_mcp.cli import completion_hook_main, completion_matches, gate_main, judge_main
 from jev_judge_mcp.git_diff import split_unified
+from jev_judge_mcp.limits import GATE
 from tests.support.git_repo import repo_with_diff
 from tests.support.jev import FakeProvider
 
@@ -87,6 +88,20 @@ def test_gate_refuses_a_path_outside_the_repo(tmp_path: Path, capsys: pytest.Cap
     envelope = json.loads(captured.out)
     assert envelope["error"]["code"] == "invalid_arguments"
     assert envelope["action"] is None
+
+
+def test_cli_names_the_budget_when_git_stops_reading_an_oversized_diff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = repo_with_diff(tmp_path)
+    (repo / "x.py").write_text("x" * (4 * GATE.aggregate_evidence_units), encoding="utf-8")
+    monkeypatch.chdir(repo)
+    provider = FakeProvider({})
+    code = gate_main(["--diff", "HEAD", "--claims", "claims.json", "--tests", "tests.log"], provider=provider)
+    error = json.loads(capsys.readouterr().out)["error"]
+    assert code == 2
+    assert error["code"] == "input_too_large"
+    assert not provider.requests
 
 
 def test_completion_hook_abstains_unless_the_command_is_push_or_pr(
