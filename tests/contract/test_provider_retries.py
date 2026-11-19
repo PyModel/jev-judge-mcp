@@ -553,3 +553,18 @@ async def test_a_caller_deadline_on_a_single_attempt_keeps_todays_timeout_text()
 
     assert str(caught.value) == "Jev-compatible endpoint request timed out after 0.05 s. Completion is uncertain."
     assert len(sent) == 1
+
+
+@pytest.mark.parametrize(
+    ("failure", "uncertain"),
+    [(httpx.ReadTimeout("late"), True), (httpx.ConnectTimeout("early"), False), (httpx.Response(503), True)],
+)
+async def test_single_attempt_carries_delivery_metadata(failure: object, uncertain: bool) -> None:
+    sent: list[httpx.Request] = []
+    with respx.mock() as router:
+        router.post(URL).mock(side_effect=serving([failure], sent))
+        with pytest.raises(ProviderError) as caught:
+            await evaluate(provider(NO_RETRIES))
+    assert len(sent) == 1
+    assert "Completion is uncertain" not in str(caught.value)
+    assert caught.value.delivery_uncertain is uncertain

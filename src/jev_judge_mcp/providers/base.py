@@ -60,6 +60,10 @@ class ProviderError(Exception):
     that status). The kernel maps it to an error code; the text is not parsed (ADR-0062 amendment).
     """
 
+    def __init__(self, message: str, *, delivery_uncertain: bool = False) -> None:
+        super().__init__(message)
+        self.delivery_uncertain = delivery_uncertain
+
     status: int | None = None
     """The HTTP status of a status error; `None` on every other failure. Drives retry classification
     and the kernel's error code."""
@@ -98,6 +102,7 @@ def _redacted(error: ProviderError, redact: Redactor, note: str = "") -> Provide
     `type(error)(text)` alone drops `status`. A 401 would then code `provider` (ADR-0072).
     """
     redacted = type(error)(redact(str(error)) + note)
+    redacted.delivery_uncertain = error.delivery_uncertain
     redacted.status = error.status
     redacted.retry_after = error.retry_after
     redacted.error_type = error.error_type
@@ -297,11 +302,15 @@ class JevProvider(ABC):
             # Redact the text, but keep the status the raise site recorded. Dropping it made a 401
             # look like a generic provider error once the text was no longer parsed (ADR-0072).
             ambiguous = isinstance(error, ProviderDeliveryError) or error.status == 408 or (error.status or 0) >= 500
-            raise _redacted(error, self._redact, uncertain if ambiguous else "") from None
+            error.delivery_uncertain |= ambiguous
+            raise _redacted(error, self._redact, uncertain if error.delivery_uncertain else "") from None
         except (TimeoutError, httpx.TimeoutException) as error:
-            note = "" if isinstance(error, (httpx.ConnectTimeout, httpx.PoolTimeout)) else uncertain
+            ambiguous = not isinstance(error, (httpx.ConnectTimeout, httpx.PoolTimeout))
+            note = uncertain if ambiguous else ""
             after = "" if timeout is None else f" after {timeout:g} s"
-            raise ProviderTimeoutError(f"{self.label} request timed out{after}.{note}") from None
+            raise ProviderTimeoutError(
+                f"{self.label} request timed out{after}.{note}", delivery_uncertain=ambiguous
+            ) from None
         except Exception as error:
             # The original may carry a secret-bearing URL or header; only the redacted text leaves.
             # Some carry no message at all (a reset is a bare `RemoteProtocolError`): name the type.
@@ -311,7 +320,9 @@ class JevProvider(ABC):
                 (httpx.ReadError, httpx.WriteError, httpx.CloseError, httpx.RemoteProtocolError, ConnectionResetError),
             )
             note = uncertain if ambiguous else ""
-            raise ProviderError(self._redact(f"{self.label} request failed: {cause}") + note) from None
+            raise ProviderError(
+                self._redact(f"{self.label} request failed: {cause}") + note, delivery_uncertain=ambiguous
+            ) from None
 
     def _transient(self, error: Exception) -> TransientFailure | None:
         """The retryable transport failure `error` describes, or `None` when it must not be retried.

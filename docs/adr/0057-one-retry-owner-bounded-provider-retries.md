@@ -133,3 +133,7 @@ backoff retain their existing bounds.
 Providers request identity encoding and cap successful responses at 8 MiB and errors at 64 KiB.
 An encoding the client did not request or a body exceeding the applicable bound ends the call
 before JSON decoding.
+
+Paid callers inspecting a provider failure can read `ProviderError.delivery_uncertain` under every
+retry policy, including `NO_RETRIES`. A true value means the provider may have accepted the
+evaluation. The single-attempt message retains its historical wording.

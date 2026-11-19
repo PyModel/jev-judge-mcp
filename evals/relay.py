@@ -21,6 +21,7 @@ What a row holds is the recorder's business: `evals.ab.proxy` logs no arguments 
 
 import json
 import os
+import re
 import select
 import stat
 import subprocess
@@ -51,7 +52,7 @@ class Recorder(Protocol):
 def decode(line: bytes) -> object:
     try:
         return json.loads(line)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (ValueError, RecursionError):
         return None
 
 
@@ -77,7 +78,8 @@ object, or a key of each item in a list. Screen counts only its `review`; compar
 
 def headline_action(body: dict[str, Any]) -> str | None:
     """The tool's one headline Action: the most severe Action it returned, or None when it returned none."""
-    path = HEADLINE_TOOLS.get(str(body.get("tool")))
+    tool = body.get("tool")
+    path = HEADLINE_TOOLS.get(tool) if isinstance(tool, str) else None
     if path is None:
         return None
     values: list[object] = [body.get(path[0])]
@@ -96,15 +98,32 @@ def result_fields(message: dict[str, Any]) -> dict[str, Any]:
     text = result_text(message)
     try:
         payload = json.loads(text) if isinstance(text, str) else None
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
         payload = None
     if isinstance(payload, dict):
         body = cast(dict[str, Any], payload)
         usage = body.get("usage")
-        row["input_tokens"] = cast(dict[str, Any], usage).get("input_tokens") if isinstance(usage, dict) else None
-        row["action"] = body.get("action")
+        metering = cast(dict[str, Any], usage) if isinstance(usage, dict) else {}
+        count = metering.get("input_tokens")
+        row["input_tokens"] = count if type(count) is int and 0 <= count < 2**63 else None
+        if "reported" in metering:
+            row["usage_reported"] = metering["reported"] is True
+        elif usage is None and body.get("provider") == "none":
+            row["input_tokens"] = 0
+            row["usage_reported"] = True
+        elif count == 0:
+            # Older children cannot distinguish an unmetered response from a measured zero.
+            row["usage_reported"] = False
+        action = body.get("action")
+        row["action"] = action if action in ACTIONS else None
         row["headline_action"] = headline_action(body)
-        row["model"] = body.get("model")
+        model = body.get("model")
+        row["model"] = (
+            model
+            if isinstance(model, str)
+            and re.fullmatch(r"(?:typesafe/)?jev(?:-latest|-\d{1,3}(?:\.\d{1,3}){1,2})?", model, re.ASCII)
+            else None
+        )
     return row
 
 
@@ -117,14 +136,14 @@ def pending_key(message_id: object) -> str:
     return json.dumps(message_id)
 
 
-def _tool_name(message: dict[str, Any]) -> str | None:
+def tool_name(message: dict[str, Any]) -> str | None:
     params = message.get("params")
     name: object = None
     if isinstance(params, dict):
         name = cast(dict[str, Any], params).get("name")
     elif isinstance(params, list) and params:
         name = cast(list[object], params)[0]
-    return None if name is None else str(name)
+    return name if isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name) else None
 
 
 class _Pending:
@@ -137,7 +156,7 @@ class _Pending:
         if isinstance(message, dict):
             call = cast(dict[str, Any], message)
             if is_tools_call(call) and "id" in call:
-                self.calls[pending_key(call["id"])] = (_tool_name(call), time.time(), time.perf_counter())
+                self.calls[pending_key(call["id"])] = (tool_name(call), time.time(), time.perf_counter())
 
 
 def _rows_in(text: str) -> list[dict[str, Any]]:
@@ -307,7 +326,13 @@ def serve(
     ):
         recorder = recorder_factory(log)
         pending = _Pending()
-        child = subprocess.Popen(args[2:], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err)
+        child = subprocess.Popen(
+            args[2:],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=err,
+            env={**os.environ, "JEV_STUDY_USAGE_PROVENANCE": "1"},
+        )
         failed = False
         try:
             try:

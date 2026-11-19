@@ -341,3 +341,40 @@ def test_an_up_to_date_push_abstains(
     captured = capsys.readouterr()
     assert code == 0 and captured.out == ""
     assert "nothing to gate" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"), [("store", "secret_file"), ("patch", "invalid_arguments"), ("claims_size", "input_too_large")]
+)
+def test_gate_guards_local_inputs_before_judgment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, expected: str
+) -> None:
+    from tests.support.git_repo import commit_files
+
+    repo = repo_with_diff(tmp_path)
+    monkeypatch.chdir(repo)
+    if case == "store":
+        commit_files(repo, {".env": "inert fixture", "x.py": "x = 3"})
+    elif case == "patch":
+        monkeypatch.setattr(cli, "diff_argument", lambda *args: "unsplittable fixture")
+    else:
+        path = repo / "claims.json"
+        path.write_text(" " * (GATE.aggregate_evidence_units + 1) + path.read_text())
+    provider = FakeProvider({})
+    result = cli.run_gate(["--diff", "HEAD~1", "--claims", "claims.json", "--tests", "tests.log"], provider=provider)
+    assert (result.exit_code, result.error_code) == (2, expected)
+    assert not provider.requests
+
+
+def test_cli_filters_configured_values_from_local_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = repo_with_diff(tmp_path)
+    monkeypatch.chdir(repo)
+    marker = "inert-redaction-fixture"
+    monkeypatch.setenv("JEV_API_KEY", marker)
+    (repo / "tests.log").write_text(marker)
+    (repo / "claims.json").write_text(json.dumps({"request": "Review " + marker, "claims": [marker]}))
+    (repo / "x.py").write_text(marker)
+    provider = FakeProvider({})
+    outcome = cli.run_gate(["--diff", "HEAD", "--claims", "claims.json", "--tests", "tests.log"], provider=provider)
+    assert outcome.exit_code == 0 and provider.requests
+    assert marker not in str(provider.requests)

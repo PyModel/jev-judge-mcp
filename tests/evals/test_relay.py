@@ -510,3 +510,56 @@ def test_early_exit_with_an_inherited_pipe_reports_the_proxy_exit(tmp_path: Path
     with pytest.raises(AssertionError, match="exited before"):
         _run_until_dead([sys.executable, "-c", script], "", [], tmp_path / "pid")
     assert time.monotonic() - started < 3, "a descendant kept the output pipe open"
+
+
+@pytest.mark.parametrize(("reported", "tokens", "expected"), [(False, 0, 3.5), (True, 0, 0), (False, 100_000_000, 4.2)])
+def test_study_relay_books_reported_or_reserved_usage(
+    tmp_path: Path, reported: bool, tokens: int, expected: float
+) -> None:
+    from evals.spend import SpendLedger, SpendPolicy
+
+    fields = result_fields(_result({"usage": {"input_tokens": tokens, "reported": reported}}))
+    book = SpendLedger.load(tmp_path / "ledger.json", SpendPolicy(10, 25, 0.042, 3.5))
+    assert book.cost_of(0, [fields]).jev_usd == expected
+    assert fields["usage_reported"] is reported
+
+
+def test_metadata_recorder_discards_unrecognized_values() -> None:
+    from io import StringIO
+
+    from evals.ab.proxy import Recorder
+
+    trace = StringIO()
+    recorder = Recorder(trace)
+    marker = "private fixture text"
+    recorder.request(_tools_call(1, {"name": {"nested": marker}}))
+    recorder.response(_result({"action": [marker], "model": marker, "usage": {"input_tokens": marker}}))
+    record = json.loads(trace.getvalue())
+    assert marker not in trace.getvalue()
+    assert all(record[field] is None for field in ("tool", "action", "model", "input_tokens"))
+
+
+def test_study_child_keeps_usage_provenance_through_stdio(tmp_path: Path) -> None:
+    child = """
+import json, sys
+from jev_judge_mcp.providers.base import parse_envelope
+for line in sys.stdin:
+    call = json.loads(line)
+    body = {"answers": {}}
+    if call["id"] == 2:
+        body["usage"] = {"input_tokens": 0, "output_tokens": 0}
+    usage = parse_envelope(body, "fixture").usage.to_wire()
+    content = [{"type":"text","text":json.dumps({"usage":usage})}]
+    print(json.dumps({"id":call["id"],"result":{"content":content}}),flush=True)
+"""
+    log = tmp_path / "study.jsonl"
+    command = [sys.executable, "-m", "evals.ab.proxy", str(log), "--", sys.executable, "-c", child]
+    subprocess.run(
+        command,
+        input="".join(json.dumps(_call(i)) + "\n" for i in (1, 2)),
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=10,
+    )
+    assert [(row["input_tokens"], row["usage_reported"]) for row in _rows(log.read_text())] == [(0, False), (0, True)]

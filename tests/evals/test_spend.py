@@ -268,3 +268,57 @@ def test_holder_readiness_failures(tmp_path: Path, script: str, error: type[Exce
             _ready(holder, timeout=0.3)
     finally:
         _stop(holder)
+
+
+def test_reconcile_published_results_and_missing_metering(tmp_path: Path) -> None:
+    from evals.spend import reconciliation_notes
+
+    rows = {tmp_path / "paid/result.json": {"cost": 2}, tmp_path / "unknown/result.json": {}}
+    assert reconciliation_notes(tmp_path, {}, [], cost_key="cost") == []
+    notes = reconciliation_notes(tmp_path, rows, [], cost_key="cost")
+    assert "missing spend ledger" in notes
+    assert "result without booking: paid, unknown" in notes
+    assert "unmeasurable result cost: unknown" in notes
+    (tmp_path / "ledger.json").write_text('{"runs":{"paid":2,"other":1}}')
+    assert reconciliation_notes(tmp_path, rows, [], cost_key="cost") == [
+        "booked without result: other",
+        "result without booking: unknown",
+        "unmeasurable result cost: unknown",
+    ]
+
+
+def test_ledger_preserves_published_charge_if_directory_sync_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import stat
+
+    book = _ledger(tmp_path)
+    sync = os.fsync
+
+    def fail_directory(fd: int) -> None:
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError("directory sync failed")
+        sync(fd)
+
+    monkeypatch.setattr(os, "fsync", fail_directory)
+    with pytest.raises(OSError, match="directory sync failed"):
+        book.record("published", 1)
+    assert book.runs == json.loads(book.path.read_text())["runs"] == {"published": 1}
+    with pytest.raises(ValueError, match="already ran"):
+        book.record("published", 1)
+
+
+def test_last_ledger_handle_releases_study(tmp_path: Path) -> None:
+    first = _ledger(tmp_path)
+    second = _ledger(tmp_path)
+    first.record("held", 1)
+    first.close()
+    first.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        first.record("invalid", 1)
+    with _spawn(_NEXT, second.path) as other:
+        assert "another process" in other.communicate(timeout=5)[1]
+    second.close()
+    with _spawn(_NEXT, second.path) as other:
+        _, error = other.communicate(timeout=5)
+        assert other.returncode == 0, error

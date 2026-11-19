@@ -3,7 +3,6 @@
 import re
 import subprocess
 import sys
-import zlib
 from importlib.metadata import version
 from pathlib import Path
 
@@ -118,16 +117,6 @@ def test_a_peeled_packed_tag_matches_the_commit_not_the_tag_object(tmp_path: Pat
         f"{TAG_OBJECT} refs/tags/v{INSTALLED}\n^{PEELED}\n",
         encoding="utf-8",
     )
-    assert reported_version(_start(tmp_path)) == INSTALLED
-
-
-def test_a_loose_annotated_tag_is_peeled_to_its_commit(tmp_path: Path) -> None:
-    git = _git(tmp_path, PEELED, TAG_OBJECT)
-    body = f"object {PEELED}\ntype commit\ntag v{INSTALLED}\n\nrelease\n".encode()
-    raw = f"tag {len(body)}\0".encode() + body
-    obj = git / "objects" / TAG_OBJECT[:2] / TAG_OBJECT[2:]
-    obj.parent.mkdir(parents=True)
-    obj.write_bytes(zlib.compress(raw))
     assert reported_version(_start(tmp_path)) == INSTALLED
 
 
@@ -258,3 +247,53 @@ async def test_installed_version_changes_are_reported(tmp_path: Path, monkeypatc
     changed = await loaded.field()
     assert changed["loaded"] == {"package": "1.0", "commit": None, "dirty": None}
     assert changed["current_package"] == "1.1" and changed["restart_needed"] is True
+
+
+@pytest.mark.anyio
+async def test_large_source_tree_reports_unverifiable_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _git(tmp_path, HEAD, None)
+    module = _start(tmp_path)
+    for n in range(1100):
+        (module.parent / str(n)).touch()
+    monkeypatch.setattr(identity, "__file__", str(module))
+    server = identity.ServerVersion()
+    for _ in range(3):
+        info = await server.field()
+        assert info["restart_needed"] is True and "cannot verify" in str(info["notice"])
+
+
+@pytest.mark.parametrize("packed", [False, True])
+def test_loose_release_ref_with_packed_tag_object(tmp_path: Path, packed: bool) -> None:
+    from tests.support.git_repo import repo_with_diff
+
+    repo = repo_with_diff(tmp_path)
+    _manifest(repo)
+    args = ["git", "-C", str(repo)]
+    subprocess.run(
+        [
+            *args,
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.invalid",
+            "tag",
+            "-a",
+            f"v{INSTALLED}",
+            "-m",
+            "release",
+        ],
+        check=True,
+    )
+    ref = repo / ".git" / "refs" / "tags" / f"v{INSTALLED}"
+    oid = ref.read_text().strip()
+    objects = repo / ".git" / "objects"
+    if packed:
+        subprocess.run(
+            [*args, "pack-objects", str(objects / "pack" / "pack")],
+            input=oid + "\n",
+            text=True,
+            check=True,
+            capture_output=True,
+        )
+        (objects / oid[:2] / oid[2:]).unlink()
+    assert reported_version(_start(repo)) == INSTALLED

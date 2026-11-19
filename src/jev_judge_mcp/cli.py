@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shlex
+import stat
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -19,18 +20,24 @@ from typing import Any
 
 import anyio
 
+from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain.json import decode_json, is_json_object
+from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.git_diff import GitDiffError, GitDiffTooLarge, diff_argument, repo_root
 from jev_judge_mcp.hook import fail_open_or_ask, hook_required
 from jev_judge_mcp.hook_render import render_decision
 from jev_judge_mcp.identity import reported_version
-from jev_judge_mcp.keyfile import stored_key_path
+from jev_judge_mcp.keyfile import redaction_values, stored_key_path
+from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.policy import POLICY_VERSION, worst_action
 from jev_judge_mcp.policy.actions import Action
 from jev_judge_mcp.providers import JevProvider
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import load_settings
-from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
+from jev_judge_mcp.text import length
+from jev_judge_mcp.tools import TOOLS, Runtime, Toolset, gate_range
+from jev_judge_mcp.tools.base import ToolError
+from jev_judge_mcp.tools.file_state import is_secret_store, pinned_directory, resolve_scoped
 from jev_judge_mcp.tools.toolset import ToolOutcome, code_of
 
 SCHEMA_VERSION = 1
@@ -123,31 +130,34 @@ def _gate_options(argv: Sequence[str]) -> dict[str, str]:
 
 def _gate_arguments(options: Mapping[str, str]) -> dict[str, object]:
     repo = _repo_root()
-    key = stored_key_path(load_settings()).resolve()
-    claims_path = _inside_repo(Path(options["claims"]), repo, key)
-    tests_path = _inside_repo(Path(options["tests"]), repo, key)
+    settings = load_settings()
+    key = stored_key_path(settings)
+    redact = Redactor(redaction_values(settings))
     try:
-        claims_text = claims_path.read_text(encoding="utf-8")
-        tests_bytes = tests_path.read_bytes()
-        tests_text = tests_bytes.decode("utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        raise CliError("invalid_arguments", "could not read a local file", exit_code=2) from error
-    request, claims = _claims(claims_text, options.get("request"))
-    try:
-        diff = diff_argument(repo, options["diff"])
+        claims_text = _read_evidence(options["claims"], repo, key, GATE.aggregate_evidence_units)
+        tests_text = _read_evidence(options["tests"], repo, key, GATE.doc_units)
+        request, claims = _claims(claims_text, options.get("request"))
+        diff, skipped = gate_range._guarded(diff_argument(repo, options["diff"]), repo, key)  # pyright: ignore[reportPrivateUsage]
+        if skipped:
+            raise CliError("secret_file", "range includes a withheld file; review it locally", exit_code=2)
+    except ToolError as error:
+        raise CliError(
+            error.code if error.code == "secret_file" else "invalid_arguments", str(error), exit_code=2
+        ) from error
     except GitDiffTooLarge as error:
         raise CliError("input_too_large", str(error), exit_code=2) from error
     except GitDiffError as error:
         raise CliError("invalid_arguments", str(error), exit_code=2) from error
     # The hash is set here because this reader read the file (ADR-0067). The MCP tool does not hash
     # a string the caller typed.
+    tests_text = redact(redact_credential_literals(tests_text))
     return {
-        "request": request,
-        "diff": diff,
-        "claims": claims,
+        "request": redact(redact_credential_literals(request)),
+        "diff": [{"path": redact(item["path"]), "patch": redact(item["patch"])} for item in diff],
+        "claims": [redact(redact_credential_literals(claim)) for claim in claims],
         "evidence": [{"id": "cli", "text": "Read by jev-judge-mcp gate from the local repo."}],
         "tests": tests_text,
-        "tests_sha256": hashlib.sha256(tests_bytes).hexdigest(),
+        "tests_sha256": hashlib.sha256(tests_text.encode("utf-8")).hexdigest(),
     }
 
 
@@ -158,24 +168,42 @@ def _repo_root() -> Path:
         raise CliError("invalid_arguments", str(error), exit_code=2) from error
 
 
-def _inside_repo(path: Path, repo: Path, key: Path) -> Path:
-    candidate = path if path.is_absolute() else repo / path
-    resolved = candidate.resolve()
-    if not _is_relative_to(resolved, repo):
-        raise CliError("invalid_arguments", f"refusing path outside the repo: {path}", exit_code=2)
-    if resolved == key:
-        raise CliError("invalid_arguments", "refusing the key file", exit_code=2)
-    if not resolved.is_file():
-        raise CliError("invalid_arguments", f"not a file: {path}", exit_code=2)
-    return resolved
-
-
-def _is_relative_to(path: Path, root: Path) -> bool:
+def _read_evidence(name: str, repo: Path, key: Path, units: int) -> str:
+    """CLI evidence is strict UTF-8. Validate and read the same bounded file descriptor."""
+    path = resolve_scoped(name, repo)
+    if is_secret_store(path, key):
+        raise CliError("secret_file", "refusing a credential store", exit_code=2)
+    ceiling = 3 * units  # maximum UTF-8 bytes per UTF-16 unit
     try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    return True
+        with pinned_directory(path.parent) as directory:
+            fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise CliError("invalid_arguments", "expected a regular evidence file", exit_code=2)
+            try:
+                key_info = key.stat()
+            except FileNotFoundError:
+                pass
+            else:
+                if os.path.samestat(info, key_info):
+                    raise CliError("secret_file", "refusing the active key store", exit_code=2)
+            if info.st_size > ceiling:
+                raise CliError("input_too_large", f"evidence exceeds {units:,} units", exit_code=2)
+            with os.fdopen(fd, "rb", closefd=False) as handle:
+                data = handle.read(ceiling + 1)
+        finally:
+            os.close(fd)
+        if len(data) > ceiling:
+            raise CliError("input_too_large", f"evidence exceeds {units:,} units", exit_code=2)
+        content = data.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise CliError("invalid_arguments", "could not read a UTF-8 evidence file", exit_code=2) from error
+    if length(content) > units:
+        raise CliError("input_too_large", f"evidence exceeds {units:,} units", exit_code=2)
+    if "\x00" in content:
+        raise CliError("invalid_arguments", "binary evidence file", exit_code=2)
+    return content
 
 
 def _claims(text: str, request: str | None) -> tuple[str, list[str]]:
