@@ -7,7 +7,8 @@ is serialized as `JSON.stringify(payload, null, 2)` (ADR-0006).
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -111,12 +112,20 @@ def frame(
     return framed
 
 
-@dataclass
 class _Pending:
-    task: asyncio.Task[Evaluation]
+    def __init__(self, evaluate: Callable[["_Pending"], Coroutine[Any, Any, Evaluation]]) -> None:
+        self.subscribers = 0
+        self.dispatched = False
+        self.task = asyncio.create_task(evaluate(self))
 
     async def replay(self) -> Evaluation:
-        return await asyncio.shield(self.task)
+        self.subscribers += 1
+        try:
+            return await asyncio.shield(self.task)
+        finally:
+            self.subscribers -= 1
+            if not self.subscribers and not self.dispatched and not self.task.done():
+                self.task.cancel()
 
 
 class Runtime:
@@ -199,7 +208,7 @@ class Runtime:
         if generation != self._cache_generation:
             raise asyncio.CancelledError
         pending = self._pending.get(key)
-        if pending is not None:
+        if pending is not None and not pending.task.cancelling():
             span.attributes["cache"] = "hit"
             return await pending.replay()
         await self._cache_slots.acquire()
@@ -207,35 +216,36 @@ class Runtime:
             self._cache_slots.release()
             raise asyncio.CancelledError
         pending = self._pending.get(key)
-        if pending is not None:
+        if pending is not None and not pending.task.cancelling():
             self._cache_slots.release()
             span.attributes["cache"] = "hit"
             return await pending.replay()
 
-        async def evaluate() -> Evaluation:
+        async def evaluate(work: _Pending) -> Evaluation:
             cached = await cache.alookup(self.settings, *identity, digest=key)
             if cached is not None:
                 span.attributes["cache"] = "hit"
                 return cached
-            evaluation = await self._evaluate_capped(provider, state, questions)
+            evaluation = await self._evaluate_capped(provider, state, questions, work)
             span.attributes["input_tokens"] = evaluation.usage.input_tokens
             span.attributes["output_tokens"] = evaluation.usage.output_tokens
             await cache.astore(self.settings, *identity, evaluation, digest=key)
             return evaluation
 
         def completed(task: asyncio.Task[Evaluation]) -> None:
-            del self._pending[key]
+            if self._pending.get(key) is work:
+                del self._pending[key]
             self._cache_slots.release()
             if not task.cancelled():
                 task.exception()  # Observe failure even if every subscriber has disconnected.
 
-        task = asyncio.create_task(evaluate())
-        self._pending[key] = _Pending(task)
-        task.add_done_callback(completed)
-        return await asyncio.shield(task)
+        work = _Pending(evaluate)
+        self._pending[key] = work
+        work.task.add_done_callback(completed)
+        return await work.replay()
 
     async def _evaluate_capped(
-        self, provider: JevProvider, state: JsonValue, questions: Mapping[str, Question]
+        self, provider: JevProvider, state: JsonValue, questions: Mapping[str, Question], work: _Pending | None = None
     ) -> Evaluation:
         """The provider call, behind the opt-in in-flight cap (ADR-0069); the default is no cap.
 
@@ -243,11 +253,12 @@ class Runtime:
         constructible outside one. A waiting call holds no provider resource and stays
         cancellable, like any other wait.
         """
-        if self._max_inflight <= 0:
-            return await provider.evaluate(state, questions, self.model, None)
-        if self._inflight is None:
+        if self._max_inflight > 0 and self._inflight is None:
             self._inflight = anyio.Semaphore(self._max_inflight)
-        async with self._inflight:
+        capacity = self._inflight if self._inflight is not None else nullcontext()
+        async with capacity:
+            if work is not None:
+                work.dispatched = True
             return await provider.evaluate(state, questions, self.model, None)
 
     async def aclose(self) -> None:

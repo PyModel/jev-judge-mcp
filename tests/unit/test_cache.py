@@ -351,7 +351,8 @@ def _observe_follower(monkeypatch: pytest.MonkeyPatch) -> asyncio.Event:
     original = _Pending.replay
 
     async def wait(pending: _Pending) -> Evaluation:
-        joined.set()
+        if pending.subscribers:
+            joined.set()
         return await original(pending)
 
     monkeypatch.setattr(_Pending, "replay", wait)
@@ -648,3 +649,29 @@ def test_legacy_cache_metering_uses_available_evidence(cache_env: Path, count: i
     record["usage"]["reported"] = "unknown"
     entry.write_text(json.dumps(record))
     assert cache.lookup(settings, "compatible", "local", "fixture", {}, _question()) is None
+
+
+async def test_last_subscriber_leaving_before_dispatch_avoids_provider_call(
+    cache_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import anyio
+
+    monkeypatch.setenv("JEV_MCP_MAX_INFLIGHT", "1")
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    slots = anyio.Semaphore(1)
+    monkeypatch.setattr(runtime, "_inflight", slots)
+    await slots.acquire()
+    async with asyncio.timeout(5):
+        caller = asyncio.create_task(runtime.ask({}, _question()))
+        while not slots.statistics().tasks_waiting:
+            await asyncio.sleep(0)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        slots.release()
+        while runtime._pending:  # pyright: ignore[reportPrivateUsage]
+            await asyncio.sleep(0)
+        assert not provider.requests
+        await runtime.ask({}, _question())
+        assert len(provider.requests) == 1
