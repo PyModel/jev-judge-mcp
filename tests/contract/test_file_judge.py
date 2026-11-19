@@ -234,3 +234,22 @@ async def test_reader_masks_pem_and_both_exact_secret_sources(tool: str, tmp_pat
     for name in ("state", "notes.txt") if tool == "jev_ask" else ("content",):
         assert "safe context" in parts[name]
         assert all(marker not in parts[name] for marker in (supplied, stored, "body-fixture"))
+
+
+@pytest.mark.parametrize("tool", ["jev_file_judge", "jev_files_judge", "jev_ask"])
+async def test_configured_value_in_path_label_stays_local(tool: str, tmp_path: Any, monkeypatch: Any) -> None:
+    monkeypatch.chdir(tmp_path)
+    marker = "configured-fixture-marker"
+    path = f"notes-{marker}.txt"
+    monkeypatch.setenv("JEV_API_KEY", marker)
+    (tmp_path / path).write_text("ordinary text")
+    args: dict[str, Any] = noul_args(path)
+    if tool == "jev_files_judge":
+        args.pop("path")
+        args["paths"] = [path]
+    elif tool == "jev_ask":
+        args = {"paths": [path], "questions": {"q": {"type": "noul", "instructions": "OK?", "criteria": {}}}}
+    result = await call_tool(tool, args, {"q": {"noul": 1}, "file": {"noul": 1}})
+    assert not result.is_error
+    assert "ordinary text" in str(result.requests)
+    assert marker not in str(result.requests)

@@ -195,9 +195,10 @@ async def test_a_flooding_command_is_killed_at_the_cap(tmp_path: Any, monkeypatc
     assert time.monotonic() - started < 10  # the pipes never buffer a flood
 
 
+@pytest.mark.parametrize("prefix", ["", "--file="])
 @pytest.mark.parametrize("present", [False, True])
 async def test_named_store_is_refused_before_review_and_execution(
-    tmp_path: Any, monkeypatch: Any, present: bool
+    tmp_path: Any, monkeypatch: Any, present: bool, prefix: str
 ) -> None:
     from unittest.mock import AsyncMock
 
@@ -208,7 +209,7 @@ async def test_named_store_is_refused_before_review_and_execution(
     runner = AsyncMock()
     monkeypatch.setattr("jev_judge_mcp.tools.ask.run_gated_command", runner)
     provider = GatedProvider(dict(GATE_ALLOW), {"q1": {"noul": 0.9}})
-    outcome = await _run(provider, 'echo "ordinary fixture"', tmp_path, monkeypatch)
+    outcome = await _run(provider, f'echo {prefix}"ordinary fixture"', tmp_path, monkeypatch)
     assert outcome.error_code == "command_refused"
     assert not provider.requests
     runner.assert_not_awaited()

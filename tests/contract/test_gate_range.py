@@ -347,3 +347,17 @@ async def test_subtree_range_uses_physical_origin_for_store_check(repo: Path, mo
     monkeypatch.setenv("JEV_MCP_KEY_FILE", str(repo / "sub/ordinary"))
     result = await call_tool("jev_gate_range", gate_args("4b825dc642cb6eb9a060e54bf8d69288fbee4904..HEAD:sub"), {})
     assert result.code == "secret_file" and not result.requests
+
+
+async def test_sensitive_range_path_is_withheld_without_naming_it_to_provider(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = "configured-fixture-marker"
+    monkeypatch.setenv("JEV_API_KEY", marker)
+    name = f"notes-{marker}.txt"
+    commit_files(repo, {name: "private fixture", "ordinary.txt": "public fixture"})
+    result = await call_tool("jev_gate_range", gate_args(), {})
+    assert not result.is_error
+    assert result.payload.get("skipped") == [{"path": name, "reason": "secret_file"}]
+    assert "public fixture" in _sent_text(result)
+    assert marker not in _sent_text(result)
