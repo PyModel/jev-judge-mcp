@@ -7,6 +7,8 @@ become part of the key. Nothing here ever logs the value.
 """
 
 import logging
+import os
+import stat
 from pathlib import Path
 
 from jev_judge_mcp import fsutil
@@ -31,7 +33,11 @@ def stored_key(settings: Settings) -> str:
     """The stored key, or `""`. Missing, unreadable, undecodable, oversized, or blank stores as
     empty — never an error."""
     try:
-        with stored_key_path(settings).open("rb") as handle:
+        with open(
+            stored_key_path(settings), "rb", opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK)
+        ) as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                return ""
             data = handle.read(KEY_FILE_BYTES_MAX + 1)
         if len(data) > KEY_FILE_BYTES_MAX:
             return ""

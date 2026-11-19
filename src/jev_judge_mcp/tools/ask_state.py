@@ -93,7 +93,7 @@ def own_part(state_text: str) -> Part | None:
     return Part(OWN_PART, text, units)
 
 
-def file_parts(paths: Sequence[str]) -> tuple[list[Part], list[Skipped]]:
+def file_parts(paths: Sequence[str], key_path: Path | None = None) -> tuple[list[Part], list[Skipped]]:
     """Each caller-named path as one part, or its typed skip; a read refusal never fails the call.
 
     Order is input order, exact duplicate paths are read once, and every refusal is
@@ -108,7 +108,7 @@ def file_parts(paths: Sequence[str]) -> tuple[list[Part], list[Skipped]]:
             continue
         seen.add(raw)
         try:
-            content = read_state(resolve_scoped(raw))
+            content = read_state(resolve_scoped(raw), key_path=key_path)
         except ToolError as error:
             skipped.append(Skipped(raw, error.code))
             continue
@@ -220,14 +220,24 @@ def command_disabled_refusal() -> str:
     )
 
 
-def scrubbed_environment(settings: Settings) -> dict[str, str]:
-    """The server's environment without every configured secret variable (ADR-0077 amendment).
-
-    The child never inherits a credential by simply being spawned here; `named_secrets` pairs each
-    value with its variable name, so only those variables are dropped.
-    """
-    secret_variables = {name for name, _ in settings.named_secrets()}
-    return {name: value for name, value in os.environ.items() if name not in secret_variables}
+def scrubbed_environment(settings: Settings | None = None) -> dict[str, str]:
+    """Only operating-system path, timezone, and locale settings reach the child."""
+    allowed = {
+        "PATH",
+        "TZ",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_MESSAGES",
+        "LC_NUMERIC",
+        "LC_TIME",
+        "LC_COLLATE",
+        "LC_MONETARY",
+    }
+    if settings is not None:
+        allowed.difference_update(name for name, _ in settings.named_secrets())
+    return {name: os.environ[name] for name in allowed if name in os.environ}
 
 
 def run_command(
@@ -240,7 +250,7 @@ def run_command(
     """The judged command's redacted output as one part.
 
     Runs under the system shell with no stdin, in the working directory, in a scrubbed environment
-    when the caller passes one, and its process group is killed at the timeout, as soon as the
+    by default, and its process group is killed at the timeout, as soon as the
     captured output passes the cap — the pipes are never allowed to buffer a flood (ADR-0077
     amendment) — and in any case once the shell exits, so a background child it left behind
     neither holds the output open nor outlives the call. The output block carries the exit status
@@ -261,7 +271,7 @@ def run_command(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=str(Path.cwd()),
-            env=dict(env) if env is not None else None,
+            env=dict(env) if env is not None else scrubbed_environment(),
             start_new_session=True,
         )
     except (OSError, ValueError) as error:

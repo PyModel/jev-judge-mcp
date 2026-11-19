@@ -50,7 +50,7 @@ block (ADR-0062). The code is set from the exception type or at the return site.
 | `quota` | HTTP 429 (`ProviderError.status`) |
 | `provider` | any other provider failure. 403, 404, and 422 stay here; a 401 that appears only in the body does too, and so does any other 400 |
 
-`529 Overloaded` is retried as a 5xx (`providers/retry.py`). A final failure is `provider` or `timeout`, not its own code.
+`529 Overloaded` ends the attempt because completion is uncertain. Jev reports a `provider` error. [ADR-0057](../adr/0057-one-retry-owner-bounded-provider-retries.md)
 
 ## Input caps, per tool
 

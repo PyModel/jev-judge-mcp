@@ -2,6 +2,7 @@
 
 from typing import ClassVar
 
+import httpx
 import pytest
 
 from jev_judge_mcp.domain import JsonValue, Usage
@@ -16,7 +17,7 @@ def test_defaults_match_adr_0057() -> None:
     policy = RetryPolicy()
     assert (policy.max_attempts, policy.per_attempt_timeout, policy.backoff_initial) == (3, 30.0, 0.5)
     assert (policy.backoff_max, policy.backoff_jitter, policy.budget) == (5.0, 0.25, 90.0)
-    assert policy.statuses == frozenset({408, 429, *range(500, 600)})
+    assert policy.statuses == frozenset({429})
 
 
 def _invalid(**overrides: object) -> RetryPolicy:
@@ -58,10 +59,11 @@ def test_backoff_doubles_and_is_jittered_subtractively(monkeypatch: pytest.Monke
     assert retry_timing.backoff_delay(policy, 1) == 0.438  # round(0.5 * (1 - 0.5 * 0.25), 3)
 
 
-def test_retry_after_hint_replaces_backoff_and_is_capped() -> None:
+def test_retry_after_is_a_minimum_within_the_remaining_budget() -> None:
     policy = RetryPolicy()
     assert retry_timing.retry_delay(policy, 1, 0.0, policy.budget, retry_after=0.25) == 0.25
-    assert retry_timing.retry_delay(policy, 1, 0.0, policy.budget, retry_after=3600.0) == 5.0
+    assert retry_timing.retry_delay(policy, 1, 0.0, policy.budget, retry_after=6.0) == 6.0
+    assert retry_timing.retry_delay(policy, 1, 0.0, policy.budget, retry_after=3600.0) is None
 
 
 def test_retry_stops_at_max_attempts_and_at_the_budget(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -125,29 +127,29 @@ def _failure(status: int | None = None) -> ProviderError:
 
 def test_status_errors_retry_only_on_the_policy_statuses() -> None:
     provider = _Classifier(Redactor(()))
-    transient = provider._transient(_failure(503))  # pyright: ignore[reportPrivateUsage]
-    assert transient is not None and transient.kind == "status" and transient.status == 503
-    assert transient.describe == "status 503"
+    transient = provider._transient(_failure(429))  # pyright: ignore[reportPrivateUsage]
+    assert transient is not None and transient.kind == "status" and transient.status == 429
+    assert transient.describe == "status 429"
     for status in (400, 401, 403, 404, 409, 422):
         assert provider._transient(_failure(status)) is None  # pyright: ignore[reportPrivateUsage]
     # No status: an envelope error, a refusal — never retried.
     assert provider._transient(_failure(None)) is None  # pyright: ignore[reportPrivateUsage]
 
 
-def test_timeouts_and_connection_failures_are_transient_and_the_rest_is_not() -> None:
+def test_only_definitely_unsent_transport_failures_are_transient() -> None:
     provider = _Classifier(Redactor(()))
-    timeout = provider._transient(TimeoutError())  # pyright: ignore[reportPrivateUsage]
+    timeout = provider._transient(httpx.ConnectTimeout("connect"))  # pyright: ignore[reportPrivateUsage]
     assert timeout is not None and timeout.describe == "timeout"
-    connect = provider._transient(ConnectionError("refused"))  # pyright: ignore[reportPrivateUsage]
+    connect = provider._transient(ConnectionRefusedError("refused"))  # pyright: ignore[reportPrivateUsage]
     assert connect is not None and connect.describe == "connect" and connect.detail == "refused"
     bare = provider._transient(ConnectionError())  # pyright: ignore[reportPrivateUsage]
-    assert bare is not None and bare.detail == "ConnectionError"
+    assert bare is None
     assert provider._transient(ValueError("nope")) is None  # pyright: ignore[reportPrivateUsage]
 
 
 def test_provider_config_error_is_never_transient() -> None:
     error = ProviderConfigError("no key")
-    error.status = 503  # even a carried status must not make configuration retryable
+    error.status = 429  # even a carried status must not make configuration retryable
     provider = _Classifier(Redactor(()))
     assert provider._transient(error) is None  # pyright: ignore[reportPrivateUsage]
 

@@ -1,5 +1,7 @@
 # Best use of Jev, and how jev-judge-mcp could enforce it
 
+2026-11-18 — The decision to replay HTTP 529 was superseded by [ADR-0057](../adr/0057-one-retry-owner-bounded-provider-retries.md#amendment-2026-11-18--uncertain-delivery-is-terminal).
+
 Research note, 2026-09-27. Documentation only: nothing here changes a tool, a threshold, or an ADR.
 Choosing an enforcement option is the owner's decision.
 

@@ -7,6 +7,8 @@ module cannot read keeps the whole diff a string rather than guessing a path. Fa
 `GitDiffError`, whose message each caller wraps in its own refusal shape.
 """
 
+import codecs
+import re
 import subprocess
 import threading
 from pathlib import Path
@@ -172,10 +174,23 @@ def _path_from_header(chunk: str) -> str | None:
     (`a/old b/new`) has no such symmetry: its `+++ b/` line names the new path when the content
     changed (git ends that line with a tab when the path holds spaces), else the last ` b/` stands.
     """
-    lines = chunk.splitlines()
+    lines = chunk.split("\n")
     first = lines[0]
     rest = first.removeprefix("diff --git ")
     path: str | None = None
+    if rest.startswith('"'):
+        # Git uses C quoting for arbitrary filename bytes; accept only its canonical escapes.
+        field = r'"((?:[^"\\]|\\(?:[abtnvfr"\\]|[0-3][0-7]{2}))*)"'
+        pair = re.fullmatch(field + " " + field, rest)
+        if pair is None:
+            return None
+        try:
+            left, right = (codecs.escape_decode(value.encode())[0].decode("utf-8") for value in pair.groups())
+        except (UnicodeError, ValueError):
+            return None
+        if not left.startswith("a/") or right != "b/" + left[2:]:
+            return None
+        path = right[2:]
     middle = len(rest) // 2
     if len(rest) % 2 == 1 and rest[middle] == " ":
         left, right = rest[:middle], rest[middle + 1 :]
@@ -190,6 +205,6 @@ def _path_from_header(chunk: str) -> str | None:
         if marker not in first:
             return None
         path = first.rsplit(marker, 1)[-1]
-    if not path or path.startswith("/") or ".." in Path(path).parts:
+    if not path or "\x00" in path or path.startswith("/") or ".." in Path(path).parts:
         return None
     return path

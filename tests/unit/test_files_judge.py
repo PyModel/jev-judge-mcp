@@ -220,9 +220,9 @@ def monkeypatch_read_counter(monkeypatch: pytest.MonkeyPatch) -> Any:
     calls = {"n": 0}
     real = module.read_state
 
-    def counting(path: Any, caps: Any = None) -> str:
+    def counting(path: Any, caps: Any = None, **kwargs: Any) -> str:
         calls["n"] += 1
-        return real(path, **({} if caps is None else {"caps": caps}))
+        return real(path, **kwargs, **({} if caps is None else {"caps": caps}))
 
     monkeypatch.setattr(module, "read_state", counting)
     return lambda: calls["n"]
@@ -323,3 +323,98 @@ async def test_an_unconfigured_provider_is_the_auth_refusal_not_a_batch_of_skips
         await toolset.aclose()
     assert result.is_error
     assert json.loads(cast(TextContent, result.content[-1]).text) == {"code": "auth"}
+
+
+def test_scout_030_advertises_numeric_batch_limit() -> None:
+    toolset = Toolset(Runtime(Settings()), TOOLS)
+    definition = next(tool for tool in toolset.definitions() if tool.name == "jev_files_judge")
+    assert f"of {FILES_JUDGE.files_max} surviving files" in (definition.description or "")
+
+
+def test_scout_015_limits_nonmatching_directory_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace
+
+    from jev_judge_mcp.tools import files_judge
+
+    monkeypatch.setattr(files_judge, "FILES_JUDGE", replace(FILES_JUDGE, discovery_max=2))
+    for i in range(20):
+        (tmp_path / f"file{i}").touch()
+    kept, skipped = plan(["*.py"], scope=tmp_path)
+    assert not kept
+    assert any(row["reason"] == "over_the_file_cap" for row in skipped)
+
+
+@pytest.mark.anyio
+async def test_scout_015_planning_leaves_loop_responsive(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    from jev_judge_mcp.tools import files_judge
+
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+
+    def hold(*args: object, **kwargs: object) -> tuple[list[tuple[str, str]], list[dict[str, str]]]:
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(5), "planner blocked its caller's loop"
+        return [], []
+
+    monkeypatch.setattr(files_judge, "plan", hold)
+    toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: FakeProvider({})), TOOLS)
+    try:
+        task = asyncio.create_task(toolset.call("jev_files_judge", batch_arguments()))
+        await asyncio.wait_for(entered.wait(), 5)
+        release.set()
+        assert not (await task).is_error
+    finally:
+        release.set()
+        await toolset.aclose()
+
+
+def test_scout_015_counts_scans_of_empty_directories(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace
+
+    from jev_judge_mcp.tools import files_judge
+
+    monkeypatch.setattr(files_judge, "FILES_JUDGE", replace(FILES_JUDGE, discovery_max=2))
+    kept, skipped = plan(["**/**/**/**/**/notes.txt"], scope=tmp_path)
+    assert not kept
+    assert [row["reason"] for row in skipped] == ["over_the_file_cap"]
+
+
+def test_scout_015_glob_walks_ordinary_in_scope_directory_link(tmp_path: Path) -> None:
+    make(tmp_path / "docs/notes.txt")
+    (tmp_path / "linked").symlink_to(tmp_path / "docs", target_is_directory=True)
+    assert plan(["link*"], scope=tmp_path) == ([("linked/notes.txt", "content")], [])
+
+
+def test_scout_015_reports_unreadable_directories(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import Mock
+
+    from jev_judge_mcp.tools import files_judge
+
+    monkeypatch.setattr(files_judge, "pinned_directory", Mock(side_effect=PermissionError))
+    kept, skipped = plan(["*.txt"], scope=tmp_path)
+    assert kept == [] and skipped == [{"path": ".", "reason": "unreadable_directory"}]
+
+
+def test_scout_015_worker_checks_cancellation_before_reading(tmp_path: Path) -> None:
+    def cancel() -> None:
+        raise asyncio.CancelledError
+
+    make(tmp_path / "sample.txt")
+    with pytest.raises(asyncio.CancelledError):
+        plan(["*.txt"], scope=tmp_path, check_cancelled=cancel)
+
+
+def test_scout_015_discovery_diagnostics_use_only_counts_and_duration(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    make(tmp_path / "fixture-name.txt")
+    with caplog.at_level(logging.DEBUG, logger="jev_judge_mcp.tools.files_judge"):
+        plan(["*.txt"], scope=tmp_path)
+    records = [record.getMessage() for record in caplog.records if record.name == "jev_judge_mcp.tools.files_judge"]
+    assert len(records) == 1 and "examined=2" in records[0] and "truncated=0" in records[0]
+    assert "duration_ms=" in records[0] and "fixture-name" not in records[0]

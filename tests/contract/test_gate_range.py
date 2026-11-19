@@ -158,12 +158,11 @@ async def test_the_operators_git_settings_do_not_reshape_the_diff(repo: Path, ke
     assert "\x1b" not in diff
 
 
-async def test_a_diff_whose_headers_do_not_split_is_refused(repo: Path) -> None:
-    commit_files(repo, {'say "hi".py': "x = 3\n"})  # git quotes this header, so no path can be read
+async def test_a_quoted_header_preserves_the_filename(repo: Path) -> None:
+    commit_files(repo, {'say "hi".py': "x = 3\n"})
     outcome = await call_tool("jev_gate_range", gate_args(), {})
-    assert outcome.is_error
-    assert outcome.code == "invalid_arguments"
-    assert outcome.requests == []
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["review"]["reviewed_files"] == ['say "hi".py']
 
 
 def _git_out(repo: Path, *args: str) -> str:
@@ -240,3 +239,38 @@ async def test_a_flooding_git_is_killed_at_the_budget_not_read_to_its_end(
     assert time.monotonic() - started < 10
     assert outcome.code == "input_too_large"
     assert outcome.requests == []
+
+
+async def test_scout_016_git_quoted_paths_are_reviewed(repo: Path) -> None:
+    names = ["café.txt", 'quoted"name.txt', "two words.txt"]
+    commit_files(repo, {name: "plain\n" for name in names})
+    result = await call_tool("jev_gate_range", gate_args(), {})
+    assert not result.is_error, result.text
+    assert sorted(result.payload["review"]["reviewed_files"]) == sorted(names)
+    (repo / names[0]).unlink()
+    deleted = await call_tool("jev_gate_range", gate_args("HEAD"), {})
+    assert not deleted.is_error and deleted.payload["review"]["reviewed_files"] == [names[0]]
+
+
+async def test_scout_004_configured_key_path_refused(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = repo / "custom-store"
+    commit_files(repo, {path.name: ""})
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(path))
+    for args in [gate_args(), gate_args(tests_path=path.name)]:
+        result = await call_tool("jev_gate_range", args, {})
+        assert result.code == "secret_file" and not result.requests
+
+
+async def test_scout_016_incomplete_quoted_header_is_refused(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from jev_judge_mcp.git_diff import split_unified
+    from jev_judge_mcp.tools import gate_range
+
+    header = 'diff --git "a/ordinary" "b/ordinary'
+    assert split_unified(header) is None
+
+    def malformed(*args: object, **kwargs: object) -> str:
+        return header
+
+    monkeypatch.setattr(gate_range, "diff_argument", malformed)
+    outcome = await call_tool("jev_gate_range", gate_args(), {})
+    assert outcome.code == "invalid_arguments" and not outcome.requests

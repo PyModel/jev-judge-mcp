@@ -600,13 +600,13 @@ def test_limits_page_says_an_upstream_401_is_auth() -> None:
     assert "code `auth`" in page
 
 
-def test_limits_page_names_529_as_a_retried_status() -> None:
-    """L3: 529 is already inside the retry set. The page has to say so."""
+def test_limits_page_names_529_as_terminal() -> None:
+    """L3: Keep the documented 529 outcome aligned with the delivery policy."""
     from jev_judge_mcp.providers.retry import DEFAULT_RETRY_POLICY
 
     page = _LIMITS_PAGE.read_text(encoding="utf-8")
-    assert 529 in DEFAULT_RETRY_POLICY.statuses
-    assert "`529 Overloaded` is retried as a 5xx" in page
+    assert 529 not in DEFAULT_RETRY_POLICY.statuses
+    assert "`529 Overloaded` ends the attempt because completion is uncertain" in page
 
 
 def test_retry_docstring_states_the_installed_sdk_timeouts() -> None:

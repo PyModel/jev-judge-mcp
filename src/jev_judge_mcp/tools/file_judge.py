@@ -11,8 +11,11 @@ the input — never judgments, and never a provider call. The reading and refusa
 from collections.abc import Sequence
 from typing import Any, cast
 
+import anyio
+
 from jev_judge_mcp.domain import ChoiceQuestion, NoulCriteria, NoulQuestion, Question, ScoreQuestion
 from jev_judge_mcp.domain.json import JsonValue
+from jev_judge_mcp.keyfile import stored_key_path
 from jev_judge_mcp.limits import FILE_JUDGE
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.arguments import Refinement
@@ -210,8 +213,9 @@ def project_answer(kind: str, answer: object, expected: Sequence[str]) -> tuple[
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     kind: str = args["kind"]
     question = build_question(kind, args["instructions"], args["criteria"])
-    path = resolve_scoped(args["path"])
-    content = read_state(path)
+    content = await anyio.to_thread.run_sync(
+        lambda: read_state(resolve_scoped(args["path"]), key_path=stored_key_path(runtime.settings))
+    )
     evaluation = await runtime.ask({"path": args["path"], "content": content}, {QUESTION_ID: question})
     expected: Sequence[str] = ()
     if isinstance(question, ChoiceQuestion):

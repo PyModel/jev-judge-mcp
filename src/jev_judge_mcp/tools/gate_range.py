@@ -17,6 +17,7 @@ import anyio
 
 from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.git_diff import GitDiffError, GitDiffTooLarge, diff_argument, repo_root
+from jev_judge_mcp.keyfile import stored_key_path
 from jev_judge_mcp.tools import gate
 from jev_judge_mcp.tools.arguments import Refinement
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define
@@ -72,35 +73,38 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     passed: dict[str, Any] = {key: args[key] for key in _PASSED if key in args}
     tests_path: str | None = args.get("tests_path")
     if tests_path is not None:
-        tests = read_state(resolve_scoped(tests_path))
+        tests = await anyio.to_thread.run_sync(
+            lambda: read_state(resolve_scoped(tests_path), key_path=stored_key_path(runtime.settings))
+        )
         passed["tests"] = tests
         # This reader read the log, so the review weighs it as read, not self-reported (ADR-0067).
         passed["tests_sha256"] = hashlib.sha256(tests.encode("utf-8")).hexdigest()
     try:
-        diff = await anyio.to_thread.run_sync(_read_range, args["range"])
+        files, skipped = await anyio.to_thread.run_sync(_read_range, args["range"], stored_key_path(runtime.settings))
     except GitDiffTooLarge as error:
         raise ToolError(str(error), code="input_too_large") from error
     except GitDiffError as error:
         # The harness picks this directory, not the caller; naming it shows a server launched
         # outside the caller's project (a `uv run --directory` entry) instead of a bare refusal.
         raise ToolError(f"{error} (server working directory: {Path.cwd()})", code="invalid_arguments") from error
-    files, skipped = _guarded(diff)
     passed["diff"] = files
     result = await gate.handle(passed, runtime)
     extra: dict[str, object] = {"skipped": skipped} if skipped else {}
     return replace(result, payload={**result.payload, "tool": NAME, **extra})
 
 
-def _read_range(rev_range: str) -> str | list[dict[str, str]]:
+def _read_range(rev_range: str, key_path: Path) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """The range's diff limited to the working directory, the file tools' scope (ADR-0077): the
     repository must contain it, and the `.` pathspec keeps every other part of the repository out.
     Run off the event loop so a slow git blocks no other call."""
     cwd = Path.cwd()
-    repo_root(cwd)
-    return diff_argument(cwd, rev_range, paths=(".",))
+    root = repo_root(cwd)
+    return _guarded(diff_argument(cwd, rev_range, paths=(".",)), root, key_path)
 
 
-def _guarded(diff: str | list[dict[str, str]]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+def _guarded(
+    diff: str | list[dict[str, str]], root: Path, key_path: Path
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """The file tools' read guards over server-read patches: a secret store's patch never leaves,
     and every other patch has its credential literals redacted (ADR-0080).
 
@@ -113,7 +117,7 @@ def _guarded(diff: str | list[dict[str, str]]) -> tuple[list[dict[str, str]], li
     kept: list[dict[str, str]] = []
     skipped: list[dict[str, str]] = []
     for item in diff:
-        if is_secret_store(Path(item["path"])):
+        if is_secret_store(root / item["path"], key_path):
             skipped.append({"path": item["path"], "reason": "secret_file"})
         else:
             kept.append({"path": item["path"], "patch": redact_credential_literals(item["patch"])})

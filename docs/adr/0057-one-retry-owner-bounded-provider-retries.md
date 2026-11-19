@@ -120,3 +120,16 @@ in askJev is withdrawn. askJev passes no timeout of its own, but the typesafe pa
 pinned SDK 0.6.0 default of 10s per attempt. The fetch-based providers still pass no timeout.
 The 30 s choice above does not depend on calling 70–500 ms a published official figure; that range
 is this repo's recorded calls, and the official pages say about 100 ms.
+
+## Amendment (2026-11-18) — uncertain delivery is terminal
+
+The default retries only an explicitly rejected HTTP 429 or a transport failure establishing a
+connection or acquiring a connection-pool slot. A read, write, reset, unspecified timeout or 5xx
+can follow acceptance of a billable evaluation. Without a provider idempotency contract, replay
+could charge twice. A server retry delay is a minimum. If that minimum reaches the remaining
+deadline, the attempt ends and the server's response is returned. The attempt cap and generated
+backoff retain their existing bounds.
+
+Providers request identity encoding and cap successful responses at 8 MiB and errors at 64 KiB.
+An encoding the client did not request or a body exceeding the applicable bound ends the call
+before JSON decoding.

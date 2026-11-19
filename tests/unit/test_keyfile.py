@@ -95,3 +95,15 @@ def test_the_redaction_set_is_the_configured_secrets_plus_the_stored_key(
     values = redaction_values(load_settings())
     assert values[:-1] == load_settings().secret_values()
     assert values[-1] == "sk-live-stored-0001"
+
+
+def test_scout_010_descriptor_must_be_regular(isolated_key_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store_key(settings(), "fixture")
+    real = isolated_key_file.stat()
+    special = os.stat_result((stat.S_IFCHR | 0o600, *real[1:]))
+
+    def describe(fd: int) -> os.stat_result:
+        return special
+
+    monkeypatch.setattr(os, "fstat", describe)
+    assert stored_key(settings()) == ""

@@ -20,7 +20,7 @@ from jev_judge_mcp.extract.worker import ProcessRegexExecutor
 from jev_judge_mcp.policy import Action
 from jev_judge_mcp.providers import Evaluation, JevProvider, resolve_model, resolve_provider
 from jev_judge_mcp.settings import Settings
-from jev_judge_mcp.telemetry import ACTIONS, Telemetry
+from jev_judge_mcp.telemetry import ACTIONS, Span, Telemetry
 from jev_judge_mcp.tools.arguments import Refinement
 from jev_judge_mcp.tools.observed import worst_action
 from jev_judge_mcp.validation.caps import CapScope
@@ -28,6 +28,7 @@ from jev_judge_mcp.validation.caps import CapScope
 type Payload = Mapping[str, object]
 
 logger = logging.getLogger("jev_judge_mcp.tools.base")
+_CLOSE_SECONDS = 10.0
 
 
 class ToolError(Exception):
@@ -109,6 +110,20 @@ def frame(
     return framed
 
 
+@dataclass
+class _Pending:
+    ready: anyio.Event = field(default_factory=anyio.Event)
+    result: Evaluation | None = None
+    error: BaseException | None = None
+
+    async def replay(self) -> Evaluation:
+        await self.ready.wait()
+        if self.error is not None:
+            raise self.error
+        assert self.result is not None
+        return self.result
+
+
 class Runtime:
     """Per-server access to Jev: the configured model and a provider resolved on first use.
 
@@ -129,6 +144,10 @@ class Runtime:
         self._provider: JevProvider | None = None
         self._regex_executor = regex_executor or ProcessRegexExecutor()
         self.telemetry = Telemetry(payloads=settings.telemetry_payloads)
+        self._pending: dict[bytes, _Pending] = {}
+        self._cache_slots = anyio.Semaphore(256)
+        self._close_lock = anyio.Lock()
+        self._regex_closed = False
         self._max_inflight = settings.max_inflight
         self._inflight: anyio.Semaphore | None = None
 
@@ -166,21 +185,46 @@ class Runtime:
             span.attributes["provider"] = self._provider.name
             wire_state = cast(JsonValue, state)
             provider = self._provider
-            cached = await cache.alookup(
-                self.settings, provider.name, provider.cache_scope, self.model, wire_state, questions
-            )
-            if cached is not None:
-                # A hit spent nothing, so it records no token attributes (the replayed payload's
-                # usage stays verbatim); `tokens{direction}` counts what the provider was billed.
-                span.attributes["cache"] = "hit"
-                return cached
-            evaluation = await self._evaluate_capped(self._provider, wire_state, questions)
-            await cache.astore(
-                self.settings, provider.name, provider.cache_scope, self.model, wire_state, questions, evaluation
-            )
+            if self.settings.jev_judge_mcp_cache:
+                return await self._cached(provider, wire_state, questions, span)
+            evaluation = await self._evaluate_capped(provider, wire_state, questions)
             span.attributes["input_tokens"] = evaluation.usage.input_tokens
             span.attributes["output_tokens"] = evaluation.usage.output_tokens
             return evaluation
+
+    async def _cached(
+        self, provider: JevProvider, state: JsonValue, questions: Mapping[str, Question], span: Span
+    ) -> Evaluation:
+        identity = (provider.name, provider.cache_scope, self.model, state, questions)
+        key = bytes.fromhex(await anyio.to_thread.run_sync(cache.request_key, *identity))
+        pending = self._pending.get(key)
+        if pending is not None:
+            span.attributes["cache"] = "hit"
+            return await pending.replay()
+        async with self._cache_slots:
+            pending = self._pending.get(key)
+            if pending is not None:
+                span.attributes["cache"] = "hit"
+                return await pending.replay()
+            pending = self._pending[key] = _Pending()
+            try:
+                cached = await cache.alookup(self.settings, *identity, digest=key)
+                if cached is not None:
+                    span.attributes["cache"] = "hit"
+                    pending.result = cached
+                else:
+                    evaluation = await self._evaluate_capped(provider, state, questions)
+                    span.attributes["input_tokens"] = evaluation.usage.input_tokens
+                    span.attributes["output_tokens"] = evaluation.usage.output_tokens
+                    await cache.astore(self.settings, *identity, evaluation, digest=key)
+                    pending.result = evaluation
+                return pending.result
+            except BaseException as error:
+                pending.error = error
+                raise
+            finally:
+                del self._pending[key]
+                pending.ready.set()
 
     async def _evaluate_capped(
         self, provider: JevProvider, state: JsonValue, questions: Mapping[str, Question]
@@ -199,10 +243,28 @@ class Runtime:
             return await provider.evaluate(state, questions, self.model, None)
 
     async def aclose(self) -> None:
-        await self._regex_executor.aclose()
-        if self._provider is not None:
-            await self._provider.aclose()
-            self._provider = None
+        errors: list[BaseException] = []
+        with anyio.CancelScope(shield=True):
+            async with self._close_lock:
+                if not self._regex_closed:
+                    try:
+                        with anyio.fail_after(_CLOSE_SECONDS):
+                            await self._regex_executor.aclose()
+                        self._regex_closed = True
+                    except BaseException as error:
+                        errors.append(error)
+                if self._provider is not None:
+                    try:
+                        with anyio.fail_after(_CLOSE_SECONDS):
+                            await self._provider.aclose()
+                        self._provider = None
+                    except BaseException as error:
+                        errors.append(error)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("runtime shutdown failed", errors)
+        await anyio.lowlevel.checkpoint_if_cancelled()
 
 
 type Handler = Callable[[dict[str, Any], Runtime], Awaitable[ToolResult]]

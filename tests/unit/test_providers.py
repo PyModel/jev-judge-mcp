@@ -161,12 +161,12 @@ def typesafe(handler: Any, retry: RetryPolicy | None = None) -> TypeSafeProvider
 
 @pytest.mark.anyio
 async def test_typesafe_sdk_retries_are_disabled(fast_retries: list[float]) -> None:
-    """One retry owner (ADR-0057): the SDK is built with `max_retries=0`, so a 503 is attempted
+    """One retry owner (ADR-0057): the SDK is built with `max_retries=0`, so a 429 is attempted
     exactly jev policy's three times — never multiplied by the SDK's own default two retries."""
-    statuses = [503, 503, 200]
+    statuses = [429, 429, 200]
 
     def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(statuses.pop(0), json={"answers": {"q": 0.5}}, headers={"retry-after-ms": "0"})
+        return httpx2.Response(statuses.pop(0), json={"answers": {"q": 0.5}})
 
     provider = typesafe(handler)
     try:
@@ -585,3 +585,116 @@ async def test_typesafe_gates_the_client_the_sdk_is_given() -> None:
         assert wrapper.timeout.connect is None and wrapper.timeout.read is None
     finally:
         await provider.aclose()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", [200, 500])
+async def test_scout_019_stream_limit_stops_consumption(status: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    from jev_judge_mcp.providers import base
+
+    monkeypatch.setattr(base, "SUCCESS_BYTES_MAX", 8, raising=False)
+    monkeypatch.setattr(base, "ERROR_BYTES_MAX", 8, raising=False)
+    consumed: list[bytes] = []
+    closed: list[bool] = []
+
+    class Body(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for chunk in [b"12345678", b"9", b"unused"]:
+                consumed.append(chunk)
+                yield chunk
+
+        async def aclose(self):
+            closed.append(True)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(status, stream=Body())))
+    provider = CompatibleProvider(Redactor([]), api_key="", base_url="https://fixture.invalid", client=client)
+    try:
+        with pytest.raises(ProviderError, match="byte limit"):
+            await provider.evaluate({}, QUESTIONS, "fixture", 1)
+    finally:
+        await provider.aclose()
+    assert consumed == [b"12345678", b"9"]
+    assert closed == [True]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failure", [httpx.ReadTimeout("read"), httpx.ReadError("closed"), 501, 505])
+async def test_scout_005_ambiguous_post_is_never_replayed(
+    failure: httpx.RequestError | int, fast_retries: list[float]
+) -> None:
+    attempts: list[httpx.Request] = []
+
+    def send(request: httpx.Request) -> httpx.Response:
+        attempts.append(request)
+        if isinstance(failure, int):
+            return httpx.Response(failure)
+        raise failure
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(send))
+    provider = CompatibleProvider(Redactor([]), api_key="", base_url="https://fixture.invalid", client=client)
+    try:
+        with pytest.raises(ProviderError, match="Completion is uncertain"):
+            await provider.evaluate({}, QUESTIONS, "fixture", 10)
+    finally:
+        await provider.aclose()
+    assert len(attempts) == 1
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("extra", [0, 1])
+async def test_scout_019_sdk_limits_unbuffered_success(monkeypatch: pytest.MonkeyPatch, extra: int) -> None:
+    from jev_judge_mcp.providers import base
+
+    body = b'{"answers":{"q":1}}'
+    monkeypatch.setattr(base, "SUCCESS_BYTES_MAX", len(body))
+    closed: list[bool] = []
+
+    class Stream(httpx2.AsyncByteStream):
+        async def __aiter__(self):
+            yield body
+            if extra:
+                yield b" "
+
+        async def aclose(self):
+            closed.append(True)
+
+    def send(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, stream=Stream())
+
+    provider = typesafe(send)
+    try:
+        if extra:
+            with pytest.raises(ProviderError, match="byte limit"):
+                await provider.evaluate({}, QUESTIONS, "fixture", 1)
+        else:
+            assert (await provider.evaluate({}, QUESTIONS, "fixture", 1)).answers == {"q": 1}
+    finally:
+        await provider.aclose()
+    assert closed == [True]
+
+
+@pytest.mark.anyio
+async def test_scout_019_unrequested_encoding_closes_before_consumption() -> None:
+    consumed: list[bool] = []
+    closed: list[bool] = []
+
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            consumed.append(True)
+            yield b""
+
+        async def aclose(self) -> None:
+            closed.append(True)
+
+    def send(request: httpx.Request) -> httpx.Response:
+        assert request.headers["accept-encoding"] == "identity"
+        return httpx.Response(200, headers={"content-encoding": "gzip"}, stream=Stream())
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(send))
+    provider = CompatibleProvider(Redactor([]), api_key="", base_url="https://fixture.invalid", client=client)
+    try:
+        with pytest.raises(ProviderError, match="unsupported content encoding"):
+            await provider.evaluate({}, QUESTIONS, "fixture", 1)
+    finally:
+        await provider.aclose()
+    assert not consumed and closed == [True]

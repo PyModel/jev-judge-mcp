@@ -291,3 +291,19 @@ async def test_an_allowed_command_runs_after_the_gate(tmp_path: Any, monkeypatch
     payload = cast(dict[str, Any], outcome.payload)
     assert payload["state_summary"]["output"] > 0
     assert payload["usage"] == {"input_tokens": 2, "output_tokens": 2}  # gate + ask, summed
+
+
+def test_scout_012_command_receives_only_operating_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import patch
+
+    from jev_judge_mcp.tools.ask_state import run_command, scrubbed_environment
+    from jev_judge_mcp.tools.base import ToolError
+
+    monkeypatch.setenv("BENIGN_PARENT_MARKER", "sample")
+    monkeypatch.setenv("LANG", "C")
+    env = scrubbed_environment(Settings())
+    assert "BENIGN_PARENT_MARKER" not in env
+    assert env["LANG"] == "C" and env["PATH"]
+    with patch("subprocess.Popen", side_effect=OSError("fixture")) as spawn, pytest.raises(ToolError):
+        run_command("true", 1, 100)
+    assert spawn.call_args.kwargs["env"] == env

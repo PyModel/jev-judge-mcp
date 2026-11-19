@@ -12,6 +12,11 @@ with the ADR-0076 credential-literal detector before it becomes state, so a judg
 config file never ships its secrets to the provider.
 """
 
+import logging
+import os
+import stat
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import NoReturn
 
@@ -19,6 +24,8 @@ from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.limits import FILE_JUDGE, FileJudgeCaps, FilesJudgeCaps
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import ToolError
+
+logger = logging.getLogger(__name__)
 
 REFUSAL_CODES = (
     "not_found",
@@ -39,12 +46,20 @@ _SECRET_ENV_STANDINS = frozenset({".env.example", ".env.sample", ".env.template"
 the checked-in stand-ins, so a real environment file is never read but its redacted example is."""
 
 
-def is_secret_store(path: Path) -> bool:
+def is_secret_store(path: Path, key_path: Path | None = None) -> bool:
     """Whether the file's name is a known secret store: such files are never read.
 
-    Matched on the resolved path's name, so a symlink's target name decides; the check is a pure
-    name test and precedes any I/O.
+    Matched on the resolved path's name, so a symlink's target name decides. The configured
+    key is also excluded by path and file identity.
     """
+    if key_path is not None:
+        try:
+            if path == key_path.absolute() or path == key_path.resolve() or path.samefile(key_path):
+                return True
+        except FileNotFoundError:
+            pass
+        except (OSError, RuntimeError):
+            return True
     name = path.name.lower()
     if name in _SECRET_EXACT:
         return True
@@ -57,6 +72,7 @@ def refuse(code: str, message: str) -> NoReturn:
     """Raise the one refusal shape the file tools own."""
     if code not in REFUSAL_CODES:
         raise ValueError(f"{code!r} is not a file-state refusal")
+    logger.debug("file refusal code=%s", code)
     raise ToolError(message, code=code)
 
 
@@ -69,43 +85,62 @@ def resolve_scoped(path: str, scope: Path | None = None) -> Path:
     wants another tree launches the server there.
     """
     root = (scope if scope is not None else Path.cwd()).resolve()
-    resolved = (root / path).resolve()
+    try:
+        resolved = (root / path).resolve()
+    except (ValueError, OSError, RuntimeError):
+        refuse("path_outside_scope", "file path could not be resolved within the working directory")
     if not resolved.is_relative_to(root):
         refuse("path_outside_scope", f"path resolves outside the server's working directory: {path}")
     return resolved
 
 
-def read_state(path: Path, caps: FileJudgeCaps | FilesJudgeCaps = FILE_JUDGE) -> str:
-    """The decoded text of a scoped regular file, or its typed refusal; no content is echoed.
-
-    Order is cheapest first: the secret-store name test (pure, no I/O), existence and type
-    (`stat`), the byte early-out, then the read with the NUL sniff, then the exact UTF-16
-    measurement, and finally the credential-literal redaction. The caller resolves the path
-    through `resolve_scoped` first, so scope precedes everything by construction, and every
-    refusal here precedes any provider call. `caps` is the calling tool's budget block: the
-    default is `jev_file_judge`'s, and `jev_files_judge` passes its own (the same numbers today,
-    so a recalibration moves both in one change).
-    """
-    if is_secret_store(path):
-        refuse("secret_file", f"{path.name} is a known secret store and is never read")
+@contextmanager
+def pinned_directory(directory: Path) -> Generator[int]:
+    """Open each component without following links, then enumerate or open children by descriptor."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open(directory.anchor, flags)
     try:
-        stat = path.stat()
+        for component in directory.parts[1:]:
+            child = os.open(component, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def read_state(path: Path, caps: FileJudgeCaps | FilesJudgeCaps = FILE_JUDGE, *, key_path: Path | None = None) -> str:
+    """Read only the validated descriptor, up to the byte ceiling plus one sentinel byte."""
+    if is_secret_store(path, key_path):
+        refuse("secret_file", f"{path.name} is a known secret store and is never read")
+    limit = 4 * caps.file_units_max
+    try:
+        with pinned_directory(path.parent) as directory:
+            fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                refuse("not_a_file", f"path is not a regular file: {path}")
+            if key_path is not None:
+                try:
+                    key_info = key_path.stat()
+                except FileNotFoundError:
+                    pass
+                else:
+                    if os.path.samestat(key_info, info):
+                        refuse("secret_file", f"{path.name} is the active key store")
+            if info.st_size > limit:
+                refuse("file_too_large", f"file exceeds the {caps.file_units_max:,}-unit state cap: {path}")
+            with os.fdopen(fd, "rb", closefd=False) as handle:
+                data = handle.read(limit + 1)
+        finally:
+            os.close(fd)
     except FileNotFoundError:
         refuse("not_found", f"file not found: {path}")
-    except OSError as error:
-        refuse("not_a_file", f"path is not a readable file: {path} ({error.strerror or error})")
-    if not path.is_file():
-        refuse("not_a_file", f"path is not a regular file: {path}")
-    # Every UTF-8 byte sequence — valid, or replaced when undecodable — measures at least one
-    # UTF-16 unit per four bytes, so a file over four times the unit cap is over-cap unread.
-    if stat.st_size > 4 * caps.file_units_max:
+    except (OSError, ValueError) as error:
+        refuse("not_a_file", f"path is not a readable file: {path} ({error})")
+    if len(data) > limit:
         refuse("file_too_large", f"file exceeds the {caps.file_units_max:,}-unit state cap: {path}")
-    try:
-        data = path.read_bytes()
-    except OSError as error:
-        # A file that passed `stat` but refuses the read (mode 000, a device, a race): the same
-        # typed verdict as any other non-readable path, never a bare handler failure.
-        refuse("not_a_file", f"path is not a readable file: {path} ({error.strerror or error})")
     if b"\x00" in data[: caps.binary_sniff_bytes]:
         refuse("binary_file", f"file looks binary (NUL byte in the first {caps.binary_sniff_bytes} bytes): {path}")
     content = data.decode("utf-8", errors="replace")

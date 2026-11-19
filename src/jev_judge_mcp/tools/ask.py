@@ -13,8 +13,10 @@ Published after the frozen prefix (divergence `ask-tool-extension`); its caps li
 
 from typing import Any, cast
 
+import anyio
+
 from jev_judge_mcp.domain import ChoiceQuestion, Question, ScoreQuestion
-from jev_judge_mcp.keyfile import redaction_values
+from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import ASK, FILE_JUDGE, SANITIZE_ID_UNITS
 from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.text import length
@@ -64,7 +66,8 @@ DEFINITION = define(
     "gate both pass: a read-only effect with confidence at the floor and no destructive intent. Anything "
     "else is the typed `command_refused` refusal carrying the reason and the final-block notice, with "
     "no execution and no ask call. The gate judges; this tool does not sandbox. An allowed command runs "
-    "with no stdin, a 30-second timeout, a secret-scrubbed environment, and its redacted "
+    "with no stdin, a 30-second timeout, and only PATH, timezone and locale settings. Enable it under a "
+    "dedicated account with only the filesystem permissions its commands need. Its redacted "
     "output becomes state. Nothing is ever truncated: an over-budget composition refuses with each "
     "part's size and a first-fit split suggestion naming which parts go to which call. Answers come "
     "back keyed by your ids, fail-closed per question. Not for exact lookups, counting, math, or "
@@ -197,7 +200,9 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             raise ToolError(denylist, code="command_refused")
     own = own_part(args.get("state", ""))
     parts: list[Part] = [own] if own is not None else []
-    file_result, skipped = file_parts(args.get("paths", []))
+    file_result, skipped = await anyio.to_thread.run_sync(
+        file_parts, args.get("paths", []), stored_key_path(runtime.settings)
+    )
     parts.extend(file_result)
     units = question_units(questions)
     if command is not None and units + sum(part.units for part in parts) > ASK.request_units_max:

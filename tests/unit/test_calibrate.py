@@ -185,7 +185,7 @@ def test_a_budget_must_come_from_tool_or_flag(tmp_path: Path, capsys: pytest.Cap
         + [json.dumps({"score": 0.9, "correct": True, "tool": "jev_verify"})] * 20,
     )
     assert calibrate.main([str(mixed)]) == 2
-    assert "rows carry the tools jev_classify, jev_verify; pass --tool to choose one" in capsys.readouterr().err
+    assert "rows carry the tools jev_classify, jev_verify; provide rows for one tool" in capsys.readouterr().err
     clash = rows_file(tmp_path, [json.dumps({"score": 0.9, "correct": True, "tool": "jev_classify"})] * 40)
     assert calibrate.main([str(clash), "--tool", "jev_verify"]) == 2
     assert "a row carries tool 'jev_classify', not --tool 'jev_verify'" in capsys.readouterr().err
@@ -231,3 +231,36 @@ def test_pathological_rows_files_exit_two_instead_of_crashing(
     deep = rows_file(tmp_path, ["[" * 100_000])
     assert calibrate.main([str(deep), "--max-error", "0.3"]) == 2
     assert "not one JSON object" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("tool", [[], {}])
+def test_scout_017_malformed_tool_exits_two(tmp_path: Path, tool: object) -> None:
+    path = rows_file(tmp_path, [json.dumps({"score": 0.9, "correct": True, "tool": tool})])
+    assert calibrate.main([str(path)]) == 2
+
+
+@pytest.mark.parametrize("budget", ["1e-20", "5e-324"])
+def test_scout_017_tiny_budget_exits_one(tmp_path: Path, budget: str) -> None:
+    assert calibrate.main([str(rows_file(tmp_path, [CLEAN] * 40)), "--max-error", budget]) == 1
+
+
+def test_scout_017_unicode_in_labels() -> None:
+    for family in ["ordinary\u2028label", "\ud800"]:
+        line = json.dumps({"score": 0.9, "correct": True, "family": family}, ensure_ascii=False)
+        if family == "\ud800":
+            with pytest.raises(calibrate.CalibrateError):
+                calibrate.parse_rows(line, "input")
+        else:
+            assert calibrate.parse_rows(line, "input")[0].family == family
+
+
+def test_scout_018_explicit_labels_do_not_absorb_anonymous_rows() -> None:
+    # Each anonymous row collides with a large explicit family under the legacy naming.
+    labels = [json.dumps({"score": 0.9, "correct": False, "family": f"row{i}"}) for i in range(1, 9)]
+    rows = calibrate.parse_rows("\n".join([CLEAN] * 8 + labels), "input")
+    rows *= 4
+    first, second = calibrate.split_rows(rows)
+    assert any(
+        {r.correct for r in second if r.family == label} != {True, False} for label in {r.family for r in second}
+    )
+    assert (first, second) == calibrate.split_rows(rows)

@@ -49,9 +49,18 @@ def test_xdg_home_honors_the_override_and_the_default(monkeypatch: pytest.Monkey
     assert fsutil.xdg_home("config") == tmp_path / ".config"
 
 
-def test_restrict_swallows_a_filesystem_that_cannot_chmod(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_private_directory_creation_does_not_need_chmod(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     def refuse(path: object, mode: int) -> None:
         raise OSError("no mode bits on this filesystem")
 
     monkeypatch.setattr("jev_judge_mcp.fsutil.os.chmod", refuse)
     assert fsutil.private_dir(tmp_path / "d") == tmp_path / "d"  # the directory still exists
+
+
+def test_scout_010_preserves_existing_directory_mode(tmp_path: Path) -> None:
+    tmp_path.chmod(0o755)
+    with pytest.raises(PermissionError) as refused:
+        fsutil.write_private_atomic(tmp_path / "private", "sample")
+    assert str(tmp_path) not in str(refused.value)
+    assert _mode(tmp_path) == 0o755
+    assert not (tmp_path / "private").exists()

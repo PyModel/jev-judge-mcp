@@ -3,25 +3,16 @@
 `keyfile` (the stored API key) and `cache` (replayed judgments over the caller's State) both write
 into the user's home, and both hold material no other local account should read. The mode pair
 lives here once — the XDG base, the private leaf directory, and the atomic write that always lands
-a fresh 0600 file. A filesystem that cannot express a mode keeps the file (ADR-0032 is POSIX-only);
-the write still succeeds.
+a fresh 0600 file. A directory whose ownership or permissions cannot be verified is refused.
 """
 
 import os
+import stat
 import tempfile
 from pathlib import Path
 from typing import Literal
 
-FILE_MODE = 0o600
 DIR_MODE = 0o700
-
-
-def restrict(path: Path, mode: int) -> None:
-    """Tighten `mode`; a filesystem that cannot express it keeps the file anyway."""
-    try:
-        os.chmod(path, mode)
-    except OSError:
-        pass
 
 
 def xdg_home(kind: Literal["cache", "config"]) -> Path:
@@ -34,9 +25,15 @@ def xdg_home(kind: Literal["cache", "config"]) -> Path:
 
 def private_dir(path: Path) -> Path:
     """`path` exists and is mode 0700. Intermediates keep the user's own modes."""
-    path.mkdir(parents=True, exist_ok=True)
-    restrict(path, DIR_MODE)
+    path.mkdir(mode=DIR_MODE, parents=True, exist_ok=True)
+    require_private_dir(path)
     return path
+
+
+def require_private_dir(path: Path) -> None:
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        raise PermissionError("choose a private directory owned by the current user with mode 0700")
 
 
 def write_private_atomic(path: Path, text: str) -> Path:
@@ -51,8 +48,6 @@ def write_private_atomic(path: Path, text: str) -> Path:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        # mkstemp already created 0600; this re-asserts it on filesystems that need it.
-        restrict(Path(temporary), FILE_MODE)
         os.replace(temporary, path)
     except BaseException:
         try:
@@ -60,5 +55,4 @@ def write_private_atomic(path: Path, text: str) -> Path:
         except OSError:
             pass
         raise
-    restrict(path, FILE_MODE)
     return path

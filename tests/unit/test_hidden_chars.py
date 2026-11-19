@@ -54,6 +54,9 @@ def test_undecodable_file_fails_instead_of_being_skipped(data: bytes) -> None:
     assert "not UTF-8" in check.scan([("f", data)])[0]
 
 
-def test_outside_a_repository_exits_2(tmp_path: Path) -> None:
+def test_outside_a_repository_exits_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
     result = subprocess.run([sys.executable, str(SCRIPT)], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert result.returncode == 2, result.stderr

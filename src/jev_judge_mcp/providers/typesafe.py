@@ -16,9 +16,11 @@ from pydantic import RootModel
 from jev_judge_mcp.domain import JsonValue
 from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.providers.base import (
+    BoundedStream,
     Evaluation,
     JevProvider,
     ProviderConnectionError,
+    ProviderDeliveryError,
     ProviderError,
     ProviderName,
     decode_body,
@@ -26,8 +28,9 @@ from jev_judge_mcp.providers.base import (
     parse_envelope,
     refuse_credentials_in_url,
     request_id_of,
+    response_limit,
 )
-from jev_judge_mcp.providers.retry import RetryPolicy
+from jev_judge_mcp.providers.retry import RetryPolicy, retry_after_seconds
 from jev_judge_mcp.serialize import stringify_compact
 
 if TYPE_CHECKING:
@@ -60,6 +63,19 @@ def sdk_importable() -> bool:
 
 async def _remember_headers(response: "httpx2.Response") -> None:
     """The SDK returns the body only. Keep this response's headers for ``request_id_of``."""
+    import httpx2
+
+    limit = response_limit(response.is_success, response.headers.get("content-encoding"))
+    if response.is_stream_consumed:
+        if len(response.content) > limit:
+            raise ProviderError(f"provider response exceeds the {limit}-byte limit")
+    else:
+
+        class Stream(BoundedStream, httpx2.AsyncByteStream):
+            pass
+
+        assert isinstance(response.stream, httpx2.AsyncByteStream)
+        response.stream = Stream(response.stream, limit)
     _response_headers.set(response.headers)
 
 
@@ -132,6 +148,7 @@ class TypeSafeProvider(JevProvider):
             self._wrapper = httpx2.AsyncClient(
                 timeout=None,
                 transport=self._transport,
+                headers={"Accept-Encoding": "identity"},
                 event_hooks={"request": [self._reject_cross_origin], "response": [_remember_headers]},
             )
             self._client = AsyncTypeSafeClient(
@@ -167,21 +184,20 @@ class TypeSafeProvider(JevProvider):
                     response_model=_RawBody,
                 )
             except TypeSafeAPIError as error:
-                # Only the 429 subclass carries `retry_after_ms`; other statuses have no hint.
-                retry_after_ms = cast("float | None", getattr(error, "retry_after_ms", None))
                 raise self._status_error(
                     error.status,
                     _body_text(error.body),
-                    retry_after=None if retry_after_ms is None else retry_after_ms / 1000,
+                    retry_after=retry_after_seconds(_response_headers.get() or {}),
                 ) from None
             except TypeSafeAPIConnectionError as error:
                 # The SDK writes `Connection error: {cause}`; a reset's cause has an empty message.
                 cause = error.__cause__
-                if isinstance(error, TimeoutError) or cause is None or str(cause):
+                if isinstance(cause, (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.PoolTimeout)):
+                    raise ProviderConnectionError(f"{self.label} request failed: {error}") from None
+                if isinstance(error, TimeoutError):
                     raise
-                # A reset is a transient connection failure even without a message (ADR-0057): the
-                # subclass keeps today's text and marks the error retryable.
-                raise ProviderConnectionError(f"{self.label} request failed: {error}{type(cause).__name__}") from None
+                detail = str(error) if cause is None or str(cause) else f"{error}{type(cause).__name__}"
+                raise ProviderDeliveryError(f"{self.label} request failed: {detail}") from None
             headers = _response_headers.get()
         finally:
             _response_headers.reset(token)

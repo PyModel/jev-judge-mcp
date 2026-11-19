@@ -2,10 +2,8 @@
 
 Every provider shares this policy, so there is exactly one definition and one test suite: the
 typesafe-sdk transport is constructed with `RetryPolicy(max_retries=0)` (its own default policy is
-disabled) and `JevProvider.evaluate` drives the attempts for all four providers. Only transient
-transport failures are retried — a connection failure before any response, a per-attempt timeout,
-and the status codes in `statuses` — never another 4xx, an envelope or validation error, a provider
-configuration error, or a cancelled call.
+disabled) and `JevProvider.evaluate` drives the attempts for all four providers.
+Only failures known to precede delivery and rate-limit rejections qualify for replay.
 
 The module-level `sleep`, `clock` and `uniform` are the loop's dependencies; tests replace them to
 stay offline and deterministic.
@@ -44,8 +42,8 @@ def uniform() -> float:
 class RetryPolicy:
     """The bounded retry shape every provider is driven by (ADR-0057).
 
-    The retry counts, backoff, jitter, and status set match the typesafe-sdk `RetryPolicy` defaults
-    (max 2 retries, 0.5 s backoff doubling to 5 s, 25% subtractive jitter, 408/429/5xx, `Retry-After`
+    The retry counts, backoff and jitter match the typesafe-sdk `RetryPolicy` defaults
+    (max 2 retries, 0.5 s backoff doubling to 5 s, 25% subtractive jitter, `Retry-After`
     honored). The SDK in use (0.7.1) does not leave those deadlines unset: `constants.DEFAULT_TIMEOUT`
     is 10 s per HTTP operation, and `RetryPolicy.timeout` is a 30 s total retry budget. This policy's
     30 s per-attempt timeout and 90 s overall budget are this server's bounds (ADR-0057), not SDK gaps.
@@ -55,18 +53,18 @@ class RetryPolicy:
     """Total attempts including the first; `1` disables retries (`NO_RETRIES`)."""
 
     per_attempt_timeout: float = 30.0
-    """Seconds before one attempt is abandoned as a retryable timeout."""
+    """Seconds before one attempt is abandoned."""
 
     backoff_initial: float = 0.5
     """First backoff delay in seconds, doubled each attempt up to `backoff_max`."""
 
     backoff_max: float = 5.0
-    """Cap on every delay, `Retry-After` hints included."""
+    """Cap on generated backoff. A server minimum is never shortened."""
 
     backoff_jitter: float = 0.25
     """Fraction of each backoff delay randomly subtracted, between 0 and 1."""
 
-    statuses: frozenset[int] = field(default_factory=lambda: frozenset({408, 429, *range(500, 600)}))
+    statuses: frozenset[int] = field(default_factory=lambda: frozenset({429}))
     """HTTP status codes that are retried."""
 
     budget: float = 90.0
@@ -132,12 +130,12 @@ def retry_delay(
 ) -> float | None:
     """The delay before the retry after failed `attempt`, or `None` when retries stop.
 
-    Delays honor a server `Retry-After` hint, capped at `backoff_max`. Retries stop at
+    Delays honor a server `Retry-After` minimum. Retries stop at
     `max_attempts` and when `elapsed + delay` would reach `budget`.
     """
     if attempt >= policy.max_attempts:
         return None
-    delay = backoff_delay(policy, attempt) if retry_after is None else min(retry_after, policy.backoff_max)
+    delay = backoff_delay(policy, attempt) if retry_after is None else retry_after
     if elapsed + delay >= budget:
         return None
     return delay
