@@ -273,14 +273,14 @@ def test_holder_readiness_failures(tmp_path: Path, script: str, error: type[Exce
 def test_reconcile_published_results_and_missing_metering(tmp_path: Path) -> None:
     from evals.spend import reconciliation_notes
 
-    rows = {tmp_path / "paid/result.json": {"cost": 2}, tmp_path / "unknown/result.json": {}}
-    assert reconciliation_notes(tmp_path, {}, [], cost_key="cost") == []
-    notes = reconciliation_notes(tmp_path, rows, [], cost_key="cost")
+    rows = {tmp_path / "paid/result.json": {"cost_usd": 2}, tmp_path / "unknown/result.json": {}}
+    assert reconciliation_notes(tmp_path, {}, [], cost_key="cost_usd") == []
+    notes = reconciliation_notes(tmp_path, rows, [], cost_key="cost_usd")
     assert "missing spend ledger" in notes
     assert "result without booking: paid, unknown" in notes
     assert "unmeasurable result cost: unknown" in notes
     (tmp_path / "ledger.json").write_text('{"runs":{"paid":2,"other":1}}')
-    assert reconciliation_notes(tmp_path, rows, [], cost_key="cost") == [
+    assert reconciliation_notes(tmp_path, rows, [], cost_key="cost_usd") == [
         "booked without result: other",
         "result without booking: unknown",
         "unmeasurable result cost: unknown",
