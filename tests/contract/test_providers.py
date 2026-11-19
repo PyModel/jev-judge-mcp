@@ -293,7 +293,9 @@ async def test_missing_usage_reports_zeros(case: Case, peer: Peer, usage: Any) -
         inner["usage"] = usage
     provider, _ = peer.provider(reply(case.wrap(inner)))
 
-    assert (await evaluate(provider)).usage == Usage(0, 0)
+    observed = (await evaluate(provider)).usage
+    assert observed.to_wire() == {"input_tokens": 0, "output_tokens": 0}
+    assert observed.reported is False
 
 
 @pytest.mark.parametrize("content", [b"not json", b"", b'{"answers": NaN}', b"{"], ids=["text", "empty", "nan", "cut"])

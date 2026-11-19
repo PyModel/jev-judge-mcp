@@ -144,7 +144,7 @@ def parse_envelope(body: object, label: str) -> Envelope:
     answers = envelope.get("answers")
     if not isinstance(answers, dict):
         raise invalid("expected an answers object.")
-    usage = Usage()
+    usage = Usage(reported=False)
     raw_usage = envelope.get("usage")
     if raw_usage is not None:
         counts = usage_counts(raw_usage)
