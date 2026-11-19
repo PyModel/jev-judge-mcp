@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from jev_judge_mcp import cli
+from jev_judge_mcp import cli, git_diff
 from jev_judge_mcp.cli import completion_hook_main, completion_matches, gate_main, judge_main
 from jev_judge_mcp.git_diff import split_unified
 from jev_judge_mcp.limits import GATE
@@ -268,7 +268,9 @@ def test_cli_gate_does_not_mark_a_file_it_read_self_reported(
     state carrying the file text, so an unread file cannot pass.
     """
     repo = repo_with_diff(tmp_path)
-    monkeypatch.chdir(repo)
+    subdir = repo / "nested"
+    subdir.mkdir()
+    monkeypatch.chdir(subdir)
     raw = (repo / "tests.log").read_bytes()
     provider = FakeProvider({})
     code = gate_main(
@@ -278,6 +280,7 @@ def test_cli_gate_does_not_mark_a_file_it_read_self_reported(
     captured = capsys.readouterr()
     assert code == 0
     review = json.loads(captured.out)["payload"]["review"]
+    assert review["reviewed_files"] == ["x.py"]
     assert "tests_weight" not in review
     assert provider.requests
     state = provider.requests[0][0]
@@ -371,10 +374,10 @@ def test_gate_guards_local_inputs_before_judgment(
         monkeypatch.setattr(cli, "is_secret_store", unrecognized_path)
     elif case == "patch":
 
-        def malformed_diff(_repo: Path, _range: str) -> str:
-            return "unsplittable fixture"
+        def unsplittable(_text: str) -> None:
+            return None
 
-        monkeypatch.setattr(cli, "diff_argument", malformed_diff)
+        monkeypatch.setattr(git_diff, "split_unified", unsplittable)
     else:
         path = repo / "claims.json"
         path.write_text(" " * (GATE.aggregate_evidence_units + 1) + path.read_text())

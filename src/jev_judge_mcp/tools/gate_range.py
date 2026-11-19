@@ -86,7 +86,9 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         # This reader read the log, so the review weighs it as read, not self-reported (ADR-0067).
         passed["tests_sha256"] = hashlib.sha256(tests.encode("utf-8")).hexdigest()
     try:
-        files, skipped = await anyio.to_thread.run_sync(_read_range, args["range"], key_path, redact)
+        files, skipped = await anyio.to_thread.run_sync(
+            lambda: read_range(args["range"], key_path, redact, cwd=Path.cwd())
+        )
     except GitDiffTooLarge as error:
         raise ToolError(str(error), code="input_too_large") from error
     except GitDiffError as error:
@@ -99,11 +101,10 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     return replace(result, payload={**result.payload, "tool": NAME, **extra})
 
 
-def _read_range(rev_range: str, key_path: Path, redact: Redactor) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """The range's diff limited to the working directory, the file tools' scope (ADR-0077): the
-    repository must contain it, and the `.` pathspec keeps every other part of the repository out.
-    Run off the event loop so a slow git blocks no other call."""
-    cwd = Path.cwd()
+def read_range(
+    rev_range: str, key_path: Path, redact: Redactor, *, cwd: Path
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Read and guard the diff inside the caller's scope: the CLI repository root or the MCP working directory."""
     root = repo_root(cwd)
     revision, origins = scoped_range(cwd, rev_range)
     diff = diff_argument(cwd, revision, paths=(".",), flags=("--full-index",))
