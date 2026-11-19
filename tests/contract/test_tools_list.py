@@ -133,6 +133,10 @@ def _expected_tool(frozen: dict[str, Any], actual: dict[str, Any]) -> dict[str, 
         props[field]["description"] = _description(current[field])
     if name == "jev_gate":
         expected["description"] = _description(actual)
+        props["review_at"]["description"] = (
+            "Low-score diagnostic threshold. An uncited concern requires review. Must be <= "
+            "auto_accept. Default min(0.5, auto_accept)."
+        )
     if name in {"jev_gate", "jev_verify"}:
         variants = props["evidence"]["anyOf"]
         served = current["evidence"]["anyOf"]
@@ -232,13 +236,16 @@ async def test_unknown_tool_is_a_deterministic_parity_shape() -> None:
     assert text_of(result) == "MCP error -32602: Tool jev_nope not found"
 
 
-@pytest.mark.parametrize("change", ["required", "constraint"])
+@pytest.mark.parametrize("change", ["required", "constraint", "review_threshold"])
 def test_production_comparison_rejects_legacy_schema_regressions(change: str, monkeypatch: pytest.MonkeyPatch) -> None:
     from jev_judge_mcp.tools import TOOLS
 
     served = [tool.definition.model_dump(by_alias=True, exclude_none=True) for tool in TOOLS]
-    schema = next(tool["inputSchema"] for tool in served if tool["name"] == "jev_verify")
-    if change == "required":
+    schemas = {tool["name"]: tool["inputSchema"] for tool in served}
+    schema = schemas["jev_verify"]
+    if change == "review_threshold":
+        schemas["jev_gate"]["properties"]["review_at"]["maximum"] = 0.9
+    elif change == "required":
         schema["required"].append("auto_accept")
     else:
         schema["properties"]["claims"]["minItems"] += 1
