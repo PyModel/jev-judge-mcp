@@ -627,10 +627,10 @@ def run_confined(
         wall = time.perf_counter() - started
         for name in ("jev-calls.jsonl", "jev-calls.stderr"):
             copy_regular_nofollow(scratch / name, run_dir / name)
-        write_run_logs(run_dir, stdout, stderr)
+        raw_hits = write_run_logs(run_dir, stdout, stderr, secrets=secrets)
         trace = (parse or stream.parse)(stdout.splitlines())
         escape = escape_scan(stdout, box)
-        hits = sorted({name for value in secrets for name in secret_scan(run_dir, value)})
+        hits = sorted(raw_hits.union(name for value in secrets for name in secret_scan(run_dir, value)))
         if hits:
             prefix = f"{escape}; " if escape else ""
             escape = f"{prefix}secret scan: key value found in {', '.join(hits)}"

@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 # An account formerly present in recorded examples. Use its digest so the guard itself is portable and clean.
 RECORDED_ACCOUNT_SHA256 = "a7cdf5d0586b392473dd0cd08c9ba833240006a8a7310bf9bc8bf1aefdfaeadb"
-HOME_PATH = re.compile(rb"/(?:Users|home)/[A-Za-z0-9][A-Za-z0-9._-]*")
+HOME_PATH = re.compile(rb"/(?:Users|home)/[A-Za-z0-9_][A-Za-z0-9._-]*")
 EXAMPLE_HOMES = {
     b"/Users/dev",
     b"/Users/example",
@@ -22,12 +22,12 @@ EXAMPLE_HOMES = {
     b"/home/user",
 }
 # Darwin's per-user temporary directory can also appear flattened in Claude's project key.
-DARWIN_TEMP = re.compile(rb"(?:/var/folders/|-var-folders-)[a-z0-9]{2}[/\-][a-z0-9_]{20,}", re.I)
+DARWIN_TEMP = re.compile(rb"(?:/var/folders/|-var-folders-)([a-z0-9_]+)", re.I)
 ACCOUNT_CANDIDATE = re.compile(rb"(?=(p[a-z]{4}))", re.I)
 
 
 def contains_host_identifier(data: bytes) -> bool:
-    if DARWIN_TEMP.search(data) or set(HOME_PATH.findall(data)) - EXAMPLE_HOMES:
+    if set(DARWIN_TEMP.findall(data)) - {b"probe", b"none", b"xyz"} or set(HOME_PATH.findall(data)) - EXAMPLE_HOMES:
         return True
     return any(
         hashlib.sha256(word.lower()).hexdigest() == RECORDED_ACCOUNT_SHA256
@@ -46,3 +46,11 @@ def test_tracked_files_omit_host_identifiers() -> None:
         if contains_host_identifier(data):
             offenders.append(name)
     assert not offenders, f"tracked files contain host identifiers: {offenders}"
+
+
+def test_portable_home_and_temp_controls() -> None:
+    for prefix in (b"/Users/", b"/home/"):
+        assert contains_host_identifier(prefix + b"_contributor/work")
+    for root in (b"/private/var/" + b"folders/", b"-private-var-" + b"folders-"):
+        assert contains_host_identifier(root + b"q1/sample/T/work")
+    assert not contains_host_identifier(b"/home/example/work")

@@ -700,10 +700,45 @@ def ensure_private_run_dir(run_dir: Path) -> None:
         raise PermissionError("study run directory must be private and owned by the operator")
 
 
-def write_run_logs(run_dir: Path, stdout: str, stderr: str) -> None:
+def write_run_logs(
+    run_dir: Path, stdout: str, stderr: str, *, base_env: Mapping[str, str] | None = None, secrets: Sequence[str] = ()
+) -> set[str]:
+    """Neutralize host roots in saved captures. Return raw secret hits before any path is replaced."""
+    env = base_env or {}
+    roots = [
+        (tempfile.gettempdir(), "/home/example/temp"),
+        (env.get("TMPDIR", ""), "/home/example/temp"),
+        (str(Path.home()), "/home/example"),
+        (env.get("HOME", ""), "/home/example"),
+        (str(Path.cwd()), "/home/example/project"),
+        (str(Path(__file__).resolve().parents[1]), "/home/example/project"),
+    ]
+    replacements: dict[str, str] = {}
+    for root, neutral in roots:
+        root = root.rstrip("/")
+        if not root.startswith("/"):
+            continue
+        for spelling in _both(root):
+            if not spelling or spelling == "/private":
+                continue
+            replacements[spelling] = neutral
+            replacements[json.dumps(spelling)[1:-1]] = neutral
+            replacements[spelling.replace("/", "-")] = neutral.replace("/", "-")
+            replacements[re.sub(r"[^a-zA-Z0-9]", "-", spelling)] = neutral.replace("/", "-")
+            if re.fullmatch(r"(?:/private)?/var/folders/[^/]+/[^/]+/[TC]", spelling):
+                parent = spelling.rsplit("/", 1)[0]
+                replacements[parent] = "/home/example/temp-user"
+                replacements[parent.replace("/", "-")] = "-home-example-temp-user"
+                replacements[re.sub(r"[^a-zA-Z0-9]", "-", parent)] = "-home-example-temp-user"
+    # Longest first: a checkout and the temporary directory can both be inside the home.
+    pattern = re.compile("|".join(map(re.escape, sorted(replacements, key=len, reverse=True))) + r"(?![\w])")
+    hits: set[str] = set()
     for name, content in (("stream.jsonl", stdout), ("claude.stderr", stderr)):
+        if any(value and value in content for value in secrets):
+            hits.add(name)
         with open(run_dir / name, "w", encoding="utf-8", opener=private_opener) as sink:
-            sink.write(content)
+            sink.write(pattern.sub(lambda match: replacements[match.group()], content) if replacements else content)
+    return hits
 
 
 def _with_stderr_marker(stderr: str) -> str:
@@ -1022,13 +1057,13 @@ def run_agent(
         except _StdoutCapExceeded as exceeded:
             # Persist before the raise so the finally scrub still sees the secret on this path.
             cfg.cleanup()
-            write_run_logs(run_dir, exceeded.captured_stdout, exceeded.captured_stderr)
+            write_run_logs(run_dir, exceeded.captured_stdout, exceeded.captured_stderr, base_env=base_env)
             raise
         except _IncompleteTranscript as incomplete:
             # Same contract: persist what was read, then fail loudly. A silently partial
             # transcript would book an agent verdict on missing evidence.
             cfg.cleanup()
-            write_run_logs(run_dir, incomplete.captured_stdout, incomplete.captured_stderr)
+            write_run_logs(run_dir, incomplete.captured_stdout, incomplete.captured_stderr, base_env=base_env)
             raise
         wall = time.perf_counter() - started
         for name in (RELAY_LOG, str(Path(RELAY_LOG).with_suffix(".stderr"))):
@@ -1040,8 +1075,8 @@ def run_agent(
                 ):
                     shutil.copyfileobj(src, dst)
         cfg.cleanup()
-        write_run_logs(run_dir, stdout, stderr)
-        scan_hit = secret_scan(run_dir, secret)
+        raw_hits = write_run_logs(run_dir, stdout, stderr, base_env=base_env, secrets=[secret])
+        scan_hit = sorted(raw_hits.union(secret_scan(run_dir, secret)))
         escape = escape_scan(stdout, box)
         if scan_hit:
             prefix = f"{escape}; " if escape else ""
