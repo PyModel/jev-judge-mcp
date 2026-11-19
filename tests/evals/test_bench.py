@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -562,7 +563,7 @@ def _record(item: str, arm: str, *, correct: bool, wall: float, gate_reason: str
 def test_headline_uses_complete_triplets_only() -> None:
     records = [
         _record("i1", "A", correct=False, wall=10.0),
-        {**_record("i1", "B", correct=True, wall=12.0), "jev_calls": [{"tool": "jev_verify"}]},
+        {**_record("i1", "B", correct=True, wall=12.0), "jev_calls": [{"tool": "jev_verify", "model": "jev-1.13.0"}]},
         _record("i1", "C", correct=True, wall=14.0),
         _record("i2", "A", correct=True, wall=10.0),
         _record("i2", "B", correct=False, wall=11.0, gate_reason="did not call Jev"),
@@ -624,9 +625,7 @@ def test_per_tool_breakdown_scores_wrapped_answers_of_labeled_items() -> None:
     ]
     items = {item.id: item for item in (verify, rerank, screen, draft, compare)}
     breakdown = analysis.per_tool(analysis.complete_triplets(records), items)
-    assert set(breakdown) == {"jev_verify", "jev_rerank", "jev_screen", "jev_compare"}, "draft items have no gold"
-    compare_metric = {arm: breakdown["jev_compare"][arm]["metrics"]["perturbed_contradiction_recall"] for arm in "ABC"}
-    assert compare_metric == {"A": 1.0, "B": 0.0, "C": 1.0}, "a wrong Jev model voids the answer"
+    assert set(breakdown) == {"jev_verify", "jev_rerank", "jev_screen"}, "only valid triplets with gold"
     assert breakdown["jev_verify"]["A"]["metrics"]["contradiction_recall"] == 1.0
     assert breakdown["jev_verify"]["B"]["metrics"]["contradiction_recall"] == 1.0, "automatic non-use keeps the answer"
     forced = breakdown["jev_verify"]["C"]["metrics"]["contradiction_recall"]
@@ -972,7 +971,8 @@ def test_scout_009_report_reserves_the_bound_for_an_unpriced_run() -> None:
         for arm, cost in zip("ABC", [0.0, "unknown", 0.03], strict=True)
     ]
     summary = analysis.headline(analysis.complete_triplets(rows))
-    assert [summary[f"jev_usd_{arm}"] for arm in "ABC"] == [0, POLICY.run_bound_usd, 0.03]
+    assert [summary[f"jev_usd_{arm}"] for arm in "ABC"] == [0, 0, 0.03]
+    assert [summary[f"jev_reserve_usd_{arm}"] for arm in "ABC"] == [0, POLICY.run_bound_usd, 0]
 
 
 def test_scout_009_report_names_booked_discrepancies_without_rewriting_history(
@@ -990,3 +990,151 @@ def test_scout_009_report_names_booked_discrepancies_without_rewriting_history(
     assert f"{run_id} ($0.9 booked, $0.03 in result)" in html
     assert "operator stopped" in html
     assert book.path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("field", "bad"),
+    [
+        ("wall_s", True),
+        ("wall_s", -1),
+        ("wall_s", float("nan")),
+        ("wall_s", float("inf")),
+        ("wall_s", 10**400),
+        ("duration_ms", False),
+        ("duration_ms", -1),
+        ("correct", "false"),
+        ("server_failure", 0),
+        ("agent_cost_reported", 1),
+        ("agent_model", 1),
+        ("gate", {}),
+        ("cross_check", []),
+        ("parse_error", False),
+        ("answer", [1]),
+        ("jev_cost_usd", "0"),
+        ("num_turns", 1.5),
+        ("usage", {"reported": True, "input": {}}),
+        ("timings", [{"round_trip_ms": True}]),
+        ("tool_counts", {"Bash": -1}),
+        ("mcp_servers", []),
+        ("jev_calls", [{"tool": ["not a name"], "is_error": 1}]),
+    ],
+)
+def test_invalid_saved_bench_row_is_named_and_excluded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, bad: object
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    for rid in loop.ids:
+        loop.seed(rid, 0)
+    path = loop.out / loop.ids[1] / "result.json"
+    row = json.loads(path.read_text())
+    path.write_text(json.dumps({**row, field: bad}))
+    stop = loop.go()
+    assert "incomplete result records" in stop and path.parent.name in stop
+    assert len(run.load_records(loop.out)) == 2
+    assert analysis.complete_triplets(run.load_records(loop.out)) == {}
+    assert path.parent.name in run.write_report(loop.out, stop="", sample=True).read_text()
+
+
+@pytest.mark.parametrize(
+    ("fields", "reason"),
+    [
+        ({"cross_check": "trace lost a call"}, "trace lost a call"),
+        ({"jev_calls": [{"tool": "jev_verify", "model": "wrong-model"}]}, "wrong-model"),
+        ({"status": "blocked: Jev rejected the API key"}, "rejected the API key"),
+    ],
+)
+def test_resume_honors_legacy_terminal_arm_and_keeps_its_cost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fields: dict[str, Any], reason: str
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    for rid in loop.ids:
+        booking_cases.write_result(loop.out, rid, 0.17, bench_keys=True, **(fields if rid.endswith(".B") else {}))
+    stop = loop.go()
+    assert reason in stop
+    assert not analysis.complete_triplets(run.load_records(loop.out))
+    assert loop.load().runs == dict.fromkeys(loop.ids, 0.17)
+    report = run.write_report(loop.out, stop="", sample=True).read_text()
+    assert reason in report and "0.17" in report
+    assert "Jev connection: 1 of 1" in report
+
+
+def test_legacy_unfinished_result_recovers_the_bound_across_restarts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    for rid in loop.ids:
+        fields = {"status": "failed: post-processing raised RuntimeError: grading failed"} if rid.endswith(".B") else {}
+        booking_cases.write_result(loop.out, rid, 0.0, bench_keys=True, **fields)
+    assert loop.go() == loop.done
+    failed = next(rid for rid in loop.ids if rid.endswith(".B"))
+    assert loop.load().runs[failed] == loop.bound
+    assert loop.go() == loop.done and loop.load().spent == loop.bound
+    report = run.write_report(loop.out, stop="", sample=True).read_text()
+    assert "reserve" in report and f"${loop.bound:g}" in report
+
+
+def test_resume_stops_on_a_previously_underbooked_unfinished_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    rid = loop.ids[0]
+    booking_cases.write_result(loop.out, rid, 0.0, bench_keys=True, status="failed: post-processing raised KeyError")
+    loop.load().record(rid, 0.0)
+    loop.install(lambda *_args: pytest.fail("launched with an underbooked unfinished run"))
+    stop = loop.go()
+    assert rid in stop and "reserve" in stop
+    assert loop.load().runs == {rid: 0.0}
+
+
+def test_invalid_grading_fields_keep_evidence_of_spend_above_the_reserve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    rid = loop.ids[0]
+    charge = loop.bound + 1.0
+    booking_cases.write_result(loop.out, rid, charge, bench_keys=True, wall_s=True)
+    assert "incomplete" in loop.go()
+    assert loop.load().runs == {rid: charge}
+
+
+@pytest.mark.parametrize(("stored", "incomplete"), [(False, True), (3.25, False)])
+def test_legacy_failure_migration_only_replaces_placeholder_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stored: float | bool, incomplete: bool
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    for rid in loop.ids:
+        booking_cases.write_result(
+            loop.out,
+            rid,
+            0.0,
+            bench_keys=True,
+            **(
+                {"status": "failed: post-processing raised ValueError", "jev_cost_usd": stored}
+                if rid.endswith(".B")
+                else {}
+            ),
+        )
+    stop = loop.go()
+    assert ("incomplete" in stop) == incomplete
+    failed = next(rid for rid in loop.ids if rid.endswith(".B"))
+    assert loop.load().runs[failed] == (loop.bound if incomplete else stored)
+
+
+def test_concurrent_resume_checks_recover_one_charge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    items = load_items(DRYRUN)[:1]
+    run_id = loop.ids[0]
+    loop.seed(run_id, 0.17)
+    both_read = threading.Barrier(2)
+    started = run.agent_started
+
+    def simultaneous_check(path: Path) -> bool:
+        if path.name == run_id:
+            both_read.wait(timeout=5)
+        return started(path)
+
+    monkeypatch.setattr(run, "agent_started", simultaneous_check)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        checks = [pool.submit(run.runs_remain, items, loop.out) for _ in range(2)]
+        assert all(check.result(timeout=10) for check in checks)
+    assert loop.load().runs == {run_id: 0.17}

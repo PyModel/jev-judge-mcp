@@ -26,10 +26,10 @@ from evals.bench.ledger import POLICY
 from evals.bench.proxy import BENCH_REQUEST_CAP
 from evals.spend import SpendLedger
 from tests.evals.booking_cases import (
+    assert_no_nan,
     bench_loop,
     cancelled_error_does_not_book,
     operator_interrupt_books_the_bound,
-    seeded_nan_books_the_bound,
     seeded_result_books_the_file_cost,
 )
 from tests.support.bench_provider import API_KEY, Loopback
@@ -171,6 +171,8 @@ def test_wrong_model_fails_the_gate_and_stops_the_study(tmp_path: Path) -> None:
     assert callers[0]["run_id"] in SpendLedger.load(tmp_path / "out" / "ledger.json", POLICY).runs, (
         "recorded, never retried"
     )
+    assert "jev-latest" in callers[0]["status"]
+    assert not run.runs_remain(ITEMS, tmp_path / "out")
     other = "dry-verify-01" if callers[0]["item"] == "dry-screen-01" else "dry-screen-01"
     assert not any(run_id.startswith(other) for run_id in got)
 
@@ -228,7 +230,16 @@ def test_a_run_whose_post_processing_raises_is_booked_at_the_run_bound(
     assert API_KEY not in "".join(p.read_text(encoding="utf-8") for p in out.rglob("*") if p.is_file())
     failed = records(out, failed="dry-screen-01.B")["dry-screen-01.B"]
     assert failed["status"].startswith("failed: post-processing raised RuntimeError: span parse broke")
-    assert failed["cost_usd"] == failed["agent_cost_usd"] == POLICY.run_bound_usd and not failed["correct"]
+    assert failed["jev_cost_usd"] is None and not failed["correct"]
+    assert failed["agent_cost_usd"] is None and failed["cost_usd"] is None
+    # Recovery after the row was committed and before the ledger was booked.
+    recovered = tmp_path / "crash-before-booking"
+    for path in out.glob("*/result.json"):
+        target = recovered / path.relative_to(out)
+        target.parent.mkdir(parents=True)
+        target.write_bytes(path.read_bytes())
+    run.runs_remain(ITEMS[:1], recovered)
+    assert SpendLedger.load(recovered / "ledger.json", POLICY).runs == book.runs
     assert failed["agent_cost_reported"] is False and failed["gate"] is None
     kept = (out / "dry-screen-01.B" / "result.json").read_text(encoding="utf-8")
     monkeypatch.setattr(spans, "parse_spans", original)
@@ -253,6 +264,8 @@ def test_a_stream_proxy_mismatch_stops_the_study(tmp_path: Path, loopback: Loopb
     assert all(row["correct"] == (row["arm"] != "C") for row in got.values())
     mismatched = [record for record in got.values() if record["cross_check"]]
     assert len(mismatched) == 1 and mismatched[0]["arm"] == "C" and not mismatched[0]["correct"]
+    assert mismatched[0]["cross_check"] in mismatched[0]["status"]
+    assert not run.runs_remain(ITEMS, tmp_path / "out")
 
 
 def test_an_unparseable_final_answer_is_incorrect(tmp_path: Path, loopback: Loopback) -> None:
@@ -339,4 +352,27 @@ def test_resume_books_a_seeded_result_cost_not_the_bound(tmp_path: Path, monkeyp
 
 
 def test_resume_books_the_bound_when_the_seeded_cost_is_nan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    seeded_nan_books_the_bound(bench_loop(tmp_path, monkeypatch))
+    loop = bench_loop(tmp_path, monkeypatch)
+    for run_id in loop.ids:
+        loop.seed(run_id, float("nan"))
+    loop.install(lambda *_: pytest.fail("relaunched an incomplete run"))
+    stop = loop.go()
+    assert "incomplete result records" in stop and all(run_id in stop for run_id in loop.ids)
+    assert loop.load().runs == dict.fromkeys(loop.ids, loop.bound)
+    assert_no_nan(loop.out / "ledger.json")
+
+
+def test_grading_failure_preserves_a_terminal_wrong_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(calls: Sequence[object], _spans: object) -> list[object]:
+        if calls:
+            raise RuntimeError("timing attribution failed")
+        return []
+
+    monkeypatch.setattr(spans, "attribute", broken)
+    out = tmp_path / "out"
+    with Loopback(model="jev-latest") as unpinned, pytest.raises(RuntimeError, match="timing attribution"):
+        run.run_bench(ITEMS, setup(tmp_path, unpinned), out)
+    failed = next(row for row in records(out).values() if "timing attribution" in row["status"])
+    assert "jev-latest" in failed["status"]
+    assert not run.runs_remain(ITEMS, out)
+    assert SpendLedger.load(out / "ledger.json", POLICY).runs[failed["run_id"]] == POLICY.run_bound_usd

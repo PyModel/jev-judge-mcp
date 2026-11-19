@@ -40,6 +40,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, NonNegativeFloat, NonNegativeInt, ValidationError
+
 from evals.ab import arms, stream
 from evals.agent import (
     RELAY_LOG,
@@ -52,7 +54,7 @@ from evals.artifacts import incomplete_message, read_records
 from evals.bench import analysis, answer, chart, gate, prompt, spans
 from evals.bench.items import Item, load_items
 from evals.bench.ledger import ARMS, POLICY, TRIPLET
-from evals.spend import SpendLedger, agent_started, book_outcome, reconciliation_notes
+from evals.spend import SpendLedger, agent_started, amount, booked_amount, reconciliation_notes
 from evals.study_runner import record_row, run_recorded, write_record
 
 LIVE_FLAG = "JEV_BENCH_LIVE"
@@ -198,10 +200,11 @@ def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) ->
         parse=setup.trace,
         auth_provider=setup.auth_provider or None,
     ) as run:
+        status = run.status
 
         def build() -> dict[str, Any]:
-            nonlocal stop
-            trace, status = run.trace, run.status
+            nonlocal status, stop
+            trace = run.trace
             # Claude reports MCP server status in its init event; Pi's stream does not, so the connection
             # check only applies when the trace names servers. Pi relies on the use gate and the proxy log.
             jev_down = arm in ("B", "C") and trace.mcp_servers and trace.mcp_servers.get("jev") != "connected"
@@ -217,6 +220,18 @@ def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) ->
                 stop = ServerUnreachable(server_error)
             elif arm in ("B", "C"):
                 use = gate.use_gate(calls) if arm == "C" else gate.automatic_note(calls)
+                try:
+                    (setup.cross_check or gate.cross_check)(calls, trace)
+                except gate.HarnessMismatchError as mismatch:
+                    cross_check, stop = str(mismatch), mismatch
+                    status = f"stopped: harness mismatch: {mismatch}"
+                wrong = gate.wrong_models(calls)
+                if wrong and stop is None:
+                    stop = gate.WrongModelError(f"{run_id}: Jev answered as {', '.join(wrong)}, not {arms.JEV_MODEL}")
+                    status = f"stopped: wrong Jev model: {stop}"
+                if jev_auth_error(calls) and stop is None:
+                    status = "blocked: Jev rejected the API key"
+                    stop = AuthRejected("Jev rejected the API key")
                 stderr_log = jev_log.with_suffix(".stderr")
                 server_spans = (
                     spans.parse_spans(stderr_log.read_text(encoding="utf-8").splitlines())
@@ -224,16 +239,6 @@ def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) ->
                     else []
                 )
                 timings = spans.attribute(calls, server_spans)
-                try:
-                    (setup.cross_check or gate.cross_check)(calls, trace)
-                except gate.HarnessMismatchError as mismatch:
-                    cross_check, stop = str(mismatch), mismatch
-                wrong = gate.wrong_models(calls)
-                if wrong and stop is None:
-                    stop = gate.WrongModelError(f"{run_id}: Jev answered as {', '.join(wrong)}, not {arms.JEV_MODEL}")
-                if jev_auth_error(calls) and stop is None:
-                    status = "blocked: Jev rejected the API key"
-                    stop = AuthRejected("Jev rejected the API key")
             parsed, parse_error = answer.parse(item, trace.result_field("result"))
             # C's missing Jev answer fails the run. B's "did not call Jev" does not.
             forced_miss = arm == "C" and use is not None
@@ -279,7 +284,11 @@ def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) ->
             )
 
         def failed(error: Exception) -> dict[str, Any]:
-            return failed_record(run_id, item, arm, run, book.policy.run_bound_usd, error)
+            row = failed_record(run_id, item, arm, run, error)
+            if stop is not None:
+                row["status"] = f"{status}; {row['status']}"
+                row["server_failure"] = isinstance(stop, ServerUnreachable)
+            return row
 
         record = write_record(run_dir / "result.json", build, failed)
     if stop is not None:
@@ -287,33 +296,60 @@ def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) ->
     return record
 
 
-_RECORD_KEYS = (
-    "run_id",
-    "item",
-    "tool",
-    "family",
-    "arm",
-    "status",
-    "answer",
-    "parse_error",
-    "gate",
-    "correct",
-    "cross_check",
-    "server_failure",
-    "wall_s",
-    "duration_ms",
-    "agent_model",
-    "agent_cost_usd",
-    "jev_cost_usd",
-    "cost_usd",
-    "agent_cost_reported",
-    "num_turns",
-    "tool_counts",
-    "mcp_servers",
-    "usage",
-    "jev_calls",
-    "timings",
-)
+class _SavedFields(BaseModel):
+    model_config = ConfigDict(strict=True, allow_inf_nan=False)
+
+
+class _Usage(_SavedFields):
+    # Claude and Pi attach different usage details. These are the fields used for reporting.
+    reported: bool = False
+    input: NonNegativeInt = 0
+    output: NonNegativeInt = 0
+    cache_read: NonNegativeInt = 0
+    cache_write: NonNegativeInt = 0
+
+
+class _SavedCall(_SavedFields):
+    tool: str
+    model: str | None = None
+    is_error: bool = False
+    refused: bool = False
+
+
+class _SavedTiming(_SavedFields):
+    round_trip_ms: NonNegativeFloat
+    provider_ms: NonNegativeFloat | None
+    # Subtracting spans measured on different clocks can produce negative residuals.
+    server_ms: float
+    relay_ms: float
+
+
+class _BenchRecord(_SavedFields):
+    run_id: str
+    item: str
+    tool: str
+    family: str
+    arm: str
+    status: str
+    answer: str | list[str] | None
+    parse_error: str | None
+    gate: str | None
+    correct: bool
+    cross_check: str | None
+    server_failure: bool
+    wall_s: NonNegativeFloat
+    duration_ms: NonNegativeFloat | None
+    agent_model: str | None
+    agent_cost_usd: NonNegativeFloat | None
+    jev_cost_usd: NonNegativeFloat | None
+    cost_usd: NonNegativeFloat | None
+    agent_cost_reported: bool
+    num_turns: NonNegativeInt | None
+    tool_counts: dict[str, NonNegativeInt]
+    mcp_servers: dict[str, str]
+    usage: _Usage
+    jev_calls: list[_SavedCall]
+    timings: list[_SavedTiming] | None
 
 
 def _bench_record(
@@ -335,12 +371,10 @@ def _bench_record(
         "mcp_servers": trace.mcp_servers,
     }
     values.update(measured)
-    return record_row(_RECORD_KEYS, values)
+    return record_row(tuple(_BenchRecord.model_fields), values)
 
 
-def failed_record(
-    run_id: str, item: Item, arm: str, run: AgentRunResult, run_bound_usd: float, error: Exception
-) -> dict[str, Any]:
+def failed_record(run_id: str, item: Item, arm: str, run: AgentRunResult, error: Exception) -> dict[str, Any]:
     """The record of a run whose post-processing raised: failed, unscored, and charged the run bound.
 
     Keys are the success record's (`_bench_record`). The study runner books the bound. Its gate stays
@@ -359,9 +393,9 @@ def failed_record(
             "correct": False,
             "cross_check": None,
             "server_failure": False,
-            "agent_cost_usd": run_bound_usd,
-            "jev_cost_usd": 0.0,
-            "cost_usd": run_bound_usd,
+            "agent_cost_usd": None,
+            "jev_cost_usd": None,
+            "cost_usd": None,
             "agent_cost_reported": False,
             "usage": {"reported": False},
             "jev_calls": [],
@@ -370,23 +404,48 @@ def failed_record(
     )
 
 
-def _records(out: Path) -> tuple[dict[Path, dict[str, Any]], list[Path]]:
-    return read_records(
-        out.glob("*/result.json"),
-        required=("run_id", "item", "arm", "status", "tool"),
-        valid=lambda r: (
-            r["arm"] in ARMS
-            and r["run_id"] == f"{r['item']}.{r['arm']}"
-            and isinstance(r.get("jev_calls"), list)
-            and all(isinstance(call, dict) for call in r["jev_calls"])
-            and isinstance(r.get("wall_s"), int | float)
-            and {"correct", "answer", "parse_error", "gate"} <= r.keys()
-        ),
-    )
+@dataclass
+class _SavedResults:
+    rows: dict[Path, dict[str, Any]]
+    incomplete: list[Path]
+    charges: dict[str, float]
+
+
+def _records(out: Path) -> _SavedResults:
+    charges: dict[str, float] = {}
+
+    def valid(row: dict[str, Any]) -> bool:
+        # read_records has already matched run_id to its directory. An unusable grading
+        # row still reserves the bound, and keeps evidence of any larger charge.
+        run_id = row["run_id"]
+        if (
+            isinstance(row.get("status"), str)
+            and row["status"].startswith(chart.GRADING_FAILURE)
+            and amount(row.get("jev_cost_usd")) == 0.0
+        ):
+            # Old graders wrote a placeholder zero after losing the cost. Preserve the original file.
+            row["jev_cost_usd"] = None
+        cost = booked_amount(row.get("jev_cost_usd"), POLICY.run_bound_usd)
+        charges[run_id] = max(cost, POLICY.run_bound_usd)
+        try:
+            record = _BenchRecord.model_validate(row)
+        except ValidationError:
+            return False
+        if (
+            record.arm not in ARMS
+            or run_id != f"{record.item}.{record.arm}"
+            or not all((record.item.strip(), record.status.strip(), record.tool.strip(), record.family.strip()))
+        ):
+            return False
+        charges[run_id] = cost
+        return True
+
+    rows, incomplete = read_records(out.glob("*/result.json"), required=("run_id",), valid=valid)
+    return _SavedResults(rows, incomplete, charges)
 
 
 def load_records(out: Path) -> list[dict[str, Any]]:
-    return list(_records(out)[0].values())
+    return list(_records(out).rows.values())
 
 
 def recorded_model(out: Path) -> str | None:
@@ -395,19 +454,6 @@ def recorded_model(out: Path) -> str | None:
         return None
     text = path.read_text(encoding="utf-8").strip()
     return text or None
-
-
-def _prior_stop(out: Path) -> str | None:
-    """A connection error or an auth rejection already booked. Resume must not continue."""
-    records, incomplete = _records(out)
-    if incomplete:
-        return incomplete_message(incomplete, out)
-    for record in records.values():
-        if record.get("server_failure"):
-            return f"stopped: provider failure on {record['run_id']}; not an arm result"
-        if str(record.get("status", "")).startswith("blocked:"):
-            return "blocked: Jev rejected the API key"
-    return None
 
 
 def recorded_thinking(out: Path) -> str | None:
@@ -419,10 +465,19 @@ def recorded_thinking(out: Path) -> str | None:
 
 
 def _report_inputs(out: Path, stop: str) -> tuple[list[dict[str, Any]], str]:
-    rows, incomplete = _records(out)
-    notes = [incomplete_message(incomplete, out)] if incomplete else []
-    notes.extend(reconciliation_notes(out, rows, incomplete, cost_key="jev_cost_usd"))
-    return list(rows.values()), "; ".join(dict.fromkeys(filter(None, [stop, *notes])))
+    saved = _records(out)
+    notes = [incomplete_message(saved.incomplete, out)] if saved.incomplete else []
+    notes.extend(reconciliation_notes(out, saved.rows, saved.incomplete, cost_key="jev_cost_usd"))
+    eligible: list[dict[str, Any]] = []
+    for row in saved.rows.values():
+        cost = row["jev_cost_usd"]
+        reason = analysis.terminal_reason(row)
+        if cost is None or reason:
+            charge = f"Jev reserve ${POLICY.run_bound_usd:g} (unmeasured)" if cost is None else f"Jev cost ${cost:g}"
+            notes.append(f"{row['run_id']}: {reason or row['status']}; {charge}")
+        if reason is None or row["server_failure"]:
+            eligible.append(row)
+    return eligible, "; ".join(dict.fromkeys(filter(None, [stop, *notes])))
 
 
 def write_report(out: Path, *, stop: str, sample: bool, labeled_items: int | None = None) -> Path:
@@ -475,22 +530,36 @@ def _stop_reason(run_id: str, error: BaseException) -> str | None:
 
 def _load_book(
     items: Sequence[Item], out: Path, seed: int
-) -> tuple[SpendLedger, list[tuple[Item, tuple[str, str, str]]]]:
+) -> tuple[SpendLedger, list[tuple[Item, tuple[str, str, str]]], str | None]:
     """The ledger after already-started runs are booked, and the plan those runs came from."""
     book = SpendLedger.load(out / "ledger.json", POLICY)
     plan = schedule(items, seed)
+    saved = _records(out)
+    prior = incomplete_message(saved.incomplete, out) if saved.incomplete else None
     for item, order in plan:
         for arm in order:
             run_id = f"{item.id}.{arm}"
-            if agent_started(out / run_id):
-                book_outcome(book, run_id, out / run_id / "result.json", cost_key="jev_cost_usd")
-    return book, plan
+            if run_id in book.runs or not agent_started(out / run_id):
+                continue
+            charge = saved.charges.get(run_id, book.policy.run_bound_usd)
+            try:
+                book.record(run_id, charge)
+            except ValueError:
+                # Concurrent resume checks may recover the same charge. A different booking is a conflict.
+                if book.runs.get(run_id) != charge:
+                    raise
+    for row in saved.rows.values():
+        rid = row["run_id"]
+        if row["jev_cost_usd"] is None and rid in book.runs and book.runs[rid] < book.policy.run_bound_usd:
+            prior = prior or f"stopped: {rid} booked below its unfinished Jev reserve of ${book.policy.run_bound_usd:g}"
+        prior = prior or analysis.terminal_reason(row)
+    return book, plan, prior
 
 
 def runs_remain(items: Sequence[Item], out: Path, *, seed: int = SEED) -> bool:
     """True when a bench call would launch at least one run. A finished bench, or one already stopped, does not."""
-    book, plan = _load_book(items, out, seed)
-    if _prior_stop(out):
+    book, plan, prior = _load_book(items, out, seed)
+    if prior:
         return False
     done = set(analysis.complete_triplets(load_records(out)))
     for item, order in plan:
@@ -502,8 +571,8 @@ def runs_remain(items: Sequence[Item], out: Path, *, seed: int = SEED) -> bool:
 
 def run_bench(items: Sequence[Item], setup: Setup, out: Path, *, seed: int = SEED) -> str:
     """Run every triplet not yet recorded, within the caps; returns why it stopped."""
-    book, plan = _load_book(items, out, seed)
-    if prior := _prior_stop(out):
+    book, plan, prior = _load_book(items, out, seed)
+    if prior:
         return prior
     total_runs = TRIPLET * len(plan)
     for item, order in plan:

@@ -192,7 +192,25 @@ def write_result(out: Path, run_id: str, cost: float, *, bench_keys: bool, **fie
     if bench_keys:
         item, arm = run_id.rsplit(".", 1)
         payload["jev_cost_usd"] = cost
-        payload.update(tool="jev_verify", jev_calls=[], correct=False, parse_error=None, gate=None)
+        payload.update(
+            tool="jev_verify",
+            family="test",
+            jev_calls=[],
+            correct=False,
+            parse_error=None,
+            gate=None,
+            cross_check=None,
+            server_failure=False,
+            duration_ms=None,
+            agent_model=None,
+            agent_cost_usd=None,
+            agent_cost_reported=False,
+            num_turns=None,
+            tool_counts={},
+            mcp_servers={},
+            usage={},
+            timings=None,
+        )
         payload["item"] = item
         payload["arm"] = arm
     else:
