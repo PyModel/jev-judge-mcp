@@ -344,3 +344,47 @@ def test_writer_failure_after_replace_keeps_shared_ledger_current(
     with pytest.raises(OSError, match="failed after replace"):
         book.record("published", 1)
     assert peer.runs == json.loads(book.path.read_text())["runs"] == {"published": 1}
+
+
+def test_spend_recovery_bounds_stored_history(tmp_path: Path) -> None:
+    from evals.artifacts import RESULT_BYTES_MAX
+    from evals.spend import reconciliation_notes
+
+    history = tmp_path / "ledger.json"
+    history.write_bytes(b'{"runs": {}}'.ljust(RESULT_BYTES_MAX + 1))
+    with pytest.raises(OSError, match="exceeds"):
+        _ledger(tmp_path)
+    assert reconciliation_notes(tmp_path, {}, [], cost_key="cost_usd") == ["unreadable spend ledger"]
+
+
+def test_spend_recovery_bounds_result_cost(tmp_path: Path) -> None:
+    from evals.artifacts import RESULT_BYTES_MAX
+
+    ledger = _ledger(tmp_path)
+    result = tmp_path / "result.json"
+    result.write_bytes(b'{"cost_usd": 0.25}'.ljust(RESULT_BYTES_MAX))
+    book_outcome(ledger, "at-limit", result)
+    with result.open("ab") as output:
+        output.write(b" ")
+    book_outcome(ledger, "oversized", result)
+    assert ledger.runs == {"at-limit": 0.25, "oversized": BOUND}
+
+
+def test_spend_recovery_requires_regular_history_at_its_own_path(tmp_path: Path) -> None:
+    target = tmp_path / "copied.json"
+    target.write_text('{"runs": {"previous": 1}}')
+    (tmp_path / "ledger.json").symlink_to(target)
+    with pytest.raises(OSError):
+        _ledger(tmp_path)
+
+
+def test_spend_recovery_keeps_last_readable_ledger_on_oversized_write(tmp_path: Path) -> None:
+    from evals.artifacts import RESULT_BYTES_MAX
+
+    book = _ledger(tmp_path)
+    book.record("kept", 1)
+    previous = book.path.read_bytes()
+    with pytest.raises((ValueError, OSError), match="exceeds"):
+        book.record("a" * RESULT_BYTES_MAX, 2)
+    assert book.path.read_bytes() == previous
+    assert book.runs == {"kept": 1}

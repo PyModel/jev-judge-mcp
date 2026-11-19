@@ -12,7 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, cast
 
-from evals.artifacts import write_json
+from evals.artifacts import RESULT_BYTES_MAX, read_artifact, write_json
 
 JEV_PUBLISHED_USD_PER_MTOK_INPUT = 0.042
 """TypeSafe's published list price (docs/jev_docs/models.md). Output tokens are free."""
@@ -61,10 +61,14 @@ class _History:
     owners: int = 0
 
     def publish(self, path: Path, cap: float, runs: dict[str, float]) -> None:
+        payload = {"max_usd": cap, "runs": runs}
+        # write_json emits ASCII JSON with indent=2 and a trailing newline.
+        if len(json.dumps(payload, indent=2, allow_nan=False)) + 1 > RESULT_BYTES_MAX:
+            raise ValueError(f"{path}: ledger exceeds {RESULT_BYTES_MAX} bytes")
         directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             try:
-                write_json(path, {"max_usd": cap, "runs": runs})
+                write_json(path, payload)
             except OSError:
                 # A writer may fail on cleanup or durability after making its rename visible.
                 try:
@@ -101,8 +105,7 @@ os.register_at_fork(after_in_child=_after_fork)
 
 def _read_history(path: Path) -> tuple[dict[str, float], float | None]:
     runs: dict[str, float] = {}
-    raw = path.read_text(encoding="utf-8")
-    payload: object = json.loads(raw)
+    payload: object = json.loads(read_artifact(path).decode("utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"{path}: expected a ledger object")
     entries = cast(dict[str, object], payload)
@@ -180,7 +183,7 @@ def _release(path: Path, state: _History) -> None:
 
 class SpendLedger:
     def __init__(self, policy: SpendPolicy, path: Path) -> None:
-        self.path = path.resolve()
+        self.path = path.parent.resolve() / path.name
         self._policy = policy
         with _mutex:
             state = _histories.get(self.path)
@@ -282,7 +285,7 @@ def book_outcome(ledger: SpendLedger, run_id: str, result_path: Path, *, cost_ke
         if run_id in ledger.runs:
             return
         try:
-            row: object = json.loads(result_path.read_text(encoding="utf-8"))
+            row: object = json.loads(read_artifact(result_path).decode("utf-8"))
         except (ValueError, OSError, RecursionError):
             row = None
         raw = cast(dict[str, Any], row).get(cost_key) if isinstance(row, dict) else None
