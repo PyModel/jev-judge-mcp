@@ -251,10 +251,14 @@ def _survey(request: Request) -> tuple[list[_Hit], bool]:
         hits.append(_Hit("opencode", "; ".join(opencode), False))
 
     pi_dir = layout.pi_dir()
-    adapter = pi_adapter_installed(layout.pi_settings())
-    pi_directory_without_adapter = pi_dir.exists() and not adapter
-    if pi_dir.exists() and adapter:
-        hits.append(_Hit("pi", f"{pi_dir} exists and pi-mcp-adapter is installed", False))
+    pi_directory_without_adapter = False
+    if pi_dir.exists():
+        if request.remove:
+            hits.append(_Hit("pi", f"{pi_dir} exists", False))
+        elif pi_adapter_installed(layout.pi_settings()):
+            hits.append(_Hit("pi", f"{pi_dir} exists and pi-mcp-adapter is installed", False))
+        else:
+            pi_directory_without_adapter = True
 
     omp: list[str] = []
     omp_root = layout.home / ".omp"
@@ -312,7 +316,7 @@ def _select(
     # Automatic means nobody named the agents: neither `--agent` nor the chooser's answer.
     automatic = (not request.agents and not chosen_explicitly) or request.select_all
     pi_requested = "pi" in selected or (automatic and pi_directory_without_adapter)
-    if pi_requested and not pi_adapter_installed(request.layout.pi_settings()):
+    if not request.remove and pi_requested and not pi_adapter_installed(request.layout.pi_settings()):
         lines.append(
             "Pi needs the MCP adapter before it can run this server. "
             f"Install it with `{PI_ADAPTER_HINT}`, then re-run. The Pi config was not changed."

@@ -187,12 +187,14 @@ def wheel_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "other-project"\n', encoding="utf-8")
     monkeypatch.setattr(launch_module, "__file__", str(origin))
     outer_manifests = {parent / "pyproject.toml" for parent in tmp_path.resolve().parents}
-    is_file = Path.is_file
+    real_stat = Path.stat
 
-    def visible_file(path: Path) -> bool:
-        return path not in outer_manifests and is_file(path)
+    def visible_stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if path in outer_manifests:
+            raise FileNotFoundError(path)
+        return real_stat(path, follow_symlinks=follow_symlinks)
 
-    monkeypatch.setattr(Path, "is_file", visible_file)
+    monkeypatch.setattr(Path, "stat", visible_stat)
 
 
 @pytest.mark.usefixtures("wheel_layout")
@@ -422,6 +424,31 @@ def test_checkout_flag_without_a_checkout_fails_accurately(
     assert "before publication" not in out
 
 
+def test_checkout_flag_explains_an_unreadable_ancestor_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fake_home(monkeypatch, tmp_path)
+    _qualifying_uvx(monkeypatch, tmp_path)
+    origin = tmp_path / "site-packages" / "launch.py"
+    origin.parent.mkdir()
+    origin.touch()
+    monkeypatch.setattr(launch_module, "__file__", str(origin))
+    manifest = tmp_path / "pyproject.toml"
+    real_stat = Path.stat
+
+    def denied(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if path == manifest:
+            raise PermissionError("permission denied")
+        return real_stat(path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", denied)
+    assert install_cli.main(["--dry-run", "-a", "claude-code", "--from-checkout"]) == 1
+    message = capsys.readouterr().out
+    assert str(manifest) in message
+    assert "permission" in message.lower()
+    assert "--from-checkout" in message
+
+
 @pytest.mark.parametrize("package", ["npm:pi-mcp-adapter", "git:example.test/owner/pi-mcp-adapter"])
 def test_each_target_gains_one_entry(tmp_path: Path, package: str) -> None:
     _pi_adapter(tmp_path, package)
@@ -540,6 +567,21 @@ def test_remove_leaves_a_foreign_entry(tmp_path: Path) -> None:
     assert code == 0, text
     assert "foreign" in text
     assert path.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize("agents", [(), ("pi",)], ids=["autodetected", "explicit"])
+def test_remove_pi_after_its_adapter_is_uninstalled(tmp_path: Path, agents: tuple[str, ...]) -> None:
+    _pi_adapter(tmp_path, "npm:pi-mcp-adapter")
+    pi = layout(tmp_path)
+    other = {"command": "/usr/bin/other"}
+    pi.pi_file().write_text(json.dumps({"mcpServers": {"other": other}}), encoding="utf-8")
+    assert execute(tmp_path, agents=("pi",))[0] == 0
+    pi.pi_settings().write_text('{"packages": []}', encoding="utf-8")
+
+    code, message = execute(tmp_path, agents=agents, remove=True)
+    assert code == 0, message
+    assert json.loads(pi.pi_file().read_text(encoding="utf-8"))["mcpServers"] == {"other": other}
+    assert _state_targets(tmp_path) == {}
 
 
 @pytest.mark.parametrize("package", ["npm:pi-mcp-adapter", "git:example.test/owner/pi-mcp-adapter"])

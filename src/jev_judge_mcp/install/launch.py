@@ -8,6 +8,7 @@ interpreter it refuses.
 
 import json
 import re
+import stat
 import subprocess
 import tomllib
 from collections.abc import Mapping
@@ -157,10 +158,16 @@ def find_package_root(start: Path | None = None) -> Path:
     origin = start if start is not None else Path(__file__)
     for parent in origin.resolve().parents:
         manifest = parent / "pyproject.toml"
-        if not manifest.is_file():
-            continue
         try:
+            if not stat.S_ISREG(manifest.stat().st_mode):
+                continue
             loaded = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue
+        except PermissionError as exc:
+            raise InstallError(
+                f"permission denied reading {manifest}; grant access or omit --from-checkout to use the PyPI package"
+            ) from exc
         except (OSError, tomllib.TOMLDecodeError) as exc:
             raise InstallError(f"could not read {manifest}") from exc
         project = loaded.get("project")
