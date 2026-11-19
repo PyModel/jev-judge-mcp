@@ -323,6 +323,7 @@ def combined(evaluations: list[Evaluation]) -> Evaluation:
         Usage(
             sum(item.usage.input_tokens for item in evaluations),
             sum(item.usage.output_tokens for item in evaluations),
+            reported=all(item.usage.reported for item in evaluations),
         ),
         first.provider,
         first.model,

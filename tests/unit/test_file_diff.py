@@ -11,9 +11,10 @@ from mcp.types import CallToolResult, TextContent
 from jev_judge_mcp.domain import JsonValue, Usage
 from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.providers import Evaluation, ProviderError
+from jev_judge_mcp.providers.base import parse_envelope
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
-from jev_judge_mcp.tools.files import REVIEW_FANOUT
+from jev_judge_mcp.tools.files import REVIEW_FANOUT, combined
 from tests.support.jev import FakeProvider, Outcome, call_tool
 
 pytestmark = pytest.mark.anyio
@@ -141,6 +142,24 @@ async def test_a_file_list_over_the_evidence_budget_refuses_like_a_string_diff()
         list_code = json.loads(cast(TextContent, list_result.content[1]).text)
         assert list_code == string_code == {"code": expected_code}
         assert list_result.structured_content == string_result.structured_content == {"code": expected_code}
+
+
+def test_combined_usage_preserves_unknown_metering_in_either_position() -> None:
+    def reply(tokens: int | None) -> Evaluation:
+        body: dict[str, object] = {"answers": {}}
+        if tokens is not None:
+            body["usage"] = {"input_tokens": tokens, "output_tokens": 0}
+        envelope = parse_envelope(body, "compatible")
+        return Evaluation({}, envelope.usage, "compatible", "test")
+
+    measured, zero, unknown = reply(1_000_000), reply(0), reply(None)
+    total = combined([measured, zero]).usage
+    assert total.reported is True
+    for group in ([measured, unknown], [unknown, measured], [combined([unknown, zero]), measured]):
+        partial = combined(group).usage
+        assert partial.input_tokens == total.input_tokens == 1_000_000
+        assert partial.output_tokens == total.output_tokens == 0
+        assert partial.reported is False
 
 
 async def test_file_list_gate_sums_provider_usage_and_keeps_the_request_id() -> None:

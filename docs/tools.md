@@ -227,7 +227,9 @@ refuse a decision and identify the provider field. Low confidence alone requires
 contradiction without sufficient corroboration yields `unsupported` and `reported_verdict:
 contradicted`. Its probabilities still describe the provider's original judgment.
 `citation_coverage` reports the number of eligible and offered lines. A held change can be split
-by hunk to expose more lines. See [ADR-0082](adr/0082-actionable-gate-escalation.md).
+by hunk to expose more lines. Aggregated token counts sum the reported usage across calls.
+In study provenance mode, `usage.reported` is false if any contributing call omitted its usage.
+See [ADR-0082](adr/0082-actionable-gate-escalation.md).
 
 From another git worktree run `jev-judge-mcp gate --diff BASE..HEAD --claims claims.txt
 --tests test.log --request "requirement"` in that worktree. A range over the aggregate input budget returns `input_too_large` before a judgment. The same admission caps apply.
