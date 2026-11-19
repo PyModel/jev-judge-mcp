@@ -163,7 +163,8 @@ def test_gate_fails_a_forced_run_whose_only_jev_calls_errored(tmp_path: Path) ->
 def test_wrong_model_fails_the_gate_and_stops_the_study(tmp_path: Path) -> None:
     with Loopback(model="jev-latest") as unpinned, pytest.raises(gate.WrongModelError, match="jev-latest"):
         run.run_bench(ITEMS, setup(tmp_path, unpinned), tmp_path / "out")
-    got = records(tmp_path / "out")
+    first_item, _ = run.schedule(ITEMS, run.SEED)[0]
+    got = records(tmp_path / "out", failed=f"{first_item.id}.C")
     assert all(row["correct"] == (row["arm"] != "C") for row in got.values())
     callers = [record for record in got.values() if record["jev_calls"]]
     assert len(callers) == 1 and callers[0]["arm"] == "C"
@@ -260,7 +261,7 @@ def test_a_stream_proxy_mismatch_stops_the_study(tmp_path: Path, loopback: Loopb
 
     with pytest.raises(gate.HarnessMismatchError):
         run.run_bench(ITEMS[:1], setup(tmp_path, loopback, plan), tmp_path / "out")
-    got = records(tmp_path / "out")
+    got = records(tmp_path / "out", failed=f"{ITEMS[0].id}.C")
     assert all(row["correct"] == (row["arm"] != "C") for row in got.values())
     mismatched = [record for record in got.values() if record["cross_check"]]
     assert len(mismatched) == 1 and mismatched[0]["arm"] == "C" and not mismatched[0]["correct"]
@@ -371,8 +372,10 @@ def test_grading_failure_preserves_a_terminal_wrong_model(tmp_path: Path, monkey
     monkeypatch.setattr(spans, "attribute", broken)
     out = tmp_path / "out"
     with Loopback(model="jev-latest") as unpinned, pytest.raises(RuntimeError, match="timing attribution"):
-        run.run_bench(ITEMS, setup(tmp_path, unpinned), out)
-    failed = next(row for row in records(out).values() if "timing attribution" in row["status"])
+        run.run_bench(ITEMS[:1], setup(tmp_path, unpinned), out)
+    failed_id = f"{ITEMS[0].id}.C"
+    failed = records(out, failed=failed_id)[failed_id]
+    assert "timing attribution" in failed["status"]
     assert "jev-latest" in failed["status"]
     assert not run.runs_remain(ITEMS, out)
     assert SpendLedger.load(out / "ledger.json", POLICY).runs[failed["run_id"]] == POLICY.run_bound_usd
