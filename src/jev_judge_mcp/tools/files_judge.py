@@ -22,6 +22,7 @@ from typing import Any, cast
 
 import anyio
 
+from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain import ChoiceQuestion, ScoreQuestion
 from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.keyfile import redaction_values, stored_key_path
@@ -492,12 +493,13 @@ def plan(
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     kind: str = args["kind"]
     question = build_question(kind, args["instructions"], args["criteria"])
+    redact = Redactor(await anyio.to_thread.run_sync(redaction_values, runtime.settings))
     survivors, skipped = await anyio.to_thread.run_sync(
         lambda: plan(
             args["paths"],
             recursive=bool(args.get("recursive", False)),
             key_path=stored_key_path(runtime.settings),
-            redact=Redactor(redaction_values(runtime.settings)),
+            redact=redact,
             check_cancelled=anyio.from_thread.check_cancelled,
         )
     )
@@ -509,7 +511,9 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     async def judge(index: int) -> None:
         path_text, content = survivors[index]
         try:
-            evaluations[index] = await runtime.ask({"path": path_text, "content": content}, {QUESTION_ID: question})
+            evaluations[index] = await runtime.ask(
+                {"path": redact_credential_literals(path_text, redact), "content": content}, {QUESTION_ID: question}
+            )
         except ProviderConfigError as error:
             # The server cannot ask at all — not a per-file failure. Cancel the siblings and re-raise
             # outside the group, so the kernel's `auth` refusal keeps its code (the raw group would

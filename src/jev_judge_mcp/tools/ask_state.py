@@ -116,7 +116,7 @@ def file_parts(
         except ToolError as error:
             skipped.append(Skipped(raw, error.code))
             continue
-        parts.append(Part(raw, content, length(content)))
+        parts.append(Part(redact_credential_literals(raw, redact), content, length(content)))
     return parts, skipped
 
 
@@ -199,6 +199,7 @@ def command_denylist_refusal(command: str, key_path: Path | None = None) -> str 
         tokens.extend(lexer)
     except ValueError:
         return _refused("the command contains an incomplete shell word")
+    tokens += [token.partition("=")[2] for token in tokens if "=" in token]
     words = {os.path.basename(token).lower() for token in tokens}
     if words & _NETWORK_CLIENTS:
         return _refused("the command reaches the network")
