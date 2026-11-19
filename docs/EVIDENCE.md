@@ -2,7 +2,7 @@
 
 Per release: the certified operating points and any regression, taken from the latest recorded
 eval run. A user deciding whether to upgrade reads quality deltas here, not only the commit list
-in [`CHANGELOG.md`](CHANGELOG.md).
+in [`CHANGELOG.md`](../CHANGELOG.md).
 
 This page is a curated digest: [`docs/evals/README.md`](evals/README.md) and the recorded reports
 under it are the source of truth, and where this page and a recorded file disagree, the recorded
@@ -61,6 +61,6 @@ evidence is the 2026-09-23 run above, recorded before `v0.2.0`.
 ## Maintaining this page
 
 The release process step that fills the next entry is documented in
-[`CONTRIBUTING.md`](CONTRIBUTING.md) § Releases: before merging a release pull request, add the new
+[`CONTRIBUTING.md`](../CONTRIBUTING.md) § Releases: before merging a release pull request, add the new
 release's entry from the latest recorded eval run, or state that no new run was recorded since the
 last entry.

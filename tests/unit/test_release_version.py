@@ -1,10 +1,14 @@
 """scripts/check_release_version.py: the Release workflow's version gate, run as the workflow runs it."""
 
+import hashlib
 import importlib.metadata
 import io
+import os
+import re
 import subprocess
 import sys
 import tarfile
+import textwrap
 import zipfile
 from pathlib import Path
 
@@ -96,3 +100,49 @@ def test_installed_version_off_the_tag_fails() -> None:
 
 def test_bad_usage_exits_2() -> None:
     assert run("dist", "only-a-directory").returncode == 2
+
+
+@pytest.mark.parametrize("change", ["none", "changed", "missing", "duplicate", "version"])
+def test_scout_006_publish_checks_verified_bytes(tmp_path: Path, change: str) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    dist(assets)
+    receipt = tmp_path / "receipt"
+    receipt.mkdir()
+    manifest = receipt / "SHA256SUMS.txt"
+    files = sorted(assets.iterdir(), key=lambda path: not path.name.endswith(".whl"))
+    manifest.write_text("".join(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n" for p in files))
+    if change == "changed":
+        with files[0].open("ab") as stream:
+            stream.write(b"changed")
+    elif change == "missing":
+        files[1].unlink()
+    elif change == "duplicate":
+        write_wheel(assets, "0.2.0")
+    # An independently sourced checksum has to win even over a replacement release checksum.
+    (assets / "SHA256SUMS.txt").write_text("untrusted release checksum")
+    marker = tmp_path / "published"
+    uv = tmp_path / "uv"
+    uv.write_text('#!/bin/bash\n[[ "$1" == publish ]] || exit 2\ntouch "$RUNNER_TEMP/published"\n')
+    uv.chmod(0o700)
+    workflow = (SCRIPT.parents[1] / ".github/workflows/release.yml").read_text()
+    step = workflow.split("- name: Upload to PyPI through trusted publishing", 1)[1]
+    match = re.search(r"^        run: (.+)(?:\n((?:          [^\n]*\n)*))?", step, re.M)
+    assert match
+    command = textwrap.dedent(match[2]) if match[1] == "|" else match[1]
+    result = subprocess.run(
+        ["bash", "-ec", command],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "RUNNER_TEMP": str(tmp_path),
+            "GITHUB_WORKSPACE": str(SCRIPT.parents[1]),
+            "TAG": "v0.2.0" if change == "version" else "v0.1.0",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) == (change == "none"), result.stderr
+    assert marker.exists() == (change == "none")

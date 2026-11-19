@@ -1,12 +1,14 @@
 """Confirm a freshly written server answers initialize and tools/list. No provider call."""
 
 import json
-import queue
+import os
+import selectors
+import signal
 import subprocess
-import threading
 import time
 from collections import deque
 from collections.abc import Mapping
+from contextlib import suppress
 from typing import IO, cast
 
 from jev_judge_mcp.domain import is_json_object
@@ -22,120 +24,151 @@ STDERR_TAIL_LINES = 5
 """How many of the child's last stderr lines a VerifyError carries (ADR-0053)."""
 
 STDERR_LINE_LIMIT = 200
-"""Per-line character cap, so one enormous stderr line cannot flood the installer's summary."""
+"""Per-line byte cap, so one enormous stderr line cannot flood the installer's summary."""
 
 
 class VerifyError(Exception):
     """The server did not answer the install check. The message has no secrets."""
 
 
-class _StderrTail:
-    """The child's last stderr lines, drained while stdout is read.
+STDOUT_LINE_BYTES = 1024 * 1024
+STDOUT_TOTAL_BYTES = 4 * STDOUT_LINE_BYTES
+STDOUT_MESSAGES = 256
+_READ_SIZE = 8192
 
-    The pipe is drained from a thread, so a chatty child cannot fill it and stall the handshake
-    until the timeout (ADR-0053): the child keeps writing, the thread keeps reading, and only the
-    short tail is kept for the error message.
-    """
 
-    def __init__(self, stream: IO[str] | None) -> None:
-        self._lines: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
-        self._lock = threading.Lock()
-        self._thread = threading.Thread(target=self._drain, args=(stream,), daemon=True)
+class _OutputLimit(VerifyError):
+    pass
 
-    def start(self) -> None:
-        self._thread.start()
 
-    def join(self, timeout: float) -> None:
-        self._thread.join(timeout)
+class _Output:
+    """Read both pipes on demand. At most one bounded line and one read chunk are pending."""
 
-    def _drain(self, stream: IO[str] | None) -> None:
-        if stream is None:
-            return
-        try:
-            for line in stream:
-                text = line.rstrip("\r\n")[:STDERR_LINE_LIMIT]
-                with self._lock:
-                    self._lines.append(text)
-        except (OSError, ValueError):
-            pass  # the pipe closed under us during teardown; the tail so far is enough
+    def __init__(self, selector: selectors.BaseSelector, stdout: IO[bytes], stderr: IO[bytes]) -> None:
+        self.selector = selector
+        selector.register(stdout, selectors.EVENT_READ, "stdout")
+        selector.register(stderr, selectors.EVENT_READ, "stderr")
+        self.stdout = bytearray()
+        self.total = 0
+        self.messages = 0
+        self.eof = False
+        self.stderr = bytearray()
+        self.tail: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
 
-    def suffix(self) -> str:
-        """The tail as an error-message suffix, or an empty string when the child said nothing."""
-        with self._lock:
-            kept = [line for line in self._lines if line]
-        if not kept:
-            return ""
-        return "the child's stderr, last lines:\n" + "\n".join(f"  {line}" for line in kept)
+    def _stderr(self, chunk: bytes) -> None:
+        parts = chunk.split(b"\n")
+        for i, part in enumerate(parts):
+            self.stderr.extend(part[: STDERR_LINE_LIMIT - len(self.stderr)])
+            if i < len(parts) - 1:
+                self.tail.append(self.stderr.decode("utf-8", errors="replace").rstrip("\r"))
+                self.stderr.clear()
+
+    def read(self, timeout: float, *, finishing: bool = False) -> None:
+        for key, _events in self.selector.select(timeout):
+            data = os.read(key.fd, _READ_SIZE)
+            if not data:
+                self.selector.unregister(key.fd)
+            if key.data == "stderr":
+                self._stderr(data)
+            elif not data:
+                self.eof = True
+            elif not finishing:
+                self.total += len(data)
+                if self.total > STDOUT_TOTAL_BYTES:
+                    raise _OutputLimit("server stdout exceeded the total byte limit")
+                self.stdout.extend(data)
+
+    def line(self, deadline: float) -> bytes | None:
+        offset = 0
+        while (remaining := deadline - time.monotonic()) > 0:
+            end = self.stdout.find(b"\n", offset)
+            length = len(self.stdout) if end == -1 else end
+            if length > STDOUT_LINE_BYTES:
+                raise _OutputLimit("server stdout exceeded the line byte limit")
+            if end >= 0 or (self.eof and self.stdout):
+                self.messages += 1
+                if self.messages > STDOUT_MESSAGES:
+                    raise _OutputLimit("server stdout exceeded the message limit")
+                result = bytes(self.stdout[:length])
+                del self.stdout[: length + 1]
+                return result
+            if self.eof:
+                return None
+            offset = length
+            self.read(remaining)
+        raise VerifyError("timed out waiting for the server")
+
+    def finish(self) -> str:
+        # Collect diagnostics already in the pipes after reaping, even if a descendant kept a pipe open.
+        deadline = time.monotonic() + 0.2
+        while self.selector.get_map() and time.monotonic() < deadline:
+            self.read(max(0, deadline - time.monotonic()), finishing=True)
+        if self.stderr:
+            self.tail.append(self.stderr.decode("utf-8", errors="replace"))
+        lines = [f"  {line}" for line in self.tail if line]
+        return "the child's stderr, last lines:\n" + "\n".join(lines) if lines else ""
 
 
 def verify_command(command: list[str], *, timeout: float = 30.0) -> None:
-    """Speak MCP over stdio. Stdin stays open until both replies arrive."""
-    # The command list is the absolute uvx path plus fixed arguments, not a shell string.
-    process = subprocess.Popen(  # noqa: S603
-        command,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    tail = _StderrTail(process.stderr)
-    tail.start()
-    try:
-        stdin = process.stdin
-        stdout = process.stdout
-        if stdin is None or stdout is None:
-            raise VerifyError("could not talk to the server")
-        reader = _LineReader(stdout)
-        reader.start()
-        _send(stdin, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _initialize_params()})
-        initialized = _read_response(reader, 1, timeout)
-        info = initialized.get("serverInfo")
-        name = info.get("name") if is_json_object(info) else None
-        if name != SERVER_NAME:
-            raise VerifyError("serverInfo.name is not jev-mcp")
-        _send(stdin, {"jsonrpc": "2.0", "method": "notifications/initialized"})
-        _send(stdin, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
-        listed = _read_response(reader, 2, timeout)
-        tools = listed.get("tools")
-        if not isinstance(tools, list):
-            raise VerifyError("tools/list did not return tools")
-        names = {item.get("name") for item in cast(list[object], tools) if is_json_object(item)}
-        missing = [tool for tool in EXPECTED_TOOLS if tool not in names]
-        if missing:
-            raise VerifyError("tools/list is missing " + ", ".join(missing))
-        stdin.close()
-    except VerifyError as exc:
-        # The child's own words (uv's resolver, a crash) are the actionable part (ADR-0053). The
-        # installer redacts this message with the same pass as every other summary line. The
-        # suffix is built only after the child is gone and the drain has finished: reading the
-        # tail while the drain thread is still reading stderr races the child's last writes and
-        # can drop exactly the lines the message exists to carry. Every wait stays bounded, so a
-        # hung or still-running child can never hang the installer.
-        first = exc.args[0] if exc.args else "the check failed"
-        if process.stdin is not None and not process.stdin.closed:
-            process.stdin.close()
+    """Speak MCP over stdio, with one deadline for the handshake."""
+    with (
+        selectors.DefaultSelector() as selector,
+        subprocess.Popen(  # noqa: S603
+            command,
+            start_new_session=True,
+            bufsize=0,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ) as process,
+    ):
+        assert process.stdin is not None and process.stdout is not None and process.stderr is not None
+        output: _Output | None = None
+        error: VerifyError | None = None
+        completed = False
         try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5)
-        tail.join(timeout=5)
-        suffix = tail.suffix()
-        raise VerifyError(f"{first}; {suffix}" if suffix else first) from None
-    finally:
-        if process.stdin is not None and not process.stdin.closed:
+            output = _Output(selector, process.stdout, process.stderr)
+            _handshake(process.stdin, output, time.monotonic() + timeout)
+            completed = True
+        except (VerifyError, BrokenPipeError) as exc:
+            error = exc if isinstance(exc, VerifyError) else VerifyError("server closed stdin")
+        finally:
             process.stdin.close()
-        if process.poll() is None:
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
-        tail.join(timeout=1)
-        if process.stdout is not None:
-            process.stdout.close()
-        if process.stderr is not None:
-            process.stderr.close()
+            if completed:
+                with suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=1)
+            if process.returncode is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    # Darwin can return EPERM for an exited process group. Popen checks its child before signaling.
+                    process.kill()
+                process.wait()
+        if error:
+            suffix = output.finish() if output is not None and not isinstance(error, _OutputLimit) else ""
+            raise VerifyError(f"{error}; {suffix}" if suffix else str(error))
+
+
+def _handshake(stdin: IO[bytes], output: _Output, deadline: float) -> None:
+    _send(stdin, {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": _initialize_params()})
+    initialized = _read_response(output, 1, deadline)
+    info = initialized.get("serverInfo")
+    if not is_json_object(info) or info.get("name") != SERVER_NAME:
+        raise VerifyError("serverInfo.name is not jev-mcp")
+    _send(stdin, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+    _send(stdin, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    listed = _read_response(output, 2, deadline)
+    tools = listed.get("tools")
+    if not isinstance(tools, list):
+        raise VerifyError("tools/list did not return tools")
+    names: set[str] = set()
+    for item in cast(list[object], tools):
+        if not is_json_object(item) or not isinstance(name := item.get("name"), str):
+            raise VerifyError("tools/list returned an invalid tool name")
+        names.add(name)
+    missing = [tool for tool in EXPECTED_TOOLS if tool not in names]
+    if missing:
+        raise VerifyError("tools/list is missing " + ", ".join(missing))
 
 
 def _initialize_params() -> dict[str, object]:
@@ -146,53 +179,21 @@ def _initialize_params() -> dict[str, object]:
     }
 
 
-def _send(stdin: IO[str], message: Mapping[str, object]) -> None:
-    stdin.write(json.dumps(message) + "\n")
+def _send(stdin: IO[bytes], message: Mapping[str, object]) -> None:
+    stdin.write((json.dumps(message) + "\n").encode())
     stdin.flush()
 
 
-class _LineReader:
-    """The child's stdout lines, handed over from a daemon thread.
-
-    `readline` buffers past the line it returns, so a reply that arrived in the same chunk as an
-    earlier line is already in the buffer where `select` on the pipe can never see it; a thread
-    reading lines onto a queue has no such blind spot, and every wait here is bounded.
-    """
-
-    def __init__(self, stream: IO[str]) -> None:
-        self._lines: queue.Queue[str | None] = queue.Queue()
-        self._thread = threading.Thread(target=self._drain, args=(stream,), daemon=True)
-
-    def start(self) -> None:
-        self._thread.start()
-
-    def _drain(self, stream: IO[str]) -> None:
-        try:
-            for line in stream:
-                self._lines.put(line)
-        except (OSError, ValueError):
-            pass  # the pipe closed under us during teardown
-        self._lines.put(None)
-
-    def line(self, timeout: float) -> str | None:
-        """The next line, `None` at EOF; `VerifyError` when `timeout` passes first."""
-        try:
-            return self._lines.get(timeout=max(0.0, timeout))
-        except queue.Empty:
-            raise VerifyError("timed out waiting for the server") from None
-
-
-def _read_response(reader: _LineReader, request_id: int, timeout: float) -> dict[str, object]:
+def _read_response(reader: _Output, request_id: int, deadline: float) -> dict[str, object]:
     # A line that is not our reply (a notification, a log) is ignored until the id matches.
     # The body is never returned to the caller, so a secret in it cannot reach the summary.
-    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        line = reader.line(deadline - time.monotonic())
+        line = reader.line(deadline)
         if line is None:
             raise VerifyError("server closed stdout")
         try:
             parsed: object = json.loads(line)
-        except json.JSONDecodeError:
+        except (ValueError, RecursionError):
             continue
         if not is_json_object(parsed) or parsed.get("id") != request_id:
             continue

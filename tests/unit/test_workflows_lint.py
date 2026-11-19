@@ -11,9 +11,12 @@ subprocess and PATH — with a stub actionlint that decides what it reports:
 - a copy of the script with no .github/workflows above it fails rather than passing vacuously.
 """
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "check_workflows.py"
 
@@ -74,3 +77,65 @@ def test_a_repo_without_workflows_is_an_error_not_a_pass(tmp_path: Path) -> None
     proc = run(script_copy, stubbed(tmp_path, "exit 0\n"))
     assert proc.returncode == 2, proc.stderr
     assert ".github/workflows" in proc.stderr
+
+
+_SHA = "a1" * 20
+
+
+@pytest.mark.parametrize(
+    ("step", "accepted"),
+    [
+        ("- uses: ./actions/local", True),
+        ("- uses: ./../outside", False),
+        (f"- uses: 'owner/repo/path@{_SHA}' # v2", True),
+        (f'uses: "docker://registry:123/repo@sha256:{_SHA}{_SHA[:24]}"', True),
+        ("- uses: owner/repo@v1", False),
+        ("- uses: owner/repo@main", False),
+        ("- uses: owner/repo@1234567", False),
+        ("- uses: docker://image:latest", False),
+        (f"- {{uses: owner/repo@{_SHA}}}", False),
+        (f"- {{\n    uses: owner/repo@{_SHA}\n  }}", False),
+        (f"- uses: &step owner/repo@{_SHA}", False),
+        ("- uses: *step", False),
+        ("- uses: |\n    owner/repo@main", False),
+        ("- 'uses': owner/repo@main", False),
+    ],
+)
+@pytest.mark.parametrize("filename", [".github/workflows/build.yaml", "tools/action.yml"])
+def test_scout_034_action_reference_policy(tmp_path: Path, step: str, accepted: bool, filename: str) -> None:
+    workflows = tmp_path / ".github/workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text("name: test\n")
+    path = tmp_path / filename
+    path.parent.mkdir(exist_ok=True)
+    path.write_text("steps:\n  " + step + "\n")
+    script = tmp_path / "scripts/check_workflows.py"
+    script.parent.mkdir()
+    shutil.copyfile(SCRIPT, script)
+    result = run(script, stubbed(tmp_path, "exit 0\n"))
+    assert result.returncode == (0 if accepted else 1), result.stderr
+    if not accepted:
+        assert f"{filename}:2:" in result.stderr
+
+
+def test_scout_034_real_workflows_have_immutable_actions(tmp_path: Path) -> None:
+    assert run(SCRIPT, stubbed(tmp_path, "exit 0\n")).returncode == 0
+
+
+def test_scout_006_both_publish_paths_share_verified_input() -> None:
+    release = (SCRIPT.parents[1] / ".github/workflows/release.yml").read_text()
+    verify, publish = release.split("\n  pypi:\n")
+    assert release.count("id-token: write") == release.count("uv publish ") == 1
+    assert verify.index("uv pip install ") < verify.index("uses: actions/upload-artifact@")
+    assert "needs.verify.result == 'success'" in publish
+    assert "github.event_name == 'workflow_dispatch' && inputs.republish_tag != ''" in publish
+    for restriction in (
+        ".head_repository.full_name == $repo",
+        '.head_branch == "main"',
+        '.path == ".github/workflows/release.yml"',
+    ):
+        assert restriction in publish
+    assert publish.index('gh run download "$SOURCE_RUN" --name "$receipt"') < publish.index(
+        'gh release download "$TAG"'
+    )
+    assert publish.index('cmp "$RUNNER_TEMP/receipt/SHA256SUMS.txt"') < publish.index("uv publish ")

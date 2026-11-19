@@ -5,6 +5,7 @@ import os
 import stat
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from shutil import which
@@ -14,9 +15,10 @@ import pytest
 from jev_judge_mcp.install import cli as install_cli
 from jev_judge_mcp.install import jsonedit
 from jev_judge_mcp.install import launch as launch_module
+from jev_judge_mcp.install import verify as verify_module
 from jev_judge_mcp.install.engine import Request, run
 from jev_judge_mcp.install.errors import InstallError
-from jev_judge_mcp.install.fs import atomic_write, entry_hash, write_state
+from jev_judge_mcp.install.fs import atomic_write, entry_hash, write_backup, write_state
 from jev_judge_mcp.install.launch import (
     PACKAGE,
     Launch,
@@ -1161,3 +1163,181 @@ def test_an_unexpanded_environment_key_is_never_stored_as_the_desktop_key(monkey
     key, secrets = cli._desktop_key(True, {"TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}"})  # pyright: ignore[reportPrivateUsage] -- the env read IS the boundary under test
     assert key == ""
     assert secrets == ()
+
+
+@pytest.mark.parametrize("remove", [False, True])
+def test_scout_003_interrupted_state_commit_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remove: bool
+) -> None:
+    config = layout(tmp_path).claude_code_file()
+    state = layout(tmp_path).state_file()
+    if remove:
+        assert execute(tmp_path, agents=("claude-code",))[0] == 0
+    original_replace = os.replace
+
+    def interrupted(source: Path, destination: Path) -> None:
+        if (
+            destination == state
+            and config.exists()
+            and ("jev" in json.loads(config.read_text())["mcpServers"]) != remove
+        ):
+            raise OSError("simulated interruption")
+        original_replace(source, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", interrupted)
+        with pytest.raises((InstallError, OSError)):
+            execute(tmp_path, agents=("claude-code",), remove=remove)
+    assert ("jev" in json.loads(config.read_text())["mcpServers"]) != remove
+    installed, pending = config.read_bytes(), state.read_bytes()
+    config.write_bytes(installed + b" ")
+    with pytest.raises(InstallError, match="recovery"):
+        execute(tmp_path, agents=("claude-code",), remove=True)
+    assert config.read_bytes() == installed + b" "
+    assert state.read_bytes() == pending
+    config.write_bytes(installed)
+    assert execute(tmp_path, agents=("claude-code",), remove=True)[0] == 0
+    assert "jev" not in json.loads(config.read_text())["mcpServers"]
+    assert _state_targets(tmp_path) == {}
+
+
+def test_scout_003_overlapping_writers(tmp_path: Path) -> None:
+    def overlapping(_: Path) -> None:
+        try:
+            code, _text = execute(tmp_path, agents=("cursor",))
+        except InstallError as error:
+            assert "busy" in str(error)
+            return
+        assert code == 0
+
+    assert execute(tmp_path, agents=("claude-code",), before_write=overlapping)[0] == 0
+    expected = {"claude-code"}
+    if layout(tmp_path).cursor_file().exists():
+        expected.add("cursor")
+    assert _state_targets(tmp_path).keys() == expected
+
+
+@pytest.mark.parametrize("broken", [b"{", b"{}", b'{"targets":{"cursor":{}}}', bytes([255])])
+def test_scout_003_invalid_state_blocks_writes(tmp_path: Path, broken: bytes) -> None:
+    state = layout(tmp_path).state_file()
+    state.parent.mkdir(parents=True)
+    state.write_bytes(broken)
+    with pytest.raises(InstallError, match="state"):
+        execute(tmp_path, agents=("cursor",))
+    assert state.read_bytes() == broken
+    assert not layout(tmp_path).cursor_file().exists()
+
+
+def test_scout_003_named_ownership(tmp_path: Path) -> None:
+    req = Request(layout=layout(tmp_path), launch=LAUNCH, agents=("cursor",), assume_yes=True)
+    assert run(req).code == 0
+    path = req.layout.cursor_file()
+    doc = json.loads(path.read_text())
+    doc["mcpServers"]["foreign"] = doc["mcpServers"]["jev"]
+    path.write_text(json.dumps(doc))
+    assert run(replace(req, name="foreign", remove=True)).code == 0
+    assert run(replace(req, name="second")).code == 0
+    assert run(replace(req, remove=True)).code == 0
+    assert run(replace(req, name="second", remove=True)).code == 0
+    assert json.loads(path.read_text())["mcpServers"] == {"foreign": doc["mcpServers"]["foreign"]}
+
+
+def test_scout_007_backups_survive_collisions_and_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = [write_backup(tmp_path, "stamp", "cursor", ".json", data) for data in (b"one", b"two")]
+    assert [path.read_bytes() for path in paths] == [b"one", b"two"]
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in paths)
+
+    def failure(_fd: int, _data: bytes) -> int:
+        raise OSError("simulated write failure")
+
+    monkeypatch.setattr(os, "write", failure)
+    with pytest.raises(OSError):
+        write_backup(tmp_path, "stamp", "cursor", ".json", b"three")
+    assert {p for p in tmp_path.rglob("*") if p.is_file()} == set(paths)
+
+
+@pytest.mark.parametrize("mode", ["explicit", "chooser", "all"])
+def test_scout_026_selection_order(tmp_path: Path, mode: str) -> None:
+    chooser = mode == "chooser"
+    if mode == "all":
+        layout(tmp_path).cursor_dir().mkdir(parents=True)
+    choices = ("cursor", "claude-code", "cursor")
+    calls: list[list[str]] = []
+    req = Request(
+        layout=layout(tmp_path),
+        launch=LAUNCH,
+        agents=() if chooser else choices,
+        select_all=mode == "all",
+        assume_yes=not chooser,
+        chooser=lambda _: choices,
+        confirmer=lambda _: True,
+        verify=calls.append,
+    )
+    result = run(req)
+    assert result.code == 0, result.text
+    assert len(calls) == 2
+    assert result.text.index("cursor: add") < result.text.index("claude-code: add")
+    assert run(req).code == 0
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("output", ["x" * 64, "{}\n" * 6])
+def test_scout_020_stdout_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, output: str) -> None:
+    monkeypatch.setattr(verify_module, "STDOUT_LINE_BYTES", 32, raising=False)
+    monkeypatch.setattr(verify_module, "STDOUT_MESSAGES", 4, raising=False)
+    script = tmp_path / "local.py"
+    script.write_text("import sys\nsys.stdin.readline()\nsys.stdout.write(" + repr(output) + ")\nsys.stdout.flush()\n")
+    with pytest.raises(VerifyError, match="limit") as result:
+        verify_command([sys.executable, str(script)], timeout=1)
+    assert output not in str(result.value)
+
+
+def test_scout_007_failed_backup_preserves_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = layout(tmp_path).claude_code_file()
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_bytes(b'{"mcpServers":{}}')
+
+    def failure(_fd: int, _data: bytes) -> int:
+        raise OSError("simulated backup failure")
+
+    monkeypatch.setattr(os, "write", failure)
+    assert execute(tmp_path, agents=("claude-code",))[0] == 1
+    assert config.read_bytes() == b'{"mcpServers":{}}'
+    assert not layout(tmp_path).state_file().exists()
+
+
+def test_scout_020_deadline_reaps_child(tmp_path: Path) -> None:
+    pidfile = tmp_path / "pid"
+    child = "import os,sys,time; open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(10)"
+    with pytest.raises(VerifyError, match="timed out"):
+        verify_command([sys.executable, "-c", child, str(pidfile)], timeout=1)
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pidfile.read_text()), 0)
+
+
+def test_scout_020_aggregate_byte_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(verify_module, "STDOUT_TOTAL_BYTES", 16)
+    with pytest.raises(VerifyError, match="total byte limit"):
+        verify_command([sys.executable, "-c", "print('{}\\n' * 6)"])
+
+
+@pytest.mark.parametrize(("length", "failure"), [(31, "closed stdout"), (32, "closed stdout"), (33, "line byte limit")])
+def test_scout_020_line_boundary(length: int, failure: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(verify_module, "STDOUT_LINE_BYTES", 32)
+    with pytest.raises(VerifyError, match=failure):
+        verify_command([sys.executable, "-c", f"import sys; sys.stdin.readline(); print('a' * {length})"])
+
+
+def test_scout_020_non_string_tool_name() -> None:
+    replies = [
+        '{"id":1,"result":{"serverInfo":{"name":"jev-mcp"}}}',
+        '{"id":2,"result":{"tools":[{"name":[]}]}}',
+    ]
+    child = (
+        f"import sys; sys.stdin.readline(); print({replies[0]!r}, flush=True); "
+        f"sys.stdin.readline(); sys.stdin.readline(); print({replies[1]!r})"
+    )
+    with pytest.raises(VerifyError, match="tools/list"):
+        verify_command([sys.executable, "-c", child])

@@ -12,6 +12,7 @@ means a doc or a copy drifted — fix the doc or the copy, never the assertion.
 """
 
 import json
+import logging
 import re
 import subprocess
 import sys
@@ -19,10 +20,16 @@ from dataclasses import fields
 from pathlib import Path
 from typing import cast
 
-from jev_judge_mcp import limits
+import pytest
+
+from jev_judge_mcp import cache, limits
 from jev_judge_mcp.calibration.targets import error_budget
+from jev_judge_mcp.domain import Usage
 from jev_judge_mcp.install.verify import EXPECTED_TOOLS
 from jev_judge_mcp.policy import thresholds as policy_thresholds
+from jev_judge_mcp.providers import Evaluation
+from jev_judge_mcp.settings import load_settings
+from jev_judge_mcp.telemetry import Telemetry
 from jev_judge_mcp.tools import TOOLS
 
 ROOT = Path(__file__).parents[2]
@@ -721,3 +728,44 @@ def test_score_citations_match_the_refreshed_summary() -> None:
     assert "1-10 levels" not in score_test
     assert limits.SCORE.levels_min == 2
     assert limits.SCORE.levels_max == 10
+
+
+def test_scout_031_evidence_links_resolve() -> None:
+    page = ROOT / "docs" / "EVIDENCE.md"
+    targets = re.findall(r"\]\(([^)]+)\)", page.read_text(encoding="utf-8"))
+    tracked = set(subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0"))
+    for target in targets:
+        link = target.partition("#")[0]
+        if link and "://" not in link:
+            path = (ROOT / link[1:] if link.startswith("/") else page.parent / link).resolve()
+            assert path.is_file() and path.relative_to(ROOT).as_posix() in tracked, target
+
+
+def test_scout_027_security_matches_local_storage_and_debug_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    page = (ROOT / "SECURITY.md").read_text()
+    monkeypatch.setenv("JEV_MCP_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("JEV_MCP_CACHE", "1")
+    cache.store(
+        load_settings(),
+        "typesafe",
+        "scope",
+        "model",
+        "fixture state",
+        {},
+        Evaluation({}, Usage(1, 2), "typesafe", "model"),
+    )
+    (entry,) = tmp_path.rglob("*.json")
+    assert re.fullmatch(r"[a-f0-9]{64}", entry.stem)
+    assert "fixture state" not in entry.read_text()
+    record = json.loads(entry.read_text())
+    for key in ("answers", "usage", "provider", "model"):
+        assert key in record and f"`{key}`" in page
+    caplog.set_level(logging.DEBUG, logger="jev_judge_mcp.telemetry")
+    for enabled in (False, True):
+        telemetry = Telemetry(payloads=enabled)
+        with telemetry.span("jev.evaluate") as span:
+            telemetry.payload(span, "example", lambda: "benign marker")
+        assert ("benign marker" in caplog.text) == enabled
+    assert all(term in page for term in ("digest", "JEV_MCP_TELEMETRY_PAYLOADS", "DEBUG", "stderr", "backups"))

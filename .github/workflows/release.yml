@@ -5,7 +5,7 @@ name: Release
 # assets and checksums uploaded, re-downloaded, installed into a fresh venv, and checked; only then is
 # the release published. Any failure leaves the release a draft. The verified wheel and sdist are
 # uploaded to PyPI through trusted publishing (OIDC, no stored token) only when the repository variable
-# PYPI_PUBLISH is 'true'; otherwise the release stays GitHub-only. pypi-retry is manual and ungated.
+# PYPI_PUBLISH is 'true'; otherwise the release stays GitHub-only. A manual retry requires the original verification run.
 on:
   push:
     branches: [main]
@@ -13,6 +13,10 @@ on:
     inputs:
       republish_tag:
         description: Existing release tag to upload to PyPI after a failed upload
+        required: false
+        type: string
+      verified_run:
+        description: Optional original Release workflow run ID for a manual PyPI retry
         required: false
         type: string
 
@@ -30,7 +34,7 @@ defaults:
 jobs:
   version:
     name: Version
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && inputs.republish_tag == ''
     runs-on: ubuntu-latest
     permissions:
       contents: write # release commits, tags, draft releases
@@ -53,6 +57,8 @@ jobs:
 
   build:
     name: Build
+    outputs:
+      manifest_digest: ${{ steps.checksums.outputs.digest }}
     needs: version
     if: needs.version.outputs.release_created == 'true'
     runs-on: ubuntu-latest
@@ -82,12 +88,13 @@ jobs:
           rm -rf dist
           uv build
           uv run --no-project scripts/check_release_version.py dist dist "$TAG"
-      - name: Write checksums
+      - id: checksums
+        name: Write checksums
         working-directory: dist
         run: |
           set -euo pipefail
           sha256sum -- *.whl *.tar.gz > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          sha256sum SHA256SUMS.txt | cut -d " " -f 1 | sed "s/^/digest=/" >> "$GITHUB_OUTPUT"
       - name: Upload onto the draft release
         run: |
           set -euo pipefail
@@ -101,6 +108,7 @@ jobs:
       contents: write # drafts and their assets are visible only with write; also the final undraft
     env:
       TAG: ${{ needs.version.outputs.tag_name }}
+      TAG_SHA: ${{ needs.version.outputs.sha }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -112,13 +120,19 @@ jobs:
         with:
           enable-cache: false
       - name: Download the release assets and check their sums
+        env:
+          BUILT_MANIFEST: ${{ needs.build.outputs.manifest_digest }}
         run: |
           set -euo pipefail
           assets="$RUNNER_TEMP/assets"
           gh release download "$TAG" --dir "$assets"
           cd "$assets"
-          test "$(wc -l < SHA256SUMS.txt)" -eq 2
-          sha256sum --check --strict SHA256SUMS.txt
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" = "$TAG_SHA"
+          mkdir "$RUNNER_TEMP/receipt"
+          sha256sum -- *.whl *.tar.gz > "$RUNNER_TEMP/receipt/SHA256SUMS.txt"
+          digest=$(sha256sum "$RUNNER_TEMP/receipt/SHA256SUMS.txt" | cut -d " " -f 1)
+          test "$digest" = "$BUILT_MANIFEST"
+          cmp SHA256SUMS.txt "$RUNNER_TEMP/receipt/SHA256SUMS.txt"
           uv run --no-project "$GITHUB_WORKSPACE/scripts/check_release_version.py" dist . "$TAG"
       - name: Install the wheel into a fresh venv and check the installed version
         run: |
@@ -129,6 +143,14 @@ jobs:
           # -I: no checkout, script directory, or PYTHONPATH on sys.path; jev_judge_mcp must come from the wheel.
           cd "$RUNNER_TEMP"
           "$venv/bin/python" -I "$GITHUB_WORKSPACE/scripts/check_release_version.py" installed "$TAG"
+      - name: Save the verified manifest for publication and retries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verified-${{ env.TAG }}-${{ env.TAG_SHA }}
+          path: ${{ runner.temp }}/receipt/SHA256SUMS.txt
+          if-no-files-found: error
+          overwrite: true
+
       - name: Publish the release
         run: |
           set -euo pipefail
@@ -137,66 +159,63 @@ jobs:
 
   pypi:
     name: Publish to PyPI
-    needs: [version, build, verify]
-    # Held until the repository variable PYPI_PUBLISH is 'true'; until then a release is GitHub-only.
-    if: needs.version.outputs.release_created == 'true' && vars.PYPI_PUBLISH == 'true'
+    needs: [version, verify]
+    if: >-
+      always() && !cancelled() && github.ref == 'refs/heads/main' &&
+      ((needs.verify.result == 'success' && vars.PYPI_PUBLISH == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.republish_tag != ''))
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # PyPI trusted publishing (OIDC); no stored token
+      actions: read
+      id-token: write # PyPI trusted publishing (OIDC)
     environment: pypi
     env:
-      TAG: ${{ needs.version.outputs.tag_name }}
+      TAG: ${{ inputs.republish_tag || needs.version.outputs.tag_name }}
+      REQUESTED_RUN: ${{ inputs.verified_run }}
+      RETRY_TAG: ${{ inputs.republish_tag }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: refs/tags/${{ needs.version.outputs.tag_name }}
+          ref: refs/tags/${{ env.TAG }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           enable-cache: false
-      - name: Download the verified wheel and sdist from the release
+      - name: Authenticate the verification run
         run: |
           set -euo pipefail
-          assets="$RUNNER_TEMP/assets"
-          gh release download "$TAG" --dir "$assets"
-          test "$(find "$assets" -maxdepth 1 -type f \( -name '*.whl' -o -name '*.tar.gz' \) -print | wc -l)" -eq 2
+          [[ "$TAG" =~ ^v[0-9][0-9A-Za-z.+-]*$ ]]
+          SOURCE_RUN=$GITHUB_RUN_ID
+          tag_sha=$(git rev-parse HEAD)
+          receipt="verified-$TAG-$tag_sha"
+          if [[ -n "$RETRY_TAG" ]]; then
+            if [[ -n "$REQUESTED_RUN" ]]; then
+              SOURCE_RUN=$REQUESTED_RUN
+            else
+              SOURCE_RUN=$(gh api --method GET "repos/$GH_REPO/actions/artifacts" -f name="$receipt" \
+                --jq '[.artifacts[] | select(.expired == false)] | first | .workflow_run.id // empty')
+            fi
+            [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]] || { echo "Missing verification run for $TAG" >&2; exit 1; }
+            test "$SOURCE_RUN" != "$GITHUB_RUN_ID"
+            gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" |
+              jq -e --arg repo "$GH_REPO" '
+                .head_repository.full_name == $repo and .head_branch == "main" and
+                .path == ".github/workflows/release.yml" and
+                (.event == "push" or .event == "workflow_dispatch")' >/dev/null
+            gh api --paginate "repos/$GH_REPO/actions/runs/$SOURCE_RUN/jobs" \
+              --jq '.jobs[] | select(.name == "Verify and publish") | .conclusion' | grep -Fx success
+          fi
+          gh run download "$SOURCE_RUN" --name "$receipt" --dir "$RUNNER_TEMP/receipt"
+          test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = false
+          gh release download "$TAG" --dir "$RUNNER_TEMP/assets"
       - name: Upload to PyPI through trusted publishing
-        # A directory is not a file list: uv publish only uploads the paths it is given.
-        run: uv publish --trusted-publishing always --no-attestations "$RUNNER_TEMP"/assets/*.whl "$RUNNER_TEMP"/assets/*.tar.gz
-
-  pypi-retry:
-    name: Republish an existing release to PyPI
-    if: github.event_name == 'workflow_dispatch' && inputs.republish_tag != ''
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write # PyPI trusted publishing (OIDC); no stored token
-    environment: pypi
-    env:
-      TAG: ${{ inputs.republish_tag }}
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: refs/tags/${{ inputs.republish_tag }}
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
-        with:
-          enable-cache: false
-      - name: Download the release assets and check their sums
-        # The same verification the publish job ran: build can re-upload assets after it, so a
-        # republish trusts the release's current bytes only after they re-pass the checks.
         run: |
           set -euo pipefail
-          assets="$RUNNER_TEMP/assets"
-          gh release download "$TAG" --dir "$assets"
-          cd "$assets"
-          test "$(wc -l < SHA256SUMS.txt)" -eq 2
-          sha256sum --check --strict SHA256SUMS.txt
-          uv run --no-project "$GITHUB_WORKSPACE/scripts/check_release_version.py" dist . "$TAG"
-      - name: Upload to PyPI through trusted publishing
-        run: uv publish --trusted-publishing always --no-attestations "$RUNNER_TEMP"/assets/*.whl "$RUNNER_TEMP"/assets/*.tar.gz
+          cd "$RUNNER_TEMP/assets"
+          sha256sum -- *.whl *.tar.gz > "$RUNNER_TEMP/current-sums"
+          cmp "$RUNNER_TEMP/receipt/SHA256SUMS.txt" "$RUNNER_TEMP/current-sums"
+          python3 "$GITHUB_WORKSPACE/scripts/check_release_version.py" dist . "$TAG"
+          uv publish --trusted-publishing always --no-attestations ./*.whl ./*.tar.gz

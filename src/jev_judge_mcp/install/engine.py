@@ -4,13 +4,13 @@ import difflib
 import json
 import re
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from jev_judge_mcp.credential_literal import redact_credential_literals
-from jev_judge_mcp.domain import is_json_object
 from jev_judge_mcp.install.documents import (
     json_entry_path,
     read_codex_entry,
@@ -25,12 +25,14 @@ from jev_judge_mcp.install.documents import (
 from jev_judge_mcp.install.errors import ConfigChangedError, ConfigParseError, ConfigShapeError, InstallError
 from jev_judge_mcp.install.fs import (
     atomic_write,
+    digest,
     entry_hash,
     file_mode,
-    load_state,
+    load_targets,
     mode_is_loose,
+    ownership_key,
     read_bytes,
-    state_hash,
+    state_lock,
     write_backup,
     write_state,
 )
@@ -146,7 +148,23 @@ def run(request: Request) -> RunResult:
     if code is not None:
         return RunResult(redact_text("\n".join(lines) + "\n", request.secrets), code)
 
-    actions = [_plan(request, target, hits) for target in selected]
+    try:
+        with nullcontext() if request.dry_run else state_lock(request.layout.state_dir()):
+            targets = load_targets(request.layout.state_file(), recover=not request.dry_run)
+            return _execute(request, hits, selected, lines, pi_failed, targets)
+    except OSError as exc:
+        raise InstallError(f"installer I/O failed: {exc.strerror or 'could not persist installer state'}") from exc
+
+
+def _execute(
+    request: Request,
+    hits: list[_Hit],
+    selected: list[str],
+    lines: list[str],
+    pi_failed: bool,
+    targets: dict[str, dict[str, object]],
+) -> RunResult:
+    actions = [_plan(request, target, hits, targets) for target in selected]
     lines.extend(_describe(request, hits, actions))
     writing = [action for action in actions if action.after is not None and action.ok]
     if request.dry_run:
@@ -161,7 +179,7 @@ def run(request: Request) -> RunResult:
         if not request.confirmer(redact_text(prompt, request.secrets)):
             lines.append("installation cancelled")
             return RunResult(redact_text("\n".join(lines) + "\n", request.secrets), 1 if pi_failed else 0)
-    _apply(request, actions)
+    _apply(request, actions, targets)
     lines.extend(_applied_lines(actions))
     return RunResult(_finish(request, lines, actions, applied=True), _exit_code(actions, pi_failed))
 
@@ -270,7 +288,7 @@ def _select(
     detected = [hit.target for hit in hits]
     chosen_explicitly = False
     if request.agents and request.select_all:
-        selected = list(dict.fromkeys([*detected, *request.agents]))
+        selected = [*detected, *request.agents]
     elif request.agents:
         selected = list(request.agents)
     else:
@@ -303,10 +321,10 @@ def _select(
         pi_failed = True
         if not selected:
             return [], lines, 1, True
-    return selected, lines, None, pi_failed
+    return list(dict.fromkeys(selected)), lines, None, pi_failed
 
 
-def _plan(request: Request, target: str, hits: list[_Hit]) -> _Action:
+def _plan(request: Request, target: str, hits: list[_Hit], targets: Mapping[str, dict[str, object]]) -> _Action:
     if target == "claude-desktop" and not running_on_macos(request.platform):
         return _Action(target, None, "fail", "Claude Desktop install is macOS only", False, False)
     path = request.layout.target_path(target)
@@ -330,10 +348,16 @@ def _plan(request: Request, target: str, hits: list[_Hit]) -> _Action:
         current, servers, text, before = _load(target, path, request.name)
         note = _other_servers(servers, request.name)
         desired = _desired(target, request.launch, literal_key)
-        recorded = state_hash(load_state(request.layout.state_file()), target)
+        record = targets.get(ownership_key(targets, target, path, request.name), {})
+        if record and (record["name"] != request.name or record["path"] != str(path.absolute())):
+            raise InstallError("installer ownership record does not match its config path and name")
+        value = record.get("entry_sha256")
+        recorded = value if isinstance(value, str) else None
         if current is not None and literal_key is None and recorded == entry_hash(current):
             desired = with_preserved_literal(desired, current)
         action = _classify(request, target, path, current, desired, recorded, text, before)
+    except OSError as exc:
+        return _Action(target, path, "fail", f"cannot read config: {exc.strerror}", False, False)
     except (ConfigParseError, ConfigShapeError, UnicodeError) as exc:
         reason = exc.args[0] if exc.args else "unreadable config"
         return _Action(target, path, "fail", f"{reason}; left unchanged", False, False)
@@ -557,9 +581,9 @@ def _diffs(actions: list[_Action]) -> list[str]:
 
 def _record(request: Request, action: _Action) -> dict[str, object]:
     """The state-file record for an added or updated entry (its `verified` flag is set after the check)."""
-    assert action.entry is not None  # only called for an entry-bearing action
+    assert action.entry is not None and action.path is not None
     return {
-        "path": str(action.path),
+        "path": str(action.path.absolute()),
         "name": request.name,
         "installer_version": _version(),
         "entry_sha256": entry_hash(action.entry),
@@ -572,26 +596,37 @@ def _planned_targets(request: Request, actions: list[_Action], targets: Mapping[
     for action in actions:
         if action.after is None or action.path is None or not action.ok:
             continue
+        key = ownership_key(planned, action.target, action.path, request.name)
         if action.kind == "remove":
-            planned.pop(action.target, None)
+            planned.pop(key, None)
         elif action.entry is not None:
-            planned[action.target] = _record(request, action)
+            planned[key] = _record(request, action)
     return planned
 
 
-def _apply(request: Request, actions: list[_Action]) -> None:
-    state = load_state(request.layout.state_file())
-    targets = _mutable_targets(state)
+def _apply(request: Request, actions: list[_Action], targets: dict[str, dict[str, object]]) -> None:
+    state_path = request.layout.state_file()
     # Validate before the irreversible step: the records are computable up front, so a key that
     # would land in the state file stops the install while no config has been touched.
     _refuse_secret({"targets": _planned_targets(request, actions, targets)}, request.secrets)
     stamp = request.stamp or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    changed = False
     for action in actions:
         if action.after is None or action.path is None or not action.ok:
             continue
+        key = ownership_key(targets, action.target, action.path, request.name)
+        record = _record(request, action) if action.entry is not None else None
+        if record is not None and request.verify is not None:
+            record["verified"] = False
+        intent = {
+            "key": key,
+            "path": str(action.path.absolute()),
+            "before": digest(action.before),
+            "after": digest(action.after.encode()),
+            "record": record,
+        }
+        _refuse_secret(intent, request.secrets)
         try:
-            _write_one(request, action, stamp)
+            _prepare_write(request, action, stamp)
         except ConfigChangedError as exc:
             action.kind = "fail"
             action.ok = False
@@ -604,48 +639,54 @@ def _apply(request: Request, actions: list[_Action]) -> None:
             action.message = f"could not write {action.path}: {exc.strerror}"
             action.after = None
             continue
-        changed = True
-        record: dict[str, object] | None = None
-        if action.kind == "remove":
-            targets.pop(action.target, None)
-        elif action.entry is not None:
-            record = _record(request, action)
+        write_state(state_path, {"targets": targets, "pending": intent})
+        try:
+            atomic_write(action.path, action.after, _write_mode(action.path, action.literal), action.before)
+        except ConfigChangedError as exc:
+            write_state(state_path, {"targets": targets})
+            action.kind, action.ok, action.message, action.after = "fail", False, str(exc), None
+            continue
+        except OSError as exc:
+            if read_bytes(action.path) != action.before:
+                raise  # replacement may have succeeded; recover from the durable intent
+            write_state(state_path, {"targets": targets})
+            action.kind, action.ok, action.message, action.after = (
+                "fail",
+                False,
+                f"config write failed: {exc.strerror}",
+                None,
+            )
+            continue
+        if record is None:
+            targets.pop(key, None)
+        else:
+            targets[key] = record
+        write_state(state_path, {"targets": targets})
         warning = _mode_warning(action.path, holds_literal(action.entry) or action.literal)
         if warning and warning not in action.message:
             action.message = (action.message + " " + warning).strip()
-        verified: bool | None = None
-        if request.verify is not None and action.kind in {"add", "update"}:
+        if record is not None and request.verify is not None:
             try:
                 request.verify(request.launch.invoke())
             except Exception as exc:
                 action.ok = False
                 action.message = (action.message + f" verify failed: {exc}").strip()
-                verified = False
             else:
-                verified = True
-        if record is not None:
-            # A failed check stays recorded as `verified: false` so `--remove` still owns the
-            # entry, while the summary and exit code report the failure (ADR-0051).
-            if verified is not None:
-                record["verified"] = verified
-            targets[action.target] = record
-    if changed:
-        write_state(request.layout.state_file(), {"targets": targets})
+                record["verified"] = True
+                write_state(state_path, {"targets": targets})
 
 
-def _write_one(request: Request, action: _Action, stamp: str) -> None:
+def _prepare_write(request: Request, action: _Action, stamp: str) -> None:
     path = action.path
-    after = action.after
-    if path is None or after is None:
-        return
+    assert path is not None
     current = read_bytes(path)
     if current != action.before:
         raise ConfigChangedError(f"{path}: changed during install, re-run")
     if current is not None:
-        write_backup(request.layout.state_dir(), stamp, action.target, path.suffix, current)
+        backup = write_backup(request.layout.state_dir(), stamp, action.target, path.suffix, current)
+        action.message = (action.message + f" backup: {backup}").strip()
     if request.before_write is not None:
         request.before_write(path)
-    atomic_write(path, after, _write_mode(path, action.literal), action.before)
 
 
 def _write_mode(path: Path, literal: bool) -> int:
@@ -660,17 +701,6 @@ def _write_mode(path: Path, literal: bool) -> int:
     if literal:
         return existing & 0o600
     return existing
-
-
-def _mutable_targets(state: Mapping[str, object]) -> dict[str, dict[str, object]]:
-    raw = state.get("targets")
-    if not is_json_object(raw):
-        return {}
-    cleaned: dict[str, dict[str, object]] = {}
-    for key, value in raw.items():
-        if is_json_object(value):
-            cleaned[key] = dict(value)
-    return cleaned
 
 
 def _refuse_secret(payload: Mapping[str, object], secrets: tuple[str, ...]) -> None:
@@ -688,7 +718,7 @@ def _applied_lines(actions: list[_Action]) -> list[str]:
         elif not action.ok:
             # The write succeeded but the post-write check failed; say so (ADR-0051).
             lines.append(f"{action.target}: {action.kind} {action.message}".strip())
-        elif action.message and "mode " in action.message:
+        elif action.message and ("mode " in action.message or "backup:" in action.message):
             lines.append(f"{action.target}: {action.message}")
     return lines
 

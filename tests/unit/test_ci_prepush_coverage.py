@@ -47,12 +47,32 @@ DOCKERFILE = REPO / "docker" / "ci-linux.Dockerfile"
 # smoke job's old-Python entry guard), and upload-artifact (the build stage produces dist/
 # in the container; only the upload itself is CI-side plumbing).
 ALLOWED_USES = {
-    "actions/checkout@v4",
-    "astral-sh/setup-uv@v6",
-    "actions/setup-node@v4",
-    "actions/setup-python@v5",
-    "actions/upload-artifact@v4",
+    "actions/checkout",
+    "astral-sh/setup-uv",
+    "actions/setup-node",
+    "actions/setup-python",
+    "actions/upload-artifact",
 }
+
+
+def _emulated_action(reference: str) -> bool:
+    action, _, revision = reference.partition("@")
+    return action in ALLOWED_USES and re.fullmatch(r"[0-9a-f]{40}", revision) is not None
+
+
+@pytest.mark.parametrize(
+    ("reference", "expected"),
+    [
+        ("actions/checkout@" + "a" * 40, True),
+        ("actions/checkout@v4", False),
+        ("actions/checkout@main", False),
+        ("unclassified/action@" + "a" * 40, False),
+    ],
+)
+def test_scout_034_emulation_requires_known_pinned_actions(reference: str, expected: bool) -> None:
+    assert _emulated_action(reference) is expected
+
+
 # Non-make ci.yml run commands, mapped to the substring that must appear in a Linux stage's
 # command. Anything else fails: an unclassified workflow command cannot be checked.
 ALLOWED_RUN = {
@@ -145,7 +165,7 @@ def _parse_steps() -> list[Step]:
         if indent == 6 and content.startswith("- "):
             item = content[2:]
             if item.startswith("uses:"):
-                steps.append(Step(action=item[len("uses:") :].strip()))
+                steps.append(Step(action=item[len("uses:") :].partition(" #")[0].strip()))
                 in_with = False
                 continue
             if item.startswith("name:"):
@@ -241,7 +261,7 @@ def test_every_workflow_step_is_emulated() -> None:
     linux = LINUX_CHECK.read_text(encoding="utf-8")
     for step in steps:
         if step.action is not None:
-            assert step.action in ALLOWED_USES, f"ci.yml runs {step.action!r}, which the gate cannot emulate"
+            assert _emulated_action(step.action), f"ci.yml runs {step.action!r}, which the gate cannot emulate"
         if "node-version" in step.with_values:
             # The image downloads this exact release, and the runner asserts it per check:
             # a floating 24.x drifts ICU rendering, which is what parity grounds on.
