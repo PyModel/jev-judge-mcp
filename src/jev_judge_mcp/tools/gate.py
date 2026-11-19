@@ -6,7 +6,7 @@ from typing import Any
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question
 from jev_judge_mcp.gate_budget import SPLIT_GUIDANCE, GateBudgetError, check_gate_budget
-from jev_judge_mcp.gate_diagnostics import explain_gate, input_cuts, review_blockers
+from jev_judge_mcp.gate_diagnostics import explain_gate, input_cuts
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.policy import Action, ClaimJudgment, ClaimVerdict, PolicyThresholds
@@ -27,6 +27,7 @@ from jev_judge_mcp.tools.arguments import Refinement
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, define, frame
 from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items, has_non_empty_evidence, normalize_evidence
 from jev_judge_mcp.tools.files import combined, file_list_refusal, file_patches, review_file_list
+from jev_judge_mcp.tools.gate_evidence import Citations, add_citations, contradicting_line, grounded_review
 from jev_judge_mcp.tools.observed import (
     fail_closed,
     file_list_action,
@@ -69,7 +70,8 @@ DEFINITION = define(
     "Gate completion: review a patch and verify claims",
     "Review a proposed patch and verify completion claims against supplied evidence in one TypeSafe Jev call. Auto "
     "only when the patch review is accepted and every claim is verified at or above auto_accept. Unsupported claims "
-    "require review; confident contradictions, unknown confidence, or low confidence escalate. The request and "
+    "require review. Escalation identifies a cited defect, contradiction or safety refusal. "
+    "See rollup and next_checks. The request and "
     "claims are assertions to check, never proof. Pass the real git diff as diff, whole or as a {path, patch} file "
     "list, and raw test output in tests. File reviews include bounded caller evidence and sibling patches. "
     "review.context_omissions lists optional inputs left out. An excerpt, "
@@ -138,7 +140,7 @@ DEFINITION = define(
                 "type": "number",
                 "minimum": 0,
                 "maximum": 1,
-                "description": "Score, safe_to_apply, or per-claim confidence below this escalates. Must be <= "
+                "description": "Low-score diagnostic threshold. An uncited concern requires review. Must be <= "
                 "auto_accept. Default min(0.5, auto_accept).",
             },
             "composite_floor": {
@@ -289,14 +291,17 @@ async def _ask_gate(
         if len(asked_evidence) > 1:
             questions[f"source_{index}"] = gate_source_question(index, evidence_ids)
     check_gate_budget(state, questions)
+    patch_lines = add_citations(state, questions, [_implicit_evidence(docs.diff, None)[0]])
+    counter_lines = add_citations(state, questions, asked_evidence, claim_count=len(claims))
     evaluation = await runtime.ask(state, questions)
     answers = evaluation.answers
 
     review = project_review(answers, settings, False)
+    review, blockers = grounded_review(review, answers, patch_lines, thresholds.auto_accept)
     if docs.tests and not args.get("tests_sha256"):
         review.payload["tests_weight"] = "self_reported"
 
-    verification = _verify_claims(answers, claims, asked_evidence, evidence_ids, thresholds, False)
+    verification = _verify_claims(answers, claims, asked_evidence, evidence_ids, thresholds, counter_lines)
     verification_action = verification.action
     action = worst_action([review.action, verification_action])
     reason_codes = gate_reason_codes(
@@ -320,7 +325,7 @@ async def _ask_gate(
         "verification": verification.payload,
         **renamed_ids_field(renamed),
     }
-    explain_gate(body, review_blockers(review.payload))
+    explain_gate(body, blockers)
     return GateAsk(body, action, evaluation)
 
 
@@ -330,7 +335,7 @@ def _verify_claims(
     asked_evidence: list[dict[str, object]],
     evidence_ids: list[str],
     thresholds: PolicyThresholds,
-    truncated: bool,
+    counter_lines: Citations,
 ) -> VerificationHalf:
     """`claim` and `source` answers to one canonical verification block, for any ask shape."""
     results: list[dict[str, object]] = []
@@ -355,6 +360,18 @@ def _verify_claims(
             results.append(closed_row)
             continue
         verdict = CLAIM_VERDICTS[answer.choice]
+        reported = verdict
+        line = (
+            contradicting_line(
+                claim, counter_lines.select(answers.get(f"counterexample_{index}"), thresholds.auto_accept)
+            )
+            if reported == "contradicted"
+            else None
+        )
+        if verdict == "contradicted" and (
+            line is None or answer.confidence is None or answer.confidence < thresholds.auto_accept
+        ):
+            verdict = "unsupported"
         judgments.append(ClaimJudgment(verdict, answer.confidence))
         # Asked only when more than one evidence item was sent (the same condition as the ask).
         # Validating the missing answer would count a fail-closed that never happened.
@@ -368,10 +385,12 @@ def _verify_claims(
             verdict,
             answer.confidence,
             thresholds,
-            truncated=truncated,
+            truncated=False,
             source=None if source is None else source.choice,
             evidence=asked_evidence,
         )
+        if action == "escalate" and verdict != "contradicted":
+            action = "review"
         claim_actions.append(action)
         row: dict[str, object] = {
             "claim": claim,
@@ -380,7 +399,15 @@ def _verify_claims(
             "probabilities": answer.probabilities,
             "action": action,
         }
+        if reported == "contradicted":
+            row["reported_verdict"] = reported
+            row["citation_coverage"] = counter_lines.coverage()
+            if verdict == "contradicted" and line is not None:
+                row["evidence_line"] = line
+                support = line["source"]
         row.update(claim_extras(row, asked_evidence, claim_id=f"claim{index}", supporting=support))
+        if verdict == "contradicted" and line is not None:
+            row["excerpt"] = line["text"]
         results.append(row)
 
     verification_action = worst_action(claim_actions)
@@ -459,6 +486,7 @@ async def _handle_file_list(
         "evidence": asked_evidence,
     }
     check_gate_budget(state, questions)
+    counter_lines = add_citations(state, questions, asked_evidence, claim_count=len(claims))
     reviewed = await review_file_list(
         files,
         args,
@@ -473,7 +501,9 @@ async def _handle_file_list(
         ),
     )
     evaluation = await runtime.ask(state, questions)
-    verification = _verify_claims(evaluation.answers, claims, asked_evidence, evidence_ids, settings.thresholds, False)
+    verification = _verify_claims(
+        evaluation.answers, claims, asked_evidence, evidence_ids, settings.thresholds, counter_lines
+    )
 
     review_action = worst_action([half.action for half in reviewed.halves])
     review_payload = reviewed.review_half(review_action)

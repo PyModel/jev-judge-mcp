@@ -766,6 +766,20 @@
       "python_behavior": "Held reviews and gates report each failing comparison and next check, also for sibling files. The file-list extension shares bounded evidence and peer patches and reports optional omissions separately from the decision. The headline scores come from the first worst-reviewed file. File blockers and next checks identify the path and index. A git range with withheld files names them locally and caps the headline at review. String fixture projections extend program-response-fields."
     },
     {
+      "id": "actionable-gate-escalation",
+      "surface": "result",
+      "tier": "tier_a",
+      "status": "sanctioned",
+      "adr": "docs/adr/0082-actionable-gate-escalation.md",
+      "tests": [
+        "tests/unit/test_grounded_gate.py",
+        "tests/parity/test_tool_fixtures.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "Threshold-only uncertainty can escalate and a confident contradiction escalates without a counterexample.",
+      "python_behavior": "The gate asks bounded evidence-pointer questions. A change rolls up file and claim reasons and gives one next check. Escalations require a named and cited defect, a cited contradiction or an explicit refusal. The program-response-fields fixture projection retains the frozen score and probability assertions."
+    },
+    {
       "id": "session-source-version",
       "surface": "result",
       "tier": "both",

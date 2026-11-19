@@ -378,12 +378,10 @@ Other operator facts:
   candidate's probability, to four decimal places. The response has no spread field. A flat band of
   low values means the candidates were not distinguishable: treat the order as weak, and read
   `ranked[].relevance` rather than the rank numbers.
-- `jev_review` and `jev_gate` escalate when the lowest rubric confidence, or `safe_to_apply`, is
-  below `thresholds.review_at` (the reference rule; default 0.5). That includes a low-confidence
-  ancillary score such as `test_gap` on a patch the other scores accept. Escalate here is
-  uncertainty, not a finding that the patch is wrong. The driving score is the `scores` entry —
-  under `review` on `jev_gate` — whose `confidence` is below `thresholds.review_at`. Compare
-  `safe_to_apply` to the same threshold. The response does not name the driver; those two fields do.
+- In `jev_review`, a rubric confidence or `safe_to_apply` below `review_at` escalates.
+  In `jev_gate`, uncertainty alone requires review. An escalation identifies a changed line
+  with a defect, evidence contradicting a claim, or an explicit safety refusal. Read the
+  change verdict in `rollup` and use the single `next_checks` entry to act.
 - Per-tool weak spots and what recorded evidence exists for each tool are in
   [`docs/tools.md`](docs/tools.md); per-release evidence, including certified operating points, is
   recorded in [`docs/EVIDENCE.md`](docs/EVIDENCE.md).

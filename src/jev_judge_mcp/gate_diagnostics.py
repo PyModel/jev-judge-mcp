@@ -1,18 +1,20 @@
 """Deterministic explanations for already decided gate actions (ADR-0081)."""
 
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from jev_judge_mcp.limits import GATE
+from jev_judge_mcp.responses import EXCERPT_CHECK, NO_HUNKS_CHECK
 from jev_judge_mcp.text import length
 
 type Blocker = dict[str, Any]
 
 _RUBRIC_CHECKS = {
-    "correctness": "Trace success and failure paths and run a regression for the changed behavior.",
-    "spec_match": "Match each acceptance criterion to its changed hunk and an observable result.",
-    "test_gap": "Identify the highest-risk changed branch and show the test that exercises it and its result.",
-    "blast_radius": "Trace direct callers and shared interfaces and check their behavior with this change.",
+    "correctness": "Run one regression that asserts the changed behavior.",
+    "spec_match": "Verify the requested behavior against the changed hunk.",
+    "test_gap": "Show the result of a test that exercises the highest-risk changed branch.",
+    "blast_radius": "Check a direct caller against the changed interface.",
 }
 
 
@@ -106,10 +108,10 @@ def review_blockers(review: Mapping[str, Any]) -> list[Blocker]:
                 "threshold_name": "composite_floor",
                 "threshold": review["thresholds"]["composite_floor"],
                 "rubrics": levels,
-                "next_check": " ".join(
-                    _RUBRIC_CHECKS[rubric] for rubric, row in levels.items() if row["level_assessment"] != "favorable"
-                )
-                or "Check the fractional rubric scores and weights against the requested composite floor.",
+                "next_check": next(
+                    (_RUBRIC_CHECKS[key] for key, row in levels.items() if row["level_assessment"] != "favorable"),
+                    "Check the fractional rubric scores against the requested composite floor.",
+                ),
             }
         )
     return blockers
@@ -118,7 +120,7 @@ def review_blockers(review: Mapping[str, Any]) -> list[Blocker]:
 def _claim_blockers(verification: Mapping[str, Any], truncated: bool) -> list[Blocker]:
     blockers: list[Blocker] = []
     thresholds = verification["thresholds"]
-    for row in verification["results"]:
+    for index, row in enumerate(verification["results"]):
         if row["action"] == "auto":
             continue
         claim = {"claim_id": row["id"]}
@@ -130,6 +132,8 @@ def _claim_blockers(verification: Mapping[str, Any], truncated: bool) -> list[Bl
                     "field": "verdict",
                     "code": "claim_invalid",
                     "value": None,
+                    "safety_refusal": True,
+                    "evidence_line": {"source": "provider", "field": f"claim_{index}", "value": None},
                     "next_check": "Obtain a valid provider judgment for this claim.",
                 }
             )
@@ -148,6 +152,25 @@ def _claim_blockers(verification: Mapping[str, Any], truncated: bool) -> list[Bl
                     else "Supply direct evidence for this claim or narrow its wording.",
                 }
             )
+            if row.get("reported_verdict") == "contradicted" and verdict == "unsupported":
+                blockers[-1].update(
+                    code="claim_contradiction_unconfirmed",
+                    next_check="Supply the exact observation that contradicts this claim.",
+                )
+            elif verdict == "contradicted":
+                line = row["evidence_line"]
+                blockers[-1].update(
+                    evidence_line=line,
+                    next_check=f"Reconcile the claim with {line['source']} line {line['line']} ({line['text']}).",
+                )
+            elif row.get("missing_evidence"):
+                missing = {
+                    "needs_before_after": "before and after observations",
+                    "needs_tests": "test output",
+                    "needs_diff": "the changed hunk",
+                    "single_item_no_source": "an independent observation",
+                }
+                blockers[-1]["next_check"] = f"Supply {missing[row['missing_evidence']]} for this claim."
             if verdict == "contradicted" and confidence is not None and confidence >= thresholds["auto_accept"]:
                 blockers[-1]["confidence_comparison"] = ">="
         if confidence is None or confidence < thresholds["auto_accept"]:
@@ -178,11 +201,31 @@ def _claim_blockers(verification: Mapping[str, Any], truncated: bool) -> list[Bl
 
 
 def explain_gate(body: dict[str, Any], blockers: list[Blocker], *, verification_cut: bool = False) -> None:
-    """Append facts from every held file and claim while preserving legacy code and hint order."""
-    if body["action"] == "auto":
+    """One change verdict, with a count per diagnostic and one highest-priority check."""
+    claim_blockers = _claim_blockers(body["verification"], verification_cut)
+    for blocker in claim_blockers:
+        blocker["next_check"] = f"{blocker['claim_id']}: {blocker['next_check']}"
+    blockers = [*blockers, *claim_blockers]
+    counts = Counter(str(b["code"]) for b in blockers)
+    body["rollup"] = {"action": body["action"], "reason_counts": dict(counts)}
+    if not blockers:
         return
-    if "verification" in body:
-        blockers = [*blockers, *_claim_blockers(body["verification"], verification_cut)]
     body["blockers"] = blockers
-    body["reason_codes"] = list(dict.fromkeys([*body["reason_codes"], *(b["code"] for b in blockers)]))
-    body["next_checks"] = list(dict.fromkeys([*(b["next_check"] for b in blockers), *body["next_checks"]]))
+    body["reason_codes"] = list(dict.fromkeys([*body["reason_codes"], *counts]))
+    priority = next((b for b in blockers if "evidence_line" in b), None)
+    if priority is None:
+        priority = next(
+            (
+                b
+                for b in blockers
+                if b["code"] in ("file_withheld", "context_omitted", "claim_contradiction_unconfirmed")
+            ),
+            None,
+        )
+    if priority is not None:
+        check = priority["next_check"]
+    elif shape_check := next((c for c in body["next_checks"] if c in (NO_HUNKS_CHECK, EXCERPT_CHECK)), None):
+        check = shape_check
+    else:
+        check = (claim_blockers or blockers)[0]["next_check"]
+    body["next_checks"] = [check]

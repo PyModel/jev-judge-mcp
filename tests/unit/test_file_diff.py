@@ -305,6 +305,10 @@ async def test_gate_checks_exact_utf8_budget_including_longest_question_and_dupl
     sample = await call_tool("jev_gate", args, _GATE_ANSWERS)
     ((state, questions),) = sample.requests
 
+    assert isinstance(state, dict)
+    state = {k: v for k, v in state.items() if k not in ("patch_lines", "counterevidence_lines")}
+    questions = {k: v for k, v in questions.items() if not k.startswith(("defect_", "counterexample_"))}
+
     def size(name: str) -> int:
         envelope = {"state": state, "questions": {name: questions[name]}}
         return len(json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode())
@@ -354,6 +358,12 @@ async def test_a_file_list_over_the_patch_budget_refuses_naming_the_diff() -> No
 
 
 _ESCALATE_REVIEW = {
+    "defect_kind": {
+        "choice": "wrong_result",
+        "confidence": 1,
+        "probabilities": {"none": 0, "wrong_result": 1, "error_handling": 0, "state_change": 0, "safety_refusal": 0},
+    },
+    "defect_line": {"choice": "L1", "confidence": 1, "probabilities": {"L1": 1, "none": 0}},
     "correctness": {"score": 0, "confidence": 0.95},
     "spec_match": {"score": 0, "confidence": 0.95},
     "test_gap": {"score": 2, "confidence": 0.95},
@@ -579,10 +589,10 @@ async def test_gate_summary_partitions_and_a_row_stands_only_when_auto() -> None
     row = outcome.payload["verification"]["results"][0]
     summary = outcome.payload["verification"]["summary"]
     assert row["verdict"] == "verified"
-    assert row["action"] == "escalate"
+    assert row["action"] == "review"
     assert row["stands"] is False
     assert summary["by_verdict"] == {"verified": 1}
-    assert summary["by_action"] == {"escalate": 1}
+    assert summary["by_action"] == {"review": 1}
     assert sum(summary["by_verdict"].values()) == 1
     assert sum(summary["by_action"].values()) == 1
 
@@ -680,7 +690,7 @@ async def test_file_reviews_overlap_and_keep_the_input_order() -> None:
     assert not result.is_error, payload
     assert provider.max_in_flight == 4
     assert payload["review"]["reviewed_files"] == ["src/0.py", "src/1.py", "src/2.py", "src/3.py"]
-    assert payload["review"]["file_actions"]["src/1.py"] == "escalate"
+    assert payload["review"]["file_actions"]["src/1.py"] == "review"
     assert {payload["review"]["file_actions"][path] for path in ("src/0.py", "src/2.py", "src/3.py")} == {"auto"}
     assert len(provider.requests) == 5  # four reviews, then the claims once
 
@@ -723,7 +733,7 @@ async def test_gate_explains_the_second_files_confidence_at_the_requested_thresh
         },
         [_REVIEW_ANSWERS, {**_REVIEW_ANSWERS, "spec_match": {"score": 1.9, "confidence": 0.59}}, _GATE_ANSWERS],
     )
-    assert outcome.payload["action"] == "escalate"
+    assert outcome.payload["action"] == "review"
     assert outcome.payload["review"]["score_file"] == "b"
     assert outcome.payload["review"]["scores"]["spec_match"]["confidence"] == 0.59
     for _, questions in outcome.requests[:2]:
@@ -809,7 +819,7 @@ async def test_omitted_supplemental_evidence_is_named_on_an_accepted_gate() -> N
 
 async def test_gate_checks_every_file_before_dispatch_and_preserves_provider_window_guidance() -> None:
     result, provider = await _call_gate_raw(
-        [{"path": "tiny", "patch": "+"}, {"path": "x" * 31_000, "patch": "+"}],
+        [{"path": "tiny", "patch": "+"}, {"path": "second", "patch": "+" * 31_000}],
         [{"id": "log", "text": "ok"}],
     )
     assert result.is_error and "30000" in str(result.content[0]) and not provider.requests

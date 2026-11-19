@@ -196,7 +196,7 @@ Clopper-Pearson upper bound, not a point estimate (ROADMAP headline metrics); ce
 target needs roughly 600 error-free held-out rows per run, and that corpus is not recorded yet
 (`evals/README.md` § Open gaps).
 
-A confident contradiction escalates. A file list gets one review per file and one verification
+A confident contradiction with a cited counterexample escalates. A file list gets one review per file and one verification
 for all claims. A range with withheld files names them and requires local review. Evidence is
 capped at 16 items and 200,000 aggregate UTF-16 units. Before sending, the gate checks primary
 documents and both byte budgets. The string gate sends the diff and tests again as implicit evidence
@@ -212,6 +212,22 @@ are omitted, `jev_review.context_omissions` or the gate’s `review.context_omis
 target path and index, required and allowed units, and omitted entries. This field is informational
 on every action, including auto. Coverage flags and decisions still follow the primary inputs and
 judgments. Claims are verified once against the canonical evidence. See [ADR-0081](adr/0081-gate-diagnostics-and-file-context.md).
+
+Read `rollup.action` for the whole change. `rollup.reason_counts` counts each detailed blocker
+by code across files, withheld paths and claims. Accepted changes have an empty count map.
+`review.file_rows` is ordered by input position and preserves repeated paths. The existing
+`action`, `review.file_actions`, `score_file`, `reason_codes`, and numeric scores remain available.
+`next_checks` contains one prioritized action. Every other held comparison keeps its own check in
+`blockers`. An omitted input on a held file is identified by path or evidence ID.
+
+A named defect or explicit safety rejection cites a changed line. A confirmed claim contradiction
+cites a counterexample and sets the claim excerpt to that line. The line number is one-based within
+the submitted patch or evidence item. Text is a bounded excerpt. Invalid required answers explicitly
+refuse a decision and identify the provider field. Low confidence alone requires review. A provider
+contradiction without sufficient corroboration yields `unsupported` and `reported_verdict:
+contradicted`. Its probabilities still describe the provider's original judgment.
+`citation_coverage` reports the number of eligible and offered lines. A held change can be split
+by hunk to expose more lines. See [ADR-0082](adr/0082-actionable-gate-escalation.md).
 
 From another git worktree run `jev-judge-mcp gate --diff BASE..HEAD --claims claims.txt
 --tests test.log --request "requirement"` in that worktree. A range over the aggregate input budget returns `input_too_large` before a judgment. The same admission caps apply.

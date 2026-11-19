@@ -6,9 +6,11 @@ the server now sends, using the same builders, so a drift in an old key still fa
 """
 
 import json
+from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 
+from jev_judge_mcp.domain import questions_to_wire
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.responses import (
     SCORE_SCALE,
@@ -23,8 +25,10 @@ from jev_judge_mcp.responses import (
 )
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.tools.common import evidence_items
-from jev_judge_mcp.tools.gate import CLAIM_SUPPORT, gate_source_question
+from jev_judge_mcp.tools.gate import CLAIM_SUPPORT, REVIEW_FRAMING, claim_question, gate_source_question
+from jev_judge_mcp.tools.gate_evidence import add_citations
 from jev_judge_mcp.tools.review import ANTI_INJECTION
+from jev_judge_mcp.tools.review_half import review_questions
 from jev_judge_mcp.tools.verify import ROLE_RULE, VERIFY_SUFFIX
 
 _OLD_CLAIM = (
@@ -55,26 +59,35 @@ def expect_program(
 
 
 def frozen_review_fields(actual: str, expected: str) -> str:
-    """Compare the recorded wire independently of ADR-0081's additive diagnostics.
-
-    Keep the original action, fields, order, reason codes and checks. Only the extensions declared
-    by a held response's blockers are allowed. The gate boundary tests own their semantic content.
-    """
+    """Check the documented extensions; compare all other fields in frozen wire order."""
     if not expected.startswith("{"):
         return actual
     original = json.loads(expected)
-    if original.get("tool") not in ("jev_gate", "jev_review") or original.get("action") not in ("escalate", "review"):
+    if original.get("tool") not in ("jev_review", "jev_gate") or "action" not in original:
         return actual
     observed = json.loads(actual)
     assert stringify(observed) == actual
-    blockers = observed.pop("blockers")
-    assert blockers and all(row["field"] and row["next_check"] for row in blockers)
     if original["tool"] == "jev_gate":
-        codes = original["reason_codes"]
-        checks = original["next_checks"]
-        assert observed["reason_codes"] == list(dict.fromkeys([*codes, *(row["code"] for row in blockers)]))
-        assert observed["next_checks"] == list(dict.fromkeys([*(row["next_check"] for row in blockers), *checks]))
-        observed.update(reason_codes=codes, next_checks=checks)
+        blockers = observed.pop("blockers", [])
+        rollup = observed.pop("rollup")
+        assert rollup == {"action": original["action"], "reason_counts": dict(Counter(b["code"] for b in blockers))}
+        assert bool(blockers) == (original["action"] != "auto")
+        assert all(b["field"] and b["next_check"] for b in blockers)
+        assert observed["reason_codes"] == list(
+            dict.fromkeys([*original["reason_codes"], *(b["code"] for b in blockers)])
+        )
+        assert len(observed["next_checks"]) == 1
+        assert observed["next_checks"][0] in original["next_checks"] + [b["next_check"] for b in blockers]
+        observed.update(reason_codes=original["reason_codes"], next_checks=original["next_checks"])
+        coverage = observed["review"].pop("citation_coverage")
+        assert 0 <= coverage["offered"] <= min(32, coverage["available"])
+        for row in observed["verification"]["results"]:
+            if row.get("reported_verdict") == "contradicted":
+                coverage = row.pop("citation_coverage")
+                assert 0 <= coverage["offered"] <= min(32, coverage["available"])
+    elif original["action"] != "auto":
+        blockers = observed.pop("blockers")
+        assert blockers and all(b["field"] and b["next_check"] for b in blockers)
     return stringify(observed)
 
 
@@ -117,6 +130,14 @@ def _rewrite_body(body: Any) -> Any:
                     ordered[f"source_{index}"] = gate_source_question(index, ids).to_wire()
             questions.clear()
             questions.update(ordered)
+        typed = review_questions(REVIEW_FRAMING)
+        for i in range(len(state["claims"])):
+            typed[f"claim_{i}"] = claim_question(i)
+            if len(evidence) > 1:
+                typed[f"source_{i}"] = gate_source_question(i, ids)
+        add_citations(state, typed, [implicit[0]])
+        add_citations(state, typed, evidence, claim_count=len(state["claims"]))
+        questions.update({k: v for k, v in questions_to_wire(typed).items() if k not in questions})
     return rewritten
 
 
@@ -168,6 +189,32 @@ def _rewrite_payload(
             _annotate_review(review, had_tests)
     verification = payload.get("verification")
     if isinstance(verification, dict) and isinstance(verification.get("results"), list):
+        if tool == "jev_gate":
+            # The frozen provider never answered a citation question. Every old hold stays a hold.
+            rows = verification["results"]
+            review = payload["review"]
+            if review["action"] == "escalate" and review.get("status") != "invalid_response":
+                review["action"] = "review"
+            for row in rows:
+                if row.get("verdict") == "contradicted":
+                    row.update(reported_verdict="contradicted", verdict="unsupported")
+                if row["action"] == "escalate" and row.get("status") != "invalid_response":
+                    row["action"] = "review"
+            order = ("auto", "review", "escalate")
+            verification["action"] = max((row["action"] for row in rows), key=order.index)
+            payload["action"] = max(review["action"], verification["action"], key=order.index)
+            verification["summary"].update(
+                {label: sum(row["verdict"] == label for row in rows) for label in ("contradicted", "unsupported")}
+            )
+            codes = []
+            for code in payload["reason_codes"]:
+                if code == "claims_contradicted":
+                    code = "claims_unsupported"
+                if code == "review_escalated" and review["action"] == "review":
+                    code = "review_required"
+                if code not in codes:
+                    codes.append(code)
+            payload["reason_codes"] = codes
         _annotate_claims(verification["results"], evidence)
         summary = verification.get("summary")
         if isinstance(summary, dict):

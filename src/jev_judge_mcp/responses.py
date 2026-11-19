@@ -76,7 +76,7 @@ _CLAIM_CODES = frozenset(
 type DiffShape = Literal["patch", "file_list", "text", "excerpt"]
 
 _HUNK_HEADERS = ("diff --git ", "@@ ", "+++ ", "--- ", "Index: ")
-_HUNK_COUNTS = re.compile(r"@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+_HUNK_COUNTS = re.compile(r"@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@", re.ASCII)
 
 SCORE_SCALE = [0, RUBRIC_SCORE_MAX]
 _LEVELS = tuple(range(RUBRIC_SCORE_MAX + 1))
@@ -122,6 +122,9 @@ def _trimmed(patch: str) -> bool:
             if line.startswith("@@ "):
                 counts = _HUNK_COUNTS.match(line)
                 if counts is None:
+                    return True
+                # A real hunk cannot span more lines than there are characters in the patch.
+                if any(len(count) > len(str(len(patch))) for count in counts.groups() if count):
                     return True
                 old = 1 if counts.group(1) is None else int(counts.group(1))
                 new = 1 if counts.group(2) is None else int(counts.group(2))

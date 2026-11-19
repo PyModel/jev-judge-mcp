@@ -74,6 +74,7 @@ def test_diff_shape_is_computed_from_the_argument() -> None:
     assert diff_shape(_PATCH.replace("-old\n", "-old\n\n", 1)) == "excerpt"  # the extra blank is one line too many
     assert diff_shape("@@\n-old\n+new") == "patch"  # a bare marker carries no counts to check
     assert diff_shape(_ELIDED) == "excerpt"  # the header promises 40/52 lines; three follow
+    assert diff_shape(_PATCH.replace("@@ -1 +1", "@@ -\uff11 +\uff11")) == "excerpt"
     assert diff_shape(_COUNTLESS) == "excerpt"  # a header git never writes
     assert diff_shape(_PATCH + "+stray line past the hunk\n") == "excerpt"
     assert diff_shape([{"path": "a", "patch": _PATCH}, {"path": "b", "patch": _ELIDED}]) == "excerpt"
@@ -111,7 +112,7 @@ async def test_a_gate_over_a_summary_names_the_missing_hunks() -> None:
     assert "claims_unsupported" in outcome.payload["reason_codes"]
     (blocker,) = outcome.payload["blockers"]
     assert (blocker["claim_id"], blocker["value"], blocker["confidence"]) == ("claim0", "unsupported", 0.9)
-    assert blocker["next_check"] in outcome.payload["next_checks"]
+    assert outcome.payload["next_checks"] == [NO_HUNKS_CHECK]
 
 
 async def test_high_confidence_adverse_levels_explain_a_composite_only_hold() -> None:
@@ -148,8 +149,8 @@ async def test_a_gate_over_a_trimmed_patch_says_the_review_scored_the_excerpt() 
     args = {"request": "add the cache", "diff": _ELIDED, "claims": ["the cache is wired"], "evidence": "x = 1 set"}
     outcome = await call_tool("jev_gate", args, {**_REVIEW_LOW, **_VERIFIED})
     assert not outcome.is_error, outcome.text
-    assert outcome.payload["action"] == "escalate"
-    assert outcome.payload["next_checks"][-2:] == [REVIEW_ONLY_CHECK, EXCERPT_CHECK]
+    assert outcome.payload["action"] == "review"
+    assert outcome.payload["next_checks"] == [EXCERPT_CHECK]
 
 
 async def test_a_file_list_gate_checks_each_patch_for_trimming() -> None:
@@ -176,13 +177,13 @@ def test_the_review_only_hint_follows_whether_the_review_saw_tests() -> None:
     assert "pass the log as tests or tests_path" in REVIEW_ONLY_CHECK
 
 
-async def test_a_gate_whose_test_log_sat_in_evidence_is_told_to_pass_it_as_tests() -> None:
+async def test_a_gate_with_test_output_in_evidence_addresses_the_reported_hold() -> None:
     log = {"id": "ci", "text": "5 passed", "kind": "tool_output"}
     args = {"request": "add the cache", "diff": _PATCH, "claims": ["the cache is wired"], "evidence": [log]}
     outcome = await call_tool("jev_gate", args, {**_REVIEW_LOW, **_VERIFIED})
     assert not outcome.is_error, outcome.text
-    assert outcome.payload["action"] == "escalate"
-    assert outcome.payload["next_checks"][-1] == REVIEW_ONLY_CHECK
+    assert outcome.payload["action"] == "review"
+    assert outcome.payload["next_checks"] == [outcome.payload["blockers"][0]["next_check"]]
 
 
 @pytest.mark.parametrize("diff", [_PATCH, [{"path": "p.py", "patch": _PATCH}]], ids=["string", "file_list"])
@@ -197,4 +198,5 @@ async def test_a_gate_that_sent_tests_to_the_review_does_not_ask_for_them_again(
     }
     outcome = await call_tool("jev_gate", args, {**_REVIEW_LOW, **_VERIFIED})
     assert not outcome.is_error, outcome.text
-    assert outcome.payload["next_checks"][-1] == REVIEW_SAW_TESTS_CHECK
+    assert len(outcome.payload["next_checks"]) == 1
+    assert "failure and recovery" in outcome.payload["next_checks"][0]

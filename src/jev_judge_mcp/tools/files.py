@@ -12,8 +12,8 @@ from typing import Any, cast
 
 import anyio
 
-from jev_judge_mcp.domain import Usage
-from jev_judge_mcp.gate_budget import check_gate_budget
+from jev_judge_mcp.domain import Question, Usage
+from jev_judge_mcp.gate_budget import GateBudgetError, check_gate_budget
 from jev_judge_mcp.gate_diagnostics import Blocker, review_blockers, size_blocker
 from jev_judge_mcp.limits import GATE, GateCaps
 from jev_judge_mcp.policy import Action
@@ -21,6 +21,7 @@ from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import Runtime, ToolError
+from jev_judge_mcp.tools.gate_evidence import Citations, add_citations, grounded_review
 from jev_judge_mcp.tools.observed import worst_action
 from jev_judge_mcp.tools.review_half import (
     ReviewDocs,
@@ -107,6 +108,16 @@ class FileListReview:
         payload["score_file"] = self.reviewed_paths[index]
         payload["reviewed_files"] = self.reviewed_paths
         payload["file_actions"] = file_actions(zip(self.reviewed_paths, actions, strict=True))
+        if "citation_coverage" in self.halves[index].payload:
+            payload["file_rows"] = [
+                {
+                    "path": path,
+                    "action": half.action,
+                    "citation_coverage": half.payload["citation_coverage"],
+                    "reason_codes": [b["code"] for b in self.blockers if b.get("reviewed_file_index") == i],
+                }
+                for i, (path, half) in enumerate(zip(self.reviewed_paths, self.halves, strict=True))
+            ]
         if self.context_omissions:
             payload["context_omissions"] = self.context_omissions
         return payload
@@ -180,28 +191,41 @@ async def review_file_list(
     sources = [(item, _wire_units(item)) for item in evidence]
     omissions: dict[int, dict[str, object]] = {}
 
-    questions = review_questions(gate_framing or "")
+    pointers: list[Citations] = []
 
-    prepared: list[tuple[CapLedger, ReviewDocs, dict[str, object]]] = []
+    prepared: list[tuple[CapLedger, ReviewDocs, dict[str, object], dict[str, Question]]] = []
     for index, item in enumerate(fitting):
         ledger = CapLedger()
         docs = review_docs({**args, "diff": item["patch"]}, ledger, doc_units)
-        extra, required, missing = _file_context(index, peers, sources, context_limit)
+        questions = review_questions(gate_framing or "")
+        limit = context_limit
+        while True:
+            extra, required, missing = _file_context(index, peers, sources, limit)
+            state = {"purpose": purpose, "request": docs.request, "diff": docs.diff, "tests": docs.tests, **extra}
+            if gate_framing is None:
+                break
+            try:
+                check_gate_budget(state, questions)
+            except GateBudgetError:
+                if not (extra["path"] or extra["evidence"] or extra["related_files"]):
+                    raise
+                limit = min(limit, required) // 2
+            else:
+                break
         if missing:
             omissions[index] = {
                 "path": item["path"],
                 "reviewed_file_index": index,
                 "required_units": required,
-                "limit_units": context_limit,
+                "limit_units": limit,
                 "omitted": missing,
             }
-        state = {"purpose": purpose, "request": docs.request, "diff": docs.diff, "tests": docs.tests, **extra}
         if gate_framing is not None:
-            check_gate_budget(state, questions)
-        prepared.append((ledger, docs, state))
+            pointers.append(add_citations(state, questions, [{"id": "diff", "kind": "diff", "text": docs.diff}]))
+        prepared.append((ledger, docs, state, questions))
 
     async def review(index: int) -> None:
-        ledger, docs, state = prepared[index]
+        ledger, docs, state, questions = prepared[index]
         try:
             async with fan_out:
                 evaluation = await runtime.ask(state, questions)
@@ -233,9 +257,30 @@ async def review_file_list(
         assert result is not None  # every task either stored its result or recorded a failure
         ledger, docs, evaluation = result
         half = project_review(evaluation.answers, settings, ledger.context_cut)
+        index = len(reviewed_paths)
+        if gate_framing is None:
+            reasons = review_blockers(half.payload)
+        else:
+            half, reasons = grounded_review(
+                half, evaluation.answers, pointers[index], settings.thresholds.auto_accept, path=item["path"]
+            )
+            if half.action != "auto" and index in omissions:
+                names = {
+                    "path": item["path"],
+                    **{f"evidence[{i}]": str(source["id"]) for i, source in enumerate(evidence)},
+                    **{f"reviewed_files[{i}]": peer["path"] for i, peer in enumerate(fitting)},
+                }
+                missing_names = [names[key] for key in cast(list[str], omissions[index]["omitted"])]
+                reasons.append(
+                    {
+                        "field": "context",
+                        "code": "context_omitted",
+                        "missing": missing_names,
+                        "next_check": f"Resubmit {item['path']} with omitted context: {', '.join(missing_names)}.",
+                    }
+                )
         halves.append(half)
-        for reason in review_blockers(half.payload):
-            index = len(reviewed_paths)
+        for reason in reasons:
             target = f"{item['path']} (reviewed_files[{index}], {reason['field']})"
             blockers.append(
                 {
