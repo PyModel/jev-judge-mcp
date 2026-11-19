@@ -349,7 +349,7 @@ async def test_subtree_range_uses_physical_origin_for_store_check(repo: Path, mo
     assert result.code == "secret_file" and not result.requests
 
 
-async def test_sensitive_range_path_is_withheld_without_naming_it_to_provider(
+async def test_sensitive_range_path_is_masked_in_skips_and_withheld_from_provider(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     marker = "configured-fixture-marker"
@@ -358,7 +358,7 @@ async def test_sensitive_range_path_is_withheld_without_naming_it_to_provider(
     commit_files(repo, {name: "private fixture", "ordinary.txt": "public fixture"})
     result = await call_tool("jev_gate_range", gate_args(), {})
     assert not result.is_error
-    assert result.payload.get("skipped") == [{"path": name, "reason": "secret_file"}]
+    assert result.payload.get("skipped") == [{"path": "notes-[redacted].txt", "reason": "secret_file"}]
     assert "public fixture" in _sent_text(result)
     assert marker not in _sent_text(result)
 
