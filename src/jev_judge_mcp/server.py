@@ -22,13 +22,13 @@ import anyio
 import uvicorn
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.shared.exceptions import MCPError
-from mcp.types import INTERNAL_ERROR, CallToolResult, CancelledNotificationParams, NotificationParams, Tool
+from mcp.types import INTERNAL_ERROR, CallToolResult, CancelledNotificationParams, NotificationParams, TextContent, Tool
 from starlette.types import ASGIApp
 
 from jev_judge_mcp import keyfile
 from jev_judge_mcp.errors import RedactingFilter, Redactor
 from jev_judge_mcp.http_auth import BearerTokenMiddleware, ensure_http_access_control
-from jev_judge_mcp.identity import reported_version
+from jev_judge_mcp.identity import ServerVersion, reported_version
 from jev_judge_mcp.instructions import server_instructions
 from jev_judge_mcp.providers import ProviderConfigError, select_provider
 from jev_judge_mcp.providers.typesafe import sdk_importable
@@ -75,6 +75,7 @@ class JevMCPServer(MCPServer):
             instructions=server_instructions(toolset.names()),
             log_level=log_level,
         )
+        self.code_version = ServerVersion()
         self.toolset = toolset
         attach_skills(self)
         # The SDK acts on both before any handler runs (the dispatcher cancels the request, the
@@ -101,7 +102,12 @@ class JevMCPServer(MCPServer):
         if "arguments" in params and params["arguments"] is None:
             raise MCPError(code=INTERNAL_ERROR, message=NULL_ARGUMENTS)
         sent = context is None or "arguments" in params
-        return await self.toolset.call(name, arguments if sent else None)
+        result = await self.toolset.call(name, arguments if sent else None)
+        version = await self.code_version.field()
+        result.meta = {**(result.meta or {}), "jev/version": version}
+        if notice := version.get("notice"):
+            result.content.append(TextContent(type="text", text=str(notice)))
+        return result
 
     async def run_stdio_async(self) -> None:
         """The SDK's stdio loop over this server's own transport (`jev_judge_mcp.stdio`)."""

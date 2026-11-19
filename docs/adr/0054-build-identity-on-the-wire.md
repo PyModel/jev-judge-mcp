@@ -25,7 +25,7 @@ the tag `v<version>`:
   same build.
 - The git state is read from files. A worktree's `.git` file (`gitdir:`), its `commondir`, loose
   refs, and `packed-refs` (including a `^` peel) are followed. A loose annotated tag is peeled by
-  reading the loose object. Nothing spawns `git`.
+  reading the loose object. Computing this version string only reads files.
 - A module path under `site-packages` or `dist-packages` is a wheel even when the venv sits inside
   the checkout, so `uvx --from .` reports the plain version.
 - The same version string is logged once at startup (`identity jev-mcp <version>`) and printed by
@@ -43,3 +43,13 @@ preserve; the suffix is how an operator tells the builds apart.
 - Parity of `serverInfo.name` is unchanged. No recorded fixture compares `serverInfo.version`.
 - The suffix is not a release version. release-please still owns `pyproject.toml` and the changelog;
   this ADR does not bump either.
+
+## Session drift
+
+Every MCP tool result includes `_meta["jev/version"]`. Its `loaded` object records the full
+checkout commit and startup dirty flag, or the installed package version for a wheel. A bounded
+`git status` supplies the dirty flag once at startup. An unavailable value is null.
+The server compares the current commit and package source file metadata against their startup
+values, or compares installed versions for a wheel. A changed or unreadable installation sets
+`restart_needed` and appends a short text notice after the normal content on each result.
+Existing sessions need one restart to acquire this reporting behavior.

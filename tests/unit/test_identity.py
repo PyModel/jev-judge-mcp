@@ -9,7 +9,13 @@ from pathlib import Path
 
 import pytest
 
+from jev_judge_mcp import identity
 from jev_judge_mcp.identity import DISTRIBUTION, reported_version
+from jev_judge_mcp.server import JevMCPServer
+from jev_judge_mcp.settings import Settings
+from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
+from tests.support.git_repo import commit_files
+from tests.support.jev import FakeProvider, text_of
 
 INSTALLED = version(DISTRIBUTION)
 HEAD = "a" * 40
@@ -180,3 +186,75 @@ def test_help_flag_prints_usage_and_exits_zero_without_serving(flag: str) -> Non
     for subcommand in ("install", "hook", "doctor", "setup", "judge", "gate", "completion-hook"):
         assert subcommand in result.stdout, subcommand
     assert result.stderr == ""
+
+
+@pytest.mark.anyio
+async def test_every_result_reports_loaded_version_and_source_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    _manifest(tmp_path)
+    module = _start(tmp_path)
+    commit_files(
+        tmp_path,
+        {
+            "pyproject.toml": (tmp_path / "pyproject.toml").read_text(),
+            str(module.relative_to(tmp_path)): "clean = True",
+        },
+    )
+    sha = subprocess.check_output(["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True).strip()
+    monkeypatch.setattr(identity, "__file__", str(module))
+    module.write_text("dirty = 1")
+    service = JevMCPServer(
+        toolset=Toolset(Runtime(Settings(), provider_factory=lambda _: FakeProvider({})), TOOLS), log_level="WARNING"
+    )
+    try:
+        args = {"request": "r", "diff": "+x", "claims": ["x"], "evidence": "e"}
+        initial = await service.call_tool("jev_gate", args)
+        info = (initial.meta or {})["jev/version"]
+        assert info["loaded"]["commit"] == sha and info["loaded"]["dirty"] is True
+        assert info["restart_needed"] is False
+        module.write_text("dirty = 2")
+        changed = await service.call_tool("jev_gate", args)
+        assert (changed.meta or {})["jev/version"]["restart_needed"] is True
+        assert text_of(changed) == text_of(initial)
+        assert "restart" in changed.content[-1].model_dump()["text"].lower()
+        commit_files(tmp_path, {str(module.relative_to(tmp_path)): "clean = False"})
+        repeated = await service.call_tool("jev_gate", {})
+        assert repeated.is_error and (repeated.meta or {})["jev/version"]["loaded"] == info["loaded"]
+        assert (repeated.meta or {})["jev/version"]["current_commit"] != sha
+        assert "restart" in repeated.content[-1].model_dump()["text"].lower()
+    finally:
+        await service.toolset.aclose()
+
+    restarted = await identity.ServerVersion().field()
+    assert restarted["loaded"] == {
+        "package": None,
+        "commit": (repeated.meta or {})["jev/version"]["current_commit"],
+        "dirty": False,
+    }
+    assert restarted["restart_needed"] is False
+    (tmp_path / ".git" / "HEAD").write_bytes(bytes([255]))
+    unavailable = await identity.ServerVersion().field()
+    assert unavailable["restart_needed"] is True and "cannot verify" in str(unavailable["notice"])
+
+
+@pytest.mark.anyio
+async def test_installed_version_changes_are_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    module = tmp_path / "site-packages" / "jev_judge_mcp" / "identity.py"
+    module.parent.mkdir(parents=True)
+    module.touch()
+    monkeypatch.setattr(identity, "__file__", str(module))
+    installed = "1.0"
+
+    def installed_version(distribution: str) -> str:
+        assert distribution == DISTRIBUTION
+        return installed
+
+    monkeypatch.setattr(identity, "version", installed_version)
+    loaded = identity.ServerVersion()
+    assert (await loaded.field())["restart_needed"] is False
+    installed = "1.1"
+    changed = await loaded.field()
+    assert changed["loaded"] == {"package": "1.0", "commit": None, "dirty": None}
+    assert changed["current_package"] == "1.1" and changed["restart_needed"] is True

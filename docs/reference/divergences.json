@@ -750,6 +750,19 @@
       "fixtures": [],
       "reference_behavior": "Review thresholds are applied to the returned scores. Gate reasons summarize the review action.",
       "python_behavior": "Held reviews and gates report each failing comparison and next check, also for sibling files. The file-list extension shares bounded evidence and peer patches and reports optional omissions separately from the decision. String fixture projections extend program-response-fields."
+    },
+    {
+      "id": "session-source-version",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0054-build-identity-on-the-wire.md",
+      "tests": [
+        "tests/unit/test_identity.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "Tool results carry no running source identity.",
+      "python_behavior": "Every MCP tool result records its loaded identity in _meta. A changed or unreadable installation adds a restart notice after the normal content."
     }
   ]
 }
