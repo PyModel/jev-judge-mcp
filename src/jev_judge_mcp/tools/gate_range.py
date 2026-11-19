@@ -34,9 +34,11 @@ DEFINITION = define(
     "Gate completion over a git range the server reads",
     "jev_gate for a change that is in git: name the range and the server reads `git diff <range>` itself, "
     "so the whole patch is reviewed, not an excerpt you typed. The diff is limited to the server's working "
-    "directory inside its git repository, and each end of the range must name a commit or a tree. "
+    "directory inside its git repository. Use commits, commit:path for a subtree, or the empty tree. "
+    "A nonempty tree object without its repository path is refused. "
     "A changed secret store (.env, keys) is never sent and is listed in "
-    "skipped. Any withheld file holds the whole range for local review. Credential literals in other "
+    "skipped. A file with a private-key delimiter in either side is also withheld. Any withheld file "
+    "holds the whole range for local review. Credential literals in other "
     "patches are redacted. "
     "Optional `tests_path` is a test log the server reads, under the same path "
     "rules as jev_file_judge (inside the working directory, no secret stores, no binary files). Everything "
