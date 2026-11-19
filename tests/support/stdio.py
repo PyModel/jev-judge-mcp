@@ -9,11 +9,12 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Self
 
-from tests.support.rpc_replies import REPLY_TIMEOUT, ReplyStream, pipe_chunks
+from tests.support.rpc_replies import REPLY_TIMEOUT, ReplyStream, TimedReply, pipe_chunks
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROTOCOL_VERSION = "2025-06-18"
@@ -92,6 +93,7 @@ class StdioServer:
             stderr=subprocess.PIPE,
             env=server_env(env),
             cwd=cwd or REPO_ROOT,
+            start_new_session=True,  # its PID also identifies its workers after reparenting
         )
         self.stdout_lines: list[bytes] = []
         assert self.process.stdout is not None
@@ -119,10 +121,14 @@ class StdioServer:
     def receive(self, timeout: float = TIMEOUT) -> dict[str, Any]:
         return self._replies.receive(timeout)
 
+    def receive_until(self, deadline: float) -> TimedReply:
+        return self._replies.receive_until(deadline)
+
     def request(self, message: Mapping[str, Any], *, timeout: float = TIMEOUT) -> dict[str, Any]:
         """Send a request and return its response within one deadline, skipping notifications."""
+        deadline = time.monotonic() + timeout
         self.send(message)
-        (reply,) = self._replies.collect([message["id"]], timeout)
+        (reply,) = self._replies.collect_until([message["id"]], deadline)
         return reply
 
     def initialize(self, *, timeout: float = TIMEOUT) -> dict[str, Any]:

@@ -15,7 +15,7 @@ import pytest
 from tests.security.tools import CASES
 from tests.support.peer import Peer
 from tests.support.secrets import secret_env
-from tests.support.stdio import StdioServer
+from tests.support.stdio import TIMEOUT, StdioServer
 
 CONCURRENT = 64
 CANCELLED = 8
@@ -45,8 +45,9 @@ def text_of(reply: dict[str, Any]) -> str:
 def replies_until(server: StdioServer, ids: set[int]) -> dict[int, dict[str, Any]]:
     """Every reply until all of `ids` have one; notifications are skipped."""
     replies: dict[int, dict[str, Any]] = {}
+    deadline = time.monotonic() + TIMEOUT
     while not ids <= replies.keys():
-        reply = server.receive()
+        _, reply = server.receive_until(deadline)
         if "id" in reply:
             replies[reply["id"]] = reply
     return replies

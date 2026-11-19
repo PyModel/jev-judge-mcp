@@ -11,6 +11,7 @@ from collections.abc import Iterator, Sequence
 from typing import IO, Any, cast
 
 REPLY_TIMEOUT = 15.0
+TimedReply = tuple[float, dict[str, Any]]
 
 
 def pipe_chunks(pipe: IO[bytes], stopping: threading.Event) -> Iterator[bytes]:
@@ -27,16 +28,17 @@ def pipe_chunks(pipe: IO[bytes], stopping: threading.Event) -> Iterator[bytes]:
 
 class ReplyStream:
     def __init__(self, pipe: IO[bytes], *, record: list[bytes] | None = None) -> None:
-        self._lines: queue.Queue[bytes | OSError | None] = queue.Queue()
+        self._lines: queue.Queue[tuple[float, bytes] | OSError | None] = queue.Queue()
         self._seen: set[int | str] = set()
         self._outstanding: set[int | str] = set()
-        self._deferred: deque[dict[str, Any]] = deque()
+        self._deferred: deque[TimedReply] = deque()
         self._stopping = threading.Event()
 
         def emit(line: bytes) -> None:
+            arrived = time.monotonic()
             if record is not None:
                 record.append(line)
-            self._lines.put(line)
+            self._lines.put((arrived, line))
 
         def read() -> None:
             partial = bytearray()
@@ -66,35 +68,51 @@ class ReplyStream:
         self._outstanding.add(ident)
 
     def receive(self, timeout: float) -> dict[str, Any]:
+        return self._receive(timeout)[1]
+
+    def receive_until(self, deadline: float) -> TimedReply:
+        """Include deferred replies, retaining the reader's original observation time."""
+        return self._read_until(deadline, include_deferred=True)
+
+    def _receive(self, timeout: float) -> TimedReply:
         if self._deferred:
             return self._deferred.popleft()
-        message = self._read(timeout)
+        arrived, message = self._read(timeout)
         ident = message.get("id")
         if isinstance(ident, (int, str)) and ident in self._outstanding:
             self._outstanding.remove(ident)
             self._seen.add(ident)
-        return message
+        return arrived, message
 
-    def _read(self, timeout: float) -> dict[str, Any]:
-        line = self._lines.get(timeout=timeout)
-        if line is None:
+    def _read(self, timeout: float) -> TimedReply:
+        entry = self._lines.get(timeout=timeout)
+        if entry is None:
             self._lines.put(None)
             raise EOFError("server stdout reached EOF")
-        if isinstance(line, OSError):
-            raise line
+        if isinstance(entry, OSError):
+            raise entry
+        arrived, line = entry
         if not line.endswith(b"\n"):
             raise ValueError("server stdout reached EOF during a JSON-RPC frame")
         message: object = json.loads(line)
         if not isinstance(message, dict):
             raise ValueError("expected a JSON-RPC object")
-        return cast(dict[str, Any], message)
+        return arrived, cast(dict[str, Any], message)
 
-    def _response(self, deadline: float) -> tuple[int | str, dict[str, Any]]:
-        while (remaining := deadline - time.monotonic()) > 0:
-            try:
-                message = self._read(remaining)
-            except queue.Empty:
-                break
+    def _read_until(self, deadline: float, *, include_deferred: bool = False) -> TimedReply:
+        remaining = max(0.0, deadline - time.monotonic())
+        try:
+            frame = self._receive(remaining) if include_deferred else self._read(remaining)
+        except queue.Empty:
+            raise TimeoutError("server reply deadline expired") from None
+        if frame[0] > deadline:
+            raise TimeoutError("server reply arrived after deadline")
+        return frame
+
+    def _response(self, deadline: float) -> tuple[int | str, TimedReply]:
+        while True:
+            frame = self._read_until(deadline)
+            _, message = frame
             if message.get("jsonrpc") != "2.0":
                 raise ValueError("expected JSON-RPC 2.0")
             if "method" in message:
@@ -113,8 +131,7 @@ class ReplyStream:
                 or ("result" in message) == ("error" in message)
             ):
                 raise ValueError("invalid JSON-RPC reply id or payload")
-            return ident, message
-        raise TimeoutError("server reply deadline expired")
+            return ident, frame
 
     def _unexpected(self, ident: int | str) -> ValueError:
         reason = "duplicate" if ident in self._seen else "unknown"
@@ -122,12 +139,14 @@ class ReplyStream:
         return ValueError(f"{reason} reply id{detail}")
 
     def collect(self, ids: Sequence[int | str], timeout: float = REPLY_TIMEOUT) -> list[dict[str, Any]]:
+        return self.collect_until(ids, time.monotonic() + timeout)
+
+    def collect_until(self, ids: Sequence[int | str], deadline: float) -> list[dict[str, Any]]:
         pending = set(ids)
         replies: dict[int | str, dict[str, Any]] = {}
-        deadline = time.monotonic() + timeout
         while pending:
             try:
-                ident, reply = self._response(deadline)
+                ident, frame = self._response(deadline)
             except (EOFError, TimeoutError) as error:
                 missing = [ident for ident in ids if ident in pending]
                 raise type(error)(f"{error}, missing reply ids {missing}") from error
@@ -137,9 +156,9 @@ class ReplyStream:
             self._seen.add(ident)
             if ident in pending:
                 pending.remove(ident)
-                replies[ident] = reply
+                replies[ident] = frame[1]
             else:
-                self._deferred.append(reply)
+                self._deferred.append(frame)
         return [replies[ident] for ident in ids]
 
     def expect_eof(self, timeout: float = REPLY_TIMEOUT) -> None:
