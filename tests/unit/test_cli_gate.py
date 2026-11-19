@@ -344,7 +344,13 @@ def test_an_up_to_date_push_abstains(
 
 
 @pytest.mark.parametrize(
-    ("case", "expected"), [("store", "secret_file"), ("patch", "invalid_arguments"), ("claims_size", "input_too_large")]
+    ("case", "expected"),
+    [
+        ("store", "secret_file"),
+        ("opened_store", "secret_file"),
+        ("patch", "invalid_arguments"),
+        ("claims_size", "input_too_large"),
+    ],
 )
 def test_gate_guards_local_inputs_before_judgment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, expected: str
@@ -355,8 +361,20 @@ def test_gate_guards_local_inputs_before_judgment(
     monkeypatch.chdir(repo)
     if case == "store":
         commit_files(repo, {".env": "inert fixture", "x.py": "x = 3"})
+    elif case == "opened_store":
+        # Simulate an inconclusive preliminary path check on an ordinary test fixture.
+        monkeypatch.setenv("JEV_MCP_KEY_FILE", str(repo / "tests.log"))
+
+        def unrecognized_path(_path: Path, _key: Path) -> bool:
+            return False
+
+        monkeypatch.setattr(cli, "is_secret_store", unrecognized_path)
     elif case == "patch":
-        monkeypatch.setattr(cli, "diff_argument", lambda *args: "unsplittable fixture")
+
+        def malformed_diff(_repo: Path, _range: str) -> str:
+            return "unsplittable fixture"
+
+        monkeypatch.setattr(cli, "diff_argument", malformed_diff)
     else:
         path = repo / "claims.json"
         path.write_text(" " * (GATE.aggregate_evidence_units + 1) + path.read_text())
