@@ -203,10 +203,20 @@ jobs:
           release_id=$(gh release view "$TAG" --json databaseId,isDraft,tagName |
             jq -er --arg tag "$TAG" 'select(.isDraft and .tagName == $tag) | .databaseId | numbers')
           endpoint="repos/$GH_REPO/releases/$release_id"
-          gh api --paginate "$endpoint/assets?per_page=100" |
-            jq -es --slurpfile expected "$RUNNER_TEMP/expected.json" \
-              'add | all(.[]; .state == "uploaded") and (map({name,digest}) | sort_by(.name) == $expected[0])' >/dev/null
+          matches_receipt() {
+            gh api --paginate "$endpoint/assets?per_page=100" |
+              jq -es --slurpfile expected "$RUNNER_TEMP/expected.json" \
+                'add | all(.[]; .state == "uploaded") and (map({name,digest}) | sort_by(.name) == $expected[0])' >/dev/null
+          }
+          if ! matches_receipt; then
+            echo "Draft release $TAG could not be matched to the verified receipt. Check its assets before retrying." >&2
+            exit 1
+          fi
           gh api --method PATCH "$endpoint" -F draft=false >/dev/null
+          if ! matches_receipt; then
+            echo "Published release $TAG could not be matched to the verified receipt. Inspect the public assets before distributing this release." >&2
+            exit 1
+          fi
 
   prepare_pypi:
     name: Authenticate PyPI distributions

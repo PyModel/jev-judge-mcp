@@ -228,7 +228,10 @@ def workflow_command(name: str) -> str:
     return textwrap.dedent(match[1])
 
 
-@pytest.mark.parametrize("change", ["none", "extra", "replaced", "missing", "pending"])
+@pytest.mark.parametrize(
+    "change",
+    ["none", "extra", "replaced", "missing", "pending", "public-extra", "public-replaced", "public-unreadable"],
+)
 def test_github_publication_checks_all_draft_assets(tmp_path: Path, change: str) -> None:
     assets = tmp_path / "assets"
     assets.mkdir()
@@ -249,13 +252,21 @@ def test_github_publication_checks_all_draft_assets(tmp_path: Path, change: str)
     elif change == "pending":
         inventory[0]["state"] = "starter"
     (tmp_path / "inventory.json").write_text(json.dumps(inventory))
+    public_inventory = inventory.copy()
+    if change == "public-extra":
+        public_inventory.append({**inventory[0], "name": "notes.txt"})
+    elif change == "public-replaced":
+        public_inventory[0] = {**inventory[0], "digest": "sha256:" + "1" * 64}
+    if change != "public-unreadable":
+        (tmp_path / "public-inventory.json").write_text(json.dumps(public_inventory))
     gh = tmp_path / "gh"
     gh.write_text(
         "#!/bin/bash\n"
         'case "$*" in\n'
         '  *"release view"*"--jq .isDraft") echo true ;;\n'
         '  *"release view"*) echo \'{"databaseId":123,"isDraft":true,"tagName":"v0.1.0"}\' ;;\n'
-        '  *"/assets?"*) cat "$RUNNER_TEMP/inventory.json" ;;\n'
+        '  *"/assets?"*) if [[ -e "$RUNNER_TEMP/published" ]]; then cat "$RUNNER_TEMP/public-inventory.json"; '
+        'else cat "$RUNNER_TEMP/inventory.json"; fi ;;\n'
         '  *"release edit"*|*"PATCH"*) touch "$RUNNER_TEMP/published" ;;\n'
         "  *) exit 2 ;;\nesac\n"
     )
@@ -275,7 +286,28 @@ def test_github_publication_checks_all_draft_assets(tmp_path: Path, change: str)
         check=False,
     )
     assert (result.returncode == 0) == (change == "none"), result.stderr
-    assert (tmp_path / "published").exists() == (change == "none")
+    assert (tmp_path / "published").exists() == (change == "none" or change.startswith("public-"))
+    if change.startswith("public-"):
+        assert "Published release v0.1.0" in result.stderr and "verified receipt" in result.stderr
+
+
+def test_release_please_pin_matches_reviewed_trust_decision() -> None:
+    project = SCRIPT.parents[1]
+    workflow = (project / ".github/workflows/release.yml").read_text()
+    adr = (project / "docs/adr/0060-release-pr-ci-is-maintainer-approved.md").read_text()
+    version_job = re.split(r"^  [\w-]+:\n", workflow.split("\n  version:\n", 1)[1], maxsplit=1, flags=re.M)[0]
+    permissions = version_job.split("    permissions:\n", 1)[1].split("\n    outputs:", 1)[0]
+    assert set(re.findall(r"^      ([\w-]+): (\w+)", permissions, flags=re.M)) == {
+        ("contents", "write"),
+        ("pull-requests", "write"),
+        ("issues", "write"),
+    }
+    assert len(re.findall(r"^      - ", version_job, flags=re.M)) == 1
+    pin = re.search(r"uses: (googleapis/release-please-action@[0-9a-f]{40})\b", version_job)
+    assert pin and pin[1] in adr
+    assert "token: ${{ github.token }}" in version_job and "secrets" not in version_job
+    assert "any pin change requires maintainer review" in " ".join(adr.lower().split())
+    assert "`pypi-retry` jobs keep" not in adr
 
 
 def test_receipt_saved_on_a_fresh_runner_after_install() -> None:

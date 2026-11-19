@@ -113,9 +113,10 @@ GitHub Release and its `v<version>` tag. A read-only job builds the tagged
 commit with a hash-locked backend and stages the wheel, sdist and checksums in
 an immutable Actions artifact. Another read-only job installs the staged wheel
 in a fresh environment. The publisher uploads missing files, records
-the verified checksums and compares every draft asset's name, state and SHA-256 digest
-before publishing. GitHub permits draft edits until publication. Keep other
-writers away from the draft during this final check and publish request.
+the verified checksums and compares every asset's name, upload state and SHA-256 digest
+before and after GitHub publication. A failed check on the public assets stops automatic
+PyPI upload. Inspect the public release against the saved receipt before distributing it.
+ADR-0060 records the timing window and the release-please trust decision.
 
 Before merging the release pull request, fill that release's entry in
 [`docs/EVIDENCE.md`](docs/EVIDENCE.md): the certified operating points and any
