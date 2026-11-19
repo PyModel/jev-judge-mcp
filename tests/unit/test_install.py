@@ -1556,12 +1556,13 @@ def test_installer_rejects_a_nonregular_config_descriptor(
     assert execute(tmp_path, agents=("cursor",))[0] == 0
     if pending:
         records = _state_targets(tmp_path)
+        (owner,) = records
         write_state(
             state,
             {
                 "targets": records,
                 "pending": {
-                    "key": "cursor",
+                    "key": owner,
                     "path": str(config),
                     "before": "1" * 64,
                     "after": "2" * 64,
