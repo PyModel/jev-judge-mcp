@@ -656,9 +656,14 @@ def _apply(request: Request, actions: list[_Action], targets: dict[str, dict[str
             action.message = f"could not write {action.path}: {exc.strerror}"
             action.after = None
             continue
-        write_state(state_path, {"targets": targets, "pending": intent})
+
+        def journal(staging: str, pending: Mapping[str, object] = intent) -> None:
+            write_state(state_path, {"targets": targets, "pending": {**pending, "staging": staging}})
+
         try:
-            atomic_write(action.path, action.after, _write_mode(action.path, action.literal), action.before)
+            atomic_write(
+                action.path, action.after, _write_mode(action.path, action.literal), action.before, journal=journal
+            )
         except ConfigChangedError as exc:
             write_state(state_path, {"targets": targets})
             action.kind, action.ok, action.message, action.after = "fail", False, str(exc), None

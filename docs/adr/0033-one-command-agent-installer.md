@@ -18,6 +18,13 @@ Agents each keep their own MCP config, and several of those files are shared wit
 - **Not published yet.** Until `jev-judge-mcp` is on PyPI, the `--from` spec is the absolute path of this checkout plus `[typesafe]`. The installer refuses to write the bare package name `jev-mcp`, which is a different project (ADR-0009, ADR-0049).
 - **Pi.** Pi has no built-in MCP. If `pi-mcp-adapter` is missing from `settings.json`, that target is not written and the installer prints `pi install npm:pi-mcp-adapter`. Other selected agents are still configured. The process exits non-zero.
 - **Pythinker desktop.** A desktop share is detected only when a bundle's `CFBundleIdentifier` is `com.pythinker.desktop`. A path named `PyThinker.app` is not enough.
+- **Concurrent config edits.** Creating a config uses an exclusive hard link. Updating one exchanges its
+  name atomically with a staged file on Linux or macOS. The installer checks the actual displaced bytes
+  before deleting the staging file. If an editor saved in the final commit window, install reports both
+  paths for reconciliation and exits with an error. Its journal identifies the displaced file after an
+  interruption. A filesystem without atomic exchange support refuses an update.
+- **File limits.** Installer config and state reads require regular files of at most 16 MiB. Opening
+  them in nonblocking mode lets the installer reject a pipe while holding its state lock.
 
 ## Consequences
 

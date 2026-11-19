@@ -5,7 +5,7 @@ import os
 import stat
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -1488,3 +1488,100 @@ def test_overlarge_state_refused_before_config_write(tmp_path: Path, monkeypatch
     with pytest.raises(InstallError, match="state"):
         execute(tmp_path, agents=("cursor",))
     assert not layout(tmp_path).cursor_file().exists()
+
+
+@pytest.mark.parametrize("original", [None, b"{}"])
+def test_commit_preserves_an_edit_after_the_last_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, original: bytes | None
+) -> None:
+    from jev_judge_mcp.install import fs
+
+    config = tmp_path / "config.json"
+    edit = b'{"other":1}'
+    config.write_bytes(edit)
+    read = fs.read_bytes
+
+    # All optimistic reads saw the planned snapshot. The commit must use the actual destination.
+    def snapshot(path: Path) -> bytes | None:
+        return original if path == config else read(path)
+
+    monkeypatch.setattr(fs, "read_bytes", snapshot)
+    with pytest.raises((fs.ConfigChangedError, InstallError)) as conflict:
+        atomic_write(config, '{"jev":1}', 0o600, original)
+    assert "changed" in str(conflict.value)
+    saved = [p for p in tmp_path.iterdir() if p.is_file() and p.read_bytes() == edit]
+    assert len(saved) == 1
+    assert config == saved[0] or str(saved[0]) in str(conflict.value)
+
+
+def test_recovery_reports_the_displaced_edit_after_interruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = layout(tmp_path).claude_code_file()
+    config.write_text("{}")
+    edit = '{"editor":"saved"}'
+    sync = os.fsync
+
+    def save_concurrent_edit(path: Path, state: Mapping[str, object]) -> None:
+        write_state(path, state)
+        if "pending" in state:
+            config.write_text(edit)
+
+    def interrupt_after_swap(fd: int) -> None:
+        if "mcpServers" in config.read_text():
+            raise KeyboardInterrupt
+        sync(fd)
+
+    with monkeypatch.context() as patch:
+        patch.setattr("jev_judge_mcp.install.engine.write_state", save_concurrent_edit)
+        patch.setattr(os, "fsync", interrupt_after_swap)
+        with pytest.raises(KeyboardInterrupt):
+            execute(tmp_path, agents=("claude-code",))
+    pending = json.loads(layout(tmp_path).state_file().read_text())["pending"]
+    saved = config.with_name(pending["staging"])
+    assert saved.read_text() == edit
+    with pytest.raises(InstallError, match="Reconcile") as conflict:
+        execute(tmp_path, agents=("claude-code",))
+    assert str(saved) in str(conflict.value)
+    assert saved.read_text() == edit
+    assert json.loads(layout(tmp_path).state_file().read_text()) == {"targets": {}}
+
+
+@pytest.mark.parametrize("pending", [False, True], ids=["planning", "recovery"])
+def test_installer_rejects_a_nonregular_config_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending: bool
+) -> None:
+    config = layout(tmp_path).cursor_file()
+    state = layout(tmp_path).state_file()
+    assert execute(tmp_path, agents=("cursor",))[0] == 0
+    if pending:
+        records = _state_targets(tmp_path)
+        write_state(
+            state,
+            {
+                "targets": records,
+                "pending": {
+                    "key": "cursor",
+                    "path": str(config),
+                    "before": "1" * 64,
+                    "after": "2" * 64,
+                    "record": None,
+                },
+            },
+        )
+    before = state.read_bytes()
+    inode = config.stat().st_ino
+    fstat = os.fstat
+
+    def describe(fd: int) -> os.stat_result:
+        st = fstat(fd)
+        return os.stat_result((stat.S_IFIFO | 0o600, *st[1:])) if st.st_ino == inode else st
+
+    monkeypatch.setattr(os, "fstat", describe)
+    if pending:
+        with pytest.raises(InstallError, match=r"recover.*regular file"):
+            execute(tmp_path, agents=("cursor",))
+    else:
+        code, text = execute(tmp_path, agents=("cursor",))
+        assert code == 1 and "regular file" in text
+    assert state.read_bytes() == before

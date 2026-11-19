@@ -38,6 +38,10 @@ def test_artifact_read_checks_the_actual_bytes_as_well_as_the_initial_size(
     assert read_artifact(path, max_bytes=4) == b"abcd"
     initial = path.stat()
     path.write_bytes(b"abcde")
-    monkeypatch.setattr(os, "fstat", lambda _fd: initial)
+
+    def size_at_open(_fd: int) -> os.stat_result:
+        return initial
+
+    monkeypatch.setattr(os, "fstat", size_at_open)
     with pytest.raises(OSError, match="exceeds 4 bytes"):
         read_artifact(path, max_bytes=4)

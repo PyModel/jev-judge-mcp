@@ -1,14 +1,17 @@
 """Private state files and atomic config writes. New installer files are mode 0600."""
 
 import contextlib
+import ctypes
+import errno
 import fcntl
 import hashlib
 import json
 import os
 import re
 import stat
+import sys
 import tempfile
-from collections.abc import Generator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from pathlib import Path
 from typing import TypeGuard
 
@@ -93,24 +96,71 @@ def _write_temporary(directory: Path, prefix: str, data: bytes, mode: int) -> st
     return temporary
 
 
-def atomic_write(path: Path, text: str, mode: int, expected: bytes | None) -> None:
-    """Write `text` through a symlink onto the real file. Abort if the file changed."""
+def _exchange_files(left: Path, right: Path) -> None:
+    """Atomically swap two existing names, keeping the actual displaced inode for validation."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    paths = os.fsencode(left), os.fsencode(right)
+    if sys.platform == "darwin" and hasattr(libc, "renamex_np"):
+        result = libc.renamex_np(*paths, 0x00000002)  # RENAME_SWAP
+    elif sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
+        result = libc.renameat2(-100, paths[0], -100, paths[1], 2)  # AT_FDCWD, RENAME_EXCHANGE
+    else:
+        raise OSError(errno.ENOTSUP, "atomic file exchange is unavailable")
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(right))
+
+
+def _displaced_digest(path: Path) -> str | None:
+    try:
+        return digest(read_bounded(path, max_bytes=INSTALL_FILE_BYTES_MAX))
+    except FileNotFoundError:
+        return None
+
+
+def _conflict(path: Path, saved: Path) -> str:
+    return f"{path} changed during install. The displaced file is at {saved}. Reconcile both files before retrying."
+
+
+def atomic_write(
+    path: Path, text: str, mode: int, expected: bytes | None, *, journal: Callable[[str], None] | None = None
+) -> None:
+    """Publish without clobbering a new file or losing a concurrent edit. Journal the staging name before committing."""
     data = _encoded_file(text, path)
     real = path.resolve() if path.is_symlink() else path
     _ensure_directory(real.parent, 0o777)
-    current = read_bytes(real)
-    if current != expected:
+    if read_bytes(real) != expected:
         raise ConfigChangedError(f"{path}: changed during install, re-run")
-    temporary = _write_temporary(real.parent, ".jev-install-", data, mode)
+    staged = Path(_write_temporary(real.parent, ".jev-install-", data, mode))
+    retain = False
     try:
-        current = read_bytes(real)
-        if current != expected:
-            raise ConfigChangedError(f"{path}: changed during install, re-run")
-        os.replace(temporary, real)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(temporary)
-        raise
+        if journal is not None:
+            journal(staged.name)
+        if expected is None:
+            try:
+                os.link(staged, real)
+            except FileExistsError:
+                raise ConfigChangedError(f"{path}: changed during install, re-run") from None
+        else:
+            retain = True
+            try:
+                _exchange_files(staged, real)
+            except OSError as exc:
+                retain = False
+                if isinstance(exc, FileNotFoundError):
+                    raise ConfigChangedError(f"{path}: changed during install, re-run") from exc
+                raise
+            _sync_directory(real.parent)
+            try:
+                displaced = _displaced_digest(staged)
+            except OSError as exc:
+                raise ConfigChangedError(_conflict(path, staged)) from exc
+            if displaced != digest(expected):
+                raise ConfigChangedError(_conflict(path, staged))
+            retain = False
+    finally:
+        if not retain:
+            staged.unlink()
     _sync_directory(real.parent)
 
 
@@ -224,6 +274,20 @@ def load_targets(path: Path, *, recover: bool) -> dict[str, dict[str, object]]:
         current = digest(read_bytes(Path(config)))
     except OSError as exc:
         raise InstallError(f"cannot recover installer state: inspect {config} ({exc.strerror})") from exc
+    staging = pending.get("staging")
+    if staging is not None:
+        if not isinstance(staging, str) or not re.fullmatch(r"\.jev-install-[a-zA-Z0-9_-]+", staging):
+            raise InstallError("invalid staging name in pending installer state")
+        if current == after and before is not None:
+            saved = Path(config).resolve().with_name(staging)
+            try:
+                displaced = _displaced_digest(saved)
+            except OSError:
+                displaced = "unreadable"
+            if displaced is not None and displaced != before:
+                if recover:
+                    write_state(path, {"targets": targets})
+                raise InstallError(_conflict(Path(config), saved))
     if current == after:
         if record is None:
             targets.pop(key, None)

@@ -173,9 +173,11 @@ def test_oversize_input_preserves_the_store_and_skips_verification(
 ) -> None:
     isolated.parent.mkdir(parents=True)
     isolated.write_text("previous\n")
-    code, text = run(
-        monkeypatch, isolated, prompt_input="x" * 4096, verify=lambda *_: pytest.fail("oversize input accepted")
-    )
+
+    def reject(_settings: Settings, _key: str) -> None:
+        pytest.fail("oversize input accepted")
+
+    code, text = run(monkeypatch, isolated, prompt_input="x" * 4096, verify=reject)
     assert code == 1
     assert "4096" in text and "xxxx" not in text
     assert isolated.read_text() == "previous\n"
