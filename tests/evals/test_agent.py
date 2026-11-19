@@ -314,10 +314,7 @@ def _wait_gone(pid: int) -> None:
         if _gone(pid):
             return
         time.sleep(0.05)
-    listing = subprocess.run(
-        ["ps", "-A", "-ww", "-o", "pid=,ppid=,stat=,command="], capture_output=True, text=True, check=False
-    ).stdout
-    assert _gone(pid), f"pid {pid} still running\n{listing}"
+    assert _gone(pid), f"pid {pid} still running"
 
 
 def _group_gone(pgid: int) -> bool:

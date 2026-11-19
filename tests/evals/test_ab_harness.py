@@ -3,7 +3,6 @@ measures, report, refusal. Nothing here calls a model or a provider; the live st
 """
 
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -755,7 +754,7 @@ def test_ps_eww_shows_a_child_env_until_the_broker_branch(tmp_path: Path) -> Non
     JEV_STUDY_KEY_FILE instead - the harness process itself must never hold the key."""
     child = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(6)"],
-        env={**os.environ, "MARKER_D3_KEY": "dummy-not-a-real-key"},
+        env={"MARKER_D3_KEY": "dummy-not-a-real-key"},
     )
     try:
         seen = ""
