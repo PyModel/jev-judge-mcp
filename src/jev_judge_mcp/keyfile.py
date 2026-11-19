@@ -58,8 +58,20 @@ def redaction_values(settings: Settings) -> list[str]:
     return [*values, stored] if stored else values
 
 
+def normalized_key(api_key: str) -> str:
+    """Normalize a candidate and enforce the byte limit of the newline-terminated UTF-8 store."""
+    normalized = api_key.strip().removeprefix("\ufeff").strip()
+    try:
+        size = len(normalized.encode("utf-8")) + 1
+    except UnicodeEncodeError:
+        raise ValueError("API key must be valid UTF-8") from None
+    if size > KEY_FILE_BYTES_MAX:
+        raise ValueError(f"API key exceeds the {KEY_FILE_BYTES_MAX}-byte store limit including its newline")
+    return normalized
+
+
 def store_key(settings: Settings, api_key: str) -> Path:
     """Write `api_key` for later runs. The directory is 0700, the file 0600, the write atomic."""
-    path = fsutil.write_private_atomic(stored_key_path(settings), api_key.strip() + "\n")
+    path = fsutil.write_private_atomic(stored_key_path(settings), normalized_key(api_key) + "\n")
     logger.info("stored the TypeSafe API key at %s", path)
     return path

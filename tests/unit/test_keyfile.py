@@ -107,3 +107,14 @@ def test_scout_010_descriptor_must_be_regular(isolated_key_file: Path, monkeypat
 
     monkeypatch.setattr(os, "fstat", describe)
     assert stored_key(settings()) == ""
+
+
+@pytest.mark.parametrize("accepted,extra", [("x" * 4095, "x"), ("é" * 2047 + "x", "é")], ids=["ascii", "utf8"])
+def test_key_rotation_enforces_the_stored_byte_limit(isolated_key_file: Path, accepted: str, extra: str) -> None:
+    store_key(settings(), "  " + accepted + "  ")
+    assert stored_key(settings()) == accepted
+    before = isolated_key_file.stat()
+    with pytest.raises(ValueError, match="4096"):
+        store_key(settings(), accepted + extra)
+    assert isolated_key_file.stat().st_ino == before.st_ino
+    assert stored_key(settings()) == accepted

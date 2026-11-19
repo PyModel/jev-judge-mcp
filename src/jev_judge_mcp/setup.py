@@ -15,7 +15,7 @@ from collections.abc import Callable, Sequence
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.keyfile import store_key
+from jev_judge_mcp.keyfile import normalized_key, store_key
 from jev_judge_mcp.providers import ProviderError
 from jev_judge_mcp.providers.resolver import resolve_model
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
@@ -57,7 +57,11 @@ def main(
     )
     parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     loaded = settings if settings is not None else load_settings()
-    api_key = _candidate_key(loaded, prompt)
+    try:
+        api_key = normalized_key(_candidate_key(loaded, prompt))
+    except ValueError as exc:
+        print(exc)
+        return 1
     if not api_key:
         print(f"No API key given. Get one at {KEY_URL}; export TYPESAFE_API_KEY or re-run in a terminal.")
         return 1
@@ -80,8 +84,8 @@ def _run_verification(loaded: Settings, api_key: str) -> None:
 
 def _candidate_key(settings: Settings, prompt: Callable[[str], str]) -> str:
     if settings.typesafe_api_key is not None:
-        return settings.typesafe_api_key.get_secret_value().strip()
+        return settings.typesafe_api_key.get_secret_value()
     try:
-        return prompt(f"TypeSafe API key ({KEY_URL}): ").strip()
+        return prompt(f"TypeSafe API key ({KEY_URL}): ")
     except (EOFError, KeyboardInterrupt):
         return ""

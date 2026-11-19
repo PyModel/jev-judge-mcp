@@ -166,3 +166,16 @@ def test_setup_is_a_subcommand_and_nothing_else_is() -> None:
     assert setup_requested(["jev-judge-mcp"]) is False
     assert setup_requested(["jev-judge-mcp", "install"]) is False
     assert setup_requested(["jev-judge-mcp", "--help"]) is False
+
+
+def test_oversize_input_preserves_the_store_and_skips_verification(
+    monkeypatch: pytest.MonkeyPatch, isolated: Path
+) -> None:
+    isolated.parent.mkdir(parents=True)
+    isolated.write_text("previous\n")
+    code, text = run(
+        monkeypatch, isolated, prompt_input="x" * 4096, verify=lambda *_: pytest.fail("oversize input accepted")
+    )
+    assert code == 1
+    assert "4096" in text and "xxxx" not in text
+    assert isolated.read_text() == "previous\n"
