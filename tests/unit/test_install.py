@@ -1049,6 +1049,26 @@ def test_remove_still_removes_an_entry_that_failed_verify(tmp_path: Path, target
     assert _state_targets(tmp_path) == {}
 
 
+def test_retry_verification_of_an_owned_entry_without_rewriting(tmp_path: Path) -> None:
+    attempts: list[list[str]] = []
+
+    def verify(command: list[str]) -> None:
+        attempts.append(command)
+        if len(attempts) < 3:
+            raise VerifyError("no answer")
+
+    config = layout(tmp_path).cursor_file()
+    code, report = execute(tmp_path, agents=("cursor",), verify=verify)
+    assert code == 1, report
+    first_stat = config.stat()
+    for expected_code in [1, 0, 0]:
+        code, report = execute(tmp_path, agents=("cursor",), verify=verify)
+        assert code == expected_code, report
+        assert (config.stat().st_ino, config.stat().st_mtime_ns) == (first_stat.st_ino, first_stat.st_mtime_ns)
+        assert _state_targets(tmp_path)["cursor"]["verified"] is (expected_code == 0)
+    assert attempts == [LAUNCH.invoke()] * 3
+
+
 def test_passed_verify_is_recorded(tmp_path: Path) -> None:
     calls: list[list[str]] = []
     code, text = execute(tmp_path, agents=("claude-code",), launch=PYPI_LAUNCH, verify=calls.append)

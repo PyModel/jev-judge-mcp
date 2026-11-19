@@ -40,7 +40,8 @@ configured agent.
   launch, and the handshake itself is tested against a local script.
 - **Verification failure.** A failed post-write handshake leaves the ownership hash and
   `verified: false` in installer state and exits non-zero. A later `install --remove` can
-  remove that entry by its hash. Removal requires no desktop key.
+  remove that entry by its hash. Re-running install retries an outstanding handshake on a matching
+  owned entry without rewriting its config. Removal requires no desktop key.
 
 ## Consequences
 

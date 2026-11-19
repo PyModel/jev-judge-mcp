@@ -360,6 +360,14 @@ def _plan(request: Request, target: str, hits: list[_Hit], targets: Mapping[str,
         elif target == "claude-desktop" and literal_key is None and not request.remove:
             return _Action(target, path, "skip", "needs --desktop-key before the key is written", False, True)
         action = _classify(request, target, path, current, desired, recorded, text, before)
+        if (
+            action.kind == "up to date"
+            and request.verify is not None
+            and current is not None
+            and recorded == entry_hash(current)
+            and record.get("verified") is not True
+        ):
+            action.kind = "verify"
     except OSError as exc:
         return _Action(target, path, "fail", f"cannot read config: {exc.strerror}", False, False)
     except (ConfigParseError, ConfigShapeError, UnicodeError) as exc:
@@ -615,6 +623,11 @@ def _apply(request: Request, actions: list[_Action], targets: dict[str, dict[str
     _refuse_secret({"targets": _planned_targets(request, actions, targets)}, request.secrets)
     stamp = request.stamp or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     for action in actions:
+        if action.kind == "verify":
+            assert action.path is not None
+            key = ownership_key(targets, action.target, action.path, request.name)
+            _verify(request, action, targets[key], targets)
+            continue
         if action.after is None or action.path is None or not action.ok:
             continue
         key = ownership_key(targets, action.target, action.path, request.name)
@@ -670,14 +683,19 @@ def _apply(request: Request, actions: list[_Action], targets: dict[str, dict[str
         if warning and warning not in action.message:
             action.message = (action.message + " " + warning).strip()
         if record is not None and request.verify is not None:
-            try:
-                request.verify(request.launch.invoke())
-            except Exception as exc:
-                action.ok = False
-                action.message = (action.message + f" verify failed: {exc}").strip()
-            else:
-                record["verified"] = True
-                write_state(state_path, {"targets": targets})
+            _verify(request, action, record, targets)
+
+
+def _verify(request: Request, action: _Action, record: dict[str, object], targets: Mapping[str, object]) -> None:
+    assert request.verify is not None
+    try:
+        request.verify(request.launch.invoke())
+    except Exception as exc:
+        action.ok = False
+        action.message = (action.message + f" verify failed: {exc}").strip()
+    if record.get("verified") is not action.ok:
+        record["verified"] = action.ok
+        write_state(request.layout.state_file(), {"targets": targets})
 
 
 def _prepare_write(request: Request, action: _Action, stamp: str) -> None:
@@ -730,7 +748,7 @@ def _applied_lines(actions: list[_Action]) -> list[str]:
 def _finish(request: Request, lines: list[str], actions: list[_Action], *, applied: bool) -> str:
     if applied and not request.remove:
         for action in actions:
-            if action.ok and action.kind in {"add", "update", "up to date"}:
+            if action.ok and action.kind in {"add", "update", "up to date", "verify"}:
                 lines.append("check: " + _CHECKS[action.target].format(name=request.name))
         if not request.key_in_environment:
             lines.append(
