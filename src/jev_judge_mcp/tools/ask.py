@@ -16,6 +16,7 @@ from typing import Any, cast
 import anyio
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question, ScoreQuestion
+from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import ASK, FILE_JUDGE, SANITIZE_ID_UNITS
 from jev_judge_mcp.providers import Evaluation
@@ -195,13 +196,15 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         # operator's execution flag (off by default, ADR-0077 amendment), then the denylist.
         if not runtime.settings.ask_commands:
             raise ToolError(command_disabled_refusal(), code="command_disabled")
-        denylist = command_denylist_refusal(command)
+        denylist = await anyio.to_thread.run_sync(command_denylist_refusal, command, stored_key_path(runtime.settings))
         if denylist is not None:
             raise ToolError(denylist, code="command_refused")
-    own = own_part(args.get("state", ""))
+    secrets = await anyio.to_thread.run_sync(redaction_values, runtime.settings)
+    redact = Redactor(secrets)
+    own = own_part(args.get("state", ""), redact)
     parts: list[Part] = [own] if own is not None else []
     file_result, skipped = await anyio.to_thread.run_sync(
-        file_parts, args.get("paths", []), stored_key_path(runtime.settings)
+        file_parts, args.get("paths", []), stored_key_path(runtime.settings), redact
     )
     parts.extend(file_result)
     units = question_units(questions)
@@ -217,9 +220,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     evaluations: list[Evaluation] = []
     output: Part | None = None
     if command is not None:
-        gate = await runtime.ask(
-            {"proposed_action": gate_state(command, redaction_values(runtime.settings))}, gate_questions()
-        )
+        gate = await runtime.ask({"proposed_action": gate_state(command, secrets)}, gate_questions())
         evaluations.append(gate)
         reason = command_refusal(gate.answers)
         if reason is not None:

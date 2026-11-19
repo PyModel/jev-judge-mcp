@@ -105,36 +105,66 @@ def test_published_snapshot_round_trips_on_the_wire() -> None:
     assert all("outputSchema" not in tool for tool in served)  # ADR-0006: no output schemas in 1.0
 
 
-SCHEMA_DIVERGENCE = {
-    "jev_gate",
-    "jev_verify",
-    "jev_review",
-    "jev_find",
-    "jev_classify",
-    "jev_decide",
-    "jev_rerank",
-    "jev_compare",
-    "jev_extract",
+_DESCRIPTION_CHANGES = {
+    "jev_verify": ("claims",),
+    "jev_find": ("candidates",),
+    "jev_classify": ("items", "classes"),
+    "jev_decide": ("candidates", "requirements"),
+    "jev_rerank": ("candidates",),
+    "jev_compare": ("aspects",),
+    "jev_extract": ("fields",),
+    "jev_review": ("diff",),
+    "jev_gate": ("claims", "tests", "diff"),
 }
-"""Input schemas gained optional fields (ADR-0062, ADR-0066, ADR-0067) and, for six more tools,
-argument descriptions that state item shapes (divergence `argument-item-shape-descriptions`,
-ADR-0013 amendment). Names, titles, execution, jev_screen, and every constraint stay frozen."""
+
+
+def _description(node: dict[str, Any]) -> str:
+    text = node["description"]
+    assert isinstance(text, str) and text.strip()
+    return text
+
+
+def _expected_tool(frozen: dict[str, Any], actual: dict[str, Any]) -> dict[str, Any]:
+    expected = copy.deepcopy(frozen)
+    name = frozen["name"]
+    props = expected["inputSchema"]["properties"]
+    current = actual["inputSchema"]["properties"]
+    for field in _DESCRIPTION_CHANGES.get(name, ()):
+        props[field]["description"] = _description(current[field])
+    if name == "jev_gate":
+        expected["description"] = _description(actual)
+    if name in {"jev_gate", "jev_verify"}:
+        variants = props["evidence"]["anyOf"]
+        served = current["evidence"]["anyOf"]
+        variants[2]["description"] = _description(served[2])
+        for want, got in ((variants[1], served[1]), (variants[2]["items"], served[2]["items"])):
+            for field in ("kind", "role"):
+                want["properties"][field] = {"type": "string", "description": _description(got["properties"][field])}
+    if name in {"jev_gate", "jev_review"}:
+        for field in ("tests_format", "tests_sha256"):
+            props[field] = {"type": "string", "description": _description(current[field])}
+        legacy = props["diff"]
+        description = legacy.pop("description")
+        patch = {
+            "type": "object",
+            "properties": {field: {"type": "string", "minLength": 1} for field in ("path", "patch")},
+            "required": ["path", "patch"],
+            "additionalProperties": False,
+        }
+        props["diff"] = {
+            "description": description,
+            "anyOf": [legacy, {"type": "array", "minItems": 1, "items": patch}],
+        }
+    return expected
 
 
 def test_served_tools_match_snapshot() -> None:
-    """The snapshot ten stay byte-identical and first; the extensions follow, in their own order."""
+    """Compare the actual registry to the frozen prefix plus its documented schema extensions."""
     snapshot = load_snapshot()
     served = served_tools()
-    comparable = [tool for tool in served[: len(snapshot)] if tool["name"] not in SCHEMA_DIVERGENCE]
-    expected = [tool for tool in snapshot if tool["name"] not in SCHEMA_DIVERGENCE]
-    assert field_mismatches(expected, comparable) == []
-    for tool in served[: len(snapshot)]:
-        if tool["name"] not in SCHEMA_DIVERGENCE:
-            continue
-        frozen = next(item for item in snapshot if item["name"] == tool["name"])
-        assert tool["name"] == frozen["name"]
-        assert tool["title"] == frozen["title"]
-        assert tool["execution"] == frozen["execution"]
+    prefix = served[: len(snapshot)]
+    expected = [_expected_tool(want, got) for want, got in zip(snapshot, prefix, strict=True)]
+    assert field_mismatches(expected, prefix) == []
     assert [tool["name"] for tool in served] == [tool["name"] for tool in snapshot] + list(EXTENSION_TOOLS)
     assert all("outputSchema" not in tool for tool in served)  # ADR-0006
 
@@ -200,3 +230,18 @@ async def test_unknown_tool_is_a_deterministic_parity_shape() -> None:
     result = await server.call_tool("jev_nope", {})
     assert result.is_error
     assert text_of(result) == "MCP error -32602: Tool jev_nope not found"
+
+
+@pytest.mark.parametrize("change", ["required", "constraint"])
+def test_production_comparison_rejects_legacy_schema_regressions(change: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from jev_judge_mcp.tools import TOOLS
+
+    served = [tool.definition.model_dump(by_alias=True, exclude_none=True) for tool in TOOLS]
+    schema = next(tool["inputSchema"] for tool in served if tool["name"] == "jev_verify")
+    if change == "required":
+        schema["required"].append("auto_accept")
+    else:
+        schema["properties"]["claims"]["minItems"] += 1
+    monkeypatch.setattr(sys.modules[__name__], "served_tools", lambda: served)
+    with pytest.raises(AssertionError):
+        test_served_tools_match_snapshot()

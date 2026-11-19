@@ -14,6 +14,8 @@ judged text is file content, and mangling it would misjudge the write.
 import re
 from collections.abc import Callable, Iterator
 
+from jev_judge_mcp.errors import Redactor
+
 REDACTED = "[redacted]"
 """The same harness-facing marker ``redact_action`` uses; defined here so this module stays separate."""
 
@@ -33,8 +35,6 @@ _FORMATS: tuple[tuple[re.Pattern[str], Callable[[re.Match[str]], bool] | None], 
     (re.compile(r"\bxox[abdeporsu]-[A-Za-z0-9-]{10,}\b"), None),
     # OpenAI- and Anthropic-style keys: long, and never a lowercase-only CSS class name.
     (re.compile(r"\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}\b"), _mixed_case_with_digit),
-    # PEM private-key blocks.
-    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), None),
     # JWTs: three base64url segments; the first two start eyJ, the base64 of '{"'.
     (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"), None),
 )
@@ -63,7 +63,32 @@ def _high_entropy(value: str) -> bool:
     return any(c.islower() for c in value) and any(c.isupper() for c in value) and any(c.isdigit() for c in value)
 
 
+_PEM_BOUNDARY = re.compile(r"-----(BEGIN|END) [A-Z0-9 ]*PRIVATE KEY-----")
+
+
+def has_private_key_boundary(text: str) -> bool:
+    return _PEM_BOUNDARY.search(text) is not None
+
+
+def _pem_spans(text: str) -> Iterator[tuple[int, int]]:
+    start: int | None = None
+    depth = 0
+    for match in _PEM_BOUNDARY.finditer(text):
+        if match[1] == "BEGIN":
+            if not depth:
+                start = match.start()
+            depth += 1
+        else:
+            depth = max(0, depth - 1)
+            if not depth:
+                yield start or 0, match.end()
+                start = None
+    if start is not None:
+        yield start, len(text)
+
+
 def _literals(text: str) -> Iterator[tuple[int, int]]:
+    yield from _pem_spans(text)
     for pattern, check in _FORMATS:
         for match in pattern.finditer(text):
             if check is None or check(match):
@@ -84,7 +109,7 @@ def has_credential_literal(text: str) -> bool:
     return next(_literals(text), None) is not None
 
 
-def redact_credential_literals(text: str) -> str:
+def redact_credential_literals(text: str, redact: Redactor | None = None) -> str:
     """The text with every credential literal replaced by ``REDACTED``.
 
     On text without a literal this is the identity, so written code reads naturally to the
@@ -95,9 +120,11 @@ def redact_credential_literals(text: str) -> str:
     cursor = 0
     for start, stop in sorted(_literals(text)):
         if start < cursor:
+            cursor = max(cursor, stop)
             continue
         out.append(text[cursor:start])
         out.append(REDACTED)
         cursor = stop
     out.append(text[cursor:])
-    return "".join(out)
+    masked = "".join(out)
+    return redact(masked) if redact is not None else masked

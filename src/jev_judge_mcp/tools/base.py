@@ -5,6 +5,7 @@ questions, asks Jev once at most, validates each answer, applies policy, and ret
 is serialized as `JSON.stringify(payload, null, 2)` (ADR-0006).
 """
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -112,16 +113,10 @@ def frame(
 
 @dataclass
 class _Pending:
-    ready: anyio.Event = field(default_factory=anyio.Event)
-    result: Evaluation | None = None
-    error: BaseException | None = None
+    task: asyncio.Task[Evaluation]
 
     async def replay(self) -> Evaluation:
-        await self.ready.wait()
-        if self.error is not None:
-            raise self.error
-        assert self.result is not None
-        return self.result
+        return await asyncio.shield(self.task)
 
 
 class Runtime:
@@ -146,6 +141,7 @@ class Runtime:
         self.telemetry = Telemetry(payloads=settings.telemetry_payloads)
         self._pending: dict[bytes, _Pending] = {}
         self._cache_slots = anyio.Semaphore(256)
+        self._cache_generation = 0
         self._close_lock = anyio.Lock()
         self._regex_closed = False
         self._max_inflight = settings.max_inflight
@@ -180,6 +176,8 @@ class Runtime:
         the first answer's.
         """
         with self.telemetry.span("jev.evaluate", questions=len(questions)) as span:
+            if self._close_lock.locked():
+                raise asyncio.CancelledError
             if self._provider is None:
                 self._provider = self._provider_factory(self.settings)
             span.attributes["provider"] = self._provider.name
@@ -195,36 +193,46 @@ class Runtime:
     async def _cached(
         self, provider: JevProvider, state: JsonValue, questions: Mapping[str, Question], span: Span
     ) -> Evaluation:
+        generation = self._cache_generation
         identity = (provider.name, provider.cache_scope, self.model, state, questions)
         key = bytes.fromhex(await anyio.to_thread.run_sync(cache.request_key, *identity))
+        if generation != self._cache_generation:
+            raise asyncio.CancelledError
         pending = self._pending.get(key)
         if pending is not None:
             span.attributes["cache"] = "hit"
             return await pending.replay()
-        async with self._cache_slots:
-            pending = self._pending.get(key)
-            if pending is not None:
+        await self._cache_slots.acquire()
+        if generation != self._cache_generation:
+            self._cache_slots.release()
+            raise asyncio.CancelledError
+        pending = self._pending.get(key)
+        if pending is not None:
+            self._cache_slots.release()
+            span.attributes["cache"] = "hit"
+            return await pending.replay()
+
+        async def evaluate() -> Evaluation:
+            cached = await cache.alookup(self.settings, *identity, digest=key)
+            if cached is not None:
                 span.attributes["cache"] = "hit"
-                return await pending.replay()
-            pending = self._pending[key] = _Pending()
-            try:
-                cached = await cache.alookup(self.settings, *identity, digest=key)
-                if cached is not None:
-                    span.attributes["cache"] = "hit"
-                    pending.result = cached
-                else:
-                    evaluation = await self._evaluate_capped(provider, state, questions)
-                    span.attributes["input_tokens"] = evaluation.usage.input_tokens
-                    span.attributes["output_tokens"] = evaluation.usage.output_tokens
-                    await cache.astore(self.settings, *identity, evaluation, digest=key)
-                    pending.result = evaluation
-                return pending.result
-            except BaseException as error:
-                pending.error = error
-                raise
-            finally:
-                del self._pending[key]
-                pending.ready.set()
+                return cached
+            evaluation = await self._evaluate_capped(provider, state, questions)
+            span.attributes["input_tokens"] = evaluation.usage.input_tokens
+            span.attributes["output_tokens"] = evaluation.usage.output_tokens
+            await cache.astore(self.settings, *identity, evaluation, digest=key)
+            return evaluation
+
+        def completed(task: asyncio.Task[Evaluation]) -> None:
+            del self._pending[key]
+            self._cache_slots.release()
+            if not task.cancelled():
+                task.exception()  # Observe failure even if every subscriber has disconnected.
+
+        task = asyncio.create_task(evaluate())
+        self._pending[key] = _Pending(task)
+        task.add_done_callback(completed)
+        return await asyncio.shield(task)
 
     async def _evaluate_capped(
         self, provider: JevProvider, state: JsonValue, questions: Mapping[str, Question]
@@ -246,6 +254,14 @@ class Runtime:
         errors: list[BaseException] = []
         with anyio.CancelScope(shield=True):
             async with self._close_lock:
+                self._cache_generation += 1
+                pending = [item.task for item in self._pending.values()]
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    _, unfinished = await asyncio.wait(pending, timeout=_CLOSE_SECONDS)
+                    if unfinished:
+                        errors.append(TimeoutError("cache evaluations did not stop"))
                 if not self._regex_closed:
                     try:
                         with anyio.fail_after(_CLOSE_SECONDS):

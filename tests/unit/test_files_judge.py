@@ -418,3 +418,20 @@ def test_scout_015_discovery_diagnostics_use_only_counts_and_duration(
     records = [record.getMessage() for record in caplog.records if record.name == "jev_judge_mcp.tools.files_judge"]
     assert len(records) == 1 and "examined=2" in records[0] and "truncated=0" in records[0]
     assert "duration_ms=" in records[0] and "fixture-name" not in records[0]
+
+
+def test_literal_and_glob_follow_the_same_named_directory_alias(tmp_path: Path) -> None:
+    make(tmp_path / "real/a.py")
+    (tmp_path / "alias").symlink_to("real")
+    assert plan(["alias/*.py"], tmp_path) == plan(["alias/a.py"], tmp_path)
+
+
+def test_recursive_glob_charges_each_directory_listing_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace
+
+    from jev_judge_mcp.tools import files_judge
+
+    monkeypatch.setattr(files_judge, "FILES_JUDGE", replace(FILES_JUDGE, discovery_max=3))
+    for name in ("a.md", "b.py", "c.md", "d.md", "e.md"):
+        make(tmp_path / name)
+    assert plan(["**/*.py"], tmp_path) == ([("b.py", "content")], [])

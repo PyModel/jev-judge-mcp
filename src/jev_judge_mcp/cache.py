@@ -168,13 +168,17 @@ def lookup(
     counts = usage_counts(usage)
     if counts is None:
         return None
+    # Old all-zero records cannot distinguish missing metering from an explicitly measured zero.
+    reported = cast(dict[str, object], usage).get("reported", any(counts))
+    if not isinstance(reported, bool):
+        return None
     request_id = record.get("request_id")
     if request_id is not None and (not isinstance(request_id, str) or not 0 < len(request_id) <= _REQUEST_ID_MAX):
         return None
     logger.debug("cache hit")
     return Evaluation(
         answers=cast(dict[str, object], answers),
-        usage=Usage(*counts),
+        usage=Usage(*counts, reported=reported),
         provider=provider,
         model=recorded_model if isinstance(recorded_model, str) else model,
         request_id=request_id,
@@ -205,7 +209,11 @@ def store(
     key = digest.hex() if digest is not None else request_key(provider, scope, model, state, questions)
     record = {
         "answers": evaluation.answers,
-        "usage": {"input_tokens": evaluation.usage.input_tokens, "output_tokens": evaluation.usage.output_tokens},
+        "usage": {
+            "input_tokens": evaluation.usage.input_tokens,
+            "output_tokens": evaluation.usage.output_tokens,
+            "reported": evaluation.usage.reported,
+        },
         "provider": evaluation.provider,
         "model": evaluation.model,
         "request_id": evaluation.request_id,
@@ -219,7 +227,11 @@ def store(
         fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             # Serialize publication and sweeping across cooperating writers, including active staging files.
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                logger.debug("cache publication busy; store skipped")
+                return
             fsutil.write_private_atomic(directory / f"{key}.json", text)
             _evict(directory, settings.cache_max_entries)
         finally:
