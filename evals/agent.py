@@ -20,8 +20,8 @@ run (`login_keychain`) gets a symlink to `login.keychain-db` only; the directory
 A set `CLAUDE_CONFIG_DIR` fails the login even when that file is reachable (5a902c3 set it to the
 sandbox), so it stays unset and Claude's project state lands in the sandbox. Pi never gets the link:
 it logs in through the copied `auth.json`. The link is the same kind of exposure as that copy: a
-Claude run can read the login keychain file through it. Nothing is read from this process's
-environment below that boundary.
+Claude run can read the login keychain file through it. The subprocess receives the explicitly constructed environment.
+Saving its transcript uses the host home, temporary directory and project roots to redact those paths.
 """
 
 import json

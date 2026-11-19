@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 # An account formerly present in recorded examples. Use its digest so the guard itself is portable and clean.
 RECORDED_ACCOUNT_SHA256 = "a7cdf5d0586b392473dd0cd08c9ba833240006a8a7310bf9bc8bf1aefdfaeadb"
-HOME_PATH = re.compile(rb"/(?:Users|home)/[A-Za-z0-9_][A-Za-z0-9._-]*")
+HOME_PATH = re.compile(rb"/(?:Users|home)/\.?[A-Za-z0-9_\x80-\xff][A-Za-z0-9._\x80-\xff-]*")
 EXAMPLE_HOMES = {
     b"/Users/dev",
     b"/Users/example",
@@ -50,7 +50,8 @@ def test_tracked_files_omit_host_identifiers() -> None:
 
 def test_portable_home_and_temp_controls() -> None:
     for prefix in (b"/Users/", b"/home/"):
-        assert contains_host_identifier(prefix + b"_contributor/work")
+        for account in (b"_contributor", b".local-auditor", "équipe".encode()):
+            assert contains_host_identifier(prefix + account + b"/work")
     for root in (b"/private/var/" + b"folders/", b"-private-var-" + b"folders-"):
         assert contains_host_identifier(root + b"q1/sample/T/work")
     assert not contains_host_identifier(b"/home/example/work")
