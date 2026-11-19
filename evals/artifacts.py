@@ -7,6 +7,15 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
+from jev_judge_mcp.fsutil import read_bounded
+
+RESULT_BYTES_MAX = 8 * 1024 * 1024
+
+
+def read_artifact(path: Path, *, max_bytes: int = RESULT_BYTES_MAX) -> bytes:
+    """Read a regular study file up to max_bytes. Missing, symlinked, special or oversize files raise OSError."""
+    return read_bounded(path, max_bytes=max_bytes)
+
 
 def write_json(path: Path, payload: Mapping[str, Any]) -> None:
     content = json.dumps(payload, indent=2, allow_nan=False) + "\n"
@@ -29,7 +38,7 @@ def read_records(
     incomplete: list[Path] = []
     for path in sorted(paths):
         try:
-            row: object = json.loads(path.read_text(encoding="utf-8"))
+            row: object = json.loads(read_artifact(path).decode("utf-8"))
         except (ValueError, OSError, RecursionError):
             row = None
         if isinstance(row, dict):

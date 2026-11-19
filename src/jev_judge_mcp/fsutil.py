@@ -6,6 +6,7 @@ lives here once — the XDG base, the private leaf directory, and the atomic wri
 a fresh 0600 file. A directory whose ownership or permissions cannot be verified is refused.
 """
 
+import errno
 import os
 import stat
 import tempfile
@@ -13,6 +14,26 @@ from pathlib import Path
 from typing import Literal
 
 DIR_MODE = 0o700
+
+
+def read_bounded(path: Path, *, max_bytes: int, follow_symlinks: bool = False) -> bytes:
+    """Read one regular file, enforcing the byte limit even when it grows after open.
+
+    Raise OSError for an unsuitable file. Nonblocking open lets fstat reject a pipe without
+    waiting for a writer. Callers editing an explicitly symlinked config can opt into following it.
+    """
+    if max_bytes < 0:
+        raise ValueError("max_bytes must be nonnegative")
+    flags = os.O_NONBLOCK | os.O_NOCTTY | (0 if follow_symlinks else os.O_NOFOLLOW)
+    with open(path, "rb", opener=lambda name, mode: os.open(name, mode | flags)) as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(errno.EINVAL, "expected a regular file", str(path))
+        if info.st_size <= max_bytes:
+            data = handle.read(max_bytes + 1)
+            if len(data) <= max_bytes:
+                return data
+    raise OSError(errno.EFBIG, f"file exceeds {max_bytes} bytes", str(path))
 
 
 def xdg_home(kind: Literal["cache", "config"]) -> Path:

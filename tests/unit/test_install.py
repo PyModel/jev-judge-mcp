@@ -1316,6 +1316,20 @@ def test_scout_003_invalid_state_blocks_writes(tmp_path: Path, broken: bytes) ->
     assert not layout(tmp_path).cursor_file().exists()
 
 
+def test_deeply_nested_state_fails_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state = layout(tmp_path).state_file()
+    state.parent.mkdir(parents=True)
+    state.write_text('{"targets":{}}')
+
+    def reject_nesting(*_args: object, **_kwargs: object) -> object:
+        raise RecursionError("JSON nesting limit")
+
+    monkeypatch.setattr(json, "loads", reject_nesting)
+    with pytest.raises(InstallError, match="state"):
+        execute(tmp_path, agents=("cursor",))
+    assert not layout(tmp_path).cursor_file().exists()
+
+
 def test_scout_003_named_ownership(tmp_path: Path) -> None:
     req = Request(layout=layout(tmp_path), launch=LAUNCH, agents=("cursor",), assume_yes=True)
     assert run(req).code == 0
@@ -1453,3 +1467,24 @@ def test_scout_020_early_pipe_close_preserves_child_stderr(monkeypatch: pytest.M
     (process,) = children
     assert process.returncode is not None
     assert all(pipe is not None and pipe.closed for pipe in (process.stdin, process.stdout, process.stderr))
+
+
+def test_overlarge_state_refused_before_config_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state = layout(tmp_path).state_file()
+    state.parent.mkdir(parents=True)
+    state.write_text('{"targets":{}}')
+    real_stat = os.fstat
+    inode = state.stat().st_ino
+
+    def large(fd: int) -> os.stat_result:
+        info = real_stat(fd)
+        if info.st_ino == inode:
+            fields = list(info)
+            fields[6] = 1 << 30
+            return os.stat_result(fields)
+        return info
+
+    monkeypatch.setattr(os, "fstat", large)
+    with pytest.raises(InstallError, match="state"):
+        execute(tmp_path, agents=("cursor",))
+    assert not layout(tmp_path).cursor_file().exists()

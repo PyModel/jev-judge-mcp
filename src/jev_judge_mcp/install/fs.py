@@ -13,8 +13,11 @@ from pathlib import Path
 from typing import TypeGuard
 
 from jev_judge_mcp.domain import is_json_object
+from jev_judge_mcp.fsutil import read_bounded
 from jev_judge_mcp.install.errors import ConfigChangedError, InstallError
 from jev_judge_mcp.install.redact import canonical_hash_payload
+
+INSTALL_FILE_BYTES_MAX = 16 * 1024 * 1024
 
 
 def entry_hash(entry: Mapping[str, object]) -> str:
@@ -49,11 +52,17 @@ def mode_is_loose(mode: int) -> bool:
 
 
 def read_bytes(path: Path) -> bytes | None:
-    real = path.resolve() if path.is_symlink() else path
     try:
-        return real.read_bytes()
+        return read_bounded(path, max_bytes=INSTALL_FILE_BYTES_MAX, follow_symlinks=True)
     except FileNotFoundError:
         return None
+
+
+def _encoded_file(text: str, path: Path) -> bytes:
+    data = text.encode("utf-8")
+    if len(data) > INSTALL_FILE_BYTES_MAX:
+        raise InstallError(f"{path} would exceed the {INSTALL_FILE_BYTES_MAX}-byte installer file limit")
+    return data
 
 
 def _write_all(fd: int, data: bytes) -> None:
@@ -86,12 +95,13 @@ def _write_temporary(directory: Path, prefix: str, data: bytes, mode: int) -> st
 
 def atomic_write(path: Path, text: str, mode: int, expected: bytes | None) -> None:
     """Write `text` through a symlink onto the real file. Abort if the file changed."""
+    data = _encoded_file(text, path)
     real = path.resolve() if path.is_symlink() else path
     _ensure_directory(real.parent, 0o777)
     current = read_bytes(real)
     if current != expected:
         raise ConfigChangedError(f"{path}: changed during install, re-run")
-    temporary = _write_temporary(real.parent, ".jev-install-", text.encode(), mode)
+    temporary = _write_temporary(real.parent, ".jev-install-", data, mode)
     try:
         current = read_bytes(real)
         if current != expected:
@@ -171,13 +181,18 @@ def _is_record(record: object) -> TypeGuard[dict[str, object]]:
 
 def load_targets(path: Path, *, recover: bool) -> dict[str, dict[str, object]]:
     try:
-        parsed: object = json.loads(path.read_text(encoding="utf-8"))
+        parsed: object = json.loads(
+            read_bounded(path, max_bytes=INSTALL_FILE_BYTES_MAX, follow_symlinks=True).decode("utf-8")
+        )
     except FileNotFoundError:
         if path.is_symlink():
             raise InstallError("installer state is a broken symlink") from None
         return {}
-    except (OSError, ValueError):
-        raise InstallError("could not read installer state; check the state file before retrying") from None
+    except (OSError, ValueError, RecursionError) as exc:
+        reason = exc.strerror if isinstance(exc, OSError) else "invalid or too deeply nested JSON"
+        raise InstallError(
+            f"could not read installer state {path}: {reason}; check the state file before retrying"
+        ) from None
     if not is_json_object(parsed) or not is_json_object(raw := parsed.get("targets")):
         raise InstallError("invalid installer state")
     targets: dict[str, dict[str, object]] = {}
@@ -205,7 +220,10 @@ def load_targets(path: Path, *, recover: bool) -> dict[str, dict[str, object]]:
         or (record is None and (key not in targets or targets[key]["path"] != config))
     ):
         raise InstallError("invalid pending installer state")
-    current = digest(read_bytes(Path(config)))
+    try:
+        current = digest(read_bytes(Path(config)))
+    except OSError as exc:
+        raise InstallError(f"cannot recover installer state: inspect {config} ({exc.strerror})") from exc
     if current == after:
         if record is None:
             targets.pop(key, None)
@@ -231,7 +249,7 @@ def ownership_key(targets: Mapping[str, object], target: str, path: Path, name: 
 def write_state(path: Path, state: Mapping[str, object]) -> None:
     ensure_private_dir(path.parent)
     text = json.dumps(state, indent=2, sort_keys=True) + "\n"
-    temporary = _write_temporary(path.parent, ".jev-state-", text.encode(), 0o600)
+    temporary = _write_temporary(path.parent, ".jev-state-", _encoded_file(text, path), 0o600)
     try:
         os.replace(temporary, path)
     except BaseException:
