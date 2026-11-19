@@ -345,7 +345,8 @@ def test_every_action_bearing_tool_yields_a_headline_from_recorded_output() -> N
             headlines.setdefault(str(call.payload["tool"]), set()).add(fields["headline_action"])
     assert all(value in {None, "auto", "review", "escalate"} for values in headlines.values() for value in values)
     with_headline = {tool for tool, values in headlines.items() if values - {None}}
-    assert with_headline == set(HEADLINE_TOOLS)
+    # The recorded parity snapshot predates the local range tool (covered separately below).
+    assert with_headline | {"jev_gate_range"} == set(HEADLINE_TOOLS)
 
 
 # --- FIX-06: log pending rows, then terminate the child --------------------------------------------
@@ -439,3 +440,59 @@ def test_recorder_close_raise_writes_fallback_rows_and_kills_the_child(tmp_path:
         _assert_dead(pid)
     finally:
         _reap(pid)
+
+
+@pytest.mark.parametrize("action", ["auto", "review", "escalate"])
+def test_scout_024_range_has_the_same_headline_action(action: str) -> None:
+    assert result_fields(_result({"tool": "jev_gate_range", "action": action}))["headline_action"] == action
+
+
+def test_scout_033_private_from_creation_and_refuse_unsafe_append(tmp_path: Path) -> None:
+    log = tmp_path / "calls.jsonl"
+    argv = [sys.executable, "-m", "evals.bench.proxy", str(log), "--", sys.executable, FAKE]
+    subprocess.run(argv, input=b"", capture_output=True, timeout=5, check=True, umask=0)
+    for path in [log, log.with_suffix(".stderr")]:
+        assert path.stat().st_mode & 0o777 == 0o600
+        path.chmod(0o644)
+        result = subprocess.run(argv, input=b"", capture_output=True, timeout=5)
+        assert result.returncode != 0
+        path.chmod(0o600)
+
+
+def test_scout_022_idle_client_survives_but_outstanding_request_expires(tmp_path: Path) -> None:
+    pid = tmp_path / "pid"
+    log = tmp_path / "calls.jsonl"
+    marker = tmp_path / "at-term.txt"
+    server = tmp_path / "server.py"
+    server.write_text(_hang_server(pid, log, marker, reads=0))
+    code = (
+        "from evals.relay import serve; from evals.ab.proxy import Recorder; "
+        "raise SystemExit(serve(None,'ab',Recorder,idle_timeout=.2))"
+    )
+    with subprocess.Popen(
+        [sys.executable, "-c", code, str(log), "--", sys.executable, str(server)],
+        cwd=REPO,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        umask=0,
+    ) as proxy:
+        try:
+            deadline = time.monotonic() + 3
+            while not pid.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert pid.is_file()
+            for path in [log, log.with_suffix(".stderr")]:
+                assert path.stat().st_mode & 0o777 == 0o600
+            time.sleep(0.3)
+            assert proxy.poll() is None
+            assert proxy.stdin is not None
+            proxy.stdin.write((json.dumps(_call(1)) + "\n").encode())
+            proxy.stdin.flush()
+            assert proxy.wait(timeout=4) != 0
+            assert json.loads(marker.read_text())["unanswered"] is True
+            _assert_dead(pid)
+        finally:
+            if proxy.poll() is None:
+                proxy.kill()
+            _reap(pid)

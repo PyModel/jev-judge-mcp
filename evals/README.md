@@ -47,7 +47,7 @@ Live bounds:
 | `calibration/` | `split.py` (60/20/20 by family), `rows.py` (rows from `scorers/tools.py` `judgments`), `flips.py`. `bounds.py`, `threshold.py`, `targets.py` moved into `jev_judge_mcp.calibration` (ADR-0070) so the installed `calibrate` command shares them |
 | `runners/` | `score.py` (offline), `live.py` (guarded), `manifest.py` (file formats) |
 | `baselines/` | `ranking.py`: original order and BM25. The embeddings baseline raises `NotImplementedError`: it needs a pinned embedding model |
-| `reports/` | Per-run directories and working reports (gitignored). Finished reports — `bench150.*`, `agent-outcomes.md`, `p8-pilot.md` — are committed as records via `.gitignore` exceptions |
+| `reports/` | Per-run directories and working reports (gitignored). Synthetic benchmark arguments, replies and stderr are private scoring inputs. Use an owner-only output directory. Keep them locally until scoring has been verified, then remove the raw run directories. Publish aggregate results only. Finished reports — `bench150.*`, `agent-outcomes.md`, `p8-pilot.md` — are committed as records via `.gitignore` exceptions |
 
 Recorded outputs are JSONL `{"id", "repeat", "output"}`, where `output` is the parsed tool result; a tool
 error is recorded as `{"id", "repeat", "error"}` and scores as a wrong answer.
@@ -164,7 +164,7 @@ temperature, built-in tools, harness server, user prompt, limits, timeout, snaps
 addendum adds one sentence naming the task's Jev tool. `tests/evals/test_ab_harness.py` asserts that is the
 only difference in the command line and that the MCP configs differ only in `jev`.
 
-Each task hinges on a judgment a Jev tool is for, and ships a gold decision the snapshot's documents settle:
+Each task ships a gold decision grounded in its snapshot. The table shows three examples from the current manifest.
 
 | Task | Judgment | Jev tool | Gold |
 |---|---|---|---|
@@ -183,7 +183,7 @@ n ≤ 10), correct solutions per hour (failed runs' time included), final tests 
 cycles and retries, tool calls and tokens per solved task, Jev calls, judge accuracy against gold, and paired
 counts and wall-time differences. With no measured pair it says "not measured" and prints no number and no
 difference. It never reports an item rate. Every run also records its cost, unsafe actions, and each Jev
-call's round trip.
+call's round trip. Older summaries can undercount `jev_gate_range` actions. Recount them only when the retained log records the decision.
 
 | Path | Role |
 |---|---|
@@ -194,7 +194,7 @@ call's round trip.
 | `ab/proxy.py` | Recorder on `evals/relay.py`: per `tools/call` round-trip ms, isError, `usage.input_tokens`, action, headline Action, model. Never logs arguments, text, or error messages |
 | `ab/review_server.py` | `request_human_review`, in both arms |
 | `ab/unsafe.py`, `ab/stream.py` | Unsafe-action rules over tool calls; Claude stream-json to frontier calls, context and output tokens (Pi's parser is `bench/pi.py`) |
-| `ab/ledger.py` | One `SpendPolicy` per agent: 18 runs (3 tasks x 2 arms x 3 repeats), 25 USD, checked per pair. Pi's stock worst case is the local loopback model's Jev headroom only; a paid remote pi model refuses without `JEV_AB_RUN_BOUND_USD` (its per-run ceiling, which bounds the pair check). `JEV_AB_MAX_USD` lowers the 25 USD for one invocation (min of the two; a value that is not a finite number >= 0 refuses the run) and the effective cap is persisted in `ledger.json`, so a resume — or a higher value — cannot raise it |
+| `ab/ledger.py` | One `SpendPolicy` per agent: 66 runs (11 manifest tasks x 2 arms x 3 repeats), 25 USD, checked per pair. Pi's stock worst case is the local loopback model's Jev headroom only; a paid remote pi model refuses without `JEV_AB_RUN_BOUND_USD` (its per-run ceiling, which bounds the pair check). `JEV_AB_MAX_USD` lowers the 25 USD for one invocation (min of the two; a value that is not a finite number >= 0 refuses the run) and the effective cap is persisted in `ledger.json`, so a resume — or a higher value — cannot raise it |
 | `ab/run.py`, `ab/report.py` | Seeded pair schedule, the runner and its refusals, the pinned-setup guard, and the markdown report |
 
 `JEV_AB_MODEL` selects the pi arm's model (the confined D3 re-run pins

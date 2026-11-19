@@ -61,7 +61,7 @@ def operator_interrupt_books_the_bound(loop: Loop, exc: type[BaseException]) -> 
             loop.go()
     assert seen == loop.ids
     assert loop.load().runs == {run_id: loop.bound for run_id in loop.ids}
-    assert loop.go() == loop.done
+    assert "incomplete" in loop.go()
     assert seen == loop.ids, "resume does not relaunch a booked run"
     assert_no_nan(loop.out / "ledger.json")
 
@@ -184,13 +184,37 @@ def bench_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Loop:
     )
 
 
-def write_result(out: Path, run_id: str, cost: float, *, bench_keys: bool) -> None:
+def write_result(out: Path, run_id: str, cost: float, *, bench_keys: bool, **fields: Any) -> dict[str, Any]:
     run_dir = out / run_id
     run_dir.mkdir(parents=True)
     (run_dir / "stream.jsonl").write_text("", encoding="utf-8")
-    payload: dict[str, Any] = {"cost_usd": cost}
+    payload: dict[str, Any] = {"cost_usd": cost, "run_id": run_id, "status": "ok", "wall_s": 1, "answer": None}
     if bench_keys:
         item, arm = run_id.rsplit(".", 1)
+        payload["jev_cost_usd"] = cost
+        payload.update(tool="jev_verify", jev_calls=[], correct=False, parse_error=None, gate=None)
         payload["item"] = item
         payload["arm"] = arm
+    else:
+        task, arm, repeat = run_id.rsplit(".", 2)
+        payload.update(
+            agent="claude",
+            task=task,
+            arm=arm,
+            repeat=int(repeat[1:]),
+            measurement=None,
+            success=False,
+            final_tests_passed=False,
+            jev_tool_called=False,
+            decision=None,
+            decision_correct=None,
+            tool_calls=0,
+            jev_calls=0,
+            test_cycles=0,
+            retries=0,
+            tokens={"total": 0},
+            wrong_branches=[],
+        )
+    payload.update(fields)
     (run_dir / "result.json").write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    return payload

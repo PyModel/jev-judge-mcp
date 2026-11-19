@@ -18,6 +18,7 @@ import pytest
 
 from evals.ab import arms, report, tasks
 from evals.ab import run as ab_run
+from tests.evals.booking_cases import write_result
 from tests.support.bench_provider import API_KEY, Loopback
 
 REPO = Path(__file__).resolve().parents[2]
@@ -167,21 +168,16 @@ def test_out_of_task_exploration_is_recorded_and_does_not_stop_the_study(
     ) -> dict[str, Any]:
         rid = f"j1-refund-window.{arm}.r{repeat}"
         explored = arm == "A"  # the recorded j6-docs-vs-code.A.r2 shape
-        record = {
-            "run_id": rid,
-            "task": "j1-refund-window",
-            "agent": "claude",
-            "arm": arm,
-            "repeat": repeat,
-            "status": "ok",
-            "success": True,
-            "failure_category": "out-of-task exploration" if explored else None,
-            "exploration": ["/run/capability.json", "/"] if explored else [],
-            "cost_usd": 0.01,
-        }
-        (out / rid).mkdir(parents=True, exist_ok=True)
-        (out / rid / "result.json").write_text(json.dumps(record) + "\n", encoding="utf-8")
-        return record
+        return write_result(
+            out,
+            rid,
+            0.01,
+            bench_keys=False,
+            success=True,
+            final_tests_passed=True,
+            failure_category="out-of-task exploration" if explored else None,
+            exploration=["/run/capability.json", "/"] if explored else [],
+        )
 
     monkeypatch.setattr(ab_run, "run_one", run_one_with_exploration)
     stop = ab_run.study(setup(tmp_path, loopback, solve()), out, repeats=1)

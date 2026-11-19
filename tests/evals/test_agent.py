@@ -227,7 +227,9 @@ def test_the_relay_log_is_written_in_the_sandbox_and_copied_to_the_records(tmp_p
     path — and run_agent copies it to the run's records when the run ends."""
 
     def config(sandbox: Path) -> dict[str, Any]:
-        (sandbox / "jev-calls.jsonl").write_text('{"tool": "jev_verify"}\n', encoding="utf-8")
+        trace = sandbox / "jev-calls.jsonl"
+        trace.touch(mode=0o600)
+        trace.write_text('{"tool": "jev_verify"}\n', encoding="utf-8")
         return {}
 
     with run_agent(
@@ -873,3 +875,56 @@ def test_models_json_is_scoped_to_the_arms_provider(tmp_path: Path) -> None:
         seen = json.loads(agent.trace.result_field("result"))
     assert list(seen["models"]["providers"]) == ["opencode-go"]
     assert seen["models"]["providers"]["opencode-go"]["apiKey"] == "sk-test-models-one-not-real"
+
+
+def test_second_scratch_allocation_failure_removes_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import tempfile
+
+    path = tmp_path / "owned-work"
+
+    def allocate(suffix: str | None = None, prefix: str | None = None, dir: str | None = None) -> str:
+        if prefix == "jev-agent-work-":
+            path.mkdir()
+            return str(path)
+        raise OSError("synthetic allocation failure")
+
+    monkeypatch.setattr(tempfile, "mkdtemp", allocate)
+    with (
+        pytest.raises(OSError, match="allocation failure"),
+        run_agent(_stub(), mcp_config={}, base_env={}, secret=KEY, run_dir=tmp_path / "out"),
+    ):
+        pytest.fail("agent launched after allocation failed")
+    assert not path.exists()
+
+
+def test_scrub_refuses_a_dangling_artifact(tmp_path: Path) -> None:
+    (tmp_path / "receipt").symlink_to(tmp_path / "absent")
+    with pytest.raises(OSError):
+        secret_scrub(tmp_path, "synthetic")
+
+
+def test_scout_033_refuses_to_archive_a_nonprivate_relay_log(tmp_path: Path) -> None:
+    def config(sandbox: Path) -> dict[str, Any]:
+        trace = sandbox / "jev-calls.jsonl"
+        trace.write_text("fixture")
+        trace.chmod(0o644)
+        return {}
+
+    with (
+        pytest.raises(PermissionError),
+        run_agent(_stub(), mcp_config=config, base_env={}, secret=KEY, run_dir=tmp_path / "records"),
+    ):
+        pytest.fail("accepted an unsafe trace")
+    assert not (tmp_path / "records/jev-calls.jsonl").exists()
+
+
+def test_scout_033_existing_shared_run_directory_is_refused_before_launch(tmp_path: Path) -> None:
+    records = tmp_path / "records"
+    records.mkdir()
+    records.chmod(0o755)
+    with (
+        pytest.raises(PermissionError),
+        run_agent(_stub(), mcp_config={}, base_env={}, secret=KEY, run_dir=records),
+    ):
+        pytest.fail("accepted a shared run directory")
+    assert list(records.iterdir()) == []

@@ -31,18 +31,20 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 
 from evals.ab import stream
+from evals.relay import private_opener
 
 REDACTED = b"[REDACTED]"
 
@@ -575,33 +577,42 @@ class AgentRunResult:
     out-of-task exploration, recorded per run, never a study stop by itself."""
 
 
-def secret_scrub(root: Path, secret: str) -> None:
+def _artifact_secrets(root: Path, secret: str, *, scrub: bool) -> tuple[str, ...]:
     if not secret:
-        raise ValueError("the secret to scrub must be non-empty")
+        raise ValueError("the secret to scan or scrub must be non-empty")
     needle = secret.encode()
-    for path in root.rglob("*"):
-        if path.is_file():
-            data = path.read_bytes()
-            if needle in data:
-                path.write_bytes(data.replace(needle, REDACTED))
+    hits: list[str] = []
+    errors: list[OSError] = []
+    flags = (os.O_RDWR if scrub else os.O_RDONLY) | os.O_NOFOLLOW | os.O_NONBLOCK
+    for directory, _, names, parent in os.fwalk(root, onerror=errors.append):
+        for name in names:
+            try:
+                fd = os.open(name, flags, dir_fd=parent)
+                with os.fdopen(fd, "r+b" if scrub else "rb") as artifact:
+                    info = os.fstat(fd)
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
+                        raise PermissionError("study artifact must be an owned, singly linked regular file")
+                    data = artifact.read()
+                    if needle in data:
+                        hits.append(str((Path(directory) / name).relative_to(root)))
+                        if scrub:
+                            artifact.seek(0)
+                            artifact.write(data.replace(needle, REDACTED))
+                            artifact.truncate()
+            except OSError as error:
+                errors.append(error)
+    if errors:
+        raise errors[0]
+    return tuple(sorted(hits))
+
+
+def secret_scrub(root: Path, secret: str) -> None:
+    _artifact_secrets(root, secret, scrub=True)
 
 
 def secret_scan(root: Path, secret: str) -> tuple[str, ...]:
-    """Relative paths of every file under `root` whose bytes contain `secret`.
-
-    The after-run check (ADR-0074): a hit fails the run — the caller records it as an escape —
-    and the scrub that follows still removes the value from the kept records.
-    """
-    if not secret:
-        raise ValueError("the secret to scan for must be non-empty")
-    needle = secret.encode()
-    hits: list[str] = []
-    for path in sorted(root.rglob("*")):
-        if path.is_file():
-            data = path.read_bytes()
-            if needle in data:
-                hits.append(str(path.relative_to(root)))
-    return tuple(hits)
+    """Relative paths of run artifacts whose bytes contain the secret."""
+    return _artifact_secrets(root, secret, scrub=False)
 
 
 def _text(output: str | bytes | None) -> str:
@@ -682,9 +693,17 @@ def _kill_group(proc: subprocess.Popen[bytes]) -> None:
             time.sleep(0.01)
 
 
+def ensure_private_run_dir(run_dir: Path) -> None:
+    run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = run_dir.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+        raise PermissionError("study run directory must be private and owned by the operator")
+
+
 def write_run_logs(run_dir: Path, stdout: str, stderr: str) -> None:
-    (run_dir / "stream.jsonl").write_text(stdout, encoding="utf-8")
-    (run_dir / "claude.stderr").write_text(stderr, encoding="utf-8")
+    for name, content in (("stream.jsonl", stdout), ("claude.stderr", stderr)):
+        with open(run_dir / name, "w", encoding="utf-8", opener=private_opener) as sink:
+            sink.write(content)
 
 
 def _with_stderr_marker(stderr: str) -> str:
@@ -965,10 +984,12 @@ def run_agent(
     """
     if not secret:
         raise ValueError("run_agent needs the non-empty secret to scrub")
-    run_dir.mkdir(parents=True, exist_ok=True)
-    workdir = Path(tempfile.mkdtemp(prefix="jev-agent-work-")).resolve()
-    secret_dir = Path(tempfile.mkdtemp(prefix="jev-agent-cfg-"))
-    try:
+    ensure_private_run_dir(run_dir)
+    with ExitStack() as cleanup:
+        workdir = Path(cleanup.enter_context(tempfile.TemporaryDirectory(prefix="jev-agent-work-"))).resolve()
+        cfg = tempfile.TemporaryDirectory(prefix="jev-agent-cfg-")
+        secret_dir = Path(cleanup.enter_context(cfg))
+        cleanup.callback(secret_scrub, run_dir, secret)
         if prepare is not None:
             prepare(workdir)
         resolved_config = mcp_config(secret_dir) if callable(mcp_config) else mcp_config
@@ -1000,21 +1021,25 @@ def run_agent(
             )
         except _StdoutCapExceeded as exceeded:
             # Persist before the raise so the finally scrub still sees the secret on this path.
-            shutil.rmtree(secret_dir, ignore_errors=True)
+            cfg.cleanup()
             write_run_logs(run_dir, exceeded.captured_stdout, exceeded.captured_stderr)
             raise
         except _IncompleteTranscript as incomplete:
             # Same contract: persist what was read, then fail loudly. A silently partial
             # transcript would book an agent verdict on missing evidence.
-            shutil.rmtree(secret_dir, ignore_errors=True)
+            cfg.cleanup()
             write_run_logs(run_dir, incomplete.captured_stdout, incomplete.captured_stderr)
             raise
         wall = time.perf_counter() - started
         for name in (RELAY_LOG, str(Path(RELAY_LOG).with_suffix(".stderr"))):
             relay = secret_dir / name
             if relay.is_file():
-                shutil.copyfile(relay, run_dir / name)
-        shutil.rmtree(secret_dir, ignore_errors=True)
+                with (
+                    open(relay, "rb", opener=private_opener) as src,
+                    open(run_dir / name, "wb", opener=private_opener) as dst,
+                ):
+                    shutil.copyfileobj(src, dst)
+        cfg.cleanup()
         write_run_logs(run_dir, stdout, stderr)
         scan_hit = secret_scan(run_dir, secret)
         escape = escape_scan(stdout, box)
@@ -1033,10 +1058,6 @@ def run_agent(
             status=run_status(returncode, trace, command.timeout_s),
             escape=escape or None,
         )
-    finally:
-        shutil.rmtree(secret_dir, ignore_errors=True)
-        shutil.rmtree(workdir, ignore_errors=True)
-        secret_scrub(run_dir, secret)
 
 
 def _usd(value: object) -> float | None:
@@ -1087,8 +1108,8 @@ def run_preflight(
     """
     from evals.ab.outcomes import reached_model
 
-    scratch = Path(tempfile.mkdtemp(prefix="jev-agent-preflight-"))
-    try:
+    with tempfile.TemporaryDirectory(prefix="jev-agent-preflight-") as temporary:
+        scratch = Path(temporary)
         command = AgentCommand(argv=argv, timeout_s=timeout_s, login_keychain=login_keychain)
         with run_agent(
             command,
@@ -1107,5 +1128,3 @@ def run_preflight(
         if not reached:
             raise AgentPreflightError(detail, cost_usd=cost, model=model)
         return result
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)

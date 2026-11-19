@@ -95,6 +95,7 @@ def test_a_crash_before_replace_leaves_the_previous_json(tmp_path: Path, monkeyp
     assert raw == previous
     assert b'"kept"' in raw
     assert b"lost" not in raw
+    assert {p.name for p in tmp_path.iterdir()} == {"ledger.json", "ledger.json.lock"}
 
 
 _HOLD = """
@@ -188,3 +189,61 @@ def test_kill_minus_nine_lets_the_next_process_load_and_record(tmp_path: Path) -
     raw = path.read_bytes()
     assert b'"held"' in raw and b'"next"' in raw
     assert b"NaN" not in raw and b"Infinity" not in raw
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"runs": {"a": -2}},
+        {"runs": {"a": True}},
+        {"runs": {"a": float("inf")}},
+        {"runs": {"a": "2"}},
+        {"runs": {"": 0}},
+        {"runs": []},
+        [],
+        {},
+        {"runs": None},
+        {"runs": {"a": 10**400}},
+        {"runs": {"a": float("nan")}},
+        {"runs": {}, "max_usd": None},
+    ],
+)
+def test_scout_002_refuses_invalid_history_without_changing_it(tmp_path: Path, payload: object) -> None:
+    path = tmp_path / "ledger.json"
+    before = json.dumps(payload)
+    path.write_text(before)
+    with pytest.raises(ValueError):
+        SpendLedger.load(path, _policy())
+    assert path.read_text() == before
+
+
+@pytest.mark.parametrize("tokens", [None, -1, False, "20", 0.5, 10**400])
+def test_scout_002_unverifiable_usage_reserves_the_run_bound(tmp_path: Path, tokens: object) -> None:
+    book = _ledger(tmp_path)
+    assert book.cost_of(0.0, [{"input_tokens": tokens}]).jev_usd >= BOUND
+    assert book.cost_of(0.0, [{"input_tokens": 0}]).jev_usd == 0
+
+
+def test_scout_008_two_open_handles_share_charges_and_lowered_cap(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    first = _ledger(tmp_path)
+    second = SpendLedger.load(first.path, replace(_policy(), max_usd=1.0))
+    first.record("one", 0.5)
+    second.record("two", 0.75)
+    assert json.loads(first.path.read_text()) == {"runs": {"one": 0.5, "two": 0.75}, "max_usd": 1.0}
+    assert not first.can_start()
+    with pytest.raises(ValueError, match="already ran"):
+        second.record("one", 0)
+
+
+def test_scout_008_rejected_load_releases_lock_for_another_process(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.json"
+    path.write_text("[]")
+    with pytest.raises(ValueError):
+        SpendLedger.load(path, _policy())
+    path.write_text(json.dumps({"runs": {"held": 1.0}}))
+    with _spawn(_NEXT, path) as second:
+        _, error = second.communicate(timeout=5)
+        assert second.returncode == 0, error
+    assert json.loads(path.read_text())["runs"] == {"held": 1.0, "next": 2.0}

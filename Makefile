@@ -118,7 +118,7 @@ confinement-image:
 eval-live:
 	$(PYTEST) tests/evals -m live
 
-# L4 agent outcome study, one agent per call (paid, capped per agent at 18 runs and 25 USD; evals/README.md
+# L4 agent outcome study, one agent per call (paid, capped per agent at 66 runs (task manifest x arms x repeats) and 25 USD; evals/README.md
 # § L4). Refuses unless the caller passes JEV_AB_LIVE=1 on the command line; this target never sets it.
 # Refuses to resume a study recorded under another Jev revision, fixture, or agent setup.
 AGENT ?= claude

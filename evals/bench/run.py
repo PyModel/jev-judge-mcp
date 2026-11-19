@@ -48,10 +48,11 @@ from evals.agent import (
     AgentSetupError,
     run_agent,
 )
+from evals.artifacts import incomplete_message, read_records
 from evals.bench import analysis, answer, chart, gate, prompt, spans
 from evals.bench.items import Item, load_items
 from evals.bench.ledger import ARMS, POLICY, TRIPLET
-from evals.spend import SpendLedger, agent_started, book_outcome
+from evals.spend import SpendLedger, agent_started, book_outcome, reconciliation_notes
 from evals.study_runner import record_row, run_recorded, write_record
 
 LIVE_FLAG = "JEV_BENCH_LIVE"
@@ -369,8 +370,23 @@ def failed_record(
     )
 
 
+def _records(out: Path) -> tuple[dict[Path, dict[str, Any]], list[Path]]:
+    return read_records(
+        out.glob("*/result.json"),
+        required=("run_id", "item", "arm", "status", "tool"),
+        valid=lambda r: (
+            r["arm"] in ARMS
+            and r["run_id"] == f"{r['item']}.{r['arm']}"
+            and isinstance(r.get("jev_calls"), list)
+            and all(isinstance(call, dict) for call in r["jev_calls"])
+            and isinstance(r.get("wall_s"), int | float)
+            and {"correct", "answer", "parse_error", "gate"} <= r.keys()
+        ),
+    )
+
+
 def load_records(out: Path) -> list[dict[str, Any]]:
-    return [json.loads(path.read_text(encoding="utf-8")) for path in sorted(out.glob("*/result.json"))]
+    return list(_records(out)[0].values())
 
 
 def recorded_model(out: Path) -> str | None:
@@ -383,7 +399,10 @@ def recorded_model(out: Path) -> str | None:
 
 def _prior_stop(out: Path) -> str | None:
     """A connection error or an auth rejection already booked. Resume must not continue."""
-    for record in load_records(out):
+    records, incomplete = _records(out)
+    if incomplete:
+        return incomplete_message(incomplete, out)
+    for record in records.values():
         if record.get("server_failure"):
             return f"stopped: provider failure on {record['run_id']}; not an arm result"
         if str(record.get("status", "")).startswith("blocked:"):
@@ -399,10 +418,17 @@ def recorded_thinking(out: Path) -> str | None:
     return text or None
 
 
+def _report_inputs(out: Path, stop: str) -> tuple[list[dict[str, Any]], str]:
+    rows, incomplete = _records(out)
+    notes = [incomplete_message(incomplete, out)] if incomplete else []
+    notes.extend(reconciliation_notes(out, rows, incomplete, cost_key="jev_cost_usd"))
+    return list(rows.values()), "; ".join(dict.fromkeys(filter(None, [stop, *notes])))
+
+
 def write_report(out: Path, *, stop: str, sample: bool, labeled_items: int | None = None) -> Path:
     """The results view over whatever complete triplets `out` holds (`evals.bench.chart`)."""
     path = out / "report.html"
-    records = load_records(out)
+    records, stop = _report_inputs(out, stop)
     path.write_text(
         chart.render(
             records,
@@ -419,7 +445,7 @@ def write_report(out: Path, *, stop: str, sample: bool, labeled_items: int | Non
 
 def publish(out: Path, *, stop: str, labeled_items: int) -> tuple[Path, Path]:
     """The deliverable chart and numbers table, citing the run records. Raw transcripts stay gitignored."""
-    records = load_records(out)
+    records, stop = _report_inputs(out, stop)
     model_id = recorded_model(out)
     thinking = recorded_thinking(out)
     reports = arms.REPO_ROOT / "evals" / "reports"
@@ -457,44 +483,48 @@ def _load_book(
         for arm in order:
             run_id = f"{item.id}.{arm}"
             if agent_started(out / run_id):
-                book_outcome(book, run_id, out / run_id / "result.json")
+                book_outcome(book, run_id, out / run_id / "result.json", cost_key="jev_cost_usd")
     return book, plan
 
 
 def runs_remain(items: Sequence[Item], out: Path, *, seed: int = SEED) -> bool:
     """True when a bench call would launch at least one run. A finished bench, or one already stopped, does not."""
+    book, plan = _load_book(items, out, seed)
     if _prior_stop(out):
         return False
-    book, plan = _load_book(items, out, seed)
     done = set(analysis.complete_triplets(load_records(out)))
-    return any(item.id not in done and f"{item.id}.{arm}" not in book.runs for item, order in plan for arm in order)
+    for item, order in plan:
+        pending = sum(f"{item.id}.{arm}" not in book.runs for arm in order)
+        if item.id not in done and pending:
+            return book.can_start(pending)
+    return False
 
 
 def run_bench(items: Sequence[Item], setup: Setup, out: Path, *, seed: int = SEED) -> str:
     """Run every triplet not yet recorded, within the caps; returns why it stopped."""
+    book, plan = _load_book(items, out, seed)
     if prior := _prior_stop(out):
         return prior
-    book, plan = _load_book(items, out, seed)
     total_runs = TRIPLET * len(plan)
     for item, order in plan:
         records = load_records(out)
         triplets = analysis.complete_triplets(records)
         first = [triplets[i.id] for i, _ in plan if i.id in triplets][:EARLY_PAIRS]
         if len(first) == EARLY_PAIRS:
-            jev_cost = {str(record["run_id"]): float(record.get("jev_cost_usd") or 0) for record in records}
             reason = analysis.early_stop(
-                first, total_runs=total_runs, jev_cost=jev_cost, budget=COST_STOP_USD, max_failed=COMPLIANCE_STOP
+                first, total_runs=total_runs, jev_cost=book.runs, budget=COST_STOP_USD, max_failed=COMPLIANCE_STOP
             )
             if reason is not None:
                 return f"{reason}; needs a decision before more runs"
         if item.id in triplets:
             continue
-        if not book.can_start(TRIPLET):
-            return f"stopped before {item.id}: {book.blocker(TRIPLET)}"
-        for arm in order:
+        pending = [arm for arm in order if f"{item.id}.{arm}" not in book.runs]
+        if not pending:
+            continue
+        if reason := book.blocker(len(pending)):
+            return f"stopped before {item.id}: {reason}"
+        for arm in pending:
             run_id = f"{item.id}.{arm}"
-            if run_id in book.runs:
-                continue
             sys.stderr.write(f"run {run_id} (spent ${book.spent:.2f})\n")
             outcome = run_recorded(
                 book,
@@ -503,11 +533,14 @@ def run_bench(items: Sequence[Item], setup: Setup, out: Path, *, seed: int = SEE
                 lambda item=item, arm=arm: run_one(item, arm, setup, book, out),
                 cost_key="jev_cost_usd",
                 file_cost=(gate.HarnessMismatchError, gate.WrongModelError),
-                file_default=0.0,
                 stop=lambda error, run_id=run_id: _stop_reason(run_id, error),
             )
             if isinstance(outcome, str):
                 return outcome
+    complete = analysis.complete_triplets(load_records(out))
+    missing = [item.id for item, _ in plan if item.id not in complete]
+    if missing:
+        return f"{len(plan) - len(missing)} of {len(plan)} triplets recorded; incomplete: {', '.join(missing)}"
     return f"all {len(plan)} triplets recorded"
 
 

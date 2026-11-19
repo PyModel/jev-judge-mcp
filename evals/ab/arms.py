@@ -6,15 +6,25 @@ recording proxy, and one sentence to the system addendum telling the agent to us
 for the judgment the task hinges on. Nothing else differs (`tests/evals/test_ab_harness.py` checks).
 """
 
+import email
+import fcntl
+import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
+import sysconfig
+import tempfile
+import uuid
+import zipfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
 from evals.agent import RELAY_LOG
+from evals.artifacts import write_json
+from evals.relay import private_opener
 
 ARMS = ("A", "B")
 ARM_LABELS = {"A": "without Jev", "B": "with Jev MCP"}
@@ -75,34 +85,107 @@ def jev_command() -> list[str]:
     return [sys.executable, "-m", "jev_judge_mcp"]
 
 
+def digest(path: Path) -> str:
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
+
+
 def study_venv(root: Path, wheel: Path) -> Path:
-    """Build, once per study, a venv OUTSIDE the repo with this package installed from the wheel.
+    """Return a verified wheel install outside the checkout for the host sandbox launcher."""
+    try:
+        archive = zipfile.ZipFile(wheel)
+    except zipfile.BadZipFile as error:
+        raise ValueError("invalid study wheel") from error
+    with archive:
+        metadata = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
+        if len(metadata) != 1:
+            raise ValueError("study wheel lacks unique package metadata")
+        info = email.message_from_bytes(archive.read(metadata[0]))
+        if info["Name"] != "jev-judge-mcp" or not info["Version"]:
+            raise ValueError("expected a jev-judge-mcp study wheel")
+    manifest = {
+        "wheel": digest(wheel),
+        "lock": digest(REPO_ROOT / "uv.lock"),
+        "python": sys.version,
+        "executable": os.path.realpath(sys.executable),
+        "platform": sysconfig.get_platform(),
+    }
+    identity = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    cache = root / ("jev-study-" + identity)
+    cache.mkdir(mode=0o700, parents=True, exist_ok=True)
+    marker = cache / "ready.json"
+    probe = [
+        "-I",
+        "-c",
+        "import jev_judge_mcp; from importlib.metadata import version; print(version('jev-judge-mcp'))",
+    ]
 
-    The sandbox launcher names this interpreter, so no agent-visible file and no `sys.prefix`
-    inside the sandbox can name the repo — the D3 contamination route ran through a launcher that
-    did. The repo checkout is an editable install whose `.pth` names `src/`, so copying the repo
-    venv would not meet that bar; only a wheel-built venv does. Dependencies come from the wheel's
-    metadata (network, at study launch: the operator's paid action).
-    """
-    venv = root / "jev-study-venv"
-    python = venv / "bin" / "python"
-    if not python.exists():
-        subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
-        subprocess.run([str(python), "-m", "pip", "install", str(wheel)], check=True)
-    return python
+    def valid(python: Path) -> bool:
+        if not python.is_file():
+            return False
+        result = subprocess.run([str(python), *probe], check=False, capture_output=True, text=True, timeout=30)
+        return result.returncode == 0 and result.stdout.strip() == info["Version"]
+
+    with (cache / "install.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if marker.exists():
+            try:
+                ready = json.loads(marker.read_text(encoding="utf-8"))
+            except (ValueError, UnicodeError):
+                ready = None
+            if isinstance(ready, dict) and cast(dict[str, Any], ready).get("inputs") == manifest:
+                name = cast(dict[str, Any], ready).get("environment")
+                if isinstance(name, str) and name.startswith("venv-") and Path(name).name == name:
+                    python = cache / name / "bin/python"
+                    if valid(python):
+                        return python
+        venv = cache / f"venv-{uuid.uuid4().hex}"
+        venv.mkdir(mode=0o700)
+        python = venv / "bin/python"
+        try:
+            subprocess.run(
+                [
+                    "uv",
+                    "sync",
+                    "--locked",
+                    "--no-install-project",
+                    "--no-dev",
+                    "--extra",
+                    "typesafe",
+                    "--python",
+                    sys.executable,
+                ],
+                env={**os.environ, "UV_PROJECT_ENVIRONMENT": str(venv)},
+                cwd=REPO_ROOT,
+                check=True,
+                timeout=300,
+            )
+            subprocess.run(
+                ["uv", "pip", "install", "--python", str(python), "--no-deps", str(wheel.resolve())],
+                check=True,
+                timeout=120,
+            )
+            if digest(wheel) != manifest["wheel"] or not valid(python):
+                raise RuntimeError("study wheel changed or its interpreter failed verification")
+            write_json(marker, {"inputs": manifest, "environment": venv.name})
+        except BaseException:
+            shutil.rmtree(venv)
+            raise
+        return python
 
 
-def ensure_wheel() -> Path:
-    """The built wheel for this checkout, building it if `make build` has not run yet."""
-    dist = REPO_ROOT / "dist"
-    wheels = sorted(dist.glob("jev_judge_mcp-*.whl"))
-    if wheels:
-        return wheels[-1]
-    subprocess.run(["uv", "build", "--wheel"], cwd=REPO_ROOT, check=True)
-    wheels = sorted(dist.glob("jev_judge_mcp-*.whl"))
-    if not wheels:
-        raise RuntimeError("uv build --wheel produced no wheel")
-    return wheels[-1]
+def ensure_wheel(destination: Path | None = None) -> Path:
+    """Build this checkout in isolation from any wheels left by earlier builds."""
+    dist = destination if destination is not None else REPO_ROOT / "dist"
+    dist.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=dist) as staging:
+        subprocess.run(["uv", "build", "--wheel", "--out-dir", staging], cwd=REPO_ROOT, check=True, timeout=180)
+        wheels = list(Path(staging).glob("jev_judge_mcp-*.whl"))
+        if len(wheels) != 1:
+            raise RuntimeError("expected one freshly built study wheel")
+        target = dist / wheels[0].name
+        wheels[0].replace(target)
+        return target
 
 
 def sandbox_python(sandbox: Path, interpreter: str | None = None) -> Path:
@@ -171,8 +254,8 @@ def keyfile_env(sandbox: Path, api_key: str) -> dict[str, str]:
     anywhere the agent can read.
     """
     path = sandbox / "typesafe.key"
-    path.write_text(api_key + "\n", encoding="utf-8")
-    path.chmod(0o600)
+    with open(path, "w", encoding="utf-8", opener=private_opener) as credential:
+        credential.write(api_key + "\n")
     return {"JEV_MCP_KEY_FILE": str(path)}
 
 
@@ -330,7 +413,10 @@ def scoped_provider_key(source: Path, provider: str) -> str:
         return ""
     if not isinstance(entries, dict) or provider not in entries:
         return ""
-    key = cast(dict[str, Any], cast(dict[str, Any], entries)[provider]).get("key")
+    entry = cast(dict[str, Any], entries)[provider]
+    if not isinstance(entry, dict):
+        return ""
+    key = cast(dict[str, Any], entry).get("key")
     return key if isinstance(key, str) and key else ""
 
 

@@ -16,6 +16,7 @@ agent's own config carries only the placeholder, and the capability token is bou
 timeout and revoked at run end by removing the grant file.
 """
 
+import errno
 import hashlib
 import json
 import os
@@ -28,7 +29,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable, Generator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -41,6 +42,7 @@ from evals.agent import (
     AgentRunResult,
     capture_output,
     container_boundary,
+    ensure_private_run_dir,
     escape_scan,
     exploration_paths,
     run_status,
@@ -48,6 +50,7 @@ from evals.agent import (
     secret_scrub,
     write_run_logs,
 )
+from evals.relay import private_opener
 
 BROKER_IMAGE = "python@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f"
 """`python:3.12-slim` by digest. The broker and shim are stdlib-only and mounted in at run time,
@@ -483,17 +486,19 @@ def copy_regular_nofollow(source: Path, target: Path) -> bool:
     """Copy `source` to `target` only if it is a regular file reached without following a symlink
     (F1): an agent-writable tree cannot make the host read anything but the file it named."""
     try:
-        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
-    except OSError:
-        return False
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as error:
+        if error.errno in (errno.ENOENT, errno.ELOOP):
+            return False
+        raise
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             return False
         with os.fdopen(fd, "rb") as reader:
             fd = -1
-            with open(target, "wb") as writer:
-                while chunk := reader.read(65_536):
-                    writer.write(chunk)
+            with open(target, "wb", opener=private_opener) as writer:
+                shutil.copyfileobj(reader, writer)
         return True
     finally:
         if fd >= 0:
@@ -542,22 +547,23 @@ def run_confined(
     if not secret:
         raise ValueError("run_confined needs the non-empty secret to scrub")
     secrets = [secret, *[value for value in extra_secrets if value]]
-    capability: Capability | None = None
     for key, value in spec.env.items():
         if any(one in value for one in secrets):
             raise ConfinementError(f"the secret value must not ride in the container env ({key})")
-    run_dir.mkdir(parents=True, exist_ok=True)
-    workdir = Path(tempfile.mkdtemp(prefix="jev-agent-work-"))
-    root = Path(tempfile.mkdtemp(prefix="jev-confined-"))
-    scratch = root / "scratch"
-    grants = root / "grants"
-    for directory in (scratch / "home", scratch / "agent", scratch / "tmp", scratch / "agent-cfg", grants):
-        directory.mkdir(parents=True, exist_ok=True)
-    tag = uuid.uuid4().hex[:12]
-    volume = f"jev-eval-sock-{tag}"
-    broker_name = f"jev-eval-broker-{tag}"
-    agent_name = f"jev-eval-agent-{tag}"
-    try:
+    ensure_private_run_dir(run_dir)
+    with ExitStack() as resources:
+        for value in secrets:
+            resources.callback(secret_scrub, run_dir, value)
+        workdir = Path(resources.enter_context(tempfile.TemporaryDirectory(prefix="jev-agent-work-")))
+        root = Path(resources.enter_context(tempfile.TemporaryDirectory(prefix="jev-confined-")))
+        scratch = root / "scratch"
+        grants = root / "grants"
+        for directory in (scratch / "home", scratch / "agent", scratch / "tmp", scratch / "agent-cfg", grants):
+            directory.mkdir(parents=True, exist_ok=True)
+        tag = uuid.uuid4().hex[:12]
+        volume = f"jev-eval-sock-{tag}"
+        broker_name = f"jev-eval-broker-{tag}"
+        agent_name = f"jev-eval-agent-{tag}"
         if prepare is not None:
             prepare(workdir)
         if scratch_files is not None:
@@ -591,10 +597,12 @@ def run_confined(
             encoding="utf-8",
         )
         capability = mint_capability(grants, spec.timeout_s + CAPABILITY_MARGIN_S)
+        resources.callback(secret_scrub, run_dir, capability.token)
         (scratch / "entrypoint.sh").write_text(
             entrypoint_text(spec, command.argv(Path(AGENT_CONFIG))), encoding="utf-8"
         )
         (scratch / "entrypoint.sh").chmod(0o755)
+        resources.callback(teardown, agent_name=agent_name, broker_name=broker_name, volume=volume)
         docker_run(["docker", "volume", "create", "--label", OWNER_LABEL, volume])
         docker_run(
             broker_argv(
@@ -638,15 +646,6 @@ def run_confined(
             escape=escape or None,
             exploration=exploration_paths(stdout, box),
         )
-    finally:
-        teardown(agent_name=agent_name, broker_name=broker_name, volume=volume)
-        shutil.rmtree(root, ignore_errors=True)
-        shutil.rmtree(workdir, ignore_errors=True)
-        # The capability token is scrubbed, never scanned: an agent reading its own
-        # /run/capability.json is exploration, not a void, but the TTL-bounded token still does
-        # not belong in the kept records (F11). A run that died before minting one has none.
-        for value in (*secrets, capability.token) if capability is not None else secrets:
-            secret_scrub(run_dir, value)
 
 
 def probe_provider(spec: ConfinementSpec, *, timeout_s: float = 60.0) -> str | None:

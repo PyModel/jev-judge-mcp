@@ -94,7 +94,7 @@ def test_an_ordinary_exception_books_the_bound_even_when_the_file_is_cheaper(tmp
     assert book.runs == {"run-a": BOUND}
 
 
-def test_a_named_file_cost_error_books_the_file_and_a_missing_file_does_not_book_the_bound(tmp_path: Path) -> None:
+def test_a_named_file_cost_error_books_the_file_and_a_missing_file_books_the_bound(tmp_path: Path) -> None:
     book = _book(tmp_path)
     path = tmp_path / "result.json"
 
@@ -106,9 +106,9 @@ def test_a_named_file_cost_error_books_the_file_and_a_missing_file_does_not_book
         run_recorded(book, "priced", path, priced, file_cost=(Mismatch,))
     assert book.runs == {"priced": 0.5}
 
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(Mismatch):
         run_recorded(book, "missing", tmp_path / "absent.json", _mismatch, file_cost=(Mismatch,))
-    assert book.runs == {"priced": 0.5}
+    assert book.runs == {"priced": 0.5, "missing": BOUND}
 
 
 def test_success_can_book_jev_cost_instead_of_the_agent_total(tmp_path: Path) -> None:
@@ -139,20 +139,19 @@ def test_a_stop_books_the_named_file_cost_and_returns_its_reason(tmp_path: Path)
         path,
         _mismatch,
         cost_key="jev_cost_usd",
-        file_default=0.0,
         stop=stop,
     )
     assert got == "blocked: Jev rejected the API key"
     assert book.runs == {"run-a": 0.4}
 
 
-def test_a_missing_stopped_cost_books_the_file_default_and_not_the_bound(tmp_path: Path) -> None:
+def test_a_missing_stopped_cost_books_the_bound(tmp_path: Path) -> None:
     book = _book(tmp_path)
     path = tmp_path / "result.json"
     path.write_text("{}\n", encoding="utf-8")
     with pytest.raises(Mismatch):
-        run_recorded(book, "run-a", path, _mismatch, file_cost=(Mismatch,), file_default=0.0)
-    assert book.runs == {"run-a": 0.0}
+        run_recorded(book, "run-a", path, _mismatch, file_cost=(Mismatch,))
+    assert book.runs == {"run-a": BOUND}
 
 
 def test_cancellation_is_never_booked_even_when_named_as_file_cost(tmp_path: Path) -> None:
@@ -189,3 +188,33 @@ def _mismatch() -> dict[str, Any]:
 
 def _cancel() -> dict[str, Any]:
     raise asyncio.CancelledError
+
+
+def test_scout_009_interrupt_books_selected_cost(tmp_path: Path) -> None:
+    book = _book(tmp_path)
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps({"cost_usd": 0.90, "jev_cost_usd": 0.03}))
+    with pytest.raises(KeyboardInterrupt):
+        run_recorded(book, "bench", path, _interrupt, cost_key="jev_cost_usd")
+    assert book.runs == {"bench": 0.03}
+
+
+@pytest.mark.parametrize("exists", [True, False])
+def test_scout_013_failed_publication_preserves_previous_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exists: bool
+) -> None:
+    import os
+
+    path = tmp_path / "result.json"
+    if exists:
+        path.write_text('{"prior": true}')
+
+    def fail(src: object, dst: object) -> None:
+        raise OSError("publication failed")
+
+    monkeypatch.setattr(os, "replace", fail)
+    with pytest.raises(OSError, match="publication failed"):
+        write_record(path, lambda: {"next": True}, lambda _e: {})
+    assert list(tmp_path.iterdir()) == ([path] if exists else [])
+    if exists:
+        assert json.loads(path.read_text()) == {"prior": True}

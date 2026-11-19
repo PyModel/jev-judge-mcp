@@ -453,3 +453,76 @@ def test_a_secret_in_the_container_env_is_refused_before_anything_starts(tmp_pat
             run_dir=tmp_path / "records",
         ):
             pass
+
+
+@pytest.mark.parametrize("name", ["jev-calls.jsonl", "jev-calls.stderr"])
+def test_scout_033_confined_archives_start_private(tmp_path: Path, name: str) -> None:
+    import os
+    import stat
+
+    source = tmp_path / "source"
+    source.write_bytes(b"synthetic evidence")
+    target = tmp_path / name
+    mask = os.umask(0o022)
+    try:
+        assert launch.copy_regular_nofollow(source, target)
+    finally:
+        os.umask(mask)
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert target.read_bytes() == source.read_bytes()
+    target.chmod(0o644)
+    target.write_bytes(b"prior evidence")
+    with pytest.raises(PermissionError):
+        launch.copy_regular_nofollow(source, target)
+    assert target.read_bytes() == b"prior evidence"
+
+
+@pytest.mark.parametrize("failure", ["second_allocation", "layout", "teardown"])
+def test_scout_011_confined_partial_setup_releases_every_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, failure: str
+) -> None:
+    import shutil
+    import tempfile
+
+    from evals.agent import AgentCommand
+
+    owned = tmp_path / "scratch-parent"
+    owned.mkdir()
+    request.addfinalizer(lambda: shutil.rmtree(owned))
+    monkeypatch.setattr(tempfile, "tempdir", str(owned))
+    spec = _spec(tmp_path)
+    run_dir = tmp_path / "records"
+    run_dir.mkdir(mode=0o700)
+    record = run_dir / "synthetic.txt"
+    record.write_text(KEY)
+    original_mkdtemp = tempfile.mkdtemp
+    original_mkdir = Path.mkdir
+
+    def allocate(suffix: str | None = None, prefix: str | None = None, dir: str | None = None) -> str:
+        if failure == "second_allocation" and any(owned.iterdir()):
+            raise OSError(failure)
+        return original_mkdtemp(suffix, prefix, dir)
+
+    def mkdir(path: Path, *args: Any, **kwargs: Any) -> None:
+        if failure == "layout" and path.name == "agent-cfg":
+            raise OSError(failure)
+        original_mkdir(path, *args, **kwargs)
+
+    def docker(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("synthetic volume creation failure")
+
+    def teardown(**_kwargs: Any) -> None:
+        if failure == "teardown":
+            raise OSError("teardown")
+
+    monkeypatch.setattr(tempfile, "mkdtemp", allocate)
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    monkeypatch.setattr(launch, "docker_run", docker)
+    monkeypatch.setattr(launch, "teardown", teardown)
+    with pytest.raises(OSError, match=failure):
+        with launch.run_confined(
+            AgentCommand(argv=lambda _: ["true"], timeout_s=1), spec=spec, mcp_config={}, secret=KEY, run_dir=run_dir
+        ):
+            pytest.fail("setup was expected to stop")
+    assert list(owned.iterdir()) == []
+    assert KEY not in record.read_text()

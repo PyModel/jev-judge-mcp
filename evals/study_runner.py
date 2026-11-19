@@ -4,7 +4,7 @@ One module owns run → record → write → failed record → book. Each study 
 contents. A failed record is the success record's keys (`record_row`); it does not keep a second list.
 
 Booking happens once, in `run_recorded`:
-- `KeyboardInterrupt` and `SystemExit` call `book_outcome` (the result file's finite `cost_usd`, else the run bound).
+- `KeyboardInterrupt` and `SystemExit` call `book_outcome` (the result file's finite selected cost, else the run bound).
 - `stop` may turn an `Exception` into a returned reason after booking `cost_key` from the written file.
   The bench uses this for `AuthRejected` and `ServerUnreachable`.
 - Other `Exception` types named in `file_cost` book that same field and re-raise. The bench names
@@ -13,16 +13,15 @@ Booking happens once, in `run_recorded`:
 - `CancelledError` is not an `Exception`. It propagates unbooked.
 
 Success books `record[cost_key]`. The A/B study uses `cost_usd`. The bench uses `jev_cost_usd`, because its
-dollar cap does not include agent spend. `file_default` lets a missing file cost book 0, which is the bench's
-stopped-run rule; the default requires the key.
+dollar cap does not include agent spend. Unverifiable charges reserve the run bound.
 """
 
-import json
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from evals.spend import SpendLedger, book_outcome
+from evals.artifacts import write_json
+from evals.spend import SpendLedger, book_outcome, booked_amount
 
 
 def record_row(keys: Sequence[str], values: Mapping[str, Any]) -> dict[str, Any]:
@@ -52,9 +51,9 @@ def write_record(
         record = build()
     except Exception as error:
         failed_row = failed(error)
-        _write(result_path, failed_row)
+        write_json(result_path, failed_row)
         raise
-    _write(result_path, record)
+    write_json(result_path, record)
     return record
 
 
@@ -66,7 +65,6 @@ def run_recorded(
     *,
     cost_key: str = "cost_usd",
     file_cost: tuple[type[BaseException], ...] = (),
-    file_default: float | None = None,
     stop: Callable[[BaseException], str | None] | None = None,
 ) -> Mapping[str, Any] | str:
     """Run one recorded attempt and book it. See the module docstring for which exception books what.
@@ -77,35 +75,16 @@ def run_recorded(
     try:
         record = execute()
     except (KeyboardInterrupt, SystemExit):
-        book_outcome(ledger, run_id, result_path)
+        book_outcome(ledger, run_id, result_path, cost_key=cost_key)
         raise
     except Exception as error:
         reason = stop(error) if stop is not None else None
         if reason is not None or (file_cost and isinstance(error, file_cost)):
-            _book_file_cost(ledger, run_id, result_path, cost_key, file_default)
+            book_outcome(ledger, run_id, result_path, cost_key=cost_key)
             if reason is not None:
                 return reason
         else:
             ledger.record_unfinished(run_id)
         raise
-    ledger.record(run_id, record[cost_key])
+    ledger.record(run_id, booked_amount(record.get(cost_key), ledger.policy.run_bound_usd))
     return record
-
-
-def _book_file_cost(
-    ledger: SpendLedger, run_id: str, result_path: Path, cost_key: str, file_default: float | None
-) -> None:
-    """Book `cost_key` from the result file. A missing file raises and does not book the run bound.
-
-    `file_default` books that amount when the field is missing or zero, which is the bench's stopped
-    run. Without it the field is required.
-    """
-    recorded = json.loads(result_path.read_text(encoding="utf-8"))
-    if file_default is None:
-        ledger.record(run_id, recorded[cost_key])
-        return
-    ledger.record(run_id, float(recorded.get(cost_key) or file_default))
-
-
-def _write(path: Path, record: Mapping[str, Any]) -> None:
-    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")

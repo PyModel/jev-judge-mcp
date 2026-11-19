@@ -12,10 +12,11 @@ from typing import Any, cast
 
 from evals.bench import answer, gate
 from evals.bench.items import Item
-from evals.bench.ledger import ARMS
+from evals.bench.ledger import ARMS, POLICY
 from evals.bench.stats import percentile, sign_test
 from evals.scorers.fields import Json
 from evals.scorers.tools import SCORERS, Example
+from evals.spend import booked_amount
 
 Record = Mapping[str, Any]
 Triplet = tuple[Record, Record, Record]
@@ -62,13 +63,15 @@ def headline(triplets: Mapping[str, Triplet]) -> dict[str, Any]:
     columns = [[triplet[index] for triplet in triplets.values()] for index in range(3)]
     walls = [[float(record["wall_s"]) for record in column] for column in columns]
     result: dict[str, Any] = {"triplets": len(triplets)}
-    for arm, samples in zip(ARMS, walls, strict=True):
+    for arm, samples, arm_records in zip(ARMS, walls, columns, strict=True):
         spread = _spread(samples)
         result[f"wall_{arm}_median_s"] = spread["median"]
         result[f"wall_{arm}_p90_s"] = spread["p90"]
         result[f"wall_{arm}_p95_s"] = spread["p95"]
-        result[f"jev_usd_{arm}"] = sum(float(record.get("jev_cost_usd") or 0) for record in columns[ARMS.index(arm)])
-        called = sum(called_jev(record) for record in columns[ARMS.index(arm)])
+        result[f"jev_usd_{arm}"] = sum(
+            booked_amount(record.get("jev_cost_usd"), POLICY.run_bound_usd) for record in arm_records
+        )
+        called = sum(called_jev(record) for record in arm_records)
         result[f"called_jev_{arm}"] = called
         result[f"called_jev_share_{arm}"] = called / len(columns[0]) if columns[0] else None
     if walls[0]:
