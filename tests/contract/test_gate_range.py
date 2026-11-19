@@ -130,8 +130,10 @@ async def test_secret_stores_never_leave_and_literals_are_redacted(repo: Path) -
     assert "KEY_ID" in sent
 
 
-@pytest.mark.parametrize(("probability", "action"), [(0.95, "review"), (0.1, "escalate")])
-async def test_withheld_files_never_stand_on_a_siblings_judgment(repo: Path, probability: float, action: str) -> None:
+@pytest.mark.parametrize(("probability", "action"), [(0.95, "review"), (0.1, "review"), (None, "escalate")])
+async def test_withheld_files_never_stand_on_a_siblings_judgment(
+    repo: Path, probability: float | None, action: str
+) -> None:
     commit_files(repo, {".env": "placeholder", "prod.env": "placeholder", "x.py": "x = 2"})
     answers = {
         "correctness": {"score": 2, "confidence": 0.95},

@@ -405,8 +405,8 @@ def test_a_clean_call_resolves_every_tool(
             {
                 "request": "Return 404 for unknown users.",
                 "diff": "+ return res.status(404)",
-                "claims": ["The patch deletes every file."],
-                "evidence": "PASS returns 404 for an unknown id",
+                "claims": ["Unknown users receive status 200."],
+                "evidence": "GET /users/missing returned 404",
             },
             {
                 **_GOOD_REVIEW,
@@ -415,6 +415,7 @@ def test_a_clean_call_resolves_every_tool(
                     "confidence": 0.97,
                     "probabilities": {"verified": 0.02, "contradicted": 0.97, "unsupported": 0.01},
                 },
+                "counterexample_0": {"choice": "L1", "confidence": 1, "probabilities": {"none": 0, "L1": 1, "L2": 0}},
             },
             "escalate",
             True,

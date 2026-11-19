@@ -78,7 +78,7 @@ async def test_a_gate_call_records_the_span_tree() -> None:
     assert {s.name for s in spans} == {"mcp.tool", "jev.evaluate", "jev.validate"}
     assert all(s.parent is root for s in spans[:-1])
     evaluate = next(s for s in spans if s.name == "jev.evaluate")
-    assert evaluate.attributes == {"questions": 7, "provider": "compatible", "input_tokens": 1, "output_tokens": 1}
+    assert evaluate.attributes == {"questions": 10, "provider": "compatible", "input_tokens": 1, "output_tokens": 1}
     for s in spans:
         assert s.duration >= 0
         assert all(isinstance(value, ALLOWED_ATTRIBUTE_TYPES) for value in s.attributes.values())
@@ -219,7 +219,7 @@ HEADLINES: dict[str, tuple[str | None, str | None]] = {
     "jev_compare": ("auto", "review"),
     "jev_extract": ("auto", "review"),
     "jev_review": ("auto", "escalate"),
-    "jev_gate": ("auto", "escalate"),
+    "jev_gate": ("auto", "review"),
 }
 """(permissive, hostile) headline Action per tool, `None` for a call that returns none."""
 
