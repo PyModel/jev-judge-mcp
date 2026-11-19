@@ -555,15 +555,24 @@ def test_the_study_launches_its_agent_with_that_agents_cli_tail(
 ) -> None:
     (tmp_path / "adapter.ts").touch()
     monkeypatch.setenv("PI_MCP_ADAPTER", str(tmp_path / "adapter.ts"))
-    setup = _setup(tmp_path, [sys.executable, "-c", STUB, "0"], agent=agent)
+    # Verify the actual argv inside the child, before host paths are scrubbed from its transcript.
+    probe = """
+import json, sys
+from pathlib import Path
+expected = json.loads(sys.argv[1])
+actual = sys.argv[2:]
+index = actual.index("--mcp-config") + 1
+assert Path(actual[index]).is_file()
+actual[index] = "<config>"
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": actual == expected}))
+"""
+    addendum = arms.addendum("B", agent, TASK.judgment.jev_tool)
+    expected = ab_run.argv_tail(agent, ab_run.user_prompt(TASK), Path("<config>"), addendum)
+    setup = _setup(tmp_path, [sys.executable, "-c", probe, json.dumps(expected)], agent=agent)
     book = SpendLedger(ledger.POLICIES[agent], tmp_path / "ledger.json")
     ab_run.run_one(TASK, "B", 1, setup, book, tmp_path / "out")
-    lines = (tmp_path / "out" / "j1-refund-window.B.r1" / "stream.jsonl").read_text(encoding="utf-8").splitlines()
-    events = [json.loads(line) for line in lines if line.startswith("{")]
-    tail = json.loads(events[-1]["result"])["argv"]
-    config = Path(tail[tail.index("--mcp-config") + 1])
-    addendum = arms.addendum("B", agent, TASK.judgment.jev_tool)
-    assert tail == ab_run.argv_tail(agent, ab_run.user_prompt(TASK), config, addendum)
+    recorded = tmp_path / "out" / "j1-refund-window.B.r1" / "stream.jsonl"
+    assert json.loads(recorded.read_text())["result"] is True
 
 
 def _reporting(servers: list[dict[str, str]]) -> list[str]:
