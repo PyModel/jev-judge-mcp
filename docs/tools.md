@@ -218,7 +218,8 @@ by code across files, withheld paths and claims. Accepted changes have an empty 
 `review.file_rows` is ordered by input position and preserves repeated paths. The existing
 `action`, `review.file_actions`, `score_file`, `reason_codes`, and numeric scores remain available.
 `next_checks` contains one prioritized action. Every other held comparison keeps its own check in
-`blockers`. An omitted input on a held file is identified by path or evidence ID.
+`blockers`. When a rubric needs review and a changed line is available, the suggested check
+names a patch line to inspect. An omitted input on a held file is identified by path or evidence ID.
 
 A named defect or explicit safety rejection cites a changed line. A confirmed claim contradiction
 cites a counterexample and sets the claim excerpt to that line. The line number is one-based within

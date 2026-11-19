@@ -32,8 +32,9 @@ For an unconfirmed contradiction, publish the effective verdict `unsupported` al
 `reported_verdict`. For an invalid required answer, explicitly refuse and identify the provider
 field. Keep file decisions in input order and take the worst file or claim decision, including
 the existing hold for withheld files. Count detailed reasons across the change and select one
-next check, prioritizing evidence and refusals, then missing context. All other diagnostics
-remain available under `blockers`.
+next check, prioritizing evidence and refusals, then missing context. A rubric hold points the
+reviewer to an example changed line when available. Only a provider-selected line can establish
+a defect. All other diagnostics remain available under `blockers`.
 
 ## Consequences
 

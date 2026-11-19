@@ -107,3 +107,18 @@ async def test_documentation_review_points_to_one_statement_to_verify() -> None:
     (check,) = body["next_checks"]
     assert "docs/double.md" in check and "The operation doubles its argument." in check
     assert "Verify the changed statement" in check
+
+
+@pytest.mark.parametrize(
+    ("patch", "target"),
+    [
+        ("@@ -1 +1,2 @@\n-return n\n+import math\n+return n + 2", "patch line 4: +return n + 2"),
+        ("@@ -1 +0,0 @@\n-if n < 0: return 0", "patch line 2: -if n < 0: return 0"),
+    ],
+)
+async def test_code_review_next_check_identifies_a_changed_operation(patch: str, target: str) -> None:
+    args = {**ARGS, "diff": [{"path": "math.py", "patch": patch}]}
+    body = (await call_tool("jev_gate", args, {**REVIEW, "claim_0": choice("verified", *VERDICTS)})).payload
+    (check,) = body["next_checks"]
+    assert body["action"] == "review"
+    assert "math.py" in check and target in check

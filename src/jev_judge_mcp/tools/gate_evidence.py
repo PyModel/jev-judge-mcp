@@ -146,16 +146,25 @@ def grounded_review(
     half: ReviewHalf, answers: Mapping[str, object], citations: Citations, threshold: float, *, path: str = ""
 ) -> tuple[ReviewHalf, list[Blocker]]:
     blockers = review_blockers(half.payload)
-    if not half.invalid and path.lower().endswith((".md", ".rst", ".txt")):
-        statement = next(
-            (line for line in citations.lines.values() if line["text"].startswith("+") and line["text"][1:].strip()),
-            None,
+    if blockers and not half.invalid:
+        documentation = path.lower().endswith((".md", ".rst", ".txt"))
+        changes = (line for line in citations.lines.values() if line["text"][1:].strip())
+        anchor = max(
+            changes,
+            key=lambda line: (
+                line["text"].startswith("+"),
+                not documentation and line["text"][1:].lstrip().startswith(("return ", "raise ", "if ", "assert ")),
+            ),
+            default=None,
         )
-        if statement:
+        if anchor:
+            location = f"patch line {anchor['line']}"
             for blocker in blockers:
-                blocker["next_check"] = (
-                    f"Verify the changed statement at patch line {statement['line']}: {statement['text'][1:].strip()}"
-                )
+                if documentation:
+                    blocker["next_check"] = f"Verify the changed statement at {location}: {anchor['text'][1:].strip()}"
+                else:
+                    check = blocker["next_check"].removesuffix(".")
+                    blocker["next_check"] = f"{check} ({location}: {anchor['text']})."
     kind = validate_choice(answers.get("defect_kind"), KINDS) if citations.lines else None
     selected = kind.choice if kind and kind.confidence is not None and kind.confidence >= threshold else "none"
     line = citations.select(answers.get("defect_line"), threshold)
