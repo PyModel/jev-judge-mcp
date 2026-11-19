@@ -19,7 +19,8 @@ selection must validate and meet `auto_accept` to establish an escalation. A per
 correctness regression with limited evidence can still hold the change for review.
 
 Offer up to 32 line choices per question, sampling throughout long sources and interleaving
-sources. Exclude diff headers, empty lines and caller notes. Removed lines may identify a
+sources. Assign consecutive labels from `L1` to `L32`. Source text appears only in evidence.
+Exclude diff headers, blank excerpts and caller notes. Removed lines may identify a
 regression from deleting code. Only added lines of patches are eligible to refute a claim.
 The full documents remain available to the provider. Reduce optional citation choices when
 the envelope is near its byte limit. Publish how many lines were eligible and offered.

@@ -55,11 +55,11 @@ def _lines(item: Mapping[str, object]) -> list[Line]:
     is_patch = item.get("kind") == "diff"
     lines: list[Line] = []
     for number, raw in enumerate(str(item["text"]).split("\n"), 1):
-        if not raw.strip():
-            continue
         if is_patch and (not raw.startswith(("+", "-")) or raw.startswith(("+++ ", "--- "))):
             continue
-        lines.append({"source": source, "line": number, "text": head(raw, EXCERPT_UNITS)})
+        excerpt = head(raw, EXCERPT_UNITS)
+        if (excerpt[1:] if is_patch else excerpt).strip():
+            lines.append({"source": source, "line": number, "text": excerpt})
     return lines
 
 
@@ -148,9 +148,8 @@ def grounded_review(
     blockers = review_blockers(half.payload)
     if blockers and not half.invalid:
         documentation = path.lower().endswith((".md", ".rst", ".txt"))
-        changes = (line for line in citations.lines.values() if line["text"][1:].strip())
         anchor = max(
-            changes,
+            citations.lines.values(),
             key=lambda line: (
                 line["text"].startswith("+"),
                 not documentation and line["text"][1:].lstrip().startswith(("return ", "raise ", "if ", "assert ")),

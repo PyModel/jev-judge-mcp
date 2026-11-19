@@ -122,3 +122,18 @@ async def test_code_review_next_check_identifies_a_changed_operation(patch: str,
     (check,) = body["next_checks"]
     assert body["action"] == "review"
     assert "math.py" in check and target in check
+
+
+async def test_blank_patch_lines_cannot_establish_a_defect() -> None:
+    args = {**ARGS, "diff": [{"path": "math.py", "patch": "@@ -1,1 +1,2 @@\n-   \n+\n+\t"}]}
+    answers = {
+        **REVIEW,
+        "claim_0": choice("verified", *VERDICTS),
+        "defect_kind": choice(
+            "wrong_result", "none", "wrong_result", "state_change", "error_handling", "safety_refusal"
+        ),
+        "defect_line": choice("L2", "none", "L1", "L2", "L3"),
+    }
+    body = (await call_tool("jev_gate", args, answers)).payload
+    assert body["review"]["citation_coverage"] == {"offered": 0, "available": 0}
+    assert body["action"] == "review"
