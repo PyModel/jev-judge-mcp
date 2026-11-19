@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, distribution, version
 from pathlib import Path
 
+from packaging.version import VERSION_PATTERN
+
 from jev_judge_mcp.domain import is_json_object
 from jev_judge_mcp.install.errors import InstallError
 from jev_judge_mcp.install.redact import is_reference
@@ -175,13 +177,11 @@ def supported_spec(spec: str) -> bool:
     """Exactly the two shapes this installer writes (ADR-0051): the version-pinned PyPI spec and
     the checkout spec. Anything else — the bare package name, another project, a relative path —
     is refused before any config is written."""
-    pinned = re.fullmatch(rf"{re.escape(PACKAGE)}\[{re.escape(EXTRA)}\]==(\S+)", spec)
-    if pinned:
-        return '"' not in pinned.group(1)
-    checkout = re.fullmatch(r"(.+)\[typesafe\]", spec)
-    if checkout:
-        return Path(checkout.group(1)).is_absolute()
-    return False
+    pin = f"{PACKAGE}[{EXTRA}]=="
+    if spec.startswith(pin):
+        return re.fullmatch(VERSION_PATTERN, spec.removeprefix(pin), re.VERBOSE | re.IGNORECASE) is not None
+    extra = f"[{EXTRA}]"
+    return spec.endswith(extra) and "\x00" not in spec and Path(spec.removesuffix(extra)).is_absolute()
 
 
 def claude_code_entry(launch: Launch) -> dict[str, object]:

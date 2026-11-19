@@ -50,7 +50,13 @@ That extra is only for running the server. Development and `make typecheck` need
 
 Running `install` from an unreleased clone without `--from-checkout`? It prints a note that the pinned PyPI build does not include your local changes, and points here. The post-write check then exercises the published build, not your tree.
 
-Installed from a clone earlier? One plain re-run of `install` rewrites the entries this installer owns to the version-pinned PyPI spec — that is the whole migration. Entries the installer does not own are left alone.
+To migrate a previous checkout install, rerun the installer and select the same agents:
+
+```sh
+uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install
+```
+
+It updates each installer-owned entry to `jev-judge-mcp[typesafe]==<installed version>` and preserves foreign entries. The post-write check may download the pinned version from PyPI. If the check fails, the command exits non-zero and `install --remove` can still remove the entry.
 
 Restart your agent. The tools show up as `jev_verify`, `jev_gate`, and so on (`mcp__jev__*` in Claude Code).
 
@@ -64,7 +70,7 @@ uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install -a claude-code    # o
 uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install --remove    # undo what install wrote
 ```
 
-Terminal agents get a reference to `TYPESAFE_API_KEY`, never the key itself. Desktop apps don't see your shell's environment. Claude Desktop (macOS only) is skipped unless you pass `--desktop-key`, which writes the key into that app's config file. The same flag writes the key into the Codex and Pythinker files when the ChatGPT or Pythinker desktop app shares them; without it, `install` says that app has no key. The installer warns if a file holding the key ends up readable by other users. Pi also needs its MCP adapter first: `pi install npm:pi-mcp-adapter`.
+Terminal agents get a reference to `TYPESAFE_API_KEY`, never the key itself. Desktop apps don't see your shell's environment. Creating a Claude Desktop entry (macOS only) requires `--desktop-key`, which writes the key into that app's config file. Migrating an owned entry keeps its existing key. The same flag writes the key into the Codex and Pythinker files when the ChatGPT or Pythinker desktop app shares them; without it, `install` says that app has no key. The installer warns if a file holding the key ends up readable by other users. Pi also needs its MCP adapter first: `pi install npm:pi-mcp-adapter`.
 
 </details>
 

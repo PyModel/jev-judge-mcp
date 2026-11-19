@@ -204,6 +204,7 @@ def test_find_package_root_without_a_checkout_names_the_flag() -> None:
 def test_specs_accept_exactly_the_two_supported_shapes() -> None:
     assert supported_spec(PIN)
     assert supported_spec("jev-judge-mcp[typesafe]==0.1.1rc1")
+    assert supported_spec("jev-judge-mcp[typesafe]==1!2.3rc1.post2.dev3+local.4")
     assert supported_spec(SPEC)
     assert supported_spec("/home/me/jev-judge-mcp[typesafe]")
     for wrong in (
@@ -213,6 +214,9 @@ def test_specs_accept_exactly_the_two_supported_shapes() -> None:
         f"{PACKAGE}==0.1.1",
         f"{PACKAGE}[typesafe]==",
         f"{PACKAGE}[typesafe]==0.1.1 more",
+        f"{PACKAGE}[typesafe]==0.1.*",
+        f"{PACKAGE}[typesafe]==1,!=2",
+        f"{PACKAGE}[typesafe]==latest",
         "work/jev-mcp[typesafe]",
         "",
     ):
@@ -990,15 +994,16 @@ def test_failed_verify_is_recorded_and_exits_non_zero(tmp_path: Path) -> None:
     assert record["entry_sha256"] == entry_hash(entry)
 
 
-def test_remove_still_removes_an_entry_that_failed_verify(tmp_path: Path) -> None:
+@pytest.mark.parametrize("target", ["claude-code", "claude-desktop"])
+def test_remove_still_removes_an_entry_that_failed_verify(tmp_path: Path, target: str) -> None:
     def failing(command: list[str]) -> None:
         raise VerifyError("no answer")
 
-    code, _ = execute(tmp_path, agents=("claude-code",), launch=PYPI_LAUNCH, verify=failing)
+    code, _ = execute(tmp_path, agents=(target,), desktop_key=MARKER, launch=PYPI_LAUNCH, verify=failing)
     assert code == 1
-    code, text = execute(tmp_path, agents=("claude-code",), remove=True, launch=PYPI_LAUNCH)
+    code, text = execute(tmp_path, agents=(target,), remove=True, launch=PYPI_LAUNCH)
     assert code == 0, text
-    assert "jev" not in json.loads((tmp_path / ".claude.json").read_text(encoding="utf-8"))["mcpServers"]
+    assert "jev" not in json.loads(layout(tmp_path).target_path(target).read_text(encoding="utf-8"))["mcpServers"]
     assert _state_targets(tmp_path) == {}
 
 
@@ -1010,17 +1015,20 @@ def test_passed_verify_is_recorded(tmp_path: Path) -> None:
     assert _state_targets(tmp_path)["claude-code"]["verified"] is True
 
 
-def test_reinstall_migrates_a_checkout_entry_to_the_pinned_spec(tmp_path: Path) -> None:
+@pytest.mark.parametrize("target", ["claude-code", "claude-desktop"])
+def test_reinstall_migrates_a_checkout_entry_to_the_pinned_spec(tmp_path: Path, target: str) -> None:
     """The ADR-0051 migration: one plain re-run rewrites entries this installer owns."""
-    code, _ = execute(tmp_path, agents=("claude-code",), launch=LAUNCH)
+    code, _ = execute(tmp_path, agents=(target,), desktop_key=MARKER, launch=LAUNCH)
     assert code == 0
-    path = tmp_path / ".claude.json"
+    path = layout(tmp_path).target_path(target)
     assert SPEC in path.read_text(encoding="utf-8")
-    code, text = execute(tmp_path, agents=("claude-code",), launch=PYPI_LAUNCH)
+    code, text = execute(tmp_path, agents=(target,), launch=PYPI_LAUNCH)
     assert code == 0, text
     entry = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["jev"]
     assert entry["args"] == PYPI_LAUNCH.args()
-    assert _state_targets(tmp_path)["claude-code"]["entry_sha256"] == entry_hash(entry)
+    assert _state_targets(tmp_path)[target]["entry_sha256"] == entry_hash(entry)
+    if target == "claude-desktop":
+        assert entry["env"]["TYPESAFE_API_KEY"] == MARKER
 
 
 def test_reinstall_replaces_an_entry_without_the_python_request(tmp_path: Path) -> None:

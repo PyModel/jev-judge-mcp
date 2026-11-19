@@ -342,8 +342,6 @@ def _plan(request: Request, target: str, hits: list[_Hit], targets: Mapping[str,
             False,
             False,
         )
-    if target == "claude-desktop" and literal_key is None:
-        return _Action(target, path, "skip", "needs --desktop-key before the key is written", False, True)
     try:
         current, servers, text, before = _load(target, path, request.name)
         note = _other_servers(servers, request.name)
@@ -355,6 +353,8 @@ def _plan(request: Request, target: str, hits: list[_Hit], targets: Mapping[str,
         recorded = value if isinstance(value, str) else None
         if current is not None and literal_key is None and recorded == entry_hash(current):
             desired = with_preserved_literal(desired, current)
+        elif target == "claude-desktop" and literal_key is None and not request.remove:
+            return _Action(target, path, "skip", "needs --desktop-key before the key is written", False, True)
         action = _classify(request, target, path, current, desired, recorded, text, before)
     except OSError as exc:
         return _Action(target, path, "fail", f"cannot read config: {exc.strerror}", False, False)

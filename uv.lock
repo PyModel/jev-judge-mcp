@@ -471,6 +471,7 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "mcp" },
+    { name = "packaging" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "tomlkit" },
@@ -502,6 +503,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28,<0.29" },
     { name = "mcp", specifier = ">=2.2,<2.3" },
     { name = "opentelemetry-sdk", marker = "extra == 'telemetry'", specifier = ">=1.44,<2" },
+    { name = "packaging", specifier = ">=26,<27" },
     { name = "prometheus-client", marker = "extra == 'telemetry'", specifier = ">=0.26,<0.27" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pydantic-settings", specifier = ">=2,<3" },

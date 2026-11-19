@@ -438,6 +438,20 @@
       "python_behavior": "The overall is unchanged, but a non-empty warnings field names the contradicting aspects in jev_decide's warning style; the field is absent when no aspect contradicts, so every unaffected output stays byte-identical to the reference."
     },
     {
+      "id": "installer-launch-identity",
+      "surface": "lifecycle",
+      "tier": "tier_a",
+      "status": "sanctioned",
+      "adr": "docs/adr/0051-launch-identity-after-publication.md",
+      "tests": [
+        "tests/integration/test_install_wheel.py",
+        "tests/unit/test_install.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The reference server launches from its npm package through npx.",
+      "python_behavior": "The installer configures uvx to launch the installed PyPI version with the typesafe extra, or an absolute source checkout on request. Its ownership record allows removal even after a failed launch check."
+    },
+    {
       "id": "checkout-version-suffix",
       "surface": "initialize",
       "tier": "both",
