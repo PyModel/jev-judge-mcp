@@ -23,7 +23,7 @@ import anyio
 from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.git_diff import GitDiffError, GitDiffTooLarge, diff_argument, repo_root
+from jev_judge_mcp.git_diff import GitDiffError, GitDiffTooLarge, repo_root
 from jev_judge_mcp.hook import fail_open_or_ask, hook_required
 from jev_judge_mcp.hook_render import render_decision
 from jev_judge_mcp.identity import reported_version
@@ -137,7 +137,7 @@ def _gate_arguments(options: Mapping[str, str]) -> dict[str, object]:
         claims_text = _read_evidence(options["claims"], repo, key, GATE.aggregate_evidence_units)
         tests_text = _read_evidence(options["tests"], repo, key, GATE.doc_units)
         request, claims = _claims(claims_text, options.get("request"))
-        diff, skipped = gate_range._guarded(diff_argument(repo, options["diff"]), repo, key)  # pyright: ignore[reportPrivateUsage]
+        diff, skipped = gate_range.read_range(options["diff"], key, redact, cwd=repo)
         if skipped:
             raise CliError("secret_file", "range includes a withheld file; review it locally", exit_code=2)
     except ToolError as error:
@@ -153,7 +153,7 @@ def _gate_arguments(options: Mapping[str, str]) -> dict[str, object]:
     tests_text = redact(redact_credential_literals(tests_text))
     return {
         "request": redact(redact_credential_literals(request)),
-        "diff": [{"path": redact(item["path"]), "patch": redact(item["patch"])} for item in diff],
+        "diff": diff,
         "claims": [redact(redact_credential_literals(claim)) for claim in claims],
         "evidence": [{"id": "cli", "text": "Read by jev-judge-mcp gate from the local repo."}],
         "tests": tests_text,
