@@ -361,3 +361,27 @@ async def test_sensitive_range_path_is_withheld_without_naming_it_to_provider(
     assert result.payload.get("skipped") == [{"path": name, "reason": "secret_file"}]
     assert "public fixture" in _sent_text(result)
     assert marker not in _sent_text(result)
+
+
+async def test_an_unattributed_subtree_object_is_refused(repo: Path) -> None:
+    commit_files(repo, {"nested/ordinary.txt": "fixture"})
+    tree = _git_out(repo, "rev-parse", "HEAD:nested")
+    result = await call_tool("jev_gate_range", gate_args(f"HEAD~1..{tree}"), {})
+    assert result.code == "invalid_arguments" and not result.requests
+
+
+async def test_working_tree_change_between_inspections_refuses(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from jev_judge_mcp import git_diff
+
+    original = git_diff.split_unified
+    target = repo / "x.py"
+    target.write_text("first working version\n")
+
+    def read(diff: str) -> list[dict[str, str]] | None:
+        patch = original(diff)
+        target.write_text("second working version\n")
+        return patch
+
+    monkeypatch.setattr(git_diff, "split_unified", read)
+    result = await call_tool("jev_gate_range", gate_args("HEAD"), {})
+    assert result.code == "invalid_arguments" and not result.requests
