@@ -2,8 +2,8 @@
 
     check_workflows.py
 
-Both Actionlint and ShellCheck must be installed. A stalled native check retries once with
-the pinned upstream pipe fix if Go is available. Missing tools and timeouts fail the gate.
+Both Actionlint and ShellCheck must be installed. On macOS, Actionlint 1.7.12 needs
+the pinned upstream pipe fix. Each workflow has its own deadline.
 Exit 0 on success, 1 on lint findings, 2 when lint could not complete.
 """
 
@@ -104,21 +104,48 @@ def _bounded(
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
-def _lint(root: Path, workflows: list[Path], timeout: float) -> subprocess.CompletedProcess[str]:
-    args = [str(path) for path in workflows]
-    try:
-        return _bounded([TOOL, *args], root, timeout)
-    except subprocess.TimeoutExpired:
-        print(f"workflow lint: {TOOL} with ShellCheck timed out after {timeout:g}s", file=sys.stderr)
+def _actionlint(root: Path, directory: str, timeout: float) -> str:
+    if sys.platform != "darwin":
+        return TOOL
+    version = _bounded([TOOL, "-version"], root, timeout)
+    version.check_returncode()
+    if version.stdout.splitlines()[:1] != ["1.7.12"]:
+        return TOOL
     go = shutil.which("go")
     if go is None:
         raise OSError(f"install {FIXED_TOOL} with Go or put a fixed actionlint on PATH")
-    print("Retrying with the pinned upstream ShellCheck pipe fix", file=sys.stderr)
+    print("Using the pinned upstream ShellCheck pipe fix for macOS actionlint 1.7.12", file=sys.stderr)
+    build = _bounded([go, "install", FIXED_TOOL], root, 180, {**os.environ, "GOBIN": directory, "GOWORK": "off"})
+    if build.returncode:
+        raise OSError(f"could not build pinned actionlint: {build.stderr.strip()}")
+    return str(Path(directory) / TOOL)
+
+
+def _lint(root: Path, workflows: list[Path], timeout: float) -> int:
+    status = 0
     with TemporaryDirectory() as directory:
-        build = _bounded([go, "install", FIXED_TOOL], root, 180, {**os.environ, "GOBIN": directory, "GOWORK": "off"})
-        if build.returncode:
-            raise OSError(f"could not build pinned actionlint: {build.stderr.strip()}")
-        return _bounded([str(Path(directory) / ("actionlint.exe" if os.name == "nt" else TOOL)), *args], root, timeout)
+        tool = _actionlint(root, directory, timeout)
+        for path in workflows:
+            workflow = path.relative_to(root)
+            try:
+                proc = _bounded([tool, str(workflow)], root, timeout)
+            except subprocess.TimeoutExpired:
+                print(f"{workflow}: {TOOL} with ShellCheck timed out after {timeout:g}s", file=sys.stderr)
+                return 2
+            if proc.returncode == 0:
+                continue
+            if proc.returncode == 1:
+                print(f"workflow lint failed: {workflow}", file=sys.stderr)
+                status = 1
+            else:
+                print(f"{workflow}: could not run {TOOL} (exit {proc.returncode})", file=sys.stderr)
+            print(proc.stdout, end="", file=sys.stderr)
+            print(proc.stderr, end="", file=sys.stderr)
+            if proc.returncode != 1:
+                return 2
+    if status == 0:
+        print("workflow lint passed")
+    return status
 
 
 def main(argv: list[str] | None = None, *, timeout: float = 30) -> int:
@@ -126,12 +153,12 @@ def main(argv: list[str] | None = None, *, timeout: float = 30) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     root = Path(__file__).resolve().parent.parent
-    if not (root / ".github" / "workflows").is_dir():
-        print("workflow lint could not find .github/workflows/", file=sys.stderr)
-        return 2
     directory = root / ".github/workflows"
-    workflows = sorted(p for p in directory.iterdir() if p.suffix in {".yml", ".yaml"})
     try:
+        workflows = sorted(p for p in directory.iterdir() if p.suffix in {".yml", ".yaml"})
+        if not workflows:
+            print("workflow lint found no workflow files in .github/workflows/", file=sys.stderr)
+            return 2
         for path in [*workflows, *_action_files(root)]:
             if (line := _pin_error(path)) is not None:
                 print(f"{path.relative_to(root)}:{line}: unsupported action reference or YAML syntax", file=sys.stderr)
@@ -144,21 +171,10 @@ def main(argv: list[str] | None = None, *, timeout: float = 30) -> int:
             print(f"workflow lint requires {required} on PATH", file=sys.stderr)
             return 2
     try:
-        proc = _lint(root, workflows, timeout)
-    except (OSError, subprocess.TimeoutExpired) as error:
+        return _lint(root, workflows, timeout)
+    except (OSError, subprocess.SubprocessError) as error:
         print(f"workflow lint could not run {TOOL} with ShellCheck: {error}", file=sys.stderr)
         return 2
-    if proc.returncode == 0:
-        print("workflow lint passed")
-        return 0
-    if proc.returncode == 1:
-        print("workflow lint failed:", file=sys.stderr)
-        print(proc.stdout, end="", file=sys.stderr)
-        print(proc.stderr, end="", file=sys.stderr)
-        return 1
-    print(f"workflow lint could not run {TOOL} (exit {proc.returncode}):", file=sys.stderr)
-    print(proc.stderr, end="", file=sys.stderr)
-    return 2
 
 
 if __name__ == "__main__":

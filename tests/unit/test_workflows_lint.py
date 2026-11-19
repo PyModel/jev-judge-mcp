@@ -21,11 +21,11 @@ import pytest
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "check_workflows.py"
 
 
-def stubbed(tmp_path: Path, body: str) -> dict[str, str]:
+def stubbed(tmp_path: Path, body: str, *, version: str = "1.7.13") -> dict[str, str]:
     stub_dir = tmp_path / "bin"
     stub_dir.mkdir(exist_ok=True)
     stub = stub_dir / "actionlint"
-    stub.write_text("#!/bin/bash\n" + body, encoding="utf-8")
+    stub.write_text(f'#!/bin/bash\nif [[ "$1" == -version ]]; then echo {version}; exit 0; fi\n' + body)
     stub.chmod(0o755)
     shellcheck = stub_dir / "shellcheck"
     shellcheck.write_text("#!/bin/bash\nexit 0\n")
@@ -41,6 +41,7 @@ def run(script: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
+        timeout=10,
     )
 
 
@@ -53,7 +54,8 @@ def test_findings_fail_the_check(tmp_path: Path) -> None:
 
 
 def test_a_clean_actionlint_passes(tmp_path: Path) -> None:
-    proc = run(SCRIPT, stubbed(tmp_path, "exit 0\n"))
+    # More than a pipe buffer on both streams must drain before the linter exits.
+    proc = run(SCRIPT, stubbed(tmp_path, "/usr/bin/head -c 262144 /dev/zero\n/usr/bin/head -c 262144 /dev/zero >&2\n"))
     assert proc.returncode == 0, proc.stderr
     assert "workflow lint passed" in proc.stdout
 
@@ -72,7 +74,10 @@ def test_a_crashed_actionlint_is_a_tool_failure(tmp_path: Path) -> None:
     assert "could not run actionlint" in proc.stderr
 
 
-def test_a_repo_without_workflows_is_an_error_not_a_pass(tmp_path: Path) -> None:
+@pytest.mark.parametrize("empty_directory", [False, True])
+def test_a_repo_without_workflows_is_an_error_not_a_pass(tmp_path: Path, empty_directory: bool) -> None:
+    if empty_directory:
+        (tmp_path / ".github/workflows").mkdir(parents=True)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     script_copy = elsewhere / "check_workflows.py"
@@ -163,9 +168,47 @@ def test_a_missing_shellcheck_fails_the_check(tmp_path: Path) -> None:
     assert "shellcheck" in proc.stderr
 
 
+def lint_with_deadline(script: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import runpy,sys; sys.platform='darwin'; sys.exit(runpy.run_path(sys.argv[1])['main'](timeout=0.5))",
+            str(script),
+        ],
+        cwd=env["HOME"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=6,
+    )
+
+
+def test_actionlint_timeout_names_the_stalled_workflow_and_fails(tmp_path: Path) -> None:
+    script = tmp_path / "scripts/check_workflows.py"
+    script.parent.mkdir()
+    shutil.copyfile(SCRIPT, script)
+    workflows = tmp_path / ".github/workflows"
+    workflows.mkdir(parents=True)
+    for name in ("build.yml", "release.yaml"):
+        (workflows / name).write_text("name: test\n")
+    env = stubbed(
+        tmp_path,
+        'for arg in "$@"; do [[ "$arg" == */release.yaml ]] && exec /bin/sleep 10; done\nexit 0\n',
+    )
+    go = tmp_path / "bin/go"
+    go.write_text('#!/bin/bash\n/bin/cp /usr/bin/true "$GOBIN/actionlint"\n')
+    go.chmod(0o755)
+    proc = lint_with_deadline(script, env)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert ".github/workflows/release.yaml" in proc.stderr and "timed out" in proc.stderr
+    assert "build.yml" not in proc.stderr
+
+
 @pytest.mark.parametrize("go_available", [False, True])
-def test_actionlint_deadline_never_skips_shellcheck(tmp_path: Path, go_available: bool) -> None:
-    env = stubbed(tmp_path, "exec /bin/sleep 4\n")
+def test_macos_pipe_fix_never_skips_shellcheck(tmp_path: Path, go_available: bool) -> None:
+    env = stubbed(tmp_path, "exec /bin/sleep 10\n", version="1.7.12")
     if go_available:
         go = tmp_path / "bin/go"
         go.write_text(
@@ -179,21 +222,8 @@ def test_actionlint_deadline_never_skips_shellcheck(tmp_path: Path, go_available
         go.chmod(0o755)
         shellcheck = tmp_path / "bin/shellcheck"
         shellcheck.write_text('#!/bin/bash\nprintf "SC2086 from fixed linter\\n" >&2\nexit 1\n')
-    proc = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import runpy,sys; sys.exit(runpy.run_path(sys.argv[1])['main'](timeout=0.2))",
-            str(SCRIPT),
-        ],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=5,
-    )
+    proc = lint_with_deadline(SCRIPT, env)
     assert proc.returncode == (1 if go_available else 2)
-    assert "timed out" in proc.stderr
+    assert "timed out" not in proc.stderr
     if go_available:
         assert "SC2086 from fixed linter" in proc.stderr
