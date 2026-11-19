@@ -1,4 +1,4 @@
-"""The workflow lint guard: actionlint findings fail `make lint`; a missing binary skips loudly.
+"""The workflow lint guard: actionlint findings fail `make lint`; both linters are required.
 
 The check guards the push path (ADR-0056): the gate's Linux image ships actionlint, so every
 push runs it for real. These tests hold the script's own contract at its real boundary —
@@ -6,7 +6,7 @@ subprocess and PATH — with a stub actionlint that decides what it reports:
 
 - findings (exit 1) fail the check and the finding text is passed through;
 - a clean run passes;
-- an absent binary skips with one stderr line, never a silent pass;
+- a missing linter or a timeout fails closed;
 - a crashed actionlint (any other exit) is a tool failure, not a pass;
 - a copy of the script with no .github/workflows above it fails rather than passing vacuously.
 """
@@ -27,6 +27,9 @@ def stubbed(tmp_path: Path, body: str) -> dict[str, str]:
     stub = stub_dir / "actionlint"
     stub.write_text("#!/bin/bash\n" + body, encoding="utf-8")
     stub.chmod(0o755)
+    shellcheck = stub_dir / "shellcheck"
+    shellcheck.write_text("#!/bin/bash\nexit 0\n")
+    shellcheck.chmod(0o755)
     return {"PATH": str(stub_dir), "HOME": str(tmp_path)}
 
 
@@ -55,12 +58,12 @@ def test_a_clean_actionlint_passes(tmp_path: Path) -> None:
     assert "workflow lint passed" in proc.stdout
 
 
-def test_an_absent_binary_skips_with_one_stderr_line(tmp_path: Path) -> None:
+def test_an_absent_binary_fails_the_check(tmp_path: Path) -> None:
     empty = tmp_path / "empty-bin"
     empty.mkdir()
     proc = run(SCRIPT, {"PATH": str(empty), "HOME": str(tmp_path)})
-    assert proc.returncode == 0, proc.stderr
-    assert "workflow lint skipped: actionlint is not installed" in proc.stderr
+    assert proc.returncode == 2, proc.stderr
+    assert "actionlint" in proc.stderr
 
 
 def test_a_crashed_actionlint_is_a_tool_failure(tmp_path: Path) -> None:
@@ -150,3 +153,47 @@ def test_scout_006_both_publish_paths_share_verified_input() -> None:
     assert "artifact-ids: ${{ needs.prepare_pypi.outputs.artifact_id }}" in pypi
     assert pypi.index('test "$digest" = "$VERIFIED_MANIFEST"') < pypi.index("uv publish ")
     assert "checkout@" not in pypi
+
+
+def test_a_missing_shellcheck_fails_the_check(tmp_path: Path) -> None:
+    env = stubbed(tmp_path, "exit 0\n")
+    (tmp_path / "bin" / "shellcheck").unlink()
+    proc = run(SCRIPT, env)
+    assert proc.returncode == 2
+    assert "shellcheck" in proc.stderr
+
+
+@pytest.mark.parametrize("go_available", [False, True])
+def test_actionlint_deadline_never_skips_shellcheck(tmp_path: Path, go_available: bool) -> None:
+    env = stubbed(tmp_path, "exec /bin/sleep 4\n")
+    if go_available:
+        go = tmp_path / "bin/go"
+        go.write_text(
+            "#!/bin/bash\n"
+            '[[ "$1" == install && "$2" == github.com/rhysd/actionlint/cmd/actionlint@*fd33e9f582a0 ]] || exit 2\n'
+            '/bin/cp "$HOME/fixed" "$GOBIN/actionlint"\n'
+        )
+        fixed = tmp_path / "fixed"
+        fixed.write_text('#!/bin/bash\nexec shellcheck "$@"\n')
+        fixed.chmod(0o755)
+        go.chmod(0o755)
+        shellcheck = tmp_path / "bin/shellcheck"
+        shellcheck.write_text('#!/bin/bash\nprintf "SC2086 from fixed linter\\n" >&2\nexit 1\n')
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import runpy,sys; sys.exit(runpy.run_path(sys.argv[1])['main'](timeout=0.2))",
+            str(SCRIPT),
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=5,
+    )
+    assert proc.returncode == (1 if go_available else 2)
+    assert "timed out" in proc.stderr
+    if go_available:
+        assert "SC2086 from fixed linter" in proc.stderr

@@ -35,7 +35,10 @@ env -u TYPESAFE_API_KEY make ci
 ```
 
 `make ci` must pass. The parity stage needs Node 24 and skips locally without it.
-Report the command you ran and its result with the change.
+Workflow lint requires both Actionlint and ShellCheck on PATH. If Actionlint stalls,
+the checker retries with the upstream pipe fix using Go 1.25+ when available.
+A missing tool or an incomplete retry fails the gate. Report the command you ran
+and its result with the change.
 
 Load `.agents/skills/test-audit` before writing, changing, reviewing, or sweeping tests.
 

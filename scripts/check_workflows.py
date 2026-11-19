@@ -2,24 +2,23 @@
 
     check_workflows.py
 
-Checks workflow and composite action references even without actionlint. Runs actionlint over the
-repository's workflows, with its shellcheck integration when shellcheck is installed too.
-actionlint is not a Python dependency; CI installs it through
-scripts/ci/install_actionlint.sh (the pin the CI image shares) and the pre-push gate's Linux
-image ships it (docker/ci-linux.Dockerfile), so both enforcement points run it for real. A
-local run without the binary skips with one stderr line — a skip, not a proof.
-
-Exit 0 clean or skipped, 1 on findings, 2 when the repository or actionlint cannot be run.
+Both Actionlint and ShellCheck must be installed. A stalled native check retries once with
+the pinned upstream pipe fix if Go is available. Missing tools and timeouts fail the gate.
+Exit 0 on success, 1 on lint findings, 2 when lint could not complete.
 """
 
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 TOOL = "actionlint"
+# v1.7.12 writes to the stdin pipe before starting ShellCheck. Upstream fd33e9f starts the reader first.
+FIXED_TOOL = "github.com/rhysd/actionlint/cmd/actionlint@v1.7.13-0.20260417151945-fd33e9f582a0"
 
 _KEY = re.compile(r"""(?P<quote>['"]?)(?P<name>[\w.-]+)(?P=quote)\s*:(?:\s+|$)(?P<value>.*)""", re.ASCII)
 _REF = re.compile(
@@ -78,7 +77,51 @@ def _action_files(root: Path) -> list[Path]:
     return files
 
 
-def main(argv: list[str] | None = None) -> int:
+def _bounded(
+    command: list[str], root: Path, timeout: float, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    with subprocess.Popen(  # noqa: S603
+        command,
+        cwd=root,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=os.name == "posix",
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if os.name == "posix":
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass  # It exited between the deadline and the signal.
+            else:
+                process.kill()
+            process.wait()
+            raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+def _lint(root: Path, workflows: list[Path], timeout: float) -> subprocess.CompletedProcess[str]:
+    args = [str(path) for path in workflows]
+    try:
+        return _bounded([TOOL, *args], root, timeout)
+    except subprocess.TimeoutExpired:
+        print(f"workflow lint: {TOOL} with ShellCheck timed out after {timeout:g}s", file=sys.stderr)
+    go = shutil.which("go")
+    if go is None:
+        raise OSError(f"install {FIXED_TOOL} with Go or put a fixed actionlint on PATH")
+    print("Retrying with the pinned upstream ShellCheck pipe fix", file=sys.stderr)
+    with TemporaryDirectory() as directory:
+        build = _bounded([go, "install", FIXED_TOOL], root, 180, {**os.environ, "GOBIN": directory, "GOWORK": "off"})
+        if build.returncode:
+            raise OSError(f"could not build pinned actionlint: {build.stderr.strip()}")
+        return _bounded([str(Path(directory) / ("actionlint.exe" if os.name == "nt" else TOOL)), *args], root, timeout)
+
+
+def main(argv: list[str] | None = None, *, timeout: float = 30) -> int:
     if argv:
         print(__doc__, file=sys.stderr)
         return 2
@@ -96,13 +139,14 @@ def main(argv: list[str] | None = None) -> int:
     except (OSError, UnicodeError) as error:
         print(f"workflow lint could not read action references: {error}", file=sys.stderr)
         return 2
-    if shutil.which(TOOL) is None:
-        print(f"workflow lint skipped: {TOOL} is not installed (the Linux gate leg ships it)", file=sys.stderr)
-        return 0
+    for required in (TOOL, "shellcheck"):
+        if shutil.which(required) is None:
+            print(f"workflow lint requires {required} on PATH", file=sys.stderr)
+            return 2
     try:
-        proc = subprocess.run([TOOL, *workflows], cwd=root, check=False, capture_output=True, text=True)  # noqa: S603
-    except OSError as error:
-        print(f"workflow lint could not run {TOOL}: {error}", file=sys.stderr)
+        proc = _lint(root, workflows, timeout)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"workflow lint could not run {TOOL} with ShellCheck: {error}", file=sys.stderr)
         return 2
     if proc.returncode == 0:
         print("workflow lint passed")
