@@ -5,10 +5,11 @@ once), and honest (ADR and pinning-test paths exist, and the Python expectation 
 `tests/parity/divergences.py` matches its fixture set exactly).
 """
 
+import json
 from pathlib import Path
 
 from tests.parity.divergences import DIVERGENT, REGISTRY
-from tests.support.fixtures import divergences, iter_calls
+from tests.support.fixtures import FIXTURES_DIR, divergences, iter_calls, iter_fixtures
 
 ROOT = Path(__file__).parents[2]
 
@@ -62,3 +63,13 @@ def test_every_tagged_call_is_registered_exactly_once() -> None:
 def test_the_projection_matches_the_registry_exactly() -> None:
     """`DIVERGENT` is derived, never authored: no divergence fact lives in Python code (ADR-0020)."""
     assert set(DIVERGENT) == set(REGISTERED)
+
+
+def test_recorded_divergences_survive_in_fixtures_and_index() -> None:
+    program = next(entry for entry in REGISTRY["divergences"] if entry["id"] == "program-response-fields")
+    expected = {call.rsplit("#", 1)[0] for call in program["fixtures"]}
+    recorded = {fixture.id: divergences(fixture) for fixture in iter_fixtures()}
+    assert {fid for fid, tags in recorded.items() if "ADR-0062" in tags} == expected
+
+    index = json.loads((FIXTURES_DIR / "index.json").read_text(encoding="utf-8"))
+    assert {row["id"]: tuple(row["divergences"]) for row in index["fixtures"]} == recorded

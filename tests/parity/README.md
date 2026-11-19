@@ -62,6 +62,7 @@ The server environment is exactly `env` plus the MCP SDK defaults (HOME, LOGNAME
 | `ADR-0005` | `unicode-astral/*-splits-surrogate*`. `truncate()` leaves a lone high surrogate. |
 | `ADR-0007` | `resolver-error/explicit-vercel-unset` |
 | `ADR-0031` | `duplicate-id/classify-omitted-ids-get-positional-fallbacks`. The reference returns two rows with the same id. Python raises `Duplicate item id` and makes no provider request. |
+| `ADR-0062` | The recorder adds this tag to each fixture with a call listed under `program-response-fields` in the divergence registry. Existing case tags keep their order. |
 
 ## Notes from recording
 
