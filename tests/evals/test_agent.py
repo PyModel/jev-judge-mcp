@@ -795,7 +795,7 @@ def test_a_stdlib_read_is_allowed_but_etc_is_not(box: Any) -> None:
 CORPUS = Path(
     os.environ.get(
         "JEV_D3_CORPUS",
-        "/Users/panda/Projects/active/firstmate/data/jev-eval-d2d3/raw/d3-paired/pi",
+        "/Users/example/jev-eval-d2d3/raw/d3-paired/pi",
     )
 )
 _CFG = re.compile(r"(/(?:private/)?var/folders/[^\s\"';]*?/T/jev-agent-cfg-[A-Za-z0-9_]+)")

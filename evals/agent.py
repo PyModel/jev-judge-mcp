@@ -210,7 +210,7 @@ CONTAINER_TOPS = (
     "var",
 )
 """This host's root names plus the confined container's: a container transcript can name either,
-and the canary must parse both — `/Users/panda/...` is an escape attempt, `/task/...` is the work."""
+and the canary must parse both — `/Users/example/...` is an escape attempt, `/task/...` is the work."""
 
 CONTAINER_RUNTIME = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt", "/proc", "/sys", "/dev")
 """The container's own system prefixes. Nothing host-side lives under any of them (ADR-0074)."""

@@ -230,7 +230,7 @@ check("filesystem_free", not hits, hits[:10])
 # The known credential paths and the broker's own mounts are absent.
 present = [p for p in (
     "/root/.pi/agent/auth.json", "/root/.claude.json", "/root/.claude",
-    "/Users/panda/.pi/agent/auth.json", "/home/panda",
+    "/Users/example/.pi/agent/auth.json", "/home/example",
     "/secrets/typesafe.key", "/secrets/model-provider.key", "/grants", "/config.json",
     "/root/.aws/credentials", "/root/.ssh/id_rsa",
 ) if os.path.exists(p)]

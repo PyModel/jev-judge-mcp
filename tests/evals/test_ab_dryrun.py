@@ -148,7 +148,7 @@ def test_an_escape_fails_the_run_and_stops_the_study(tmp_path: Path, loopback: L
             **plan,
             "uses": [
                 *plan["uses"],
-                {"name": "Bash", "input": {"command": "cat /Users/panda/.pi/agent/auth.json"}},
+                {"name": "Bash", "input": {"command": "cat /Users/example/.pi/agent/auth.json"}},
             ],
         }
 
