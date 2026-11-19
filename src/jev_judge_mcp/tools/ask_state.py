@@ -17,6 +17,7 @@ environment scrubbed of every configured secret variable.
 import contextlib
 import os
 import re
+import shlex
 import signal
 import subprocess
 import threading
@@ -28,8 +29,9 @@ from typing import BinaryIO, NoReturn
 
 import anyio
 
-from jev_judge_mcp.credential_literal import redact_credential_literals
+from jev_judge_mcp.credential_literal import has_private_key_boundary, redact_credential_literals
 from jev_judge_mcp.domain import ChoiceQuestion, NoulCriteria, NoulQuestion, Question
+from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.hook import (
     DESTRUCTIVE_CRITERIA,
     DESTRUCTIVE_ID,
@@ -44,7 +46,7 @@ from jev_judge_mcp.hook import (
 from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.keyfile import redaction_values
 from jev_judge_mcp.limits import ASK
-from jev_judge_mcp.redact_action import REDACTED, redact_action
+from jev_judge_mcp.redact_action import redact_action
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import ToolError
@@ -73,7 +75,7 @@ class Skipped:
     reason: str
 
 
-def own_part(state_text: str) -> Part | None:
+def own_part(state_text: str, redact: Redactor | None = None) -> Part | None:
     """The caller's own framing text as one part, credential-redacted; `None` when it is empty.
 
     The text is sent verbatim but for redaction — whitespace included, so a judgment never sees
@@ -81,7 +83,7 @@ def own_part(state_text: str) -> Part | None:
     tool runs; this re-measures after redaction, which can grow a short secret into a
     `[redacted]` marker.
     """
-    text = redact_credential_literals(state_text)
+    text = redact_credential_literals(state_text, redact)
     if not text.strip():
         return None
     units = length(text)
@@ -93,7 +95,9 @@ def own_part(state_text: str) -> Part | None:
     return Part(OWN_PART, text, units)
 
 
-def file_parts(paths: Sequence[str], key_path: Path | None = None) -> tuple[list[Part], list[Skipped]]:
+def file_parts(
+    paths: Sequence[str], key_path: Path | None = None, redact: Redactor | None = None
+) -> tuple[list[Part], list[Skipped]]:
     """Each caller-named path as one part, or its typed skip; a read refusal never fails the call.
 
     Order is input order, exact duplicate paths are read once, and every refusal is
@@ -108,7 +112,7 @@ def file_parts(paths: Sequence[str], key_path: Path | None = None) -> tuple[list
             continue
         seen.add(raw)
         try:
-            content = read_state(resolve_scoped(raw), key_path=key_path)
+            content = read_state(resolve_scoped(raw), key_path=key_path, redact=redact)
         except ToolError as error:
             skipped.append(Skipped(raw, error.code))
             continue
@@ -132,11 +136,9 @@ def gate_state(command: str, redactions: Sequence[str] = ()) -> str:
     """
 
     def scrub(text: str) -> str:
-        text = redact_action(text)
-        for secret in redactions:
-            if secret:
-                text = text.replace(secret, REDACTED)
-        return text
+        if has_private_key_boundary(text):
+            text = redact_credential_literals(text)
+        return redact_action(Redactor(redactions)(text))
 
     event: dict[str, object] = {"cwd": str(Path.cwd()), "tool_name": "Bash", "tool_input": command}
     return event_state(event, None, "unknown", scrub)
@@ -182,14 +184,21 @@ _TOKEN_SPLIT = re.compile(r"[\s|;&()<>'\"]+")
 Not a shell parser — a conservative splitter for a denylist, so a path inside quotes is still seen."""
 
 
-def command_denylist_refusal(command: str) -> str | None:
+def command_denylist_refusal(command: str, key_path: Path | None = None) -> str | None:
     """The deterministic refusal for a command the denylist names, before any gate or run.
 
-        A read-only effect is not a safe command: a network client can exfiltrate, a secret-store path
+    A read-only effect is not a safe command: a network client can exfiltrate, a secret-store path
     can print a credential, and an environment reader can dump what the scrub missed. Every family
     refuses with the final-block notice and costs no provider call (ADR-0077 amendment, 2026-10-01).
     """
     tokens = [token for token in _TOKEN_SPLIT.split(command) if token]
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        tokens.extend(lexer)
+    except ValueError:
+        return _refused("the command contains an incomplete shell word")
     words = {os.path.basename(token).lower() for token in tokens}
     if words & _NETWORK_CLIENTS:
         return _refused("the command reaches the network")
@@ -203,7 +212,9 @@ def command_denylist_refusal(command: str) -> str | None:
     if any(part.lower() in private_names for token in tokens for part in Path(token).parts):
         return _refused("the command reaches a private configuration directory")
     for token in tokens:
-        if is_secret_store(Path(token)):
+        if "\x00" not in token and is_secret_store(
+            Path(token).expanduser() if token.startswith("~/") else Path(token), key_path
+        ):
             return _refused("the command touches a known secret store")
     return None
 
@@ -343,12 +354,12 @@ def run_command(
         )
     stdout = collected["stdout"].decode("utf-8", errors="replace")
     stderr = collected["stderr"].decode("utf-8", errors="replace")
-    block = redact_credential_literals(
-        redact_action(f"exit status: {process.returncode}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}")
+    block = redact_action(
+        redact_credential_literals(
+            f"exit status: {process.returncode}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+            Redactor(redactions),
+        )
     )
-    for secret in redactions:
-        if secret:
-            block = block.replace(secret, REDACTED)
     units = length(block)
     if units > output_units_max:
         raise ToolError(

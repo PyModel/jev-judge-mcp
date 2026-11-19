@@ -193,3 +193,31 @@ async def test_a_flooding_command_is_killed_at_the_cap(tmp_path: Any, monkeypatc
     assert getattr(raised.value, "code", "") == "output_too_large"
     assert "killed" in str(raised.value)
     assert time.monotonic() - started < 10  # the pipes never buffer a flood
+
+
+@pytest.mark.parametrize("present", [False, True])
+async def test_named_store_is_refused_before_review_and_execution(
+    tmp_path: Any, monkeypatch: Any, present: bool
+) -> None:
+    from unittest.mock import AsyncMock
+
+    store = tmp_path / "ordinary fixture"
+    if present:
+        store.write_text("benign fixture")
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(store))
+    runner = AsyncMock()
+    monkeypatch.setattr("jev_judge_mcp.tools.ask.run_gated_command", runner)
+    provider = GatedProvider(dict(GATE_ALLOW), {"q1": {"noul": 0.9}})
+    outcome = await _run(provider, 'echo "ordinary fixture"', tmp_path, monkeypatch)
+    assert outcome.error_code == "command_refused"
+    assert not provider.requests
+    runner.assert_not_awaited()
+
+
+async def test_command_pem_is_masked_on_both_provider_hops(tmp_path: Any, monkeypatch: Any) -> None:
+    provider = GatedProvider(dict(GATE_ALLOW), {"q1": {"noul": 0.95}})
+    text = "-----BEGIN " + "PRIVATE KEY-----\nonly-fixture-bytes\n-----END " + "PRIVATE KEY-----"
+    outcome = await _run(provider, f"echo '{text}'", tmp_path, monkeypatch)
+    assert not outcome.is_error
+    assert len(provider.requests) == 2
+    assert all("only-fixture-bytes" not in str(state) for state, _ in provider.requests)

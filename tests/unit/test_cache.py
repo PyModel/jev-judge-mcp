@@ -497,12 +497,17 @@ async def test_scout_035_cancel_and_failure_release_waiters(
             release.set()
             assert await leader == await runtime.ask({}, _question())
             assert evaluate.await_count == 1
+        elif outcome == "leader_cancel":
+            leader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await leader
+            release.set()
+            assert await follower == await runtime.ask({}, _question())
+            assert evaluate.await_count == 1
         else:
-            if outcome == "leader_cancel":
-                leader.cancel()
             release.set()
             for task in (leader, follower):
-                with pytest.raises(asyncio.CancelledError if outcome == "leader_cancel" else RuntimeError):
+                with pytest.raises(RuntimeError):
                     await task
             await runtime.ask({}, _question())
             assert evaluate.await_count == 2
@@ -565,3 +570,81 @@ def test_cache_module_loads_before_the_posix_startup_check(monkeypatch: pytest.M
 
     monkeypatch.setitem(sys.modules, "fcntl", None)
     assert "store" in runpy.run_path(cache.__file__)
+
+
+async def test_busy_publication_delivers_answer_and_records_skip(
+    cache_env: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import fcntl
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="jev_judge_mcp.cache")
+    cache_env.parent.mkdir(mode=0o700)
+    cache_env.mkdir(mode=0o700)
+    fd = os.open(cache_env, os.O_RDONLY)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: FakeProvider(ANSWERS))
+    try:
+        task = asyncio.create_task(runtime.ask({}, _question()))
+        done, _ = await asyncio.wait([task], timeout=1)
+    finally:
+        os.close(fd)
+    evaluation = await task
+    assert task in done and evaluation.answers == ANSWERS
+    assert not list(cache_env.iterdir())
+    assert "busy" in caplog.text
+
+
+@pytest.mark.parametrize("reported", [True, False])
+def test_cache_replays_usage_provenance(cache_env: Path, reported: bool) -> None:
+    from jev_judge_mcp.providers.base import parse_envelope
+
+    body: dict[str, object] = {"answers": ANSWERS}
+    if reported:
+        body["usage"] = {"input_tokens": 0, "output_tokens": 0}
+    envelope = parse_envelope(body, "fixture")
+    usage = envelope.usage
+    evaluation = Evaluation(answers=envelope.answers, usage=usage, provider="compatible", model="fixture")
+    settings = load_settings()
+    cache.store(settings, "compatible", "local", "fixture", {}, _question(), evaluation)
+    record = json.loads(next(cache_env.iterdir()).read_text())
+    assert record["usage"]["reported"] is reported
+    replay = cache.lookup(settings, "compatible", "local", "fixture", {}, _question())
+    assert replay is not None and replay.usage == usage
+
+
+async def test_cache_waiting_for_slot_cannot_start_after_shutdown(
+    cache_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import anyio
+
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    slots = anyio.Semaphore(1)
+    monkeypatch.setattr(runtime, "_cache_slots", slots)
+    await slots.acquire()
+    async with asyncio.timeout(5):
+        caller = asyncio.create_task(runtime.ask({}, _question()))
+        while not slots.statistics().tasks_waiting:
+            await asyncio.sleep(0)
+        await runtime.aclose()
+        slots.release()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+    assert not provider.requests
+
+
+@pytest.mark.parametrize("count,expected", [(0, False), (7, True)])
+def test_legacy_cache_metering_uses_available_evidence(cache_env: Path, count: int, expected: bool) -> None:
+    settings = load_settings()
+    evaluation = Evaluation(answers={}, usage=Usage(count, 0), provider="compatible", model="fixture")
+    cache.store(settings, "compatible", "local", "fixture", {}, _question(), evaluation)
+    entry = next(cache_env.iterdir())
+    record = json.loads(entry.read_text())
+    record["usage"].pop("reported", None)
+    entry.write_text(json.dumps(record))
+    replay = cache.lookup(settings, "compatible", "local", "fixture", {}, _question())
+    assert replay is not None and replay.usage.reported is expected
+    record["usage"]["reported"] = "unknown"
+    entry.write_text(json.dumps(record))
+    assert cache.lookup(settings, "compatible", "local", "fixture", {}, _question()) is None

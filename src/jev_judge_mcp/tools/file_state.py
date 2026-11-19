@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import NoReturn
 
 from jev_judge_mcp.credential_literal import redact_credential_literals
+from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.limits import FILE_JUDGE, FileJudgeCaps, FilesJudgeCaps
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import ToolError
@@ -54,7 +55,7 @@ def is_secret_store(path: Path, key_path: Path | None = None) -> bool:
     """
     if key_path is not None:
         try:
-            if path == key_path.absolute() or path == key_path.resolve() or path.samefile(key_path):
+            if path.absolute() == key_path.absolute() or path == key_path.resolve() or path.samefile(key_path):
                 return True
         except FileNotFoundError:
             pass
@@ -109,7 +110,13 @@ def pinned_directory(directory: Path) -> Generator[int]:
         os.close(fd)
 
 
-def read_state(path: Path, caps: FileJudgeCaps | FilesJudgeCaps = FILE_JUDGE, *, key_path: Path | None = None) -> str:
+def read_state(
+    path: Path,
+    caps: FileJudgeCaps | FilesJudgeCaps = FILE_JUDGE,
+    *,
+    key_path: Path | None = None,
+    redact: Redactor | None = None,
+) -> str:
     """Read only the validated descriptor, up to the byte ceiling plus one sentinel byte."""
     if is_secret_store(path, key_path):
         refuse("secret_file", f"{path.name} is a known secret store and is never read")
@@ -148,4 +155,4 @@ def read_state(path: Path, caps: FileJudgeCaps | FilesJudgeCaps = FILE_JUDGE, *,
         refuse("file_too_large", f"file exceeds the {caps.file_units_max:,}-unit state cap: {path}")
     # Redaction is the last step, so the cap measures the file as it is on disk, and a clean file
     # passes through unchanged (the detector is the identity without a literal).
-    return redact_credential_literals(content)
+    return redact_credential_literals(content, redact)

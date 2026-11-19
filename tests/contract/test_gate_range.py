@@ -303,3 +303,47 @@ async def test_scout_016_incomplete_quoted_header_is_refused(repo: Path, monkeyp
     monkeypatch.setattr(gate_range, "diff_argument", malformed)
     outcome = await call_tool("jev_gate_range", gate_args(), {})
     assert outcome.code == "invalid_arguments" and not outcome.requests
+
+
+@pytest.mark.parametrize("context_override", [False, True])
+async def test_range_withholds_partial_pem_and_masks_exact_values(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, context_override: bool
+) -> None:
+    if context_override:
+        monkeypatch.setenv("GIT_DIFF_OPTS", "--unified=1")
+    lines = ["-----BEGIN PRIVATE KEY-----", *["unchanged fixture line"] * 15, "-----END PRIVATE KEY-----"]
+    commit_files(repo, {"notes.txt": "\n".join(lines)})
+    lines[7] = "changed fixture line"
+    commit_files(
+        repo, {"notes.txt": "\n".join(lines), "ok.txt": "safe context configured-fixture-marker stored-fixture-marker"}
+    )
+    monkeypatch.setenv("JEV_API_KEY", "configured-fixture-marker")
+    store = repo / "fixture-store"
+    store.write_text("stored-fixture-marker")
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(store))
+    result = await call_tool("jev_gate_range", gate_args(), {})
+    assert not result.is_error, result.text
+    assert result.payload.get("skipped") == [{"path": "notes.txt", "reason": "secret_file"}]
+    sent = _sent_text(result)
+    assert "safe context" in sent
+    assert all(marker not in sent for marker in ("fixture line", "configured-fixture-marker", "stored-fixture-marker"))
+
+
+@pytest.mark.parametrize("revision", ["HEAD~1..HEAD", "HEAD~1...HEAD", "HEAD~1", "HEAD~1.."])
+async def test_subdirectory_range_headers_keep_the_repository_origin(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, revision: str
+) -> None:
+    commit_files(repo, {"sub/notes.txt": "ordinary fixture", "outside.txt": "outside scope"})
+    set_config(repo, "diff.relative", "true")
+    monkeypatch.chdir(repo / "sub")
+    result = await call_tool("jev_gate_range", gate_args(revision), {})
+    assert not result.is_error, result.text
+    assert result.payload["review"]["reviewed_files"] == ["sub/notes.txt"]
+    assert "outside scope" not in _sent_text(result)
+
+
+async def test_subtree_range_uses_physical_origin_for_store_check(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    commit_files(repo, {"sub/ordinary": "benign fixture"})
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(repo / "sub/ordinary"))
+    result = await call_tool("jev_gate_range", gate_args("4b825dc642cb6eb9a060e54bf8d69288fbee4904..HEAD:sub"), {})
+    assert result.code == "secret_file" and not result.requests

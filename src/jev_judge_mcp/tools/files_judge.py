@@ -15,7 +15,7 @@ import logging
 import os
 import time
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
@@ -23,7 +23,8 @@ from typing import Any, cast
 import anyio
 
 from jev_judge_mcp.domain import ChoiceQuestion, ScoreQuestion
-from jev_judge_mcp.keyfile import stored_key_path
+from jev_judge_mcp.errors import Redactor
+from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import FILE_JUDGE, FILES_JUDGE
 from jev_judge_mcp.providers import Evaluation, ProviderConfigError
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
@@ -182,14 +183,18 @@ class _Discovery:
     remaining: int
     unreadable: Callable[[Path], None]
     check_cancelled: Callable[[], None]
+    transitions_left: int
     failures: int = 0
     stopped: Path | None = None
+    listings: dict[Path, list[Path]] = field(default_factory=dict[Path, list[Path]])
 
     def children(self, directory: Path) -> list[Path]:
         """Only sort a completed listing. A partial directory has no deterministic prefix."""
         self.check_cancelled()
         if self.stopped is not None:
             return []
+        if directory in self.listings:
+            return self.listings[directory]
         if self.remaining == 0:
             self.stopped = directory
             return []
@@ -209,7 +214,9 @@ class _Discovery:
             self.failures += 1
             self.unreadable(directory)
             return []
-        return sorted(entries)
+        entries.sort()
+        self.listings[directory] = entries
+        return entries
 
 
 def _walk(directory: Path, budget: _Discovery, *, recursive: bool) -> Iterator[Path]:
@@ -221,31 +228,54 @@ def _walk(directory: Path, budget: _Discovery, *, recursive: bool) -> Iterator[P
         yield from (child for child in children if child.is_file())
 
 
-def _glob_files(root: Path, parts: tuple[str, ...], budget: _Discovery) -> Iterator[Path]:
-    pending = [(root, 0)]
+def _glob_files(
+    root: Path, parts: tuple[str, ...], budget: _Discovery, outside: Callable[[Path], None]
+) -> Iterator[Path]:
+    pending = [(root, root, 0)]
     visited: set[tuple[Path, int]] = set()
     while pending and budget.stopped is None:
-        directory, index = pending.pop()
+        directory, display, index = pending.pop()
         if (directory, index) in visited:
             continue
+        if budget.transitions_left == 0:
+            budget.stopped = directory
+            break
+        budget.transitions_left -= 1
         visited.add((directory, index))
         segment = parts[index]
         last = index + 1 == len(parts)
         if segment == "**" and last:
-            yield from _walk(directory, budget, recursive=True)
+            for child in _walk(directory, budget, recursive=True):
+                yield display / child.relative_to(directory)
             continue
         children = budget.children(directory)
         if segment == "**":
-            pending.extend((child, index) for child in reversed(children) if not child.is_symlink() and child.is_dir())
-            pending.append((directory, index + 1))
+            pending.extend(
+                (child, display / child.name, index)
+                for child in reversed(children)
+                if not child.is_symlink() and child.is_dir()
+            )
+            pending.append((directory, display, index + 1))
         else:
             matches = [child for child in children if fnmatchcase(child.name, segment)]
             if last:
-                yield from matches
+                yield from (display / child.name for child in matches)
             else:
-                pending.extend(
-                    (child, index + 1) for child in reversed(matches) if not child.is_symlink() and child.is_dir()
-                )
+                for child in reversed(matches):
+                    target = child
+                    if child.is_symlink():
+                        if _has_glob_magic(segment):
+                            continue
+                        try:
+                            target = resolve_scoped(str(child), root)
+                        except ToolError:
+                            budget.failures += 1
+                            outside(display / child.name)
+                            continue
+                        if SKIP_DIRECTORIES.intersection(target.relative_to(root).parts):
+                            continue
+                    if target.is_dir():
+                        pending.append((target, display / child.name, index + 1))
 
 
 def _aggregate(reason: str, count: int, first: Sequence[str]) -> dict[str, str]:
@@ -270,6 +300,7 @@ def plan(
     *,
     recursive: bool = False,
     key_path: Path | None = None,
+    redact: Redactor | None = None,
     check_cancelled: Callable[[], None] = lambda: None,
 ) -> tuple[list[tuple[str, str]], list[dict[str, str]]]:
     """Expand, prune, and read — the whole deterministic half of the tool, before any provider call.
@@ -310,6 +341,7 @@ def plan(
         2 * FILES_JUDGE.discovery_max,
         lambda path: skip(path.relative_to(root).as_posix(), "unreadable_directory"),
         check_cancelled,
+        transitions_left=2 * FILES_JUDGE.discovery_max,
     )
     candidates: list[tuple[Path, str]] = []
     seen: set[Path] = set()
@@ -359,7 +391,9 @@ def plan(
                 continue
             matched_any = False
             full = False
-            for match in _glob_files(root, pattern.parts, budget):
+            for match in _glob_files(
+                root, pattern.parts, budget, lambda path: skip(path.relative_to(root).as_posix(), "outside_scope")
+            ):
                 matched_any = True
                 if match.is_dir():
                     try:
@@ -415,7 +449,7 @@ def plan(
                 cap_first.append(text)
             continue
         try:
-            content = read_state(resolved, caps=FILES_JUDGE, key_path=key_path)
+            content = read_state(resolved, caps=FILES_JUDGE, key_path=key_path, redact=redact)
         except ToolError as error:
             skip(text, _SKIP_REASONS[error.code])
             continue
@@ -463,6 +497,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             args["paths"],
             recursive=bool(args.get("recursive", False)),
             key_path=stored_key_path(runtime.settings),
+            redact=Redactor(redaction_values(runtime.settings)),
             check_cancelled=anyio.from_thread.check_cancelled,
         )
     )

@@ -15,7 +15,8 @@ import anyio
 
 from jev_judge_mcp.domain import ChoiceQuestion, NoulCriteria, NoulQuestion, Question, ScoreQuestion
 from jev_judge_mcp.domain.json import JsonValue
-from jev_judge_mcp.keyfile import stored_key_path
+from jev_judge_mcp.errors import Redactor
+from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import FILE_JUDGE
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.arguments import Refinement
@@ -214,7 +215,11 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     kind: str = args["kind"]
     question = build_question(kind, args["instructions"], args["criteria"])
     content = await anyio.to_thread.run_sync(
-        lambda: read_state(resolve_scoped(args["path"]), key_path=stored_key_path(runtime.settings))
+        lambda: read_state(
+            resolve_scoped(args["path"]),
+            key_path=stored_key_path(runtime.settings),
+            redact=Redactor(redaction_values(runtime.settings)),
+        )
     )
     evaluation = await runtime.ask({"path": args["path"], "content": content}, {QUESTION_ID: question})
     expected: Sequence[str] = ()

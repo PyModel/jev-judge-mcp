@@ -760,8 +760,8 @@ def test_scout_027_security_matches_local_storage_and_debug_output(
     assert re.fullmatch(r"[a-f0-9]{64}", entry.stem)
     assert "fixture state" not in entry.read_text()
     record = json.loads(entry.read_text())
-    for key in ("answers", "usage", "provider", "model"):
-        assert key in record and f"`{key}`" in page
+    for key in record:
+        assert f"`{key}`" in page
     caplog.set_level(logging.DEBUG, logger="jev_judge_mcp.telemetry")
     for enabled in (False, True):
         telemetry = Telemetry(payloads=enabled)
