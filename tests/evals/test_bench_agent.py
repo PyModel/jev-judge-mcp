@@ -28,6 +28,11 @@ for line in sys.stdin:
         reply(i)
     elif mode == "eof" and i == 2:
         break
+    elif mode == "partial_batch":
+        if i == 3:
+            print(json.dumps({"jsonrpc": "2.0", "method": "notifications/message"}), flush=True)
+            reply(2)
+            break
     elif mode == "unterminated":
         sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": i, "result": {}}))
         break
@@ -56,15 +61,18 @@ sys.exit(7 if mode == "bad_exit" else 0)
     ("mode", "count", "parallel", "error"),
     [
         ("empty", 0, True, None),
-        ("eof", 2, True, "EOF"),
+        ("eof", 2, True, "missing reply ids [2]"),
+        ("partial_batch", 3, True, "missing reply ids [1, 3]"),
         ("unterminated", 1, False, "EOF during a JSON-RPC frame"),
         ("unterminated_tail", 0, False, "EOF during a JSON-RPC frame"),
         ("unknown", 1, False, "unknown reply id"),
+        ("unknown", 2, True, "unknown reply id 99"),
         ("inherited", 0, True, "unknown reply id"),
         ("duplicate", 2, True, "duplicate reply id"),
         ("duplicate", 1, False, "duplicate reply id"),
         ("reordered", 2, True, None),
         ("rpc_error", 1, False, "JSON-RPC error"),
+        ("rpc_error", 2, True, "JSON-RPC error for request 1"),
         ("bad_exit", 0, False, "exit status 7"),
     ],
 )
