@@ -1801,12 +1801,12 @@ def test_scout_011_cleanup_failure_preserves_primary_error_and_redacts_detail(
         raise OSError("private diagnostic")
 
     with monkeypatch.context() as patch:
-        patch.setattr(shutil, "rmtree", fail)
+        patch.setattr(Path, "rmdir", fail)
         with pytest.raises(RuntimeError, match="interrupted") as caught, ab_run.private_secrets() as owned:
             raise RuntimeError("interrupted")
     assert str(owned) in caught.value.__notes__[0] and "remove it locally" in caught.value.__notes__[0]
     assert "private diagnostic" not in caught.value.__notes__[0]
-    shutil.rmtree(owned)
+    assert ab_run.reap()["dirs"] == [owned.name]
 
 
 def test_scout_013_partial_json_object_is_reported(tmp_path: Path) -> None:

@@ -24,10 +24,12 @@ Claude run can read the login keychain file through it. The subprocess receives 
 Saving its transcript uses the host home, temporary directory and project roots to redact those paths.
 """
 
+import errno
 import json
 import os
 import posixpath
 import re
+import secrets as secure_random
 import shlex
 import shutil
 import signal
@@ -577,6 +579,82 @@ class AgentRunResult:
     out-of-task exploration, recorded per run, never a study stop by itself."""
 
 
+ARTIFACT_CHUNK_BYTES = 64 * 1024
+RELAY_CAP_BYTES = STDOUT_CAP_BYTES
+
+
+def copy_regular_nofollow(
+    source: Path, target: Path, *, limit: int = RELAY_CAP_BYTES, private_source: bool = False
+) -> bool:
+    """Copy at most the remaining relay budget, including a source that grows after fstat."""
+    try:
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as error:
+        if error.errno == errno.ENOENT or (error.errno == errno.ELOOP and not private_source):
+            return False
+        raise
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            if private_source:
+                raise PermissionError("study relay must be a singly linked regular file")
+            return False
+        if private_source and (info.st_uid != os.getuid() or info.st_mode & 0o077):
+            raise PermissionError("study relay must be an owned private file")
+        if info.st_size > limit:
+            raise OSError("incomplete transcript: aggregate relay log limit exceeded")
+        with os.fdopen(fd, "rb", closefd=False) as reader, open(target, "wb", opener=private_opener) as writer:
+            while chunk := reader.read(min(ARTIFACT_CHUNK_BYTES, limit + 1)):
+                if len(chunk) > limit:
+                    raise OSError("incomplete transcript: aggregate relay log limit exceeded")
+                writer.write(chunk)
+                limit -= len(chunk)
+    finally:
+        os.close(fd)
+    return True
+
+
+def copy_relay_logs(source: Path, target: Path, *, private_source: bool = False) -> None:
+    remaining = RELAY_CAP_BYTES
+    for name in (RELAY_LOG, str(Path(RELAY_LOG).with_suffix(".stderr"))):
+        if copy_regular_nofollow(source / name, target / name, limit=remaining, private_source=private_source):
+            remaining -= (target / name).stat().st_size
+
+
+def _stream_secret(artifact: BinaryIO, needle: bytes, output: BinaryIO | None = None) -> bool:
+    """Keep only the unmatched suffix that could begin a match in the next block."""
+    tail = b""
+    hit = False
+    while chunk := artifact.read(ARTIFACT_CHUNK_BYTES):
+        parts = (tail + chunk).split(needle)
+        if len(parts) > 1:
+            if output is None:
+                return True
+            hit = True
+            output.write(REDACTED.join(parts[:-1]) + REDACTED)
+        suffix = parts[-1]
+        cut = max(0, len(suffix) - len(needle) + 1)
+        if output is not None:
+            output.write(suffix[:cut])
+        tail = suffix[cut:]
+    if output is not None:
+        output.write(tail)
+    return hit
+
+
+def _scrub_file(artifact: BinaryIO, needle: bytes, name: str, parent: int) -> None:
+    artifact.seek(0)
+    staging = ".jev-scrub-" + secure_random.token_hex(16)
+    fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=parent)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            _stream_secret(artifact, needle, output)
+        os.replace(staging, name, src_dir_fd=parent, dst_dir_fd=parent)
+    except BaseException:
+        os.unlink(staging, dir_fd=parent)
+        raise
+
+
 def _artifact_secrets(root: Path, secret: str, *, scrub: bool) -> tuple[str, ...]:
     if not secret:
         raise ValueError("the secret to scan or scrub must be non-empty")
@@ -592,13 +670,10 @@ def _artifact_secrets(root: Path, secret: str, *, scrub: bool) -> tuple[str, ...
                     info = os.fstat(fd)
                     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
                         raise PermissionError("study artifact must be an owned, singly linked regular file")
-                    data = artifact.read()
-                    if needle in data:
+                    if _stream_secret(artifact, needle):
                         hits.append(str((Path(directory) / name).relative_to(root)))
                         if scrub:
-                            artifact.seek(0)
-                            artifact.write(data.replace(needle, REDACTED))
-                            artifact.truncate()
+                            _scrub_file(artifact, needle, name, parent)
             except OSError as error:
                 errors.append(error)
     if errors:
@@ -1066,14 +1141,7 @@ def run_agent(
             write_run_logs(run_dir, incomplete.captured_stdout, incomplete.captured_stderr, base_env=base_env)
             raise
         wall = time.perf_counter() - started
-        for name in (RELAY_LOG, str(Path(RELAY_LOG).with_suffix(".stderr"))):
-            relay = secret_dir / name
-            if relay.is_file():
-                with (
-                    open(relay, "rb", opener=private_opener) as src,
-                    open(run_dir / name, "wb", opener=private_opener) as dst,
-                ):
-                    shutil.copyfileobj(src, dst)
+        copy_relay_logs(secret_dir, run_dir, private_source=True)
         cfg.cleanup()
         raw_hits = write_run_logs(run_dir, stdout, stderr, base_env=base_env, secrets=[secret])
         scan_hit = sorted(raw_hits.union(secret_scan(run_dir, secret)))

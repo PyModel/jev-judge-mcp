@@ -25,7 +25,6 @@ import os
 import platform
 import random
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -56,10 +55,13 @@ from evals.artifacts import incomplete_message, read_records, write_json
 from evals.bench import pi
 from evals.confinement.launch import (
     CONTAINER_ADAPTER,
+    KEY_PREFIX,
     ConfinementError,
     ConfinementSpec,
     Upstream,
+    clear_leased_directory,
     confined_reference,
+    directory_lease,
     docker_available,
     docker_run,
     exit_on_sigterm,
@@ -979,21 +981,23 @@ def study_provenance(image_id: str, agent: str, model: str) -> dict[str, Any]:
 
 @contextmanager
 def private_secrets() -> Generator[Path]:
-    path = Path(tempfile.mkdtemp(prefix="jev-ab-secrets-"))
-    primary: BaseException | None = None
-    try:
-        yield path
-    except BaseException as error:
-        primary = error
-        raise
-    finally:
+    path = Path(tempfile.mkdtemp(prefix=KEY_PREFIX))
+    with ExitStack() as resources:
+        primary: BaseException | None = None
         try:
-            shutil.rmtree(path)
-        except OSError:
-            message = f"could not remove private credential directory {path}; remove it locally"
-            if primary is None:
-                raise StudyRefusedError(message) from None
-            primary.add_note(message)
+            resources.enter_context(directory_lease(path))
+            yield path
+        except BaseException as error:
+            primary = error
+            raise
+        finally:
+            try:
+                clear_leased_directory(path)
+            except OSError:
+                message = f"could not remove private credential directory {path}; remove it locally"
+                if primary is None:
+                    raise StudyRefusedError(message) from None
+                primary.add_note(message)
 
 
 EVAL_IMAGE = "jev-eval-agent:latest"

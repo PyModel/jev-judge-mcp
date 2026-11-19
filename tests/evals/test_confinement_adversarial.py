@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -634,7 +635,11 @@ def test_sigterm_tears_the_boundary_down_and_the_reaper_sweeps_leftovers(
                 "import shutil as _sh",
                 "def _scratch_files(s):",
                 f"    _sh.copyfile({str(stub)!r}, s / 'stub.py')",
-                "print('READY', flush=True)",
+                "wait = launch.wait_for_broker",
+                "def ready(name):",
+                "    wait(name)",
+                "    print('BROKER-READY ' + name, flush=True)",
+                "launch.wait_for_broker = ready",
                 "try:",
                 "    with launch.run_confined("
                 "        AgentCommand(argv=lambda config: ['python3', '/scratch/stub.py'], timeout_s=500.0),"
@@ -654,16 +659,15 @@ def test_sigterm_tears_the_boundary_down_and_the_reaper_sweeps_leftovers(
         proc = subprocess.Popen(
             [sys.executable, str(child)], stdout=sink, stderr=sink, env={**os.environ, "PYTHONPATH": str(REPO)}
         )
-        # READY lands before the container starts; the SIGTERM then hits the run in flight —
-        # the case that used to leak every container, volume, and key mount.
-        deadline = time.time() + 120
-        while "READY" not in log.read_text(encoding="utf-8", errors="replace") and time.time() < deadline:
-            if proc.poll() is not None:
+        deadline = time.monotonic() + 120
+        broker = ""
+        while time.monotonic() < deadline:
+            for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("BROKER-READY "):
+                    broker = line.removeprefix("BROKER-READY ")
+            if broker or proc.poll() is not None:
                 break
             time.sleep(0.2)
-        assert "READY" in log.read_text(encoding="utf-8", errors="replace"), log.read_text(
-            encoding="utf-8", errors="replace"
-        )[-800:]
         proc.terminate()
         try:
             proc.wait(timeout=90)
@@ -671,31 +675,29 @@ def test_sigterm_tears_the_boundary_down_and_the_reaper_sweeps_leftovers(
             proc.kill()
             raise AssertionError("SIGTERM did not unwind the child") from error
     assert "TOREDOWN" in log.read_text(encoding="utf-8", errors="replace")
-    leftovers = launch.docker_run(["docker", "ps", "-aq", "--filter", "label=jev-eval"], check=False).stdout.strip()
-    assert leftovers == "", f"teardown left containers: {leftovers}"
-    # The reaper: forge the leftovers a killed run would leave, then sweep them.
-    launch.docker_run(
-        ["docker", "run", "-d", "--name", "jev-eval-broker-orphan", "--label", launch.OWNER_LABEL, "busybox", "true"],
-        check=False,
-    )
-    launch.docker_run(
-        ["docker", "volume", "create", "--label", launch.OWNER_LABEL, "jev-eval-sock-orphan"], check=False
-    )
-    stale = tmp_path / "jev-confined-orphan"  # the reaper's tempdir is redirected below, so the
-    # forged stale root lives and dies inside this test's tmp_path, never the shared one.
-    monkeypatch.setattr(launch.tempfile, "gettempdir", lambda: str(tmp_path))
-    stale.mkdir(exist_ok=True)
-    os.utime(stale, (0, 0))
-    removed = launch.reap()
-    # `docker ps -aq --filter label=…` yields ids, so the container leg proves removal by absence.
-    assert removed["containers"], removed
-    still = launch.docker_run(
-        ["docker", "ps", "-aq", "--filter", "name=jev-eval-broker-orphan"], check=False
-    ).stdout.strip()
-    assert still == "", "the orphan container survived the reaper"
-    assert "jev-eval-sock-orphan" in removed["volumes"], removed
-    assert "jev-confined-orphan" in removed["dirs"], removed
-    shutil.rmtree(stale, ignore_errors=True)
+    assert broker.startswith("jev-eval-broker-")
+    child_selection = ["--filter", f"label={launch.LEASE_LABEL}={broker.removeprefix('jev-eval-broker-')}"]
+    for listing in (["docker", "ps", "-aq"], ["docker", "volume", "ls", "-q"]):
+        assert not launch.docker_run([*listing, *child_selection]).stdout.strip()
+
+    monkeypatch.setattr(launch.tempfile, "tempdir", str(tmp_path))
+    orphan = Path(tempfile.mkdtemp(prefix=launch.RUN_PREFIX))
+    label = f"{launch.LEASE_LABEL}={orphan.name}"
+    name = f"jev-test-orphan-{orphan.name}"
+    volume = f"jev-test-sock-{orphan.name}"
+    try:
+        with launch.directory_lease(orphan):
+            launch.docker_run(
+                ["docker", "run", "-d", "--pull", "never", "--name", name, "--label", label, image, "true"]
+            )
+            launch.docker_run(["docker", "volume", "create", "--label", label, volume])
+        removed = launch.reap()
+        assert removed["containers"] and removed["volumes"] == [volume]
+        assert removed["dirs"] == [orphan.name] and not orphan.exists()
+        assert not launch.docker_run(["docker", "ps", "-aq", "--filter", f"label={label}"]).stdout.strip()
+    finally:
+        launch.docker_run(["docker", "rm", "-f", name], check=False)
+        launch.docker_run(["docker", "volume", "rm", volume], check=False)
 
 
 @DOCKER
