@@ -4,21 +4,19 @@ status: accepted
 
 # Release-PR CI is maintainer-approved
 
-release-please opens and updates the release pull request with the workflow token, so its
-`pull_request` event starts no `ci` run. Automating that run has two shapes: a GitHub App
-whose token starts the pull request's own events (option A), or `release.yml` dispatching
-`ci.yml` on the release branch through `workflow_dispatch` (what the `release-pr-ci` job
-did). The dispatch cannot serve the purpose: GitHub documents that checks from such a run
-never count toward the pull request's required checks
-([troubleshooting required status checks](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks)),
-so the job was dead weight that looked like coverage.
+release-please opens and updates the release pull request with the workflow token.
+GitHub creates an approval-required workflow run for the `opened`, `synchronize` and
+`reopened` pull request events. A maintainer with write access can select **Approve workflows to run**
+in the merge box to start CI on those changes. [GitHub token behavior](https://docs.github.com/en/actions/concepts/security/github_token)
+
+We considered a GitHub App installation token for automatic pull request checks (option A).
+The previous `release-pr-ci` job dispatched `ci.yml` on the release branch separately.
 
 ## Decision
 
-Release-PR CI is maintainer-approved (option B: no App, no dispatch). The `release-pr-ci`
+Maintainers approve release CI using that pending run (option B). The `release-pr-ci`
 job in `release.yml` is removed, along with the `workflow_dispatch` trigger on `ci.yml` that
-existed only for it. A maintainer approves the pending `ci` run on the release PR; those
-checks report on the pull request like any other branch's, and
+existed only for it. The approved checks report on the release pull request, and
 `env -u TYPESAFE_API_KEY make ci` on the release branch remains the local fallback
 (CONTRIBUTING.md § Releases). Both automatic PyPI upload and a manual retry with
 `republish_tag` use the same `pypi` environment and OIDC publishing job.

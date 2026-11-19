@@ -189,6 +189,14 @@ def test_release_guide_matches_current_version_configuration() -> None:
         assert "pins it with `release-as`" not in (project / "CONTRIBUTING.md").read_text()
 
 
+@pytest.mark.parametrize("path", ["CONTRIBUTING.md", "docs/adr/0060-release-pr-ci-is-maintainer-approved.md"])
+def test_release_docs_explain_how_to_start_pending_ci(path: str) -> None:
+    project = SCRIPT.parents[1]
+    guide = " ".join((project / path).read_text().split())
+    assert "Approve workflows to run" in guide
+    assert "write access" in guide
+
+
 def test_package_code_runs_without_release_write_permissions() -> None:
     workflow = (SCRIPT.parents[1] / ".github/workflows/release.yml").read_text()
     jobs = re.split(r"^  [\w-]+:\n", workflow.split("\njobs:\n")[1], flags=re.M)[1:]

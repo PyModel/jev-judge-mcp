@@ -140,10 +140,9 @@ workflow `release.yml`, environment `pypi`.
 
 - `.release-please-manifest.json` records the released version. A release pull
   request needs a releasable change such as a `feat` or `fix` commit in the scanned history.
-- The release pull request is opened or updated with the workflow token, so its `pull_request`
-  event does not trigger `ci`. Release-PR CI is maintainer-approved instead (ADR-0060): a
-  maintainer approves the pending `ci` run on the release PR, and those checks report on the
-  pull request like any other branch's. If that run is unavailable, use
+- When release-please opens or updates the release pull request with the workflow token,
+  GitHub creates a pending `ci` run. A maintainer with write access selects **Approve workflows to run**
+  in the pull request's merge box (ADR-0060). If that run is unavailable, use
   `env -u TYPESAFE_API_KEY make ci` on the release branch as a fallback.
 - The version gate is `scripts/check_release_version.py`, tested offline in
   `tests/unit/test_release_version.py`.
