@@ -42,14 +42,19 @@ def _relay(proxy: str, log: Path, messages: list[Any]) -> tuple[list[Any], list[
     child.stdin.write(b"".join((json.dumps(message) + "\n").encode() for message in messages))
     child.stdin.flush()
     out: list[bytes] = []
-    reader = threading.Thread(target=lambda: out.append(child.stdout.read() if child.stdout else b""))
+    reader = threading.Thread(target=lambda: out.append(child.stdout.read() if child.stdout else b""), daemon=True)
     reader.start()
     reader.join(timeout=30)
     try:
         assert not reader.is_alive(), "the relay never closed the client's stdout"
     finally:
         child.stdin.close()
-        assert child.wait(timeout=30) == 0
+        try:
+            assert child.wait(timeout=30) == 0
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait(timeout=5)
+            raise
     replies = [json.loads(line) for line in out[0].splitlines()]
     rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
     return replies, rows
@@ -120,7 +125,10 @@ def _run_until_dead(argv: list[str], server_source: str, messages: list[Any], pi
         deadline = time.monotonic() + 30
         while not pid_path.exists():
             if proc.poll() is not None:
-                _out, err = proc.communicate()
+                try:
+                    _out, err = proc.communicate(timeout=1)
+                except subprocess.TimeoutExpired as exc:
+                    err = exc.stderr or b""
                 raise AssertionError(f"proxy exited before the server wrote its pid\n{err.decode()}")
             if time.monotonic() > deadline:
                 raise AssertionError("server pid was never written")
@@ -130,10 +138,8 @@ def _run_until_dead(argv: list[str], server_source: str, messages: list[Any], pi
         proc.stdin.flush()
         try:
             _out, err = proc.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            _out, err = proc.communicate()
-            raise AssertionError(f"relay did not exit\n{err.decode()}") from None
+        except subprocess.TimeoutExpired as exc:
+            raise AssertionError(f"relay did not exit\n{(exc.stderr or b'').decode()}") from exc
         captured = marker.read_text(encoding="utf-8") if marker.exists() else ""
         return err.decode(), captured
     finally:
@@ -496,3 +502,11 @@ def test_scout_022_idle_client_survives_but_outstanding_request_expires(tmp_path
             if proxy.poll() is None:
                 proxy.kill()
             _reap(pid)
+
+
+def test_early_exit_with_an_inherited_pipe_reports_the_proxy_exit(tmp_path: Path) -> None:
+    script = "import subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(4)'])"
+    started = time.monotonic()
+    with pytest.raises(AssertionError, match="exited before"):
+        _run_until_dead([sys.executable, "-c", script], "", [], tmp_path / "pid")
+    assert time.monotonic() - started < 3, "a descendant kept the output pipe open"

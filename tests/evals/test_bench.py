@@ -498,9 +498,9 @@ def test_proxy_relays_25_calls_and_answers_the_26th_itself(tmp_path: Path, paddi
             writer.join(timeout=5)
         assert process.returncode == 0, stderr
         assert not writer.is_alive()
-    replies = {json.loads(line)["id"]: json.loads(line) for line in stdout.splitlines()}
-    assert sorted(replies) == list(range(1, BENCH_REQUEST_CAP + 2))
-    assert replies[BENCH_REQUEST_CAP + 1]["result"]["isError"] is True
+    replies = sorted((json.loads(line) for line in stdout.splitlines()), key=lambda reply: reply["id"])
+    assert [reply["id"] for reply in replies] == list(range(1, BENCH_REQUEST_CAP + 2))
+    assert replies[-1]["result"]["isError"] is True
     rows = sorted((json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()), key=lambda r: r["seq"])
     assert [row["refused"] for row in rows] == [False] * BENCH_REQUEST_CAP + [True]
     first = rows[0]

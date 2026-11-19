@@ -272,12 +272,14 @@ env.update({
 })
 proc = subprocess.Popen(
     ["python3", "-m", "jev_judge_mcp"],
-    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env,
 )
+from rpc_replies import ReplyStream
+replies = ReplyStream(proc.stdout)
 def send(msg):
     proc.stdin.write((json.dumps(msg) + "\\n").encode())
     proc.stdin.flush()
-    return json.loads(proc.stdout.readline().decode())
+    return replies.collect([msg["id"]])[0]
 init = send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
     "protocolVersion": "2024-11-05", "capabilities": {},
     "clientInfo": {"name": "adversary", "version": "0"}}})
@@ -302,8 +304,8 @@ check(
 )
 check("mcp_answer_carries_no_key", KEY1 not in text and KEY2 not in text, text[:200])
 proc.stdin.close()
-proc.terminate()
-proc.wait(timeout=10)
+replies.expect_eof()
+assert proc.wait(timeout=10) == 0
 
 print("ADVERSARY-REPORT " + json.dumps(report))
 failed = [name for name, row in report.items() if not row["ok"]]
@@ -402,6 +404,7 @@ def test_the_adversary_finds_no_credential_and_the_boundary_holds(boundary_stack
     (scratch / "code").mkdir(parents=True)
     for module in launch.MODULES:
         shutil.copyfile(stack["code"] / module, scratch / "code" / module)
+    shutil.copyfile(REPO / "tests" / "support" / "rpc_replies.py", scratch / "rpc_replies.py")
     script = scratch / "adversary.py"
     import base64
 
