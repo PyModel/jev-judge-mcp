@@ -130,11 +130,38 @@ async def test_secret_stores_never_leave_and_literals_are_redacted(repo: Path) -
     assert "KEY_ID" in sent
 
 
+@pytest.mark.parametrize(("probability", "action"), [(0.95, "review"), (0.1, "escalate")])
+async def test_withheld_files_never_stand_on_a_siblings_judgment(repo: Path, probability: float, action: str) -> None:
+    commit_files(repo, {".env": "placeholder", "prod.env": "placeholder", "x.py": "x = 2"})
+    answers = {
+        "correctness": {"score": 2, "confidence": 0.95},
+        "spec_match": {"score": 2, "confidence": 0.95},
+        "test_gap": {"score": 0, "confidence": 0.95},
+        "blast_radius": {"score": 0, "confidence": 0.95},
+        "safe_to_apply": {"noul": probability},
+        "claim_0": {
+            "choice": "verified",
+            "confidence": 0.95,
+            "probabilities": {"verified": 0.95, "contradicted": 0.03, "unsupported": 0.02},
+        },
+    }
+    outcome = await call_tool("jev_gate_range", gate_args(), answers)
+    body = outcome.payload
+    assert body["action"] == action
+    assert body["verification"]["action"] == "auto"
+    assert body["partial"] and set(body["unreviewed_files"]) == {".env", "prod.env"}
+    assert "accepted" not in body["reason_codes"] and "incomplete_context" in body["reason_codes"]
+    assert not any("Proceed" in check for check in body["next_checks"])
+    assert {b["path"] for b in body["blockers"] if b["code"] == "file_withheld"} == {".env", "prod.env"}
+    assert all(item["reason"] == "secret_file" for item in body["skipped"])
+    assert "placeholder" not in _sent_text(outcome)
+
+
 async def test_a_range_of_only_secret_stores_is_refused_without_a_provider_call(repo: Path) -> None:
     commit_files(repo, {"prod.env": "TOKEN=abc\n"})
     outcome = await call_tool("jev_gate_range", gate_args(), {})
     assert outcome.is_error
-    assert outcome.code == "secret_file"
+    assert outcome.code == "secret_file" and "prod.env" in outcome.text
     assert outcome.requests == []
 
 

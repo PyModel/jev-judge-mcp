@@ -113,6 +113,19 @@ def _classify_generated_id_collision(
     return [], "Duplicate item id: item0", True
 
 
+def _gate_document_refusal(field: str, limit: int) -> Expectation:
+    def expect(
+        bodies: list[Any], text: str, is_error: bool, arguments: Mapping[str, Any]
+    ) -> tuple[list[Any], str, bool]:
+        error = (
+            f"{field} exceeds {limit} UTF-16 units. "
+            "Split the diff by file or hunk and submit each claim with its supporting evidence."
+        )
+        return [], stringify({"tool": "jev_gate", "error": error}), True
+
+    return expect
+
+
 _EXPECTATIONS: dict[str, Expectation] = {
     "invalid-pattern/extract-multiline-flag#0": _refused_only_field(
         "unsupported regular expression: the 'm' flag is outside the supported subset"
@@ -129,7 +142,10 @@ _EXPECTATIONS: dict[str, Expectation] = {
     "invalid-pattern/extract-syntax-error#0": _reason(0, "invalid regular expression: invalid group"),
     "invalid-pattern/extract-unknown-flag#0": _same,
     "unicode-astral/find-truncation-splits-surrogate-pair#0": _drop_split_surrogate,
-    "unicode-astral/gate-claim-truncation-splits-surrogate#0": _drop_split_surrogate,
+    "unicode-astral/gate-claim-truncation-splits-surrogate#0": _gate_document_refusal("claims[0]", 2000),
+    "truncated/gate-claim-over-cap#0": _gate_document_refusal("claims[0]", 2000),
+    "truncated/gate-evidence-item-over-cap#0": _gate_document_refusal("evidence[0]", 50000),
+    "mock-039#0": _gate_document_refusal("diff", 50000),
     "resolver-error/explicit-vercel-unset#0": _vercel_unsupported,
     "duplicate-id/classify-omitted-ids-get-positional-fallbacks#0": _classify_generated_id_collision,
 }

@@ -196,14 +196,12 @@ Clopper-Pearson upper bound, not a point estimate (ROADMAP headline metrics); ce
 target needs roughly 600 error-free held-out rows per run, and that corpus is not recorded yet
 (`evals/README.md` § Open gaps).
 
-**Weak spots.** Same escalate-is-uncertainty rule as jev_review, plus the claim rules: a
-contradicted claim escalates, and cut context (diff, tests, docs, evidence over their caps) keeps
-the gate off `auto`. A file-list `diff` is reviewed per file with the claims verified once; a file
-over the cap lands in `unreviewed_files` with reason `incomplete_context` and the whole gate
-turns on the worst file (ADR-0066). Evidence is capped at 16 items and 200,000 aggregate UTF-16
-units; over either is an `input_too_large` error telling you to split the gate. Those UTF-16 caps
-are not the 64k token window: a gate state inside them can still come back as `input_too_large` (ADR-0079):
-split the call. The claim half also receives the diff and the tests again as implicit evidence (ADR-0063), so those bytes are in the state twice: about 100k extra UTF-16 units when both are at the 50,000 cap.
+A confident contradiction escalates. A file list gets one review per file and one verification
+for all claims. A range with withheld files names them and requires local review. Evidence is
+capped at 16 items and 200,000 aggregate UTF-16 units. Before sending, the gate checks primary
+documents and both byte budgets. The string gate sends the diff and tests again as implicit evidence
+(ADR-0063). At the document caps this would add about 100k extra UTF-16 units and the gate
+would refuse. Split by file or hunk and send each claim with the evidence it needs.
 
 **Reading a held gate.** Use `blockers` for file-by-file and claim-by-claim comparisons. For
 example, `spec_match_confidence_below_review_at` can report a favorable level, confidence 0.49

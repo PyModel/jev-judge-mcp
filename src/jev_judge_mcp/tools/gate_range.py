@@ -35,7 +35,8 @@ DEFINITION = define(
     "so the whole patch is reviewed, not an excerpt you typed. The diff is limited to the server's working "
     "directory inside its git repository, and each end of the range must name a commit or a tree. "
     "A changed secret store (.env, keys) is never sent and is listed in "
-    "skipped; credential literals in other patches are redacted. "
+    "skipped. Any withheld file holds the whole range for local review. Credential literals in other "
+    "patches are redacted. "
     "Optional `tests_path` is a test log the server reads, under the same path "
     "rules as jev_file_judge (inside the working directory, no secret stores, no binary files). Everything "
     "else is jev_gate: the same claims, evidence, thresholds, caps, and payload. A bad range, an empty diff, "
@@ -88,7 +89,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         # outside the caller's project (a `uv run --directory` entry) instead of a bare refusal.
         raise ToolError(f"{error} (server working directory: {Path.cwd()})", code="invalid_arguments") from error
     passed["diff"] = files
-    result = await gate.handle(passed, runtime)
+    result = await gate.handle(passed, runtime, withheld=skipped)
     extra: dict[str, object] = {"skipped": skipped} if skipped else {}
     return replace(result, payload={**result.payload, "tool": NAME, **extra})
 
@@ -122,7 +123,8 @@ def _guarded(
         else:
             kept.append({"path": item["path"], "patch": redact_credential_literals(item["patch"])})
     if not kept:
-        refuse("secret_file", "every file in that range is a secret store; nothing was sent")
+        paths = ", ".join(item["path"] for item in skipped)
+        refuse("secret_file", f"Every file in the range was withheld as a secret store: {paths}. Review locally.")
     return kept, skipped
 
 

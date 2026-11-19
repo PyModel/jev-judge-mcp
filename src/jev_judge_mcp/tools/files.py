@@ -13,6 +13,7 @@ from typing import Any, cast
 import anyio
 
 from jev_judge_mcp.domain import Usage
+from jev_judge_mcp.gate_budget import check_gate_budget
 from jev_judge_mcp.gate_diagnostics import Blocker, review_blockers, size_blocker
 from jev_judge_mcp.limits import GATE, GateCaps
 from jev_judge_mcp.policy import Action
@@ -87,8 +88,6 @@ class FileListReview:
     evaluations: list[Evaluation]
     reviewed_paths: list[str]
     unreviewed: list[str]
-    fitting: list[dict[str, str]]
-    """The files that were reviewed, as sent: jev_gate's verification ask cites each one."""
     unhashed_tests: bool
     truncated: bool
     """Whether any file's documents were cut; an unreviewed file is `partial`, never a cut."""
@@ -98,16 +97,16 @@ class FileListReview:
     context_omissions: list[dict[str, object]]
 
     def review_half(self, action: Action) -> dict[str, object]:
-        """The review half both tools publish: the first reviewed file's half under `action`, then
+        """The review half both tools publish: scores from the first file with the worst review, then
         `score_file`, `reviewed_files`, and `file_actions` (ADR-0066 amendment). `tests_weight` is
         the caller's to add, where its payload places it."""
-        payload = dict(self.halves[0].payload)
+        actions: list[Action] = [half.action for half in self.halves]
+        index = actions.index(worst_action(actions))
+        payload = dict(self.halves[index].payload)
         payload["action"] = action
-        payload["score_file"] = self.reviewed_paths[0]
+        payload["score_file"] = self.reviewed_paths[index]
         payload["reviewed_files"] = self.reviewed_paths
-        payload["file_actions"] = file_actions(
-            zip(self.reviewed_paths, [half.action for half in self.halves], strict=True)
-        )
+        payload["file_actions"] = file_actions(zip(self.reviewed_paths, actions, strict=True))
         if self.context_omissions:
             payload["context_omissions"] = self.context_omissions
         return payload
@@ -161,6 +160,7 @@ async def review_file_list(
     purpose: str,
     doc_units: int,
     evidence: Sequence[Mapping[str, object]] = (),
+    gate_framing: str | None = None,
 ) -> FileListReview:
     """One review request per file under `doc_units`; a file over it is unreviewed (ADR-0066).
 
@@ -180,24 +180,31 @@ async def review_file_list(
     sources = [(item, _wire_units(item)) for item in evidence]
     omissions: dict[int, dict[str, object]] = {}
 
-    async def review(index: int) -> None:
+    questions = review_questions(gate_framing or "")
+
+    prepared: list[tuple[CapLedger, ReviewDocs, dict[str, object]]] = []
+    for index, item in enumerate(fitting):
         ledger = CapLedger()
+        docs = review_docs({**args, "diff": item["patch"]}, ledger, doc_units)
+        extra, required, missing = _file_context(index, peers, sources, context_limit)
+        if missing:
+            omissions[index] = {
+                "path": item["path"],
+                "reviewed_file_index": index,
+                "required_units": required,
+                "limit_units": context_limit,
+                "omitted": missing,
+            }
+        state = {"purpose": purpose, "request": docs.request, "diff": docs.diff, "tests": docs.tests, **extra}
+        if gate_framing is not None:
+            check_gate_budget(state, questions)
+        prepared.append((ledger, docs, state))
+
+    async def review(index: int) -> None:
+        ledger, docs, state = prepared[index]
         try:
-            docs = review_docs({**args, "diff": fitting[index]["patch"]}, ledger, doc_units)
-            extra, required, missing = _file_context(index, peers, sources, context_limit)
-            if missing:
-                omissions[index] = {
-                    "path": fitting[index]["path"],
-                    "reviewed_file_index": index,
-                    "required_units": required,
-                    "limit_units": context_limit,
-                    "omitted": missing,
-                }
             async with fan_out:
-                evaluation = await runtime.ask(
-                    {"purpose": purpose, "request": docs.request, "diff": docs.diff, "tests": docs.tests, **extra},
-                    review_questions(),
-                )
+                evaluation = await runtime.ask(state, questions)
         except Exception as error:
             # One failed file fails the call, as the sequential pass did. Cancel the siblings so no
             # paid review keeps running, and re-raise outside the group so the kernel maps the error
@@ -227,7 +234,17 @@ async def review_file_list(
         ledger, docs, evaluation = result
         half = project_review(evaluation.answers, settings, ledger.context_cut)
         halves.append(half)
-        blockers.extend({**reason, "path": item["path"]} for reason in review_blockers(half.payload))
+        for reason in review_blockers(half.payload):
+            index = len(reviewed_paths)
+            target = f"{item['path']} (reviewed_files[{index}], {reason['field']})"
+            blockers.append(
+                {
+                    **reason,
+                    "path": item["path"],
+                    "reviewed_file_index": index,
+                    "next_check": f"{target}: {reason['next_check']}",
+                }
+            )
         evaluations.append(evaluation)
         reviewed_paths.append(item["path"])
         if docs.tests and not args.get("tests_sha256"):
@@ -244,7 +261,6 @@ async def review_file_list(
         evaluations,
         reviewed_paths,
         unreviewed,
-        fitting,
         unhashed_tests,
         truncated,
         scopes,

@@ -749,7 +749,7 @@
       ],
       "fixtures": [],
       "reference_behavior": "Review thresholds are applied to the returned scores. Gate reasons summarize the review action.",
-      "python_behavior": "Held reviews and gates report each failing comparison and next check, also for sibling files. The file-list extension shares bounded evidence and peer patches and reports optional omissions separately from the decision. String fixture projections extend program-response-fields."
+      "python_behavior": "Held reviews and gates report each failing comparison and next check, also for sibling files. The file-list extension shares bounded evidence and peer patches and reports optional omissions separately from the decision. The headline scores come from the first worst-reviewed file. File blockers and next checks identify the path and index. A git range with withheld files names them locally and caps the headline at review. String fixture projections extend program-response-fields."
     },
     {
       "id": "session-source-version",
@@ -763,6 +763,29 @@
       "fixtures": [],
       "reference_behavior": "Tool results carry no running source identity.",
       "python_behavior": "Every MCP tool result records its loaded identity in _meta. A changed or unreadable installation adds a restart notice after the normal content."
+    },
+    {
+      "id": "gate-request-budget",
+      "surface": "result",
+      "tier": "tier_a",
+      "status": "sanctioned",
+      "adr": "docs/adr/0081-gate-diagnostics-and-file-context.md",
+      "tests": [
+        "tests/unit/test_file_diff.py",
+        "tests/parity/test_tool_fixtures.py"
+      ],
+      "fixtures": [
+        "mock-039#0",
+        "truncated/gate-claim-over-cap#0",
+        "truncated/gate-evidence-item-over-cap#0",
+        "unicode-astral/gate-claim-truncation-splits-surrogate#0"
+      ],
+      "fixture_tags": [
+        "ADR-0005",
+        "ADR-0062"
+      ],
+      "reference_behavior": "Oversized primary documents are clipped and sent.",
+      "python_behavior": "The gate refuses oversized input before any review or verification. The response gives the bound and a split suggestion."
     }
   ]
 }

@@ -17,7 +17,10 @@ applicable, a focused next check, and its file or claim where applicable. Rubric
 includes the observed score and its interpreted level. A composite miss includes all levels.
 Invalid responses name the missing usable field. Truncations report UTF-16 lengths and limits.
 The gate adds specific codes and next checks alongside existing summaries. A review also
-publishes its own blockers. Numeric policy, claim policy and aggregation remain owned by ADR-0002.
+publishes its own blockers. For a file list, `score_file` identifies the first file with the
+worst review action. Each file blocker gives its path and index, including in its next check.
+The gate asks the rubric about the target file's contribution and its cross-file contracts.
+ADR-0002 defines the numeric and claim policies and the aggregation rules.
 
 Each fitting file receives its own complete patch, request and dedicated tests. Supplemental
 context includes its path, complete caller evidence records in order, and complete fitting
@@ -29,8 +32,14 @@ review publishes an informational `context_omissions` list in reviewed-file orde
 the target `path` and `reviewed_file_index`, the full `required_units` and `limit_units` in UTF-16,
 and the omitted `path`, `evidence[i]` or `reviewed_files[i]` entries. A gate returns this list in
 its `review` object. Supplemental omissions leave actions, summary codes, next checks and coverage
-flags unchanged for the same judgments. Cuts to primary documents still mark truncation.
-Oversized primary patches keep their separate unreviewed disposition.
+flags unchanged for the same judgments. The gate refuses oversized primary documents before
+any provider call. This supersedes ADR-0066's partial result for oversized gate patches;
+`jev_review` retains its partial review. Before fan-out the gate checks every review and the
+canonical verification. Compact UTF-8 must fit 30,000 bytes for state plus the longest
+question and 60,000 bytes for the whole request. These conservative limits leave room for
+provider framing under its 32k and 64k token windows. Budget errors name the bound and describe
+how to split by file, hunk or claim. A git range that withholds a file names its path and reason,
+marks coverage partial, and can return at best review even when every examined file passes.
 Completion claims and source questions still run once against the canonical evidence.
 
 ## Consequences
