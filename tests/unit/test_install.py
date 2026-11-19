@@ -178,9 +178,27 @@ def test_requires_python_without_an_install_is_none(monkeypatch: pytest.MonkeyPa
     assert local_install_warning() is None
 
 
-def test_find_package_root_without_a_checkout_names_the_flag(tmp_path: Path) -> None:
-    with pytest.raises(InstallError, match="source checkout"):
-        find_package_root(start=tmp_path)
+@pytest.fixture
+def wheel_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Model a wheel below an unrelated project, regardless of pytest's outer directory."""
+    origin = tmp_path / "site-packages" / "jev_judge_mcp" / "install" / "launch.py"
+    origin.parent.mkdir(parents=True)
+    origin.touch()
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "other-project"\n', encoding="utf-8")
+    monkeypatch.setattr(launch_module, "__file__", str(origin))
+    outer_manifests = {parent / "pyproject.toml" for parent in tmp_path.resolve().parents}
+    is_file = Path.is_file
+
+    def visible_file(path: Path) -> bool:
+        return path not in outer_manifests and is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", visible_file)
+
+
+@pytest.mark.usefixtures("wheel_layout")
+def test_find_package_root_without_a_checkout_names_the_flag() -> None:
+    with pytest.raises(InstallError, match=r"source checkout.*--from-checkout"):
+        find_package_root()
 
 
 def test_specs_accept_exactly_the_two_supported_shapes() -> None:
@@ -263,16 +281,13 @@ def _installed_like_local_checkout(monkeypatch: pytest.MonkeyPatch, requires_pyt
     monkeypatch.setattr(launch_module, "distribution", found)
 
 
+@pytest.mark.usefixtures("wheel_layout")
 def test_wheel_layout_dry_run_renders_the_pinned_pypi_spec(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The critique's wheel probe, inverted: no checkout anywhere, and `install` still works."""
 
-    def no_checkout(start: Path | None = None) -> Path:
-        return find_package_root(start=tmp_path / "nowhere")
-
     _fake_home(monkeypatch, tmp_path)
-    monkeypatch.setattr(launch_module, "find_package_root", no_checkout)
     code = install_cli.main(["--dry-run", "-a", "claude-code"])
     out = capsys.readouterr().out
     assert code == 0, out
@@ -317,11 +332,13 @@ def test_default_from_a_checkout_is_still_the_pypi_spec(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _fake_home(monkeypatch, tmp_path)
+    assert find_package_root() == Path(__file__).resolve().parents[2]
     code = install_cli.main(["--dry-run", "-a", "claude-code"])
     assert code == 0
     out = capsys.readouterr().out
-    assert PIN in out
-    assert str(find_package_root()) not in out
+    added = [line[1:] for line in out.splitlines() if line.startswith("+") and not line.startswith("+++ ")]
+    entry = json.loads("\n".join(added))["mcpServers"]["jev"]
+    assert entry["args"] == ["--python", ">=3.12", "--from", PIN, PACKAGE]
 
 
 # --- ADR-0053: an unreleased tree says so before pinning the published build. ---
@@ -388,12 +405,12 @@ def test_from_checkout_requires_uvx_that_honors_cache_keys(
     assert f"{find_package_root()}[typesafe]" in out
 
 
+@pytest.mark.usefixtures("wheel_layout")
 def test_checkout_flag_without_a_checkout_fails_accurately(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _fake_home(monkeypatch, tmp_path)
     _qualifying_uvx(monkeypatch, tmp_path)
-    monkeypatch.setattr(launch_module, "find_package_root", lambda: find_package_root(start=tmp_path))
     code = install_cli.main(["--dry-run", "-a", "claude-code", "--from-checkout"])
     assert code == 1
     out = capsys.readouterr().out
@@ -852,7 +869,7 @@ def test_verify_error_carries_the_child_stderr(tmp_path: Path) -> None:
     with pytest.raises(VerifyError) as caught:
         verify_command([sys.executable, str(script)], timeout=5)
     message = str(caught.value)
-    assert "server closed stdout" in message
+    assert message.partition(";")[0] in {"server closed stdin", "server closed stdout"}
     assert "3.10.19" in message
     assert "Python>=3.12" in message
 
