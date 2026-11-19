@@ -74,7 +74,7 @@ def _hang_server(pid: Path, log: Path, marker: Path, *, reads: int) -> str:
     if reads:
         reply = (
             "sys.stdin.readline()\n" * reads
-            + "sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': [1]}) + '\\n')\n"
+            + "sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': {'content': []}}) + '\\n')\n"
             + "sys.stdout.flush()\n"
         )
     return (
@@ -103,10 +103,6 @@ def _reap(pid_path: Path) -> None:
         os.kill(int(text), 9)
     except ProcessLookupError:
         pass
-
-
-def _proxy_argv(proxy: str, log: Path, server: Path) -> list[str]:
-    return [sys.executable, "-m", proxy, str(log), "--", sys.executable, str(server)]
 
 
 def _run_until_dead(argv: list[str], server_source: str, messages: list[Any], pid_path: Path) -> tuple[str, str]:
@@ -357,6 +353,16 @@ def test_every_action_bearing_tool_yields_a_headline_from_recorded_output() -> N
 
 # --- FIX-06: log pending rows, then terminate the child --------------------------------------------
 
+_RESPONSE_RAISES = """
+import importlib
+import sys
+from unittest.mock import patch
+
+proxy = importlib.import_module(sys.argv[1])
+with patch.object(proxy, "result_fields", side_effect=RuntimeError("injected recorder failure")):
+    raise SystemExit(proxy.main(sys.argv[2:]))
+"""
+
 # response() raises, and close() logs one pending call before raising too. The relay must keep the other.
 _CLOSE_RAISES = """
 import json
@@ -399,7 +405,7 @@ def test_response_raise_logs_the_recorders_unanswered_row_and_kills_the_child(pr
     server = pid.with_name("server.py")
     try:
         err, at_term = _run_until_dead(
-            _proxy_argv(proxy, log, server),
+            [sys.executable, "-c", _RESPONSE_RAISES, proxy, str(log), "--", sys.executable, str(server)],
             _hang_server(pid, log, pid.with_name("at-term.txt"), reads=1),
             [_tools_call(1, {"name": "jev_verify", "arguments": {"k": hidden}})],
             pid,
@@ -415,7 +421,7 @@ def test_response_raise_logs_the_recorders_unanswered_row_and_kills_the_child(pr
             assert row["seq"] == 0 and row["arguments"] == {"k": hidden} and row["text"] is None
         else:
             assert "seq" not in row and "arguments" not in row and hidden not in at_term
-        assert "Traceback" in err
+        assert "RuntimeError: injected recorder failure" in err
         _assert_dead(pid)
     finally:
         _reap(pid)
