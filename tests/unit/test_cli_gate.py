@@ -350,6 +350,7 @@ def test_an_up_to_date_push_abstains(
     ("case", "expected"),
     [
         ("store", "secret_file"),
+        ("sensitive_label", "secret_file"),
         ("opened_store", "secret_file"),
         ("patch", "invalid_arguments"),
         ("claims_size", "input_too_large"),
@@ -364,6 +365,9 @@ def test_gate_guards_local_inputs_before_judgment(
     monkeypatch.chdir(repo)
     if case == "store":
         commit_files(repo, {".env": "inert fixture", "x.py": "x = 3"})
+    elif case == "sensitive_label":
+        monkeypatch.setenv("JEV_API_KEY", "private-label-fixture")
+        commit_files(repo, {"private-label-fixture.txt": "inert fixture"})
     elif case == "opened_store":
         # Simulate an inconclusive preliminary path check on an ordinary test fixture.
         monkeypatch.setenv("JEV_MCP_KEY_FILE", str(repo / "tests.log"))
@@ -384,6 +388,8 @@ def test_gate_guards_local_inputs_before_judgment(
     provider = FakeProvider({})
     result = cli.run_gate(["--diff", "HEAD~1", "--claims", "claims.json", "--tests", "tests.log"], provider=provider)
     assert (result.exit_code, result.error_code) == (2, expected)
+    if case == "sensitive_label":
+        assert "private-label-fixture" not in result.rendered
     assert not provider.requests
 
 

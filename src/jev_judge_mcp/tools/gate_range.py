@@ -129,12 +129,13 @@ def read_range(
         paths = [root / origin / item["path"] for origin in origins]
         if not paths or any(not path.is_relative_to(cwd) for path in paths):
             raise GitDiffError("git patch origin is outside the working directory")
+        label = redact_credential_literals(item["path"], redact)
         if (
             has_private_key_boundary(full)
-            or redact_credential_literals(item["path"], redact) != item["path"]
+            or label != item["path"]
             or any(is_secret_store(path, key_path) for path in paths)
         ):
-            skipped.append({"path": item["path"], "reason": "secret_file"})
+            skipped.append({"path": label, "reason": "secret_file"})
         else:
             kept.append({"path": item["path"], "patch": redact_credential_literals(patch, redact)})
     if not kept:
