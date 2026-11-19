@@ -215,7 +215,8 @@ def test_chart_labels_a_grading_failure_apart_from_a_connection_error() -> None:
     # The grading failure comes from the runner's own record builder, so a reworded status fails here.
     item = Item("crash", "jev_verify", "f", {}, "q", None, {}, (), "i", None, None, None, {}, {"status": "draft"})
     agent = AgentRunResult((), Path("."), "", "", 0, 1.5, Trace(), "ok")
-    crashed = run.failed_record("crash.B", item, "B", agent, KeyError("answer"))
+    crashed = run.failed_record("crash.B", item, "B", agent, 2.25, KeyError("answer"))
+    assert crashed["jev_cost_usd"] is None
     records = [
         record("ok", "A", "ok"),
         record("ok", "B", "ok"),

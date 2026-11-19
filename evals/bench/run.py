@@ -284,7 +284,7 @@ def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) ->
             )
 
         def failed(error: Exception) -> dict[str, Any]:
-            row = failed_record(run_id, item, arm, run, error)
+            row = failed_record(run_id, item, arm, run, book.policy.run_bound_usd, error)
             if stop is not None:
                 row["status"] = f"{status}; {row['status']}"
                 row["server_failure"] = isinstance(stop, ServerUnreachable)
@@ -374,11 +374,13 @@ def _bench_record(
     return record_row(tuple(_BenchRecord.model_fields), values)
 
 
-def failed_record(run_id: str, item: Item, arm: str, run: AgentRunResult, error: Exception) -> dict[str, Any]:
+def failed_record(
+    run_id: str, item: Item, arm: str, run: AgentRunResult, run_bound_usd: float, error: Exception
+) -> dict[str, Any]:
     """The record of a run whose post-processing raised: failed, unscored, and charged the run bound.
 
-    Keys are the success record's (`_bench_record`). The study runner books the bound. Its gate stays
-    None: a crash here is not a use-gate miss.
+    The study runner books the caller's run bound in the ledger. Measured costs and the use gate
+    remain unknown in the saved row.
     """
     return _bench_record(
         run_id,
