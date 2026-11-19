@@ -1,11 +1,8 @@
 name: Release
 
-# Conventional Commits on main -> a release pull request. Merging it -> a draft GitHub Release with its
-# tag (release-please-config.json: draft + force-tag-creation). The tagged commit is then built, its
-# assets and checksums uploaded, re-downloaded, installed into a fresh venv, and checked; only then is
-# the release published. Any failure leaves the release a draft. The verified wheel and sdist are
-# uploaded to PyPI through trusted publishing (OIDC, no stored token) only when the repository variable
-# PYPI_PUBLISH is 'true'; otherwise the release stays GitHub-only. A manual retry requires the original verification run.
+# A merged release is built and installed with read-only credentials. Only verified
+# artifacts reach the GitHub and PyPI publishing jobs. A manual main-branch retry
+# overrides the automatic PYPI_PUBLISH hold and requires an original verification receipt.
 on:
   push:
     branches: [main]
@@ -57,125 +54,17 @@ jobs:
 
   build:
     name: Build
-    outputs:
-      manifest_digest: ${{ steps.checksums.outputs.digest }}
     needs: version
     if: needs.version.outputs.release_created == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write # upload assets onto the draft release
-    env:
-      TAG: ${{ needs.version.outputs.tag_name }}
-      TAG_SHA: ${{ needs.version.outputs.sha }}
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: refs/tags/${{ needs.version.outputs.tag_name }}
-          persist-credentials: false
-      - name: Confirm the tagged commit and a draft release
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$TAG_SHA"
-          test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
-        with:
-          enable-cache: false
-      - name: Build one wheel and one sdist at the tag version
-        run: |
-          set -euo pipefail
-          rm -rf dist
-          uv build
-          uv run --no-project scripts/check_release_version.py dist dist "$TAG"
-      - id: checksums
-        name: Write checksums
-        working-directory: dist
-        run: |
-          set -euo pipefail
-          sha256sum -- *.whl *.tar.gz > SHA256SUMS.txt
-          sha256sum SHA256SUMS.txt | cut -d " " -f 1 | sed "s/^/digest=/" >> "$GITHUB_OUTPUT"
-      - name: Upload onto the draft release
-        run: |
-          set -euo pipefail
-          gh release upload "$TAG" dist/*.whl dist/*.tar.gz dist/SHA256SUMS.txt --clobber
-
-  verify:
-    name: Verify and publish
-    needs: [version, build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # drafts and their assets are visible only with write; also the final undraft
-    env:
-      TAG: ${{ needs.version.outputs.tag_name }}
-      TAG_SHA: ${{ needs.version.outputs.sha }}
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          ref: refs/tags/${{ needs.version.outputs.tag_name }}
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
-        with:
-          enable-cache: false
-      - name: Download the release assets and check their sums
-        env:
-          BUILT_MANIFEST: ${{ needs.build.outputs.manifest_digest }}
-        run: |
-          set -euo pipefail
-          assets="$RUNNER_TEMP/assets"
-          gh release download "$TAG" --dir "$assets"
-          cd "$assets"
-          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" = "$TAG_SHA"
-          mkdir "$RUNNER_TEMP/receipt"
-          sha256sum -- *.whl *.tar.gz > "$RUNNER_TEMP/receipt/SHA256SUMS.txt"
-          digest=$(sha256sum "$RUNNER_TEMP/receipt/SHA256SUMS.txt" | cut -d " " -f 1)
-          test "$digest" = "$BUILT_MANIFEST"
-          cmp SHA256SUMS.txt "$RUNNER_TEMP/receipt/SHA256SUMS.txt"
-          uv run --no-project "$GITHUB_WORKSPACE/scripts/check_release_version.py" dist . "$TAG"
-      - name: Install the wheel into a fresh venv and check the installed version
-        run: |
-          set -euo pipefail
-          venv="$RUNNER_TEMP/verify-venv"
-          uv venv --python "$(cat .python-version)" "$venv"
-          uv pip install --python "$venv/bin/python" "$RUNNER_TEMP"/assets/*.whl
-          # -I: no checkout, script directory, or PYTHONPATH on sys.path; jev_judge_mcp must come from the wheel.
-          cd "$RUNNER_TEMP"
-          "$venv/bin/python" -I "$GITHUB_WORKSPACE/scripts/check_release_version.py" installed "$TAG"
-      - name: Save the verified manifest for publication and retries
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: verified-${{ env.TAG }}-${{ env.TAG_SHA }}
-          path: ${{ runner.temp }}/receipt/SHA256SUMS.txt
-          if-no-files-found: error
-          overwrite: true
-
-      - name: Publish the release
-        run: |
-          set -euo pipefail
-          test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
-          gh release edit "$TAG" --draft=false
-
-  pypi:
-    name: Publish to PyPI
-    needs: [version, verify]
-    if: >-
-      always() && !cancelled() && github.ref == 'refs/heads/main' &&
-      ((needs.verify.result == 'success' && vars.PYPI_PUBLISH == 'true') ||
-      (github.event_name == 'workflow_dispatch' && inputs.republish_tag != ''))
-    runs-on: ubuntu-latest
-    permissions:
       contents: read
-      actions: read
-      id-token: write # PyPI trusted publishing (OIDC)
-    environment: pypi
     env:
-      TAG: ${{ inputs.republish_tag || needs.version.outputs.tag_name }}
-      REQUESTED_RUN: ${{ inputs.verified_run }}
-      RETRY_TAG: ${{ inputs.republish_tag }}
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.version.outputs.tag_name }}
+      TAG_SHA: ${{ needs.version.outputs.sha }}
+    outputs:
+      artifact_id: ${{ steps.stage.outputs.artifact-id }}
+      manifest_digest: ${{ steps.checksums.outputs.digest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -183,13 +72,174 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
+          version: "0.12.19"
+          checksum: "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
           enable-cache: false
+      - name: Build one wheel and one sdist at the tag version
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TAG_SHA"
+          export VIRTUAL_ENV="$RUNNER_TEMP/backend"
+          uv venv --python "$(cat .python-version)" "$VIRTUAL_ENV"
+          uv pip install --python "$VIRTUAL_ENV/bin/python" --only-binary :all: --require-hashes -r - <<'LOCK'
+          hatchling==1.33.0 --hash=sha256:415290b84f464d2884303fca8974d38e7b85579069fab02a15db0828fbb1446d
+          packaging==26.3 --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+          pathspec==1.1.1 --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189
+          pluggy==1.7.0 --hash=sha256:7dd7b0d8832ba3cb632c306926ded123429211b83641b35dc5c41ad2d34f9bec
+          tomlkit==0.15.2 --hash=sha256:05562412163a3037b94497385fb7f9204c637bc605af7a48199e41cf2272f437
+          trove-classifiers==2026.9.21.13 --hash=sha256:8b1ff4f9c191b1040b71c37f1e445ab99732911e3cd91de52838453a854d7a17
+          LOCK
+          uv build --no-build-isolation --python "$VIRTUAL_ENV/bin/python" --out-dir "$RUNNER_TEMP/dist"
+          mkdir "$RUNNER_TEMP/assets"
+          cp "$RUNNER_TEMP"/dist/*.whl "$RUNNER_TEMP"/dist/*.tar.gz "$RUNNER_TEMP/assets/"
+          python3 -I scripts/check_release_version.py dist "$RUNNER_TEMP/assets" "$TAG"
+      - id: checksums
+        working-directory: ${{ runner.temp }}/assets
+        run: |
+          set -euo pipefail
+          sha256sum -- *.whl *.tar.gz > SHA256SUMS.txt
+          sha256sum SHA256SUMS.txt | cut -d " " -f 1 | sed "s/^/digest=/" >> "$GITHUB_OUTPUT"
+      - id: stage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: built-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/assets/
+          if-no-files-found: error
+
+  verify:
+    name: Verify staged distributions
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ needs.version.outputs.tag_name }}
+      TAG_SHA: ${{ needs.version.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.TAG_SHA }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/assets
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.12.19"
+          checksum: "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
+          enable-cache: false
+      - name: Install the wheel into a fresh venv and check the installed version
+        env:
+          BUILT_MANIFEST: ${{ needs.build.outputs.manifest_digest }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/assets"
+          python3 -I "$GITHUB_WORKSPACE/scripts/check_release_version.py" dist . "$TAG"
+          sha256sum -- *.whl *.tar.gz > "$RUNNER_TEMP/expected-sums"
+          cmp SHA256SUMS.txt "$RUNNER_TEMP/expected-sums"
+          test "$(sha256sum SHA256SUMS.txt | cut -d ' ' -f 1)" = "$BUILT_MANIFEST"
+          venv="$RUNNER_TEMP/verify-venv"
+          uv venv --python "$(cat "$GITHUB_WORKSPACE/.python-version")" "$venv"
+          uv pip install --python "$venv/bin/python" ./*.whl
+          "$venv/bin/python" -I "$GITHUB_WORKSPACE/scripts/check_release_version.py" installed "$TAG"
+
+  publish:
+    # This job name also authenticates verification receipts from earlier releases.
+    name: Verify and publish
+    needs: [version, build, verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.version.outputs.tag_name }}
+      BUILT_MANIFEST: ${{ needs.build.outputs.manifest_digest }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/assets
+      - name: Upload staged distributions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_SHA: ${{ needs.version.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9][0-9A-Za-z.+-]*$ ]]
+          test "$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha)" = "$TAG_SHA"
+          draft=$(gh release view "$TAG" --json isDraft,assets)
+          jq -e '.isDraft == true and (.assets | type == "array")' <<< "$draft" >/dev/null
+          cd "$RUNNER_TEMP/assets"
+          version=${TAG#v}
+          files=("jev_judge_mcp-$version-py3-none-any.whl" "jev_judge_mcp-$version.tar.gz")
+          sha256sum -- "${files[@]}" > "$RUNNER_TEMP/expected-sums"
+          cmp SHA256SUMS.txt "$RUNNER_TEMP/expected-sums"
+          test "$(sha256sum SHA256SUMS.txt | cut -d ' ' -f 1)" = "$BUILT_MANIFEST"
+          for file in "${files[@]}" SHA256SUMS.txt; do
+            if ! jq -e --arg file "$file" 'any(.assets[]; .name == $file)' <<< "$draft" >/dev/null; then
+              gh release upload "$TAG" "$file"
+            fi
+          done
+      - name: Save the verified manifest for publication and retries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verified-${{ env.TAG }}-${{ needs.version.outputs.sha }}
+          path: ${{ runner.temp }}/assets/SHA256SUMS.txt
+          if-no-files-found: error
+          overwrite: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/assets"
+          version=${TAG#v}
+          sha256sum -- "jev_judge_mcp-$version-py3-none-any.whl" "jev_judge_mcp-$version.tar.gz" SHA256SUMS.txt |
+            jq -Rn '[inputs | split("  ") | {name: .[1], digest: ("sha256:" + .[0])}] | sort_by(.name)' \
+              > "$RUNNER_TEMP/expected.json"
+          release_id=$(gh release view "$TAG" --json databaseId,isDraft,tagName |
+            jq -er --arg tag "$TAG" 'select(.isDraft and .tagName == $tag) | .databaseId | numbers')
+          endpoint="repos/$GH_REPO/releases/$release_id"
+          gh api --paginate "$endpoint/assets?per_page=100" |
+            jq -es --slurpfile expected "$RUNNER_TEMP/expected.json" \
+              'add | all(.[]; .state == "uploaded") and (map({name,digest}) | sort_by(.name) == $expected[0])' >/dev/null
+          gh api --method PATCH "$endpoint" -F draft=false >/dev/null
+
+  prepare_pypi:
+    name: Authenticate PyPI distributions
+    needs: [version, publish]
+    if: >-
+      always() && !cancelled() && github.ref == 'refs/heads/main' &&
+      ((needs.publish.result == 'success' && vars.PYPI_PUBLISH == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.republish_tag != ''))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      artifact_id: ${{ steps.stage.outputs.artifact-id }}
+      manifest_digest: ${{ steps.validate.outputs.digest }}
+    env:
+      TAG: ${{ inputs.republish_tag || needs.version.outputs.tag_name }}
+      REQUESTED_RUN: ${{ inputs.verified_run }}
+      RETRY_TAG: ${{ inputs.republish_tag }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - name: Authenticate the verification run
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           [[ "$TAG" =~ ^v[0-9][0-9A-Za-z.+-]*$ ]]
           SOURCE_RUN=$GITHUB_RUN_ID
-          tag_sha=$(git rev-parse HEAD)
+          tag_sha=$(gh api "repos/$GH_REPO/commits/refs/tags/$TAG" --jq .sha)
           receipt="verified-$TAG-$tag_sha"
           if [[ -n "$RETRY_TAG" ]]; then
             if [[ -n "$REQUESTED_RUN" ]]; then
@@ -211,11 +261,46 @@ jobs:
           gh run download "$SOURCE_RUN" --name "$receipt" --dir "$RUNNER_TEMP/receipt"
           test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = false
           gh release download "$TAG" --dir "$RUNNER_TEMP/assets"
-      - name: Upload to PyPI through trusted publishing
+      - name: Validate PyPI distributions
+        id: validate
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/assets"
           sha256sum -- *.whl *.tar.gz > "$RUNNER_TEMP/current-sums"
           cmp "$RUNNER_TEMP/receipt/SHA256SUMS.txt" "$RUNNER_TEMP/current-sums"
-          python3 "$GITHUB_WORKSPACE/scripts/check_release_version.py" dist . "$TAG"
+          python3 -I "$GITHUB_WORKSPACE/scripts/check_release_version.py" dist . "$TAG"
+          sha256sum "$RUNNER_TEMP/current-sums" | cut -d ' ' -f 1 | sed 's/^/digest=/' >> "$GITHUB_OUTPUT"
+      - id: stage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pypi-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/assets/*.whl
+            ${{ runner.temp }}/assets/*.tar.gz
+          if-no-files-found: error
+
+  pypi:
+    name: Publish to PyPI
+    needs: prepare_pypi
+    if: "!cancelled() && needs.prepare_pypi.result == 'success'"
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment: pypi
+    # Same uv 0.12.19 image as the local Linux CI gate. No checkout or package installation.
+    container: ghcr.io/astral-sh/uv@sha256:10b94fe3550b7a96e3982860bb82cdefba6300264a7a40bb9334acf21a450974
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.prepare_pypi.outputs.artifact_id }}
+          merge-multiple: true
+          path: assets
+      - name: Upload to PyPI through trusted publishing
+        working-directory: assets
+        env:
+          VERIFIED_MANIFEST: ${{ needs.prepare_pypi.outputs.manifest_digest }}
+        run: |
+          set -euo pipefail
+          digest=$(sha256sum -- *.whl *.tar.gz | sha256sum | cut -d ' ' -f 1)
+          test "$digest" = "$VERIFIED_MANIFEST"
           uv publish --trusted-publishing always --no-attestations ./*.whl ./*.tar.gz

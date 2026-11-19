@@ -8,6 +8,7 @@ TAG is the release tag, `v` followed by the version (`v0.1.0`). Exits 1 on a mis
 
 import importlib
 import importlib.metadata
+import re
 import sys
 import tarfile
 import zipfile
@@ -24,16 +25,19 @@ class ReleaseCheckError(Exception):
 
 def tag_version(tag: str) -> str:
     version = tag.removeprefix("v")
-    if version == tag or not version:
+    if version == tag or not re.fullmatch(r"[0-9][0-9A-Za-z.+-]*", version):
         raise ReleaseCheckError(f"release tag {tag!r} is not 'v' followed by a version")
     return version
 
 
 def _metadata_version(text: str, source: str) -> str:
-    version = HeaderParser().parsestr(text)["Version"]
-    if not version:
-        raise ReleaseCheckError(f"{source} has no Version field")
-    return version
+    metadata = HeaderParser().parsestr(text)
+    if metadata.get_all("Name") != [DISTRIBUTION]:
+        raise ReleaseCheckError(f"{source} must have one Name field equal to {DISTRIBUTION}")
+    versions = metadata.get_all("Version", [])
+    if len(versions) != 1 or not versions[0]:
+        raise ReleaseCheckError(f"{source} must have one Version field")
+    return versions[0]
 
 
 def _only_member(names: list[str], suffix: str, archive: Path) -> str:
@@ -53,7 +57,8 @@ def wheel_version(wheel: Path) -> str:
 def sdist_version(sdist: Path) -> str:
     with tarfile.open(sdist, "r:gz") as archive:
         member = _only_member(archive.getnames(), "/PKG-INFO", sdist)
-        extracted = archive.extractfile(member)
+        info = archive.getmember(member)
+        extracted = archive.extractfile(info) if info.isfile() else None
         if extracted is None:
             raise ReleaseCheckError(f"{sdist.name}:{member} is not a regular file")
         return _metadata_version(extracted.read().decode("utf-8"), f"{sdist.name}:{member}")
@@ -70,9 +75,15 @@ def check_dist(directory: Path, tag: str) -> str:
     expected = tag_version(tag)
     wheel = _only_file(directory, "*.whl")
     sdist = _only_file(directory, "*.tar.gz")
+    allowed = {wheel.name, sdist.name, "SHA256SUMS.txt"}
+    for asset in directory.iterdir():
+        if asset.name not in allowed or asset.is_symlink() or not asset.is_file():
+            raise ReleaseCheckError(f"unexpected release asset: {asset.name!r}")
     for archive, actual in ((wheel, wheel_version(wheel)), (sdist, sdist_version(sdist))):
         if actual != expected:
             raise ReleaseCheckError(f"{archive.name} is version {actual}, but tag {tag} needs {expected}")
+    if wheel.name != f"{PACKAGE}-{expected}-py3-none-any.whl" or sdist.name != f"{PACKAGE}-{expected}.tar.gz":
+        raise ReleaseCheckError(f"release asset names must identify {DISTRIBUTION} at {tag}")
     return expected
 
 

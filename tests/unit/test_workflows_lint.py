@@ -124,18 +124,29 @@ def test_scout_034_real_workflows_have_immutable_actions(tmp_path: Path) -> None
 
 def test_scout_006_both_publish_paths_share_verified_input() -> None:
     release = (SCRIPT.parents[1] / ".github/workflows/release.yml").read_text()
-    verify, publish = release.split("\n  pypi:\n")
+    before_pypi, pypi = release.split("\n  pypi:\n")
+    build, post_build = before_pypi.split("\n  verify:\n")
+    verify, post_verify = post_build.split("\n  publish:\n")
+    publish, prepare = post_verify.split("\n  prepare_pypi:\n")
     assert release.count("id-token: write") == release.count("uv publish ") == 1
-    assert verify.index("uv pip install ") < verify.index("uses: actions/upload-artifact@")
-    assert "needs.verify.result == 'success'" in publish
-    assert "github.event_name == 'workflow_dispatch' && inputs.republish_tag != ''" in publish
+    assert ": write" not in build.split("\n  build:\n")[1]
+    assert ": write" not in verify
+    assert "uv pip install " in verify
+    assert "uses: actions/upload-artifact@" not in verify
+    assert publish.index("Save the verified manifest") < publish.index("- name: Publish the release")
+    assert "needs: [version, build, verify]" in publish
+    assert "needs.publish.result == 'success'" in prepare
+    assert "github.event_name == 'workflow_dispatch' && inputs.republish_tag != ''" in prepare
     for restriction in (
         ".head_repository.full_name == $repo",
         '.head_branch == "main"',
         '.path == ".github/workflows/release.yml"',
     ):
-        assert restriction in publish
-    assert publish.index('gh run download "$SOURCE_RUN" --name "$receipt"') < publish.index(
+        assert restriction in prepare
+    assert prepare.index('gh run download "$SOURCE_RUN" --name "$receipt"') < prepare.index(
         'gh release download "$TAG"'
     )
-    assert publish.index('cmp "$RUNNER_TEMP/receipt/SHA256SUMS.txt"') < publish.index("uv publish ")
+    assert prepare.index('cmp "$RUNNER_TEMP/receipt/SHA256SUMS.txt"') < prepare.index("uses: actions/upload-artifact@")
+    assert "artifact-ids: ${{ needs.prepare_pypi.outputs.artifact_id }}" in pypi
+    assert pypi.index('test "$digest" = "$VERIFIED_MANIFEST"') < pypi.index("uv publish ")
+    assert "checkout@" not in pypi
