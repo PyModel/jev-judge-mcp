@@ -93,11 +93,10 @@ def headline_action(body: dict[str, Any]) -> str | None:
 
 def result_fields(message: dict[str, Any]) -> dict[str, Any]:
     """isError and the result body's `usage.input_tokens`, `action`, headline Action and `model`; never text."""
-    result = cast(dict[str, Any], message.get("result") or {})
-    row: dict[str, Any] = {"is_error": bool(result.get("isError")) or "error" in message}
-    text = result_text(message)
+    text, is_error = _result_content(message)
+    row: dict[str, Any] = {"is_error": is_error}
     try:
-        payload = json.loads(text) if isinstance(text, str) else None
+        payload = json.loads(text) if text is not None else None
     except (ValueError, RecursionError):
         payload = None
     if isinstance(payload, dict):
@@ -127,9 +126,28 @@ def result_fields(message: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def result_text(message: dict[str, Any]) -> object:
-    content = cast(list[dict[str, Any]], cast(dict[str, Any], message.get("result") or {}).get("content") or [])
-    return content[0].get("text") if content and content[0].get("type") == "text" else None
+def _result_content(message: dict[str, Any]) -> tuple[str | None, bool]:
+    result = message.get("result")
+    if not isinstance(result, dict):
+        return None, True
+    envelope = cast(dict[str, Any], result)
+    content = envelope.get("content")
+    if not isinstance(content, list):
+        return None, True
+    is_error = bool(envelope.get("isError")) or "error" in message
+    if not content:
+        return None, is_error
+    if not isinstance(content[0], dict):
+        return None, True
+    first = cast(dict[str, Any], content[0])
+    if first.get("type") != "text":
+        return None, is_error
+    text = first.get("text")
+    return (text, is_error) if isinstance(text, str) else (None, True)
+
+
+def result_text(message: dict[str, Any]) -> str | None:
+    return _result_content(message)[0]
 
 
 def pending_key(message_id: object) -> str:

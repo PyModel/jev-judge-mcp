@@ -563,3 +563,14 @@ for line in sys.stdin:
         timeout=10,
     )
     assert [(row["input_tokens"], row["usage_reported"]) for row in _rows(log.read_text())] == [(0, False), (0, True)]
+
+
+@pytest.mark.parametrize(
+    "reply", [["invalid"], {"content": [7]}, {"content": {"type": "text"}}, {"content": [{"type": "text", "text": 5}]}]
+)
+def test_metadata_recorder_marks_malformed_response_unknown(reply: object) -> None:
+    from evals.relay import result_text
+
+    response = {"id": 1, "result": reply}
+    assert result_fields(response) == {"is_error": True}
+    assert result_text(response) is None
