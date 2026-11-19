@@ -322,3 +322,25 @@ def test_last_ledger_handle_releases_study(tmp_path: Path) -> None:
     with _spawn(_NEXT, second.path) as other:
         _, error = other.communicate(timeout=5)
         assert other.returncode == 0, error
+
+
+def test_writer_failure_after_replace_keeps_shared_ledger_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from collections.abc import Mapping
+    from typing import Any
+
+    from evals import spend
+
+    book = _ledger(tmp_path)
+    peer = _ledger(tmp_path)
+    publish = spend.write_json
+
+    def fail_after_replace(path: Path, payload: Mapping[str, Any]) -> None:
+        publish(path, payload)
+        raise OSError("publication failed after replace")
+
+    monkeypatch.setattr(spend, "write_json", fail_after_replace)
+    with pytest.raises(OSError, match="failed after replace"):
+        book.record("published", 1)
+    assert peer.runs == json.loads(book.path.read_text())["runs"] == {"published": 1}

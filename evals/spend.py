@@ -63,7 +63,19 @@ class _History:
     def publish(self, path: Path, cap: float, runs: dict[str, float]) -> None:
         directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
-            write_json(path, {"max_usd": cap, "runs": runs})
+            try:
+                write_json(path, {"max_usd": cap, "runs": runs})
+            except OSError:
+                # A writer may fail on cleanup or durability after making its rename visible.
+                try:
+                    visible, limit = _read_history(path)
+                except FileNotFoundError:
+                    pass  # The first publication failed before its rename.
+                else:
+                    self.runs.update(visible)
+                    if limit is not None:
+                        self.cap = limit
+                raise
             # The rename is visible even when syncing the directory subsequently fails.
             self.runs.update(runs)
             self.cap = cap
