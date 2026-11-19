@@ -3,6 +3,7 @@
 import json
 import os
 import stat
+import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import replace
@@ -1341,3 +1342,27 @@ def test_scout_020_non_string_tool_name() -> None:
     )
     with pytest.raises(VerifyError, match="tools/list"):
         verify_command([sys.executable, "-c", child])
+
+
+@pytest.mark.parametrize("close_stdout", [False, True])
+def test_scout_020_early_pipe_close_preserves_child_stderr(monkeypatch: pytest.MonkeyPatch, close_stdout: bool) -> None:
+    children: list[subprocess.Popen[bytes]] = []
+
+    def capture(child: subprocess.Popen[bytes]) -> subprocess.Popen[bytes]:
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(subprocess.Popen, "__enter__", capture)
+    # The reply makes the parent send its next request after the child has closed stdin.
+    response = json.dumps({"id": 1, "result": {"serverInfo": {"name": "jev-mcp"}}})
+    early_exit = "os.close(1)" if close_stdout else f"print({response!r}, flush=True)"
+    child = (
+        f"import os, sys, time; sys.stdin.readline(); os.close(0); {early_exit}; "
+        "time.sleep(0.08); print('local resolver diagnostic', file=sys.stderr, flush=True)"
+    )
+    with pytest.raises(VerifyError, match="local resolver diagnostic"):
+        verify_command([sys.executable, "-c", child], timeout=2)
+
+    (process,) = children
+    assert process.returncode is not None
+    assert all(pipe is not None and pipe.closed for pipe in (process.stdin, process.stdout, process.stderr))

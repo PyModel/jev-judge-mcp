@@ -37,6 +37,10 @@ STDOUT_MESSAGES = 256
 _READ_SIZE = 8192
 
 
+class _ClosedPipe(VerifyError):
+    """The child closed a handshake pipe and may still be writing its final diagnostic."""
+
+
 class _OutputLimit(VerifyError):
     pass
 
@@ -98,11 +102,14 @@ class _Output:
             self.read(remaining)
         raise VerifyError("timed out waiting for the server")
 
-    def finish(self) -> str:
-        # Collect diagnostics already in the pipes after reaping, even if a descendant kept a pipe open.
-        deadline = time.monotonic() + 0.2
+    def drain(self, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
         while self.selector.get_map() and time.monotonic() < deadline:
             self.read(max(0, deadline - time.monotonic()), finishing=True)
+
+    def finish(self) -> str:
+        # Read remaining pipe bytes after reaping, even if a descendant kept a pipe open.
+        self.drain(0.2)
         if self.stderr:
             self.tail.append(self.stderr.decode("utf-8", errors="replace"))
         lines = [f"  {line}" for line in self.tail if line]
@@ -130,20 +137,30 @@ def verify_command(command: list[str], *, timeout: float = 30.0) -> None:
             output = _Output(selector, process.stdout, process.stderr)
             _handshake(process.stdin, output, time.monotonic() + timeout)
             completed = True
-        except (VerifyError, BrokenPipeError) as exc:
-            error = exc if isinstance(exc, VerifyError) else VerifyError("server closed stdin")
+        except BrokenPipeError:
+            error = _ClosedPipe("server closed stdin")
+        except VerifyError as exc:
+            error = exc
         finally:
-            process.stdin.close()
-            if completed:
-                with suppress(subprocess.TimeoutExpired):
-                    process.wait(timeout=1)
-            if process.returncode is None:
+            try:
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    # Darwin can return EPERM for an exited process group. Popen checks its child before signaling.
-                    process.kill()
-                process.wait()
+                    process.stdin.close()
+                except BrokenPipeError:
+                    error = error or _ClosedPipe("server closed stdin")
+                if isinstance(error, _ClosedPipe) and output is not None:
+                    # A resolver may close its protocol pipe before it finishes writing stderr.
+                    output.drain(0.5)
+                elif completed:
+                    with suppress(subprocess.TimeoutExpired):
+                        process.wait(timeout=1)
+            finally:
+                if process.returncode is None:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        # Darwin can return EPERM for an exited process group. Popen checks its child before signaling.
+                        process.kill()
+                    process.wait()
         if error:
             suffix = output.finish() if output is not None and not isinstance(error, _OutputLimit) else ""
             raise VerifyError(f"{error}; {suffix}" if suffix else str(error))
@@ -190,7 +207,7 @@ def _read_response(reader: _Output, request_id: int, deadline: float) -> dict[st
     while time.monotonic() < deadline:
         line = reader.line(deadline)
         if line is None:
-            raise VerifyError("server closed stdout")
+            raise _ClosedPipe("server closed stdout")
         try:
             parsed: object = json.loads(line)
         except (ValueError, RecursionError):
