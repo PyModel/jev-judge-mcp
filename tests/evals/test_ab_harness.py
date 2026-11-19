@@ -1703,6 +1703,20 @@ def test_scout_013_each_agent_keeps_its_own_record_and_incomplete_runs_are_named
     assert [record["agent"] for record in ab_run.derived_records(tmp_path)] == ["claude"]
 
 
+@pytest.mark.parametrize(
+    "wall",
+    [True, False, -1, float("inf"), float("nan"), 10**400],
+    ids=["true", "false", "negative", "inf", "nan", "overflow"],
+)
+def test_invalid_saved_duration_is_excluded_from_ab_reports(tmp_path: Path, wall: object) -> None:
+    run_dir = tmp_path / "claude/task.A.r1"
+    run_dir.mkdir(parents=True)
+    row = _run("task", "A", status="ok", wall_s=wall)
+    (run_dir / "result.json").write_text(json.dumps(row))
+    assert ab_run.load_records(tmp_path) == []
+    assert "claude/task.A.r1" in ab_run.write_report(tmp_path, tmp_path / "report.md")
+
+
 def test_scout_032_only_verified_inputs_reuse_a_successful_install(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

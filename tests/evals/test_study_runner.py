@@ -154,6 +154,21 @@ def test_a_missing_stopped_cost_books_the_bound(tmp_path: Path) -> None:
     assert book.runs == {"run-a": BOUND}
 
 
+@pytest.mark.parametrize(
+    ("cost", "charge"),
+    [({}, BOUND), ({"jev_cost_usd": None}, BOUND), ({"jev_cost_usd": False}, BOUND), ({"jev_cost_usd": 0}, 0)],
+    ids=["missing", "unknown", "boolean", "measured-zero"],
+)
+def test_returned_stop_reserves_only_if_the_selected_price_is_unknown(
+    tmp_path: Path, cost: dict[str, object], charge: float
+) -> None:
+    book = _book(tmp_path)
+    path = tmp_path / "result.json"
+    path.write_text(json.dumps({"cost_usd": 0.5, **cost}))
+    assert run_recorded(book, "run-a", path, _mismatch, cost_key="jev_cost_usd", stop=lambda _: "stop") == "stop"
+    assert book.runs == {"run-a": charge}
+
+
 def test_cancellation_is_never_booked_even_when_named_as_file_cost(tmp_path: Path) -> None:
     book = _book(tmp_path)
     path = tmp_path / "result.json"

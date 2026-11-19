@@ -1097,6 +1097,18 @@ def test_invalid_grading_fields_keep_evidence_of_spend_above_the_reserve(
     assert loop.load().runs == {rid: charge}
 
 
+def test_underbooked_measured_run_stops_before_more_paid_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    rid = loop.ids[0]
+    loop.seed(rid, 0.25)
+    loop.load().record(rid, 0.1)
+    loop.install(lambda *_args: pytest.fail("started a paid run despite a known undercharge"))
+    assert not run.runs_remain(load_items(DRYRUN)[:1], loop.out)
+    stop = loop.go()
+    assert rid in stop and "$0.25" in stop
+    assert loop.load().runs == {rid: 0.1}
+
+
 @pytest.mark.parametrize(("stored", "incomplete"), [(False, True), (3.25, False)])
 def test_legacy_failure_migration_only_replaces_placeholder_zero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stored: float | bool, incomplete: bool

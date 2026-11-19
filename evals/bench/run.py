@@ -550,8 +550,10 @@ def _load_book(
                     raise
     for row in saved.rows.values():
         rid = row["run_id"]
-        if row["jev_cost_usd"] is None and rid in book.runs and book.runs[rid] < book.policy.run_bound_usd:
-            prior = prior or f"stopped: {rid} booked below its unfinished Jev reserve of ${book.policy.run_bound_usd:g}"
+        required = saved.charges[rid]
+        if rid in book.runs and book.runs[rid] < required:
+            kind = "unfinished Jev reserve" if row["jev_cost_usd"] is None else "recorded Jev cost"
+            prior = prior or f"stopped: {rid} booked below its {kind} of ${required:g}"
         prior = prior or analysis.terminal_reason(row)
     return book, plan, prior
 

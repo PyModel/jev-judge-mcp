@@ -70,7 +70,7 @@ from evals.confinement.launch import (
     run_confined,
 )
 from evals.isolation import IsolationInfrastructureError, postprocess
-from evals.spend import SpendLedger, agent_started, book_outcome, reconciliation_notes
+from evals.spend import SpendLedger, agent_started, amount, book_outcome, reconciliation_notes
 from evals.study_runner import record_row, run_recorded, write_record
 
 LIVE_FLAG = "JEV_AB_LIVE"
@@ -747,7 +747,7 @@ def _records(out: Path, *, all_agents: bool = False) -> tuple[dict[Path, dict[st
             and r["run_id"] == run_id(r["task"], r["arm"], r["repeat"])
             and {"measurement", "success", "final_tests_passed", "jev_tool_called", "decision", "decision_correct"}
             <= r.keys()
-            and isinstance(r.get("wall_s"), int | float)
+            and amount(r.get("wall_s")) is not None
             and all(type(r.get(k)) is int for k in ("tool_calls", "jev_calls", "test_cycles", "retries"))
             and isinstance(r.get("tokens"), dict)
             and type(r["tokens"].get("total")) is int
