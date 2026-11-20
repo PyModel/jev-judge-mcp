@@ -99,3 +99,11 @@ staging files older than one day are eligible for cleanup. Existing cache direct
 private and owned by the current user. New records use the dedicated `jev-records-v1/` child.
 Legacy records in its parent remain readable and are never swept. An unsuitable directory disables disk replay.
 For a custom cache or key location, select a new private directory owned by the service account.
+
+## Amendment (2026-11-19) — the last caller leaving cancels shared work
+
+A shared request runs only while some call waits on it. When the last waiting call is cancelled, the
+shared request is cancelled too, before or after the provider request is sent, as ADR-0011 requires
+of every cancelled call. Its billed tokens are still reported once: by the originating call, or by a
+call still waiting on the shared request when the originating call has already left. This replaces
+the 2026-11-18 sentence that only the originating call reports billed tokens.
