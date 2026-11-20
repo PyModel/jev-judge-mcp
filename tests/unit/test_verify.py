@@ -143,9 +143,8 @@ def test_a_claim_that_fails_on_complete_evidence_has_no_missing_evidence_code() 
     assert missing_evidence_code(verdict="verified", evidence=complete) is None
 
 
-async def test_a_caller_note_literally_named_none_still_blocks_auto() -> None:
-    """The `none` source hatch shares its key with a caller item called `none`; when that item is a
-    caller note, the ADR-0067 rule still holds — the collision never turns the note into auto."""
+async def test_a_caller_note_named_none_is_refused_in_source_selection() -> None:
+    """The source hatch reserves its key before any caller note can share it."""
     evidence = [
         {"id": "none", "text": "I ran the tests myself.", "kind": "caller_note"},
         {"id": "b", "text": "unrelated"},
@@ -155,11 +154,9 @@ async def test_a_caller_note_literally_named_none_still_blocks_auto() -> None:
         "source_claim0": {"choice": "none", "probabilities": {"none": 0.9, "b": 0.1}},
     }
     outcome = await call_tool("jev_verify", {"claims": ["Tests pass."], "evidence": evidence}, answers)
-    assert not outcome.is_error, outcome.text
-    row = outcome.payload["results"][0]
-    assert row["verdict"] == "verified" and row["confidence"] == 0.97
-    assert row["action"] == "review"
-    assert row["supporting_evidence"] is None  # the hatch still reads as no source on the wire
+    assert outcome.is_error and outcome.code == "invalid_arguments"
+    assert outcome.text == "ID 'none' sanitizes to reserved ID 'none'."
+    assert outcome.requests == []
 
 
 async def test_one_caller_note_is_policy_source_without_changing_supporting_evidence() -> None:

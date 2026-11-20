@@ -3,9 +3,10 @@
 from typing import Any
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question
+from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import DECIDE
 from jev_judge_mcp.policy import RequirementCheck
-from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
+from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, define, frame
 from jev_judge_mcp.tools.observed import contradicts_recommendation, fail_closed, validate_choice
 
 ESCAPE_HATCHES = {
@@ -103,21 +104,8 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     requirements: list[str] = args.get("requirements", [])
     candidates: list[dict[str, str]] = args["candidates"]
 
-    # Duplicate ids and ids that shadow an active escape hatch would alias wire keys.
-    seen: set[str] = set()
-    for candidate in candidates:
-        candidate_id = candidate["id"]
-        if candidate_id in seen:
-            raise ToolError("Duplicate candidate id: " + candidate_id, code="invalid_arguments")
-        if hatches and candidate_id in ESCAPE_HATCHES:
-            raise ToolError(
-                f'Candidate id "{candidate_id}" collides with an escape hatch; rename it or set escape_hatches: false.',
-                code="invalid_arguments",
-            )
-        seen.add(candidate_id)
-
-    # Opaque positional wire keys; validated slug ids come back verbatim.
-    key_to_id = {f"option_{i}": candidate["id"] for i, candidate in enumerate(candidates)}
+    ids = ensure_unique_ids(candidates, "candidate", reserved=ESCAPE_HATCHES if hatches else ()).ids
+    key_to_id = {f"option_{i}": identifier for i, identifier in enumerate(ids)}
     criteria = {f"option_{i}": candidate["description"] for i, candidate in enumerate(candidates)}
     if hatches:
         criteria.update(ESCAPE_HATCHES)
@@ -153,8 +141,8 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     rec = validate_choice(answers.get("recommendation"), criteria)
     # Q3 (ADR-0012): a malformed check stays visible as invalid_response and never warns.
     checks = [
-        RequirementCheck(candidate["id"], j, answer.choice if answer is not None else INVALID)
-        for i, candidate in enumerate(candidates)
+        RequirementCheck(identifier, j, answer.choice if answer is not None else INVALID)
+        for i, identifier in enumerate(ids)
         for j in range(len(requirements))
         for answer in [validate_choice(answers.get(f"check_{i}_{j}"), RELATION_CRITERIA)]
     ]

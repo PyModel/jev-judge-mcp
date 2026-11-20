@@ -22,7 +22,7 @@ from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from tests.parity.divergences import DIVERGENT, Expectation
 from tests.parity.program_expect import frozen_review_fields
-from tests.support.fixtures import FixtureCall, divergences
+from tests.support.fixtures import FixtureCall
 
 FAKE_URL = "http://fake.invalid"
 
@@ -51,7 +51,7 @@ async def replay_call(call: FixtureCall, monkeypatch: pytest.MonkeyPatch) -> Non
 
     Every request the tool makes must match its recorded exchange — method, path,
     authorization, content type, and body key order — and the result must reproduce the
-    recorded text and `isError`. A call whose fixture carries a divergence tag is checked
+    recorded text and `isError`. A call listed in the divergence registry is checked
     against its Python expectation in `DIVERGENT` instead.
     """
     apply_call_env(call, monkeypatch)
@@ -59,7 +59,7 @@ async def replay_call(call: FixtureCall, monkeypatch: pytest.MonkeyPatch) -> Non
     expected_bodies = [exchange["request"]["body"] for exchange in exchanges]
     expected_text: str = call.payload["result"]["content"][0]["text"]
     expected_error = bool(call.payload["result"].get("isError"))
-    if divergences(call):
+    if call.id in DIVERGENT:
         expectation: Expectation = DIVERGENT[call.id]
         expected_bodies, expected_text, expected_error = expectation(
             expected_bodies, expected_text, expected_error, call.payload["arguments"]
@@ -97,7 +97,7 @@ async def replay_call(call: FixtureCall, monkeypatch: pytest.MonkeyPatch) -> Non
     assert content.type == "text", call.id
     observed = (
         frozen_review_fields(content.text, expected_text, call.payload["arguments"])
-        if divergences(call) and not expected_error
+        if call.id in DIVERGENT and not expected_error
         else content.text
     )
     assert observed == expected_text, call.id

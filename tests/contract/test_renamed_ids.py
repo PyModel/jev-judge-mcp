@@ -1,14 +1,5 @@
-"""`renamed_ids`: a caller can map every returned id back to the id it sent (ADR-0062 amendment).
+"""Canonical IDs on the provider wire and in client results."""
 
-jev_find, jev_verify, and jev_gate run caller ids through `ensure_unique_ids`, and their schemas
-invite file paths as ids. The descriptions said nothing about the rewrite, so a caller could not
-map `providers_base.py` back to `providers/base.py`. The field is additive: sent id → returned id,
-present only when at least one id changed, absent when nothing changed. The last test is the
-recurrence guard: a tool that sanitizes ids and drops the renames fails it.
-"""
-
-import ast
-from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -16,8 +7,6 @@ import pytest
 from tests.support.jev import call_tool
 
 pytestmark = pytest.mark.anyio
-
-TOOLS_DIR = Path(__file__).parents[2] / "src" / "jev_judge_mcp" / "tools"
 
 CLAIM_VERIFIED = {"choice": "verified", "probabilities": {"verified": 0.97, "contradicted": 0.02, "unsupported": 0.01}}
 GOOD_REVIEW: dict[str, Any] = {
@@ -34,7 +23,7 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-async def test_find_maps_sanitized_and_duplicated_ids_back_to_the_caller() -> None:
+async def test_find_refuses_duplicated_path_ids() -> None:
     outcome = await call_tool(
         "jev_find",
         {
@@ -46,21 +35,14 @@ async def test_find_maps_sanitized_and_duplicated_ids_back_to_the_caller() -> No
                 {"id": "notes:ok", "text": "elsewhere"},
             ],
         },
-        {
-            "best": {
-                "choice": "providers_base.py_1",
-                "probabilities": {"providers_base.py": 0.02, "providers_base.py_1": 0.96, "notes_ok": 0.02},
-            },
-            "exists": {"noul": 0.95},
-        },
+        {},
     )
-    assert not outcome.is_error, outcome.text
-    payload = outcome.payload
-    assert payload["renamed_ids"] == {"providers/base.py": "providers_base.py_1", "notes:ok": "notes_ok"}
-    assert [row["id"] for row in payload["top"]] == ["providers_base.py_1"]
+    assert outcome.is_error and outcome.code == "invalid_arguments"
+    assert outcome.text == "IDs 'providers/base.py' and 'providers/base.py' both sanitize to 'providers_base.py'."
+    assert outcome.requests == []
 
 
-async def test_verify_maps_evidence_ids_and_not_generated_claim_ids() -> None:
+async def test_verify_uses_canonical_evidence_ids_and_positional_claim_ids() -> None:
     outcome = await call_tool(
         "jev_verify",
         {
@@ -79,12 +61,13 @@ async def test_verify_maps_evidence_ids_and_not_generated_claim_ids() -> None:
     )
     assert not outcome.is_error, outcome.text
     payload = outcome.payload
-    # claim0 is a generated id, never sent: it must not appear as a sent key or a returned value.
-    assert payload["renamed_ids"] == {"docs/install.md": "docs_install.md", "src/setup.py": "src_setup.py"}
-    assert "claim0" not in payload["renamed_ids"]
+    assert "renamed_ids" not in payload
+    state = cast(dict[str, Any], outcome.requests[0][0])
+    assert [item["id"] for item in state["evidence"]] == ["docs_install.md", "src_setup.py"]
+    assert [row["id"] for row in payload["results"]] == ["claim0"]
 
 
-async def test_gate_maps_evidence_ids_and_keeps_implicit_collisions_out() -> None:
+async def test_gate_uses_canonical_caller_and_implicit_evidence_ids() -> None:
     outcome = await call_tool(
         "jev_gate",
         {
@@ -94,19 +77,18 @@ async def test_gate_maps_evidence_ids_and_keeps_implicit_collisions_out() -> Non
             "claims": ["The unknown-user test passes."],
             "evidence": [
                 {"id": "src/a.py", "text": "PASS returns 404 for an unknown id"},
-                {"id": "diff", "text": "caller evidence that happens to be named diff"},
+                {"id": "caller", "text": "caller evidence"},
             ],
         },
         {**GOOD_REVIEW, "claim_0": CLAIM_VERIFIED},
     )
     assert not outcome.is_error, outcome.text
     payload = outcome.payload
-    # The caller's "diff" is unchanged; the implicit diff item is the one suffixed.
-    assert payload["renamed_ids"] == {"src/a.py": "src_a.py"}
+    assert "renamed_ids" not in payload
     state, _ = outcome.requests[0]
     request_state = cast(dict[str, object], state)
     asked = cast(list[dict[str, object]], request_state["evidence"])
-    assert [item["id"] for item in asked] == ["src_a.py", "diff", "diff_1", "tests"]
+    assert [item["id"] for item in asked] == ["src_a.py", "caller", "diff", "tests"]
 
 
 @pytest.mark.parametrize(
@@ -148,22 +130,12 @@ async def test_unchanged_ids_omit_the_field(tool: str, arguments: dict[str, Any]
     assert "renamed_ids" not in outcome.payload
 
 
-def test_every_tool_that_sanitizes_ids_surfaces_the_renames() -> None:
-    """Guard: a tool module that calls `ensure_unique_ids` must carry the rename map into its payload.
-
-    The original bug was exactly this drop: `ensure_unique_ids(...).items` and no `renamed` anywhere.
-    """
-    offenders: list[str] = []
-    for path in sorted(TOOLS_DIR.glob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        sanitizes = any(
-            isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "ensure_unique_ids"
-            for node in ast.walk(tree)
-        )
-        has_handle = any(isinstance(node, ast.AsyncFunctionDef) and node.name == "handle" for node in ast.walk(tree))
-        if not (sanitizes and has_handle):
-            continue
-        source = path.read_text(encoding="utf-8")
-        if "renamed_ids" not in source or not ("caller_renames" in source or ".renamed" in source):
-            offenders.append(path.name)
-    assert not offenders, f"tools that sanitize ids but drop the renames: {offenders}"
+async def test_find_returns_canonical_id_without_a_rename_map() -> None:
+    outcome = await call_tool(
+        "jev_find",
+        {"query": "Where is the class?", "candidates": [{"id": "src/a.py", "text": "class A"}]},
+        {"best": {"choice": "src_a.py", "probabilities": {"src_a.py": 1.0}}, "exists": {"noul": 0.95}},
+    )
+    assert not outcome.is_error, outcome.text
+    assert [row["id"] for row in outcome.payload["top"]] == ["src_a.py"]
+    assert "renamed_ids" not in outcome.payload

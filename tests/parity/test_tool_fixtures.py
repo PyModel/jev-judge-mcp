@@ -3,7 +3,7 @@
 Every fixture call of an implemented tool is replayed through `tests.support.replay`: the
 fixture env configures the server, the fake provider serves the recorded responses in order,
 and the Python tool must send the recorded request bodies (key order included) and return the
-recorded result text byte for byte, with the same `isError`. Fixtures tagged with a divergence
+recorded result text byte for byte, with the same `isError`. Calls in the divergence registry
 are replayed against the Python expectation in `DIVERGENT` instead. Fixture calls come from
 `tests.support.fixtures`, the one loader (ADR-0015).
 """
@@ -48,10 +48,10 @@ def test_every_fixture_call_is_replayed() -> None:
 
 
 def test_divergent_fixtures_have_python_expectations() -> None:
-    """Every tagged call has a Python expectation, and only tagged calls do: no silent divergence."""
+    """Every tagged call has an expectation and every expectation refers to a recorded call."""
     tagged_calls = {call.id for call in ALL_CALLS if divergences(call)}
-    implemented = {call.id for call in CALLS if divergences(call)}
-    assert implemented <= DIVERGENT.keys() <= tagged_calls
+    implemented = {call.id for call in CALLS}
+    assert tagged_calls <= DIVERGENT.keys() <= implemented
 
 
 REGEX_TIMEOUT_FIXTURES = (

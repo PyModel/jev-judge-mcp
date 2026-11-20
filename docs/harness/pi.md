@@ -12,9 +12,12 @@ Which tool fits a step is `docs/skills/jev-mcp/SKILL.md`. Building an app on the
 
 The command hook is not the `jev_gate` MCP tool, which stays the completion gate (ADR-0035).
 
-## Reading deduplicated ids
+## Matching results to caller IDs
 
-`jev_find`, `jev_verify`, and `jev_gate` sanitize and de-duplicate caller ids. When the same id is sent on several items, the first occurrence in caller order keeps the sent id and later occurrences get `_1`, `_2`, …; an unsuffixed id in a row therefore names the first physical item sent under that id. The payload's `renamed_ids` maps the sent id to the returned id of its last renamed occurrence (ADR-0062).
+Send unique IDs using ASCII letters, digits, dots, hyphens, and underscores. Use at most 64
+characters and avoid leading or trailing underscores to receive the same IDs in results.
+Collisions after sanitization return `invalid_arguments` before a provider request. See the
+[caller ID rules](../tools.md#caller-ids) for reserved keys and generated IDs.
 
 ## Command hook
 

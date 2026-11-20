@@ -1,8 +1,7 @@
 """Integrity of `docs/reference/divergences.json` — the single source of divergence truth (ADR-0020).
 
-The registry must stay closed (enums), complete (every tagged fixture call registered exactly
-once), and honest (ADR and pinning-test paths exist, and the Python expectation projection in
-`tests/parity/divergences.py` matches its fixture set exactly).
+The registry accounts for every recorded tag and references existing ADRs, tests, and calls.
+Its fixture set matches the Python expectation projection in `tests/parity/divergences.py`.
 """
 
 import json
@@ -53,11 +52,16 @@ def test_adr_and_pinning_test_paths_exist() -> None:
             assert (ROOT / path.split("::")[0]).is_file(), (entry["id"], path)
 
 
-def test_every_tagged_call_is_registered_exactly_once() -> None:
-    assert set(TAGGED) == set(REGISTERED)
+def test_registry_preserves_recorded_tags_and_references_existing_calls() -> None:
+    recorded_entries: dict[str, set[str]] = {}
+    for entry in REGISTRY["divergences"]:
+        if "fixture_tags" in entry:
+            for fid in entry["fixtures"]:
+                recorded_entries.setdefault(fid, set()).update(entry["fixture_tags"])
+    assert TAGGED.keys() == recorded_entries.keys()
     for fid, tags in TAGGED.items():
-        entry = REGISTERED[fid]
-        assert set(tags) <= set(entry.get("fixture_tags", ())), (fid, tags, entry["id"])
+        assert set(tags) <= recorded_entries[fid], (fid, tags)
+    assert REGISTERED.keys() <= {call.id for call in ALL_CALLS}
 
 
 def test_the_projection_matches_the_registry_exactly() -> None:

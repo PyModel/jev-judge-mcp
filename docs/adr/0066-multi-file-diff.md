@@ -36,8 +36,7 @@ The split path now asks two kinds of request and frames one reply over all of th
   the `claim_i` and `source_i` questions, asked once. The fitting files join the evidence as one
   implicit `diff` item per file (`id "diff:<path>"`, sanitized like any id), so a claim can rest
   on a file's patch the way a claim rests on the string diff. The `verification` block is this
-  one request's rows — canonical by construction — and `renamed_ids` covers this request's
-  evidence pass.
+  one request's rows.
 
 The call's action is the worst of the review files' worst action and the verification action,
 and `usage` is the sum over every provider call with a request id kept, through the same
@@ -105,3 +104,9 @@ were even asked.
 - No recorded parity fixture carries a file list (the shape is an extension), so request order is
   not pinned by replay; `tests/unit/test_file_diff.py` pins the overlap, the fan-out bound, the process cap, the input order,
   and the cancel-on-failure arm.
+
+## Amendment (2026-11-19): reserve file evidence IDs
+
+[ADR-0085](0085-shared-caller-id-policy.md) reserves the generated `diff:<path>` evidence keys in
+the caller's evidence namespace. A collision fails before the per-file reviews begin. The
+verification result uses canonical evidence IDs and has no `renamed_ids` field.

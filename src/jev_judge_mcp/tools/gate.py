@@ -7,22 +7,17 @@ from typing import Any
 from jev_judge_mcp.domain import ChoiceQuestion, Question
 from jev_judge_mcp.gate_budget import SPLIT_GUIDANCE, GateBudgetError, check_gate_budget
 from jev_judge_mcp.gate_diagnostics import explain_gate, input_cuts
-from jev_judge_mcp.ids import ensure_unique_ids
+from jev_judge_mcp.ids import generated_ids
 from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.policy import Action, ClaimJudgment, ClaimVerdict, PolicyThresholds
 from jev_judge_mcp.policy.claims import claim_action
 from jev_judge_mcp.providers import Evaluation, ProviderError
-from jev_judge_mcp.responses import (
-    caller_renames,
-    claim_extras,
-    renamed_ids_field,
-    summary_extras,
-)
+from jev_judge_mcp.responses import claim_extras, summary_extras
 from jev_judge_mcp.serialize import js_number_to_locale_string_en_us
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.arguments import Refinement
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, define, frame
-from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items, has_non_empty_evidence, normalize_evidence
+from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items, has_non_empty_evidence, identify_evidence
 from jev_judge_mcp.tools.files import combined, file_list_refusal, file_patches, review_file_list
 from jev_judge_mcp.tools.gate_evidence import Citations, add_citations, contradicting_line, grounded_review
 from jev_judge_mcp.tools.observed import (
@@ -41,7 +36,7 @@ from jev_judge_mcp.tools.review_half import (
     review_questions,
     review_settings,
 )
-from jev_judge_mcp.tools.verify import NO_SOURCE, ROLE_RULE, VERIFY_SUFFIX
+from jev_judge_mcp.tools.verify import NO_SOURCE, NO_SOURCE_ID, ROLE_RULE, VERIFY_SUFFIX
 from jev_judge_mcp.validation.caps import (
     exceeds,
     gate_evidence_aggregate_error,
@@ -148,7 +143,7 @@ DEFINITION = define(
 )
 
 EVIDENCE_NOT_EMPTY = Refinement(
-    lambda value: has_non_empty_evidence(normalize_evidence(value)),
+    lambda value: has_non_empty_evidence(evidence_items(value)),
     "jev_gate requires at least one evidence item with non-empty text.",
 )
 """The `.refine` on gate's evidence (`index.ts:1370-1372`): checked with the arguments, before any request."""
@@ -173,7 +168,7 @@ def claim_question(index: int) -> ChoiceQuestion:
 
 def gate_source_question(index: int, evidence_ids: list[str]) -> ChoiceQuestion:
     criteria: dict[str, str | None] = {item_id: None for item_id in evidence_ids}
-    criteria["none"] = NO_SOURCE
+    criteria[NO_SOURCE_ID] = NO_SOURCE
     return ChoiceQuestion(f"Which evidence item does claims[{index}] rest on?" + VERIFY_SUFFIX, criteria)
 
 
@@ -203,6 +198,11 @@ def _implicit_evidence(diff: str | None, tests: str | None) -> list[dict[str, ob
     return items
 
 
+def _caller_evidence(evidence: list[dict[str, object]], implicit: list[dict[str, object]]) -> list[dict[str, object]]:
+    reserved = {NO_SOURCE_ID, "diff", *(str(item["id"]) for item in implicit)}
+    return identify_evidence(evidence, reserved)
+
+
 @dataclass(frozen=True, slots=True)
 class GateAsk:
     """One string-diff gate evaluation: the payload body, the headline action, and the ask itself."""
@@ -228,8 +228,7 @@ async def handle(
     settings = review_settings(args)
     # The evidence budgets are evidence-driven and identical for every per-file call, so they are
     # refused once here, before the split: a file list over budget is an isError like a string is.
-    raw_evidence = evidence_items(args["evidence"])
-    evidence = ensure_unique_ids(raw_evidence, "evidence").items
+    evidence = evidence_items(args["evidence"])
     if exceeds(len(evidence), GATE.evidence_items):
         return _refused(gate_evidence_items_error(GATE.evidence_items))
     if exceeds(sum(length(str(item["text"])) for item in evidence), GATE.aggregate_evidence_units):
@@ -239,8 +238,8 @@ async def handle(
         return _refused(f"{cut['field']} exceeds {cut['threshold']} UTF-16 units. {SPLIT_GUIDANCE}")
     try:
         if isinstance(args.get("diff"), list):
-            return await _handle_file_list(args, runtime, settings, evidence, raw_evidence, withheld)
-        ask = await _ask_gate(args, runtime, settings, evidence, raw_evidence)
+            return await _handle_file_list(args, runtime, settings, evidence, withheld)
+        ask = await _ask_gate(args, runtime, settings, evidence)
     except GateBudgetError as error:
         return _refused(str(error))
     except ProviderError as error:
@@ -257,16 +256,14 @@ async def _ask_gate(
     runtime: Runtime,
     settings: ReviewSettings,
     evidence: list[dict[str, object]],
-    raw_evidence: list[dict[str, object]],
 ) -> GateAsk:
     """One string-diff gate ask: the review rubric and every claim and source question together."""
     thresholds = settings.thresholds
     docs = ReviewDocs(args["request"], args["diff"], args.get("tests") or None)
     claims: list[str] = args["claims"]
-    sent_evidence = [_sent_evidence_item(item) for item in evidence]
     implicit = _implicit_evidence(docs.diff, docs.tests)
-    asked_evidence = ensure_unique_ids([*sent_evidence, *implicit], "evidence").items
-    renamed = caller_renames(raw_evidence, asked_evidence)
+    caller_evidence = _caller_evidence(evidence, implicit)
+    asked_evidence = [*map(_sent_evidence_item, caller_evidence), *implicit]
 
     state = {
         "purpose": "Review the proposed diff against the request, then check each completion claim against the "
@@ -284,7 +281,7 @@ async def _ask_gate(
         questions[f"claim_{index}"] = claim_question(index)
         questions[f"source_{index}"] = gate_source_question(index, evidence_ids)
     check_gate_budget(state, questions)
-    patch_lines = add_citations(state, questions, [asked_evidence[len(sent_evidence)]])
+    patch_lines = add_citations(state, questions, implicit[:1])
     counter_lines = add_citations(state, questions, asked_evidence, claim_count=len(claims))
     evaluation = await runtime.ask(state, questions)
     answers = evaluation.answers
@@ -313,7 +310,6 @@ async def _ask_gate(
         "reason_codes": reason_codes,
         "review": review.payload,
         "verification": verification.payload,
-        **renamed_ids_field(renamed),
     }
     explain_gate(body, blockers, args["diff"], verification.source_issues)
     return GateAsk(body, action, evaluation)
@@ -364,8 +360,8 @@ def _verify_claims(
         ):
             verdict = "unsupported"
         judgments.append(ClaimJudgment(verdict, answer.confidence))
-        source = validate_choice(answers.get(f"source_{index}"), [*evidence_ids, "none"])
-        support = source.choice if source is not None and source.choice != "none" else None
+        source = validate_choice(answers.get(f"source_{index}"), [*evidence_ids, NO_SOURCE_ID])
+        support = source.choice if source is not None and source.choice != NO_SOURCE_ID else None
         action = gate_claim_action(
             verdict,
             answer.confidence,
@@ -432,7 +428,6 @@ async def _handle_file_list(
     runtime: Runtime,
     settings: ReviewSettings,
     evidence: list[dict[str, object]],
-    raw_evidence: list[dict[str, object]],
     withheld: Sequence[dict[str, str]] | None,
 ) -> ToolResult:
     """Per-file review plus one claims verification (ADR-0066 and its amendment).
@@ -450,13 +445,14 @@ async def _handle_file_list(
     request: str = args["request"]
     tests: str | None = args.get("tests") or None
     claims: list[str] = args["claims"]
-    sent_evidence = [_sent_evidence_item(item) for item in evidence]
-    implicit = [
-        *({"id": f"diff:{item['path']}", "text": item["patch"], "kind": "diff", "role": "after"} for item in files),
-        *_implicit_evidence(None, tests),
+    ids = generated_ids(f"diff:{item['path']}" for item in files)
+    implicit: list[dict[str, object]] = [
+        {"id": identifier, "text": item["patch"], "kind": "diff", "role": "after"}
+        for identifier, item in zip(ids, files, strict=True)
     ]
-    asked_evidence = ensure_unique_ids([*sent_evidence, *implicit], "evidence").items
-    renamed = caller_renames(raw_evidence, asked_evidence)
+    implicit.extend(_implicit_evidence(None, tests))
+    caller_evidence = _caller_evidence(evidence, implicit)
+    asked_evidence = [*map(_sent_evidence_item, caller_evidence), *implicit]
     evidence_ids = [str(item["id"]) for item in asked_evidence]
     questions: dict[str, Question] = {}
     for index in range(len(claims)):
@@ -480,7 +476,7 @@ async def _handle_file_list(
         settings,
         purpose=_FILE_REVIEW_PURPOSE,
         doc_units=GATE.doc_units,
-        evidence=evidence,
+        evidence=caller_evidence,
         gate_framing=(
             " Judge the target file's contribution to the request in the context of the supplied changes. "
             "Check cross-file contracts and supporting tests. Credit sibling behavior only where the evidence shows it."
@@ -513,7 +509,6 @@ async def _handle_file_list(
         "reason_codes": reason_codes,
         "review": review_payload,
         "verification": verification.payload,
-        **renamed_ids_field(renamed),
         "partial": bool(withheld),
         "unreviewed_files": [item["path"] for item in withheld or ()],
     }

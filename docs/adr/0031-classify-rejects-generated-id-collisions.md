@@ -12,3 +12,9 @@ This is a Reference Quirk (Q11). Keeping it returns the wrong classification at 
 - The fixture stays a recording of the reference and is tagged `ADR-0031`. The parity expectation is the tool error and zero provider requests. Items are checked first, so this recording fails on `item0`.
 - `ids.duplicate_caller_ids_rejected_in` still describes supplied ids. Q11 is the generated-id case.
 - Moving every tool's id allocation into `ids.py` is a separate change.
+
+## Amendment (2026-11-19): preserve supplied IDs
+
+[ADR-0085](0085-shared-caller-id-policy.md) supersedes the generated-ID refusal. Omitted items
+and classes now get unused keys. The recorded fixture keeps its original tag and the registered
+projection checks distinct keys across the results, probabilities, and summary.

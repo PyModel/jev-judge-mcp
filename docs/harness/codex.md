@@ -8,9 +8,12 @@ The command hook is not the `jev_gate` MCP tool, which stays the completion gate
 
 Codex has no skill package. Paste `docs/skills/jev-mcp/SKILL.md` into the project's `AGENTS.md` for tool routing. Paste `src/jev_judge_mcp/skills/jev/SKILL.md` only when the task is building an app on the Jev API; its cookbook thresholds are not this server's defaults (`docs/reference/limits.md`). A connected client can read both at `jev-skill://jev-mcp/SKILL.md` and `jev-skill://jev/SKILL.md` instead of pasting. The on-demand rule is in `docs/agent-rules.md`.
 
-## Reading deduplicated ids
+## Matching results to caller IDs
 
-`jev_find`, `jev_verify`, and `jev_gate` sanitize and de-duplicate caller ids. When the same id is sent on several items, the first occurrence in caller order keeps the sent id and later occurrences get `_1`, `_2`, …; an unsuffixed id in a row therefore names the first physical item sent under that id. The payload's `renamed_ids` maps the sent id to the returned id of its last renamed occurrence (ADR-0062).
+Send unique IDs using ASCII letters, digits, dots, hyphens, and underscores. Use at most 64
+characters and avoid leading or trailing underscores to receive the same IDs in results.
+Collisions after sanitization return `invalid_arguments` before a provider request. See the
+[caller ID rules](../tools.md#caller-ids) for reserved keys and generated IDs.
 
 ## Command hook
 

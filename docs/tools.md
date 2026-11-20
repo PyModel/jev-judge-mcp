@@ -37,6 +37,22 @@ provider contact and makes a required completion hook ask.
 
 ---
 
+## Caller IDs
+
+Find, rerank, classify, decide, extract, verify, gate, and gate range use canonical caller IDs.
+The sanitizer replaces each run outside ASCII letters, digits, dots, hyphens, and underscores
+with `_`, trims edge underscores, and keeps the first 64 characters. A supplied value that
+sanitizes to empty gets a generated ID. Two supplied IDs with the same sanitized value, including
+an empty value, or a supplied ID that matches a reserved key return `invalid_arguments` before
+any provider request. The error names the original IDs and the shared or reserved key.
+
+Where IDs are optional, an omitted ID gets its usual positional ID, such as `candidate0`, when
+available. If that key is taken, the tool picks the next free index starting at the list length.
+Supplied IDs take precedence in either order. Results that include caller IDs use canonical IDs.
+For exact round trips, send unique IDs that already follow the sanitizer's character and length
+rules and have no leading or trailing underscores.
+See [ADR-0085](adr/0085-shared-caller-id-policy.md).
+
 ## jev_verify — claims against evidence
 
 **Use when** you hold claims (a summary, a PR description, an agent's "done" list) and the evidence
@@ -44,7 +60,8 @@ they cite, and want verified / contradicted / unsupported per claim. Act on an `
 An `auto` contradiction is confidently false. `stands` is true only for a verified claim at
 `auto`. A sole caller note counts as the policy source without filling `supporting_evidence`.
 A caller note alone cannot earn `auto`. If a source was requested, a missing or malformed source
-answer holds the claim for review.
+answer holds the claim for review. [Caller evidence IDs](#caller-ids) reserve `none` when
+multiple evidence items are sent.
 
 **Measured.** L3 live run, 2026-09-23: n=5 claims, contradiction_recall 1.000, macro_f1 1.000,
 brier 0.00004, ece 0.002, selective_accuracy 1.000, auto_coverage 1.000, invalid 0. Five synthetic
@@ -95,9 +112,9 @@ routing, clutter/article), and you want one call.
 the margin over the runner-up clears `minimum_margin` (0.5). At those defaults the margin does not bind: two options whose probabilities sum to at most 1.01 already force a margin of at least 0.69
 when the top is 0.85, so a close split cannot also clear `auto_accept`. The margin binds only if
 you lower `auto_accept` below 0.755 or raise `minimum_margin` above 0.69. The same pair is the
-default for compare and extract. Conflicting caller ids are
-rejected before any provider request (ADR-0031). Item text cut at the cap is reported to telemetry
-only and does not change the action (CONTEXT.md "Truncated Context" draws this line).
+default for compare and extract. Items and classes each have their own [caller ID](#caller-ids)
+namespace. Item text cut at the cap is reported to telemetry only and does not change the action
+(CONTEXT.md "Truncated Context" draws this line).
 
 **Not for** labels you cannot enumerate, or when one item needs its own question — that is a batch
 of noul or choice questions, not a catalog.
@@ -109,10 +126,10 @@ of noul or choice questions, not a catalog.
 **Measured.** No recorded live eval. The scorer's primary metric is `overdecision_rate` (picking a
 candidate when it should have escaped), with escape-hatch accuracy and requirement-check F1.
 
-**Weak spots.** The escape hatches (`ask_user`, `investigate`, `none`) are always offered; a
-candidate id that collides with one is refused. Requirements are capped at 3, each up to 500 UTF-16
-units — a decision with a longer rulebook does not fit and belongs in code (ADR-0002), not in the
-question.
+**Weak spots.** Escape hatches (`ask_user`, `investigate`, `none`) are enabled by default and
+reserve those keys while enabled. Every candidate requires a [caller ID](#caller-ids).
+Requirements are capped at 3, each up to 500 UTF-16 units — a decision with a longer rulebook
+does not fit and belongs in code (ADR-0002), not in the question.
 
 **Not for** open-ended planning, ranking, or anything with more than six options.
 
@@ -127,7 +144,7 @@ accuracy.
 **Weak spots.** The exists verdict thresholds (answered at ≥ 0.7, absent below 0.35, else
 `partial`) are frozen parity defaults, not call arguments. The semantic-find cookbook uses the same
 numbers as examples to tune; this server does not (ADR-0001, `docs/reference/parity-manifest.json`). Candidate text is truncated at the cap
-(telemetry only). `top_k` defaults to 5.
+(telemetry only). `top_k` defaults to 5. Candidate IDs are [optional](#caller-ids).
 
 **Not for** discovering candidates — it only ranks what you pass, unlike a search engine.
 
@@ -142,7 +159,7 @@ order; an embeddings baseline is an open gap, not implemented (`evals/README.md`
 **Weak spots.** A flat band of low `relevance` values means the candidates were not
 distinguishable; treat the order as weak (README § Operator notes). `ranked[].relevance` is the
 probability at a fixed precision; there is no spread field. Aggregate candidate text over 100,000
-UTF-16 units refuses with an `input_too_large` error.
+UTF-16 units refuses with an `input_too_large` error. Candidate IDs are [optional](#caller-ids).
 
 **Not for** deciding whether anything is relevant at all — that is `jev_find`'s exists question.
 
@@ -164,7 +181,7 @@ difference.
 ## jev_extract — a value your regex proposes
 
 **Use when** a value (version, date, price) sits in a document and your regex can propose the
-candidates; Jev picks among them or returns null.
+candidates; Jev picks among them or returns null. Every field requires a [caller ID](#caller-ids).
 
 **Measured.** No recorded live eval. Scorer: exact match, hallucinated values (must be 0),
 not-found precision/recall.
@@ -218,6 +235,9 @@ capped at 16 items and 200,000 aggregate UTF-16 units. Before sending, the gate 
 documents and both byte budgets. The string gate sends the diff and tests again as implicit evidence
 (ADR-0063). At the document caps this would add about 100k extra UTF-16 units and the gate
 would refuse. Split by file or hunk and send each claim with the evidence it needs.
+[Caller evidence IDs](#caller-ids) reserve `none` for source selection and `diff` for patch
+citations. They also reserve sanitized `diff:<path>` keys for file patches and `tests` when a log
+is supplied.
 
 **Reading a held gate.** Use `blockers` for file-by-file and claim-by-claim comparisons. For
 example, `spec_match_confidence_below_review_at` can report a favorable level, confidence 0.49
@@ -242,8 +262,8 @@ are missing or malformed. Plain summaries require actual diff structure before t
 
 A named defect or explicit safety rejection cites a changed line. A confirmed claim contradiction
 cites a counterexample and sets the claim excerpt to that line. The line number is one-based within
-the submitted patch or evidence item. The source uses the ID sent to the provider, including any
-renamed implicit diff. Changed code remains citable even when it resembles a diff header.
+the submitted patch or evidence item. The source uses the canonical evidence ID sent to the
+provider. Changed code remains citable even when it resembles a diff header.
 `evidence_line` is always `{source, line, text}`. Invalid answers identify the provider question
 in `invalid_answer`. Only a cited safety refusal sets `safety_refusal`. Invalid required answers
 explicitly refuse a decision. Low confidence alone requires review. A provider
@@ -405,9 +425,10 @@ handler on the file list, so the review sees the whole patch, never an excerpt y
 **Measured.** No recorded live eval; the judgment is jev_gate's.
 
 **Weak spots.** Everything on the jev_gate card applies: the same caps, thresholds, fail-closed
-paths, and payload; only `tool` names this tool. A secret store in the range (`.env`, keys) is
-never sent and is listed in `skipped` as `secret_file`; credential literals in other patches are
-redacted. A range of only secret stores refuses `secret_file`; a bad range, an empty diff, no
+paths, payload, and [caller evidence ID policy](#caller-ids). Only `tool` names this tool. A secret
+store in the range (`.env`, keys) is never sent and is listed in `skipped` as `secret_file`.
+Credential literals in other patches are redacted. A range of only secret stores refuses
+`secret_file`; a bad range, an empty diff, no
 repository, or headers git quoted so they do not split refuse `invalid_arguments`; a diff past the
 gate's aggregate budget is killed mid-read and refuses `input_too_large`; all before any provider
 call. `tests_path` is read under jev_file_judge's path rules and is not self-reported. The working

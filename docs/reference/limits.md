@@ -43,7 +43,7 @@ block (ADR-0062). The code is set from the exception type or at the return site.
 
 | Code | Produced by |
 | --- | --- |
-| `invalid_arguments` | a schema reject (every row marked reject below); an unknown tool; duplicate caller ids; a decide candidate id colliding with an escape hatch; a diff that is not the file-list shape; a broken `auto_accept`/`review_at` pair (the frozen text `Thresholds must satisfy 0 <= review_at <= auto_accept <= 1.`) |
+| `invalid_arguments` | a schema reject (every row marked reject below); an unknown tool; caller ID collisions after sanitization, including with reserved keys; a diff that is not the file-list shape; a broken `auto_accept`/`review_at` pair (the frozen text `Thresholds must satisfy 0 <= review_at <= auto_accept <= 1.`) |
 | `input_too_large` | every frozen budget refusal marked error below: the aggregate character budgets, jev_gate's item-count budget, and the file-list diff budget. `tests/contract/test_limits.py` pins each frozen budget text to this code. Also an upstream 400 whose body carries `error_type` `max_tokens_exceeded` (ADR-0079) |
 | `auth` | `ProviderConfigError` (no credentials, including an explicit provider with a missing or malformed key); an upstream 401 (`ProviderError.status`), which is code `auth` |
 | `timeout` | `ProviderTimeoutError` |
@@ -264,7 +264,7 @@ error, and the output cap and the timeout refuse after or around the run.
 | `min_items` | 1 | below → reject (jev_find, jev_rerank candidates) |
 | `max_items` | 250 | above → reject (jev_find, jev_rerank candidates) |
 | `text_units` | 2000 | truncate (item scope; jev_find, jev_rerank candidate text) |
-| `SANITIZE_ID_UNITS` | 64 | the reference truncates a sanitized id at 64 UTF-16 units — a Python-side cap the manifest does not record (`ids.py` imports it) |
+| `SANITIZE_ID_UNITS` | 64 | the reference sanitizer keeps the first 64 UTF-16 units. See the [caller ID rules](../tools.md#caller-ids) |
 
 ## Defaults and thresholds
 
@@ -289,7 +289,7 @@ and cannot be set per call.
 
 Other defaults, in prose: the model is `jev-latest` unless `JEV_MCP_MODEL` says otherwise (README
 § Configuration); `jev_find`'s `top_k` defaults to 5; `jev_rerank`'s omitted `top_k` returns every
-candidate; `jev_decide`'s escape hatches (`ask_user`, `investigate`, `none`) are always offered.
+candidate; `jev_decide`'s escape hatches (`ask_user`, `investigate`, `none`) are offered by default.
 Thresholding guidance — including raising your own bar before destructive steps — is in
 [`docs/guidance.md`](../guidance.md); what is certified on recorded traffic is in
 [`docs/EVIDENCE.md`](../EVIDENCE.md).

@@ -1,6 +1,6 @@
 """Schema fragments and helpers shared by several tools (`index.ts:88-116`, `lib.ts:363-374`)."""
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from typing import Any, cast
 
 from jev_judge_mcp.ids import ensure_unique_ids
@@ -91,9 +91,8 @@ def evidence_items(raw: object) -> list[dict[str, object]]:
     return [cast(dict[str, object], raw)]
 
 
-def normalize_evidence(raw: object) -> list[dict[str, object]]:
-    """`normalizeEvidence` (`lib.ts:363-368`): evidence items with safe, unique ids."""
-    return ensure_unique_ids(evidence_items(raw), "evidence").items
+def identify_evidence(items: list[dict[str, object]], reserved: Collection[str]) -> list[dict[str, object]]:
+    return ensure_unique_ids(items, "evidence", reserved=reserved).items
 
 
 _JS_WHITESPACE = "".join(

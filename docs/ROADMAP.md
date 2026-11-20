@@ -84,7 +84,7 @@ The harness pins Node 24 (the audit ran on v24.19.0). The fake speaks the `compa
 
 ### P2 — Domain, validation, text [PY-03]
 
-Canonical `ChoiceQuestion/NoulQuestion/ScoreQuestion` and answers owned by us, not SDK classes. Validators: `validate_choice(answer, expected_keys)`, `validate_noul`, `validate_score`, `margin`. UTF-16 `length/truncate` (ADR-0005), `sanitize_id/ensure_unique_ids`, JS serializer + `to_fixed` (ADR-0006).
+Canonical `ChoiceQuestion/NoulQuestion/ScoreQuestion` and answers owned by us, not SDK classes. Validators: `validate_choice(answer, expected_keys)`, `validate_noul`, `validate_score`, `margin`. UTF-16 `length/truncate` (ADR-0005), the shared caller ID policy (ADR-0085), JS serializer + `to_fixed` (ADR-0006).
 
 **Accept:** every validation edge case from the TS unit + mock suites has a Python test; Hypothesis properties: non-argmax never validates; NaN/Inf/negatives/sum∉[1±tol] never validate; serializer round-trips match Node `JSON.stringify` on 10k generated payloads including `-0.0`, subnormals, the `1e21` and `1e-7` boundaries, and sums of the `0.1+0.2` class (differential test calls Node 24 in CI).
 

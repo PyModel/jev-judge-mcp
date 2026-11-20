@@ -35,6 +35,11 @@ def anyio_backend() -> str:
 INPUTS: dict[str, Json] = {}
 for _item in load_items():
     INPUTS.setdefault(_item.tool, _item.input)
+_gate = INPUTS["jev_gate"]
+INPUTS["jev_gate"] = {
+    **_gate,
+    "evidence": [{**item, "id": "submitted-diff"} if item["id"] == "diff" else item for item in _gate["evidence"]],
+}
 INPUTS["jev_score"] = {
     "subject": "Regression risk of the rename.",
     "levels": ["minor risk", "major risk", "severe risk"],

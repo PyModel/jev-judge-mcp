@@ -71,11 +71,11 @@ def test_each_harness_page_keeps_the_hook_contract() -> None:
 
 
 def test_each_harness_page_states_the_duplicate_id_rule() -> None:
-    """ADR-0062's 2026-09-25 amendment: a caller colliding ids can read which physical item a row cites."""
+    """Every harness states the shared refusal and describes safe caller IDs."""
     for name in PAGES:
         text = (HARNESS / name).read_text(encoding="utf-8")
-        assert "first occurrence in caller order keeps the sent id" in text
-        assert "renamed_ids" in text
+        assert "Collisions after sanitization return `invalid_arguments`" in text
+        assert "unique IDs using ASCII letters, digits, dots, hyphens, and underscores" in text
 
 
 def test_readme_links_harness_docs() -> None:

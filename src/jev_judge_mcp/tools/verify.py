@@ -6,9 +6,9 @@ from jev_judge_mcp.domain import ChoiceQuestion, Question
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import VERIFY
 from jev_judge_mcp.policy import DEFAULT_AUTO_ACCEPT
-from jev_judge_mcp.responses import caller_renames, claim_extras, renamed_ids_field, summary_extras
+from jev_judge_mcp.responses import claim_extras, summary_extras
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, caller_actions, define, frame, headline
-from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items
+from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items, identify_evidence
 from jev_judge_mcp.tools.observed import (
     fail_closed,
     validate_choice,
@@ -24,6 +24,7 @@ RELATION_CRITERIA = {
     "contradicts": "The evidence states the opposite of the claim or implies that it is false",
     "says_nothing": "The evidence does not address what the claim asserts, either way",
 }
+NO_SOURCE_ID = "none"
 NO_SOURCE = "No single evidence item contains the content the claim depends on"
 
 ROLE_RULE = (
@@ -68,10 +69,8 @@ DEFINITION = define(
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     auto_accept: float = args.get("auto_accept", DEFAULT_AUTO_ACCEPT)
     raw_evidence = evidence_items(args["evidence"])
-    evidence = ensure_unique_ids(raw_evidence, "evidence").items
+    evidence = identify_evidence(raw_evidence, (NO_SOURCE_ID,) if len(raw_evidence) > 1 else ())
     claims = ensure_unique_ids([{"text": text} for text in args["claims"]], "claim").items
-    # Claims are strings without caller ids, so only evidence ids can rename today.
-    renamed = caller_renames(raw_evidence, evidence)
 
     questions: dict[str, Question] = {}
     for claim in claims:
@@ -81,7 +80,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         )
         if len(evidence) > 1:
             criteria: dict[str, str | None] = {str(item["id"]): None for item in evidence}
-            criteria["none"] = NO_SOURCE
+            criteria[NO_SOURCE_ID] = NO_SOURCE
             questions[f"source_{claim_id}"] = ChoiceQuestion(
                 f"Which evidence item does claim `{claim_id}` ({text}) rest on?" + VERIFY_SUFFIX, criteria
             )
@@ -93,7 +92,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     }
     evaluation = await runtime.ask(state, questions)
     answers = evaluation.answers
-    source_keys = [*(str(item["id"]) for item in evidence), "none"]
+    source_keys = [*(str(item["id"]) for item in evidence), NO_SOURCE_ID]
 
     results: list[dict[str, object]] = []
     for claim in claims:
@@ -119,7 +118,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             results.append(closed_row)
             continue
         confidence = validated.confidence
-        support = source.choice if source is not None and source.choice != "none" else None
+        support = source.choice if source is not None and source.choice != NO_SOURCE_ID else None
         policy_source = (None if source is None else source.choice) if source_asked else evidence[0]["id"]
         action = verify_claim_action(
             confidence,
@@ -155,7 +154,6 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
                     **summary_extras(results),
                 },
                 "results": results,
-                **renamed_ids_field(renamed),
             },
         ),
         action=headline(item_actions),

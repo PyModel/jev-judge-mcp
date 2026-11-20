@@ -109,9 +109,13 @@ def test_ranking_metrics() -> None:
 
 
 def test_baselines_use_the_tool_candidate_ids() -> None:
-    candidates = ["shipping times", {"id": "r", "text": "the refund window is 30 days"}, {"id": "r", "text": "refund"}]
-    assert original_order(candidates) == ["candidate0", "r", "r_1"]
-    assert bm25("refund window", candidates) == ["r", "r_1", "candidate0"]
+    candidates = [
+        "shipping times",
+        {"id": "r", "text": "the refund window is 30 days"},
+        {"id": "candidate0", "text": "refund"},
+    ]
+    assert original_order(candidates) == ["candidate3", "r", "candidate0"]
+    assert bm25("refund window", candidates) == ["r", "candidate0", "candidate3"]
     assert bm25("q", []) == []
     with pytest.raises(NotImplementedError):
         embeddings("q", candidates)

@@ -1,7 +1,9 @@
-"""`sanitize_id` and `ensure_unique_ids` (`lib.ts:13-45`)."""
+"""Reference sanitization and the shared caller ID policy."""
+
+import pytest
 
 from jev_judge_mcp.ids import ensure_unique_ids, sanitize_id
-from jev_judge_mcp.responses import caller_renames
+from jev_judge_mcp.tools.base import ToolError
 
 
 def test_sanitize_id_keeps_safe_characters_and_drops_the_rest() -> None:
@@ -26,36 +28,39 @@ def test_sanitize_id_slices_after_stripping() -> None:
     assert sanitize_id("_" * 10 + "a" * 70) == "a" * 64
 
 
-def test_ensure_unique_ids_assigns_fallbacks_and_resolves_collisions() -> None:
+def test_ensure_unique_ids_refuses_repeated_caller_ids() -> None:
     raw = [{"id": "src/lib.ts", "text": "a"}, {"id": "src/lib.ts", "text": "b"}, {"text": "c"}]
-    items = ensure_unique_ids(raw, "candidate").items
-    assert [item["id"] for item in items] == ["src_lib.ts", "src_lib.ts_1", "candidate2"]
-    assert caller_renames(raw, items) == {"src/lib.ts": "src_lib.ts_1"}
+    with pytest.raises(ToolError) as raised:
+        ensure_unique_ids(raw, "candidate")
+    assert str(raised.value) == "IDs 'src/lib.ts' and 'src/lib.ts' both sanitize to 'src_lib.ts'."
 
 
-def test_renamed_keeps_first_insertion_position_with_last_value() -> None:
-    raw = [{"id": "a/b"}, {"id": "x"}, {"id": "a/b"}]
-    renamed = caller_renames(raw, ensure_unique_ids(raw, "c").items)
-    assert list(renamed.items()) == [("a/b", "a_b_1")]
+def test_sanitized_collision_names_both_original_ids_in_order() -> None:
+    raw = [{"id": "a/b"}, {"id": "x"}, {"id": "a_b"}]
+    with pytest.raises(ToolError) as raised:
+        ensure_unique_ids(raw, "c")
+    assert str(raised.value) == "IDs 'a/b' and 'a_b' both sanitize to 'a_b'."
 
 
-def test_fallback_ids_collide_like_any_other() -> None:
+def test_fallback_ids_leave_supplied_ids_in_place() -> None:
     raw = [{"text": "no id"}, {"id": "item0"}]
     items = ensure_unique_ids(raw, "item").items
-    assert [item["id"] for item in items] == ["item0", "item0_1"]
-    assert caller_renames(raw, items) == {"item0": "item0_1"}
+    assert [item["id"] for item in items] == ["item2", "item0"]
 
 
-def test_suffix_search_skips_taken_suffixes() -> None:
-    items = ensure_unique_ids([{"id": "a"}, {"id": "a_1"}, {"id": "a"}], "c").items
-    assert [item["id"] for item in items] == ["a", "a_1", "a_2"]
+def test_overflow_search_skips_taken_ids() -> None:
+    items = ensure_unique_ids([{}, {"id": "c0"}, {"id": "c4"}, {}], "c").items
+    assert [item["id"] for item in items] == ["c5", "c0", "c4", "c3"]
 
 
 def test_empty_and_none_ids_use_the_positional_fallback() -> None:
-    raw = [{"id": ""}, {"id": None}, {"id": "???"}]
-    items = ensure_unique_ids(raw, "evidence").items
-    assert [item["id"] for item in items] == ["evidence0", "evidence1", "evidence2"]
-    assert caller_renames(raw, items) == {"???": "evidence2"}
+    items = ensure_unique_ids([{"id": ""}, {"id": None}], "evidence").items
+    assert [item["id"] for item in items] == ["evidence0", "evidence1"]
+    items = ensure_unique_ids([{"id": "???"}], "evidence").items
+    assert [item["id"] for item in items] == ["evidence0"]
+    with pytest.raises(ToolError) as raised:
+        ensure_unique_ids([{"id": ""}, {"id": None}, {"id": "???"}], "evidence")
+    assert str(raised.value) == "IDs '' and '???' both sanitize to ''."
 
 
 def test_id_keeps_its_key_position_or_is_appended() -> None:

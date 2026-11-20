@@ -44,9 +44,12 @@ output to state and uses one provider call for the questions. See the `jev_ask` 
 
 Which tool fits a step is `docs/skills/jev-mcp/SKILL.md`. Building an app on the Jev API, rather than calling these tools, is `src/jev_judge_mcp/skills/jev/SKILL.md`. A connected client reads them at `jev-skill://jev-mcp/SKILL.md` and `jev-skill://jev/SKILL.md`. Do not copy the `jev` skill's cookbook thresholds onto these tools; this server's defaults are `docs/reference/limits.md`. The on-demand rule is in `docs/agent-rules.md`. This repository ships no plugin manifest. A plugin entry is appropriate only when it points at one of those skills and embeds no machine path and no key.
 
-## Reading deduplicated ids
+## Matching results to caller IDs
 
-`jev_find`, `jev_verify`, and `jev_gate` sanitize and de-duplicate caller ids. When the same id is sent on several items, the first occurrence in caller order keeps the sent id and later occurrences get `_1`, `_2`, …; an unsuffixed id in a row therefore names the first physical item sent under that id. The payload's `renamed_ids` maps the sent id to the returned id of its last renamed occurrence (ADR-0062).
+Send unique IDs using ASCII letters, digits, dots, hyphens, and underscores. Use at most 64
+characters and avoid leading or trailing underscores to receive the same IDs in results.
+Collisions after sanitization return `invalid_arguments` before a provider request. See the
+[caller ID rules](../tools.md#caller-ids) for reserved keys and generated IDs.
 
 ## Command hook
 

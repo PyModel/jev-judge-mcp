@@ -317,7 +317,7 @@
         "ADR-0031"
       ],
       "reference_behavior": "An omitted classify id becomes {kind}{index} with no check against supplied ids, so a later entry with that id overwrites the earlier one and both rows report the same id at auto (quirk Q11).",
-      "python_behavior": "A generated id that equals an id already used for that items or classes list raises Duplicate {kind} id before any provider request."
+      "python_behavior": "Supplied IDs keep their canonical keys. An omitted item or class ID whose positional key is taken gets the first available overflow key under ADR-0085."
     },
     {
       "id": "posix-only",
@@ -695,8 +695,37 @@
         "ADR-0007",
         "ADR-0062"
       ],
-      "reference_behavior": "Gate, verify, review, and find return the reference payload. Claim questions tell the model not to use diff and tests. Verify questions have no anti-injection sentence. A sanitized or de-duplicated id is not mapped back to the id the caller sent.",
-      "python_behavior": "Additive fields are appended. Gate sends diff and tests as implicit evidence and drops the ignore-them sentence. Verify questions gain the role sentence and the anti-injection sentence. Find, verify, and gate append renamed_ids (sent id -> returned id) when id sanitization or de-duplication changed a caller id. Old keys stay. See also ADR-0063, ADR-0067, and ADR-0068."
+      "reference_behavior": "Gate, verify, review, and find return the reference payload. Claim questions tell the model not to use diff and tests. Verify questions have no anti-injection sentence.",
+      "python_behavior": "Additive fields are appended. Gate sends diff and tests as implicit evidence and drops the ignore-them sentence. Verify questions gain the role sentence and the anti-injection sentence. See also ADR-0063, ADR-0067, and ADR-0068."
+    },
+    {
+      "id": "caller-id-policy",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0085-shared-caller-id-policy.md",
+      "tests": [
+        "tests/contract/test_caller_ids.py",
+        "tests/parity/test_tool_fixtures.py"
+      ],
+      "fixtures": [
+        "contradicted/gate-contradicted-below-auto-accept#0",
+        "duplicate-id/classify-duplicate-class-id#0",
+        "duplicate-id/classify-duplicate-item-id#0",
+        "duplicate-id/decide-candidate-collides-with-escape-hatch#0",
+        "duplicate-id/decide-duplicate-candidate-id#0",
+        "duplicate-id/extract-duplicate-field-id#0",
+        "duplicate-id/find-ids-sanitized-and-suffixed#0",
+        "duplicate-id/rerank-duplicate-id#0",
+        "duplicate-id/rerank-fallback-avoids-supplied-ids#0",
+        "duplicate-id/verify-duplicate-evidence-ids-suffixed#0",
+        "low-confidence/gate-claim-confidence-tiers#0",
+        "normal/gate-accepted#0",
+        "unicode-astral/classify-astral-ids-preserved#0",
+        "unsupported/gate-unsupported-confident#0"
+      ],
+      "reference_behavior": "The reference suffixes some duplicate IDs, preserves some IDs verbatim, and uses tool-specific refusal messages and generated keys.",
+      "python_behavior": "Each caller ID namespace uses the reference sanitizer, refuses collisions with supplied or reserved IDs before requests, and gives missing IDs an unoccupied positional or overflow key. Existing opaque provider keys are retained."
     },
     {
       "id": "initialize-instructions",

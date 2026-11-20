@@ -5,13 +5,14 @@ import math
 import re
 from typing import cast
 
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
 from jev_judge_mcp.ids import ensure_unique_ids, sanitize_id
-from jev_judge_mcp.responses import caller_renames
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.text import TRUNCATION_MARKER, length, truncate
+from jev_judge_mcp.tools.base import ToolError
 from jev_judge_mcp.validation.caps import CapLedger
 
 # Any code point, including lone surrogates, weighted toward the astral and surrogate edge cases.
@@ -64,12 +65,22 @@ def test_sanitize_id_is_safe(raw: str) -> None:
 @given(st.lists(st.one_of(st.none(), TEXT), max_size=20))
 def test_ensure_unique_ids_are_unique_and_safe(raw_ids: list[str | None]) -> None:
     raw_items = [{"id": raw} for raw in raw_ids]
+    supplied = [sanitize_id(raw) for raw in raw_ids if raw is not None]
+    if len(set(supplied)) != len(supplied):
+        with pytest.raises(ToolError) as raised:
+            ensure_unique_ids(raw_items, "item")
+        assert raised.value.code == "invalid_arguments"
+        return
     items = ensure_unique_ids(raw_items, "item").items
-    renamed = caller_renames(raw_items, items)
     ids = [item["id"] for item in items]
     assert len(set(ids)) == len(ids)
     assert all(isinstance(i, str) and re.fullmatch(r"[A-Za-z0-9_.-]+", i) for i in ids)
-    assert all(raw and raw != new for raw, new in renamed.items())
+    for raw, key in zip(raw_ids, ids, strict=True):
+        canonical = sanitize_id(raw) if raw is not None else ""
+        if canonical:
+            assert key == canonical
+        else:
+            assert key not in supplied
 
 
 JSON = st.recursive(

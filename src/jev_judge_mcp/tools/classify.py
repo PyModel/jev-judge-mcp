@@ -3,6 +3,7 @@
 from typing import Any
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question
+from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import CLASSIFY
 from jev_judge_mcp.policy import DEFAULT_CLASSIFY_AUTO_ACCEPT, DEFAULT_MINIMUM_MARGIN
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, caller_actions, define, frame, headline
@@ -79,29 +80,18 @@ DEFINITION = define(
 def _opaque(
     raw: list[dict[str, str]], kind: str, key_prefix: str, text_key: str, cap: int, ledger: CapLedger
 ) -> list[tuple[str, str, str]]:
-    """`(external id, wire key, capped text)` per entry.
-
-    A caller id is kept verbatim. An omitted id becomes `{kind}{index}`. Either form that repeats
-    an id already used in this list raises `Duplicate {kind} id` before the caller asks the
-    provider (ADR-0031). The reference does not check a generated id against a supplied one.
-    """
-    seen: set[str] = set()
-    out: list[tuple[str, str, str]] = []
-    for index, entry in enumerate(raw):
-        supplied = entry.get("id")
-        external = supplied if supplied is not None else f"{kind}{index}"
-        if external in seen:
-            raise ToolError(f"Duplicate {kind} id: {external}", code="invalid_arguments")
-        seen.add(external)
-        out.append((external, f"{key_prefix}{index}", ledger.text(entry[text_key], cap, "item")))
-    return out
+    """`(canonical id, wire key, capped text)` per entry."""
+    ids = ensure_unique_ids(raw, kind).ids
+    return [
+        (identifier, f"{key_prefix}{index}", ledger.text(entry[text_key], cap, "item"))
+        for index, (identifier, entry) in enumerate(zip(ids, raw, strict=True))
+    ]
 
 
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     auto_accept: float = args.get("auto_accept", DEFAULT_CLASSIFY_AUTO_ACCEPT)
     minimum_margin: float = args.get("minimum_margin", DEFAULT_MINIMUM_MARGIN)
 
-    # Opaque wire keys (i0, c0) so sanitizing can never rename or collide caller ids.
     ledger = CapLedger()
     items = _opaque(args["items"], "item", "i", "text", CLASSIFY.item_units, ledger)
     classes = _opaque(args["classes"], "class", "c", "description", CLASSIFY.class_description_units, ledger)

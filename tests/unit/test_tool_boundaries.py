@@ -80,47 +80,56 @@ def test_review_settings_reports_the_invariant_text_unchanged() -> None:
 
 
 @pytest.mark.parametrize(
-    ("arguments", "error"),
+    ("arguments", "item_ids", "class_ids"),
     [
         (
             {
                 "items": [{"text": "a"}, {"id": "item0", "text": "b"}],
                 "classes": [{"id": "x", "description": "x"}, {"id": "y", "description": "y"}],
             },
-            "Duplicate item id: item0",
+            ["item2", "item0"],
+            ["x", "y"],
         ),
         (
             {
                 "items": [{"id": "item1", "text": "a"}, {"text": "b"}],
                 "classes": [{"id": "x", "description": "x"}, {"id": "y", "description": "y"}],
             },
-            "Duplicate item id: item1",
+            ["item1", "item2"],
+            ["x", "y"],
         ),
         (
             {
                 "items": [{"id": "a", "text": "a"}, {"id": "b", "text": "b"}],
                 "classes": [{"description": "x"}, {"id": "class0", "description": "y"}],
             },
-            "Duplicate class id: class0",
+            ["a", "b"],
+            ["class2", "class0"],
         ),
         (
             {
                 "items": [{"id": "a", "text": "a"}, {"id": "b", "text": "b"}],
                 "classes": [{"id": "class1", "description": "x"}, {"description": "y"}],
             },
-            "Duplicate class id: class1",
+            ["a", "b"],
+            ["class1", "class2"],
         ),
     ],
     ids=["omitted-item-then-item0", "item1-then-omitted", "omitted-class-then-class0", "class1-then-omitted"],
 )
-async def test_classify_rejects_a_generated_id_that_collides_before_any_request(
-    arguments: dict[str, object], error: str
+async def test_classify_generated_ids_preserve_caller_ids(
+    arguments: dict[str, object], item_ids: list[str], class_ids: list[str]
 ) -> None:
-    """ADR-0031: a fallback id equal to a supplied id is Duplicate {kind} id, and nothing is asked."""
-    outcome = await call_tool("jev_classify", arguments, {"i0": {"choice": "c0"}})
-    assert outcome.is_error
-    assert outcome.text == error
-    assert outcome.requests == []
+    answers = {
+        "i0": {"choice": "c0", "probabilities": {"c0": 0.97, "c1": 0.03}},
+        "i1": {"choice": "c1", "probabilities": {"c0": 0.03, "c1": 0.97}},
+    }
+    outcome = await call_tool("jev_classify", arguments, answers)
+    assert not outcome.is_error, outcome.text
+    rows = outcome.payload["results"]
+    assert [row["id"] for row in rows] == item_ids
+    assert [row["classification"] for row in rows] == class_ids
+    assert len(outcome.requests) == 1
 
 
 async def test_classify_over_the_item_cap_stays_auto() -> None:

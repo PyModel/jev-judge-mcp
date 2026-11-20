@@ -42,7 +42,7 @@ through `jev_decide`, and traversing a catalog too big for one call.
 | --- | --- | --- |
 | Claim versus evidence | `jev_verify` | One batch of claims. Evidence is the only material a claim may be judged against. |
 | Fetched page or file, before you read it | `jev_screen` | Injection and relevance. Closest fit for whether you should read it. The recommendation is `pass`, `review`, `block`, or `skip`. A missing or malformed answer is `review`. |
-| Many items, is-it-X or which class | `jev_classify` | Bulk Noul and Choice work, including keep versus drop and clutter versus article. One call. Conflicting ids are rejected before any provider request. |
+| Many items, is-it-X or which class | `jev_classify` | Bulk Noul and Choice work, including keep versus drop and clutter versus article. One call. |
 | Waiting on a process | `jev_decide` or `jev_verify` | `jev_decide` over `keep_waiting`, `done`, and `failed`, with the last output lines as evidence. Or `jev_verify` the claim that the command finished successfully, against that output. There is no poller. |
 | Context compaction | `jev_classify`, then you | Keep versus drop. You write the paragraph. Check every number in that paragraph against the kept text. |
 | Which file or note answers a question | `jev_find` | Ranked candidates, plus a check that any candidate answers at all. |
@@ -62,6 +62,12 @@ through `jev_decide`, and traversing a catalog too big for one call.
 | Which agent or harness takes a step | `jev_decide` | Handlers as options, task facts as state, escape hatches for "none fits". Ambiguity is a second question in the same call. The server never picks models: that is process config (ADR-0008). |
 | More classes than one catalog holds | `jev_classify`, then `jev_rerank`, then `jev_decide` | Prune into coarse buckets, rank the survivors, decide among the top few. The traversal is in `docs/guidance.md`. |
 | New text, code, or options you cannot list | you | You write it. |
+
+For tools with caller IDs, use unique canonical IDs if you need to match results to input. The
+sanitizer replaces unsupported character runs with `_`, trims edge underscores, and keeps up to
+64 ASCII letters, digits, dots, hyphens, or underscores. Collisions between sanitized IDs or with
+reserved IDs return `invalid_arguments` before a provider request. Omitted optional IDs get an
+unused generated ID. See the [caller ID rules](https://github.com/PyModel/jev-judge-mcp/blob/main/docs/tools.md#caller-ids).
 
 A typed in-set choice is what `jev_decide` and `jev_classify` already return: one of the options you supplied, an escape hatch, or `invalid_response`.
 
