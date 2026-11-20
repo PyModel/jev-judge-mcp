@@ -9,10 +9,10 @@ The relay owns what both recorders need to agree on (ADR-0026):
   request whose id collides with a pending call is relayed, never logged as that call's answer;
 - at the server's EOF the recorder is closed, so every call still pending is logged as unanswered,
   and then the client's stdout is closed;
-- when a recorder call raises, the traceback is logged, then `Recorder.close()` logs every call
+- when a recorder call raises, `Recorder.close()` logs every call
   still pending in that recorder's own row shape; only if `close` itself raises does the relay write
   a fallback row (no arguments, no result text, `seq` above any seq already in the log). The client's
-  stdout is closed, and only then is the child terminated;
+  stdout is closed, the child is terminated and reaped, then stderr gets a best-effort traceback;
 - one nonblocking writer serves the client's stdout, shared by relayed lines and the recorder's own replies.
 
 What a row holds is the recorder's business: `evals.ab.proxy` logs no arguments or text,
@@ -30,6 +30,7 @@ import time
 import traceback
 from collections import Counter
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import IO, Any, Protocol, cast
 
@@ -330,6 +331,28 @@ def _pump(child: subprocess.Popen[bytes], recorder: Recorder, pending: _Pending,
                 queued[server_fd].clear()
 
 
+def _emit_diagnostics(diagnostics: list[str]) -> None:
+    # Bypass buffering so interpreter shutdown cannot retry a write to an unread pipe.
+    data = memoryview("".join(diagnostics).encode(sys.stderr.encoding or "utf-8", "backslashreplace"))
+    with suppress(OSError, ValueError):
+        fd = sys.stderr.fileno()
+        blocking = os.get_blocking(fd)
+        os.set_blocking(fd, False)
+        try:
+            deadline = time.monotonic() + 0.1
+            while data:
+                try:
+                    data = data[os.write(fd, data) :]
+                except BlockingIOError:
+                    pass
+                if data and not select.select([], [fd], [], max(0.0, deadline - time.monotonic()))[1]:
+                    break
+                if time.monotonic() >= deadline:
+                    break
+        finally:
+            os.set_blocking(fd, blocking)
+
+
 def serve(
     argv: Sequence[str] | None, prog: str, recorder_factory: Callable[[IO[str]], Recorder], *, idle_timeout: float = 180
 ) -> int:
@@ -351,20 +374,18 @@ def serve(
             stderr=err,
             env={**os.environ, "JEV_STUDY_USAGE_PROVENANCE": "1"},
         )
-        failed = False
+        diagnostics: list[str] = []
         try:
             try:
                 _pump(child, recorder, pending, idle_timeout)
             except Exception:
-                failed = True
-                traceback.print_exc()
+                diagnostics.append(traceback.format_exc())
             log.flush()
             before = log.tell()
             try:
                 recorder.close()
             except Exception:
-                failed = True
-                traceback.print_exc()
+                diagnostics.append(traceback.format_exc())
                 log.seek(0)
                 old = bytes(log.buffer.read(before)).decode("utf-8")
                 log.seek(0)
@@ -372,7 +393,7 @@ def serve(
                     log.write(json.dumps(row) + "\n")
                 log.flush()
             sys.stdout.close()
-            if failed:
+            if diagnostics:
                 child.terminate()
             try:
                 code = child.wait(timeout=5)
@@ -380,7 +401,7 @@ def serve(
                 child.kill()
                 child.wait()
                 return 1
-            return 1 if failed else code
+            return 1 if diagnostics else code
         finally:
             if child.poll() is None:
                 child.kill()
@@ -389,3 +410,5 @@ def serve(
                 child.stdin.close()
             if child.stdout:
                 child.stdout.close()
+            if diagnostics:
+                _emit_diagnostics(diagnostics)

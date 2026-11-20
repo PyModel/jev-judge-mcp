@@ -6,7 +6,7 @@ The server sends the judgment State and questions to the configured provider (Ty
 
 The response cache is off by default. With `JEV_MCP_CACHE` enabled, the filename is a SHA-256 digest of the provider, endpoint or account scope, model, State and questions. The JSON record stores `answers`, `usage` (token counts and whether the provider reported them), `provider`, `model`, and `request_id`. When supplied, the request ID can link a local judgment to the provider’s request logs. Answers can contain sensitive source material. Use a dedicated `JEV_MCP_CACHE_DIR`. The default is `$XDG_CACHE_HOME/jev-mcp` or `~/.cache/jev-mcp`. Entries use mode 0600 inside a 0700 directory. To clear them, stop processes using the cache and remove only files you have identified as Jev cache entries. Preserve unrelated files in custom directories.
 
-Telemetry keeps recent spans in memory. By default, they contain counts, flags and labels. Enabling `JEV_MCP_TELEMETRY_PAYLOADS` includes argument text in recorded spans. With `JEV_MCP_LOG_LEVEL=DEBUG`, those payloads also reach stderr and any logs retained by the parent application. The handler masks configured secret values. Other credentials, personal information and source text can remain visible.
+Telemetry keeps recent spans in memory. By default, they contain counts, flags and labels. Enabling `JEV_MCP_TELEMETRY_PAYLOADS` includes argument text in recorded spans. With `JEV_MCP_LOG_LEVEL=DEBUG` and payload telemetry enabled, recorded payloads and TypeSafe SDK wire bodies can reach stderr and any logs retained by the parent application. The handler masks configured secret values. Other credentials, personal information and source text can remain visible.
 
 ## Error redaction
 
@@ -18,7 +18,7 @@ A key configured in the environment is redacted from logs and from provider erro
 
 The installer keeps its own state file (`~/.local/state/jev-mcp/install.json`, mode 0600 in a 0700 directory) holding a hash of the entry it wrote, never a key. Before modifying an existing config, the installer saves a private copy of the entire file under `$XDG_STATE_HOME/jev-mcp/backups` (default `~/.local/state/jev-mcp/backups`). These backups can contain credentials for other servers. Retain them for recovery and delete individual copies when they are no longer needed. A key written into a GUI app's own config by `install --desktop-key` is reported when that file is still readable by group or others.
 
-Pattern redaction of command text runs in the opt-in command hook, `jev-judge-mcp hook gate` (`docs/adr/0034-action-pattern-redaction-beside-configured-secrets.md`, `docs/adr/0035-command-hook-is-not-jev-gate.md`). `install` does not enable that hook. The tools do not call it. With no credentials the hook prints nothing and exits 0. On a provider failure it asks. `JEV_GATE_STATE` is sent as the operator wrote it and is not a place to put a key.
+Pattern redaction of command text runs in the opt-in command hook, `jev-judge-mcp hook gate` (`docs/adr/0034-action-pattern-redaction-beside-configured-secrets.md`, `docs/adr/0035-command-hook-is-not-jev-gate.md`). `install` does not enable that hook. The tools do not call it. With no credentials or on an unexpected local failure, the hook exits 0 and emits a decision only when `JEV_HOOK_REQUIRED=1`, in which case it asks. On a provider failure it asks. `JEV_GATE_STATE` is sent as the operator wrote it and is not a place to put a key.
 
 ## Reporting a vulnerability
 

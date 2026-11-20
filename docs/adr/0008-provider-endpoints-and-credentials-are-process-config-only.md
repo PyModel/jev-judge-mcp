@@ -18,3 +18,9 @@ environment there is now exactly one file: the key `jev-judge-mcp setup` writes
 `TYPESAFE_API_KEY` is unset, with the variable always winning. The stored value joins the
 redaction set whenever it is read. Decision and rationale: ADR-0046.
 
+## Amendment (2026-11-19): local logging protects payloads and malformed records
+
+TypeSafe SDK wire-body records reach stderr only when DEBUG logging and payload telemetry are
+both enabled. On a log formatting error, the filter redacts the original message and the
+argument representation before emitting them.
+

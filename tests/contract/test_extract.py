@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import anyio
@@ -162,6 +163,25 @@ async def test_timeout_is_invalid_pattern_within_budget_while_other_calls_run() 
     assert '"status": "invalid_pattern"' in slow_text[0]
     assert 1.0 <= finished["slow"] < 1.2
     assert max(t for name, t in finished.items() if name != "slow") < 0.6
+
+
+async def test_warm_worker_does_not_import_from_the_callers_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "imported"
+    original = Path(pickle.__file__).read_text(encoding="utf-8")
+    (tmp_path / "pickle.py").write_text(
+        original + f"\nfrom pathlib import Path\nPath({str(marker)!r}).touch()\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    pool = ProcessRegexExecutor(size=1)
+    try:
+        await pool.warm()
+        matches = await pool.find(translate("[A-Z]{3}-\\d+", "g"), to_units(DOCUMENT), deadline=time.monotonic() + 5)
+    finally:
+        await pool.aclose()
+    assert matches == Matches(["ABC-123", "ABC-124"], False, 0)
+    assert not marker.exists()
 
 
 async def test_cancelled_call_kills_its_worker_and_the_pool_recovers() -> None:
@@ -377,7 +397,7 @@ def test_an_orphaned_worker_ends_itself_after_the_deadline() -> None:
     job = pickle.dumps((translate("(a|aa)+$", "g").source, 0, to_units(SLOW_DOCUMENT), 0.2, *caps))
     started = time.monotonic()
     worker = subprocess.run(
-        [sys.executable, "-m", "jev_judge_mcp.extract.worker"],
+        [sys.executable, "-P", "-m", "jev_judge_mcp.extract.worker"],
         input=len(job).to_bytes(4) + job,
         capture_output=True,
         timeout=10,

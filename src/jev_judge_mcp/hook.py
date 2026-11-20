@@ -18,7 +18,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from jev_judge_mcp.credential_literal import has_credential_literal, redact_credential_literals
+from jev_judge_mcp.credential_literal import (
+    REDACTED,
+    has_credential_field,
+    has_credential_literal,
+    redact_credential_literals,
+)
 from jev_judge_mcp.domain.answers import ChoiceAnswer
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.domain.questions import ChoiceQuestion, NoulCriteria, NoulQuestion, Question
@@ -272,17 +277,39 @@ def _questions(plan: _Plan) -> dict[str, Question]:
 
 def _plan(event: dict[str, object], extra: str | None) -> _Plan:
     tool = _text(event.get("tool_name"), "unknown")
-    writes = tool in _WRITES
-    containment: _Containment = _containment(event) if writes else "unknown"
+    if tool not in _WRITES:
+        return _Plan(tool, "unknown", event_state(event, extra, "unknown", redact_action))
+    containment = _containment(event)
+    if containment == "outside":
+        return _Plan(tool, containment, "")
+
     credential_matched = False
-    if writes and containment != "outside":
-        # Strict, high-precision: ordinary code never matches, a known-format literal always
-        # does, and the hit denies before any call (ADR-0076).
-        credential_matched = has_credential_literal(_render_input(event))
-    # The write path is judged as code: only the strict detector may rewrite it, never
-    # redact_action, which is a shell-command redactor (ADR-0076).
-    redactor = redact_credential_literals if writes else redact_action
-    return _Plan(tool, containment, event_state(event, extra, containment, redactor), credential_matched)
+
+    def redact_input(value: object, field: str = "") -> object:
+        nonlocal credential_matched
+        if isinstance(value, str):
+            if field and has_credential_field(field, value):
+                credential_matched = True
+                return REDACTED
+            redacted = redact_credential_literals(value)
+            credential_matched |= redacted != value
+            return redacted
+        elif is_json_object(value):
+            for key in value:
+                if has_credential_literal(key):
+                    credential_matched = True
+            return {key: redact_input(member, key) for key, member in value.items()}
+        elif isinstance(value, list):
+            items: list[object] = value  # pyright: ignore[reportUnknownVariableType]
+            return [redact_input(item) for item in items]
+        return value
+
+    # Scan decoded strings so JSON escaping cannot hide literal syntax or word boundaries.
+    value = redact_input(event.get("tool_input", {}))
+    if credential_matched:
+        return _Plan(tool, containment, "", credential_matched=True)
+    state = event_state(event, extra, containment, redact_credential_literals, input_text=_render_input(value))
+    return _Plan(tool, containment, state)
 
 
 def _containment(event: dict[str, object]) -> _Containment:
@@ -303,6 +330,8 @@ def event_state(
     extra: str | None,
     containment: _Containment,
     redact: Callable[[str], str],
+    *,
+    input_text: str | None = None,
 ) -> str:
     lines = [
         f"An autonomous coding agent is working in: {_text(event.get('cwd'), 'unknown')}",
@@ -319,14 +348,13 @@ def event_state(
     description = event.get("description")
     if isinstance(description, str) and description:
         parts.append(f"Description: {redact(description)}")
-    parts.append(f"Input: {redact(_render_input(event))}")
+    if input_text is None:
+        input_text = redact(_render_input(event.get("tool_input", {})))
+    parts.append(f"Input: {input_text}")
     return "\n".join(lines) + "\n\n--- proposed action ---\n" + "\n".join(parts)
 
 
-def _render_input(event: Mapping[str, object]) -> str:
-    if "tool_input" not in event:
-        return "{}"
-    value = event["tool_input"]
+def _render_input(value: object) -> str:
     if isinstance(value, str):
         return value
     return stringify_compact(value)

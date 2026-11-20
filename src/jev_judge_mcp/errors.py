@@ -75,7 +75,14 @@ class RedactingFilter(logging.Filter):
         self._redact = redact
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = self._redact(record.getMessage())
+        try:
+            message = record.getMessage()
+        except Exception:
+            try:
+                message = f"{record.msg!s} {record.args!r}"
+            except Exception:
+                message = "<unformattable log message>"
+        record.msg = self._redact(message)
         record.args = None
         if record.exc_info is not None:
             # Render the traceback now, redacted, so the formatter never sees the raw exception.

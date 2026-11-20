@@ -31,3 +31,10 @@ An upstream 401 is `auth` (ADR-0072). It reached the provider, but the flag trea
 provider, is `auth`, so the required hook asks instead of exiting 0 with empty stdout. A timeout,
 quota, or other provider error after the call stays fail-open. Asks are written by
 `hook_render.render_decision`. The hook still never prints `allow`.
+
+## Amendment (2026-11-19): unexpected local failures
+
+The shared hook CLI handles invalid settings, invalid UTF-8, and other unexpected exceptions.
+Required gate and completion hooks ask. By default they exit 0 with a generic stderr diagnostic
+and empty stdout. Screen and compact-cut keep the same empty-stdout behavior in either mode,
+because their host events accept only annotations (ADR-0077).

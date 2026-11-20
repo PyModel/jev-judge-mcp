@@ -425,15 +425,18 @@ def test_redactor_leaves_urls_without_userinfo_alone_except_whole() -> None:
     assert redact("https://jev.example/v1 and https://jev.example/") == f"{REDACTED} and https://jev.example/"
 
 
-def test_redacting_filter_covers_message_args_and_traceback() -> None:
+@pytest.mark.parametrize("malformed", [False, True], ids=["valid-format", "malformed-format"])
+def test_redacting_filter_covers_message_args_and_traceback(malformed: bool) -> None:
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
     handler.addFilter(RedactingFilter(Redactor(["s3cret-value"])))
-    logger = logging.getLogger("tests.redaction")
+    logger = logging.Logger("tests.redaction")
     logger.addHandler(handler)
     logger.propagate = False
     try:
         logger.warning("key %s in %r", "s3cret-value", {"k": "s3cret-value"})
+        if malformed:
+            logger.warning("key %d", "s3cret-value")
         try:
             raise RuntimeError("boom s3cret-value")
         except RuntimeError:
@@ -445,6 +448,8 @@ def test_redacting_filter_covers_message_args_and_traceback() -> None:
     assert "s3cret-value" not in output
     assert "key [redacted] in {'k': '[redacted]'}" in output
     assert "RuntimeError: boom [redacted]" in output
+    if malformed:
+        assert "key %d" in output and "('[redacted]',)" in output
 
 
 def test_server_logging_redacts_configured_secrets(capsys: pytest.CaptureFixture[str]) -> None:
@@ -461,6 +466,30 @@ def test_server_logging_redacts_configured_secrets(capsys: pytest.CaptureFixture
     assert "s3cret-value" not in err
     assert "pw-1" not in err
     assert "HTTP Request: POST" in err
+
+
+def test_debug_logging_hides_sdk_wire_payloads_by_default(capsys: pytest.CaptureFixture[str]) -> None:
+    root = logging.getLogger()
+    saved = root.handlers[:], root.level
+    sdk = logging.getLogger("typesafe_sdk")
+    sdk_level = sdk.level
+    try:
+        configure_logging("DEBUG")
+        sdk.setLevel(logging.DEBUG)  # The SDK can set its own level when imported after configuration.
+        sdk.debug("wire body=%s", "private file contents")
+        sdk.info("SDK status")
+        logging.getLogger("jev_judge_mcp").debug("application diagnostic")
+        err = capsys.readouterr().err
+        assert "private file contents" not in err
+        assert "SDK status" in err
+        assert "application diagnostic" in err
+
+        configure_logging("DEBUG", telemetry_payloads=True)
+        sdk.debug("wire body=%s", "private file contents")
+        assert "private file contents" in capsys.readouterr().err
+    finally:
+        root.handlers[:], root.level = saved
+        sdk.setLevel(sdk_level)
 
 
 # --- Error-body helpers ---

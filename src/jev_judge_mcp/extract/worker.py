@@ -229,7 +229,7 @@ class ProcessRegexExecutor:
         process: Process | None = None
         with anyio.CancelScope(shield=True):
             process = await anyio.open_process(
-                [sys.executable, "-m", __name__], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None
+                [sys.executable, "-P", "-m", __name__], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None
             )
         assert process is not None  # the spawn either returned a process or raised
         return process

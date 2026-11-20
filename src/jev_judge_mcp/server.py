@@ -8,6 +8,7 @@ before the server starts.
 import contextlib
 import errno
 import gc
+import io
 import logging
 import os
 import signal
@@ -125,10 +126,16 @@ def build_server(settings: Settings) -> JevMCPServer:
     return JevMCPServer(toolset=Toolset(Runtime(settings), TOOLS), log_level=settings.log_level)
 
 
-def configure_logging(level: LogLevel, secrets: Iterable[str] = ()) -> None:
+def configure_logging(level: LogLevel, secrets: Iterable[str] = (), *, telemetry_payloads: bool = False) -> None:
     """Log to stderr. Every record, from any logger, is redacted of `secrets` first (ADR-0008)."""
     handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(level)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    if not telemetry_payloads:
+        # The SDK may set its own level on import, after this handler is installed.
+        handler.addFilter(
+            lambda record: record.levelno >= logging.INFO or record.name.partition(".")[0] != "typesafe_sdk"
+        )
     handler.addFilter(RedactingFilter(Redactor(secrets)))
     root = logging.getLogger()
     root.handlers[:] = [handler]
@@ -251,6 +258,13 @@ def warn_unexpanded_references() -> None:
 
 
 def ensure_secrets_redactable(settings: Settings) -> None:
+    try:
+        validate_secrets_redactable(settings)
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
+
+
+def validate_secrets_redactable(settings: Settings) -> None:
     """Refuse any configured secret too short to redact safely (ADR-0050).
 
     The Redactor replaces exact values, so a 1-2 character secret would blank every matching
@@ -259,7 +273,7 @@ def ensure_secrets_redactable(settings: Settings) -> None:
     """
     for variable, value in settings.named_secrets():
         if len(value) < MIN_SECRET_LENGTH:
-            raise SystemExit(
+            raise ValueError(
                 f"{variable} is shorter than {MIN_SECRET_LENGTH} characters; refusing to start: "
                 "a secret that short cannot be redacted without corrupting text"
             )
@@ -268,7 +282,7 @@ def ensure_secrets_redactable(settings: Settings) -> None:
         where = f"the key file {keyfile.stored_key_path(settings)}"
         if settings.key_file is not None:
             where += " set by JEV_MCP_KEY_FILE"
-        raise SystemExit(
+        raise ValueError(
             f"{where} holds a key shorter than {MIN_SECRET_LENGTH} characters; refusing to start: "
             "a secret that short cannot be redacted without corrupting text"
         )
@@ -458,6 +472,38 @@ def print_version() -> None:
     print(f"{DISTRIBUTION} {identity}")
 
 
+def _configure_process_logging(settings: Settings) -> None:
+    configure_logging(
+        settings.log_level, keyfile.redaction_values(settings), telemetry_payloads=settings.telemetry_payloads
+    )
+    warn_unexpanded_references()
+
+
+def _run_hook(argv: list[str]) -> int:
+    from jev_judge_mcp.hook import fail_open_or_ask, hook_required
+
+    try:
+        stdin = sys.stdin
+        if isinstance(stdin, io.TextIOWrapper):
+            stdin.reconfigure(encoding="utf-8", errors="strict")
+        if hook_requested(argv):
+            from jev_judge_mcp.hook import main as hook_main
+
+            return hook_main(argv[2:])
+        from jev_judge_mcp.cli import completion_hook_main
+
+        settings = load_settings()
+        validate_secrets_redactable(settings)
+        _configure_process_logging(settings)
+        return completion_hook_main(argv[2:])
+    except Exception:
+        # A diagnostic must not expose stdin, credentials, or invalid settings values.
+        annotates = argv[1:3] in (["hook", "screen"], ["hook", "compact-cut"])
+        return fail_open_or_ask(
+            not annotates and hook_required(os.environ), "jev-judge-mcp hook: unexpected error\n", "hook failed"
+        )
+
+
 def main() -> None:
     # The platform gate covers the installer, the command hook, the doctor, setup, and the server.
     # No arguments keep stdout protocol-only (ADR-0032, ADR-0033).
@@ -472,10 +518,8 @@ def main() -> None:
         from jev_judge_mcp.install.cli import main as install_main
 
         sys.exit(install_main(sys.argv[2:]))
-    if hook_requested(sys.argv):
-        from jev_judge_mcp.hook import main as hook_main
-
-        sys.exit(hook_main(sys.argv[2:]))
+    if hook_requested(sys.argv) or completion_hook_requested(sys.argv):
+        sys.exit(_run_hook(sys.argv))
     if doctor_requested(sys.argv):
         from jev_judge_mcp.doctor import main as doctor_main
 
@@ -488,14 +532,10 @@ def main() -> None:
         from jev_judge_mcp.cli import calibrate_main
 
         sys.exit(calibrate_main(sys.argv[2:]))
-    if judge_requested(sys.argv) or gate_cli_requested(sys.argv) or completion_hook_requested(sys.argv):
+    if judge_requested(sys.argv) or gate_cli_requested(sys.argv):
         subcommand_settings = load_settings()
         ensure_secrets_redactable(subcommand_settings)
-        # Logging is configured before the subcommand runs, so a toolset failure reaches stderr
-        # through the redacting filter, not through lastResort (ADR-0008). The completion hook
-        # keeps its own stdout/stderr handling around gate_main.
-        configure_logging(subcommand_settings.log_level, keyfile.redaction_values(subcommand_settings))
-        warn_unexpanded_references()
+        _configure_process_logging(subcommand_settings)
     if judge_requested(sys.argv):
         from jev_judge_mcp.cli import judge_main
 
@@ -504,10 +544,6 @@ def main() -> None:
         from jev_judge_mcp.cli import gate_main
 
         sys.exit(gate_main(sys.argv[2:]))
-    if completion_hook_requested(sys.argv):
-        from jev_judge_mcp.cli import completion_hook_main
-
-        sys.exit(completion_hook_main(sys.argv[2:]))
     settings = load_settings()
     # The gates run before logging and before anything binds, so a misconfiguration is one clear
     # line on stderr and a non-zero exit, never a live unauthenticated server (ADR-0050).
@@ -515,8 +551,7 @@ def main() -> None:
     ensure_http_access_control(settings)
     ensure_http_port_free(settings)
     ensure_provider_runnable(settings)
-    configure_logging(settings.log_level, keyfile.redaction_values(settings))
-    warn_unexpanded_references()
+    _configure_process_logging(settings)
     server = build_server(settings)
     # One line, the same identity `initialize` will report (ADR-0054). Not logged by `--version`.
     logger.info("identity %s %s", server.name, server.version)

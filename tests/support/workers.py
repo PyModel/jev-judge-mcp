@@ -15,7 +15,7 @@ def worker_pids(group: int) -> set[int]:
     # pgrep emits only PIDs and the kernel keeps the group across reparenting. Match the
     # complete Python module invocation so a command that mentions the module is excluded.
     python = rf"({re.escape(sys.executable)}|([^[:space:]]*/)?[Pp]ython[0-9.]*)"
-    pattern = rf"{python} -m {re.escape(WORKER_MODULE)}"
+    pattern = rf"{python} -P -m {re.escape(WORKER_MODULE)}"
     result = subprocess.run(["pgrep", "-g", str(group), "-f", "-x", pattern], capture_output=True, text=True, timeout=5)
     if result.returncode == 1:  # pgrep's documented no-match status
         return set()

@@ -69,3 +69,8 @@ literals in `extract/worker.py`. They are bounds on something that can grow, so 
 with every other bound as `limits.EXTRACT.pool_size_max` and `queue_bound_per_slot`, stated on
 `docs/reference/limits.md` like the rest; the worker reads them from its caps block. The values
 are unchanged. No parity-manifest row exists for either; this ADR owns them.
+
+## Amendment (2026-11-19): safe worker import paths
+
+Workers start with `python -P -m` so the caller's working directory is excluded from the
+implicit module search path. The worker resolves through the existing installation.
