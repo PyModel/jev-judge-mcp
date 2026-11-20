@@ -89,8 +89,8 @@ red run after the fact. This ADR puts the whole workflow in front of every push.
   `tests/unit/test_ci_prepush_coverage.py` holds that line.
 - **Runner fidelity, learned the hard way.** The image ships Node 24.19.0 exactly (the
   workflow's `actions/setup-node` pin; a floating 24.x drifts ICU rendering) and asserts the
-  version per check; git, make and procps, because the integration census and support harness
-  shell out to them and a missing tool is a gate failure, never a skipped test; a non-root
+  version per check; git, make, procps and jq, because the integration census, support harness
+  and release-asset check shell out to them and a missing tool is a gate failure, never a skipped test; a non-root
   user (uid 1000), because the security wire tests deadlock under root; and docker's `--init`,
   because killed process groups in `tests/evals` otherwise linger as unreaped zombies and the
   group-death assertions see them alive. Each of these was a real leg failure that GitHub did

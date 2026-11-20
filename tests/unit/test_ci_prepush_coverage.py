@@ -250,7 +250,7 @@ def test_make_ci_prerequisites_are_phony() -> None:
 
 def test_parity_does_not_repeat_the_policy_replay_target(tmp_path: Path) -> None:
     result = subprocess.run(
-        ["make", "-n", "-f", str(MAKEFILE), "PYTEST=pytest", "parity", "policy-replay"],
+        ["make", "--no-print-directory", "-n", "-f", str(MAKEFILE), "PYTEST=pytest", "parity", "policy-replay"],
         cwd=tmp_path,
         check=True,
         capture_output=True,

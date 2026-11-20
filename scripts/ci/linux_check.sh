@@ -79,7 +79,7 @@ STAGE_START=0
 
 # A missing system tool the tests shell out to is a gate failure, not a skipped test: the
 # image must provide what ubuntu-latest provides.
-for tool in uv uvx git make ps node python3; do
+for tool in uv uvx git make ps jq node python3; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		echo "pre-push: check 'linux:tools' failed for $LABEL: $tool is missing from the CI image; rerun with: make ci-linux"
 		exit 1
