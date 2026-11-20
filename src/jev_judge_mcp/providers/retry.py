@@ -13,7 +13,7 @@ import math
 import random
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC
 from email.utils import parsedate_to_datetime
 from typing import Literal
@@ -21,6 +21,9 @@ from typing import Literal
 import anyio
 
 type RetryKind = Literal["status", "timeout", "connect"]
+
+MIN_USEFUL_ATTEMPT = 1.0
+"""Seconds reserved for a retry, allowing headroom over Jev's measured 70 to 500 ms latency."""
 
 
 async def sleep(seconds: float) -> None:
@@ -63,9 +66,6 @@ class RetryPolicy:
 
     backoff_jitter: float = 0.25
     """Fraction of each backoff delay randomly subtracted, between 0 and 1."""
-
-    statuses: frozenset[int] = field(default_factory=lambda: frozenset({429}))
-    """HTTP status codes that are retried."""
 
     budget: float = 90.0
     """Overall seconds one `evaluate` call may spend across attempts and delays."""
@@ -122,7 +122,8 @@ def backoff_delay(policy: RetryPolicy, attempt: int) -> float:
         if exponent >= math.log2(policy.backoff_max) - math.log2(policy.backoff_initial)
         else math.ldexp(policy.backoff_initial, exponent)
     )
-    return min(exponential, round(exponential * (1 - uniform() * policy.backoff_jitter), 3))
+    jittered = exponential * (1 - uniform() * policy.backoff_jitter)
+    return min(exponential, round(jittered, 3) or jittered or exponential)
 
 
 def retry_delay(
@@ -130,25 +131,25 @@ def retry_delay(
 ) -> float | None:
     """The delay before the retry after failed `attempt`, or `None` when retries stop.
 
-    Delays honor a server `Retry-After` minimum. Retries stop at
-    `max_attempts` and when `elapsed + delay` would reach `budget`.
+    Delays honor a server `Retry-After` minimum. A retry needs both an attempt slot and enough time
+    after the delay to make a useful attempt.
     """
     if attempt >= policy.max_attempts:
         return None
-    delay = backoff_delay(policy, attempt) if retry_after is None else retry_after
-    if elapsed + delay >= budget:
+    delay = max(backoff_delay(policy, attempt), retry_after or 0.0)
+    if budget - elapsed - delay < MIN_USEFUL_ATTEMPT:
         return None
     return delay
 
 
 def retry_after_seconds(headers: Mapping[str, str]) -> float | None:
     """`retry-after-ms` or `Retry-After` (delay seconds or HTTP date) as seconds; `None` otherwise."""
-    raw = _header(headers, "retry-after-ms")
+    raw = header_value(headers, "retry-after-ms")
     if raw is not None:
         seconds = _finite_seconds(raw, 0.001)
         if seconds is not None:
             return seconds
-    raw = _header(headers, "retry-after")
+    raw = header_value(headers, "retry-after")
     if raw is not None:
         seconds = _finite_seconds(raw, 1)
         if seconds is not None:
@@ -164,7 +165,7 @@ def retry_after_seconds(headers: Mapping[str, str]) -> float | None:
     return None
 
 
-def _header(headers: Mapping[str, str], name: str) -> str | None:
+def header_value(headers: Mapping[str, str], name: str) -> str | None:
     """Case-insensitive single-header lookup for plain mappings and httpx.Headers alike."""
     for key, value in headers.items():
         if key.lower() == name:

@@ -1,4 +1,4 @@
-"""The bench runner: `JEV_BENCH_LIVE=1 python -m evals.bench.run` (paid; not wired to any make target).
+"""The three-arm bench runner and report for saved runs.
 
 Items run in a seeded random order. Each item's A, B, and C runs go back to back in a random order
 within the triplet, and a triplet starts only if the whole triplet fits the ledger, so a stop leaves
@@ -6,14 +6,9 @@ complete triplets. A is direct (no Jev server). B is automatic: the server is av
 that never calls Jev is recorded as "did not call Jev", not a failure (ADR-0036). C is forced: the
 server plus the one-sentence instruction, and a run with no Jev answer fails the use gate.
 
-The bench model is Pi `opencode-go/deepseek-v4.1-flash` at thinking high. One Pi prompt preflights
-that model, and one Claude prompt preflights the Claude agent the same way, through the same
-`run_preflight`. A preflight that never reaches the model refuses the bench (exit 2) before any run
-is booked and before any report is published, so a dead login cannot spend the run cap or rewrite
-`bench150`. A bench with nothing left to launch skips the preflight. Its cost is recorded in
-`preflight.json`, not the ledger. The first provider connection, auth, or rate-limit error stops the
-run. That attempt is booked so it is never retried, and it is not an arm result. Only complete triplets
-are analyzed.
+The CLI can report saved runs. It refuses to start paid runs until the bench has a confined
+launcher (ADR-0074). A provider connection, auth, or rate-limit failure stops execution and
+books the attempt without treating it as an arm result. Only complete triplets are analyzed.
 After the first 10 triplets the forced-arm compliance stop and the Jev-spend projection apply. The
 25 USD ceiling applies to Jev spend. Agent model spend is recorded separately from Pi's usage cost
 fields, and marked not measured when those fields are absent.
@@ -22,10 +17,8 @@ On 2026-09-22 a two-arm Pi run reached its model for 43 with-Jev runs, then the 
 accepting connections. Pi reported "Connection error." with zero tokens on both arms, and the runner
 kept the remaining 107 as if they were results. This runner does not do that again.
 
-The paid path refuses without its flag, without `TYPESAFE_API_KEY`, and while any item's label is
-not `frozen`. The offline dry run (`tests/evals/test_bench_dryrun.py`) drives this same code with a
-stub agent and a loopback provider. `evals.study_runner` owns the run, the result file, and the
-booking handler (ADR-0045).
+The offline dry run (`tests/evals/test_bench_dryrun.py`) uses a stub agent and a loopback provider.
+`evals.study_runner` owns the run, the result file, and the booking handler (ADR-0045).
 """
 
 import argparse
@@ -47,17 +40,22 @@ from evals.agent import (
     RELAY_LOG,
     AgentCommand,
     AgentRunResult,
-    AgentSetupError,
+    read_relay_log,
     run_agent,
 )
 from evals.artifacts import incomplete_message, read_records
 from evals.bench import analysis, answer, chart, gate, prompt, spans
 from evals.bench.items import Item, load_items
 from evals.bench.ledger import ARMS, POLICY, TRIPLET
-from evals.spend import SpendLedger, agent_started, amount, booked_amount, reconciliation_notes
-from evals.study_runner import record_row, run_recorded, write_record
+from evals.spend import SpendLedger, amount, reconciliation_notes
+from evals.study_runner import record_row, recover_attempts, run_recorded, write_record
 
 LIVE_FLAG = "JEV_BENCH_LIVE"
+_CONFINEMENT_REFUSAL = (
+    "the bench's live path is not yet confined (ADR-0074): routing it through "
+    "evals.confinement.run_confined is the named follow-up; no live bench run starts "
+    "until then"
+)
 OUT = arms.REPO_ROOT / "evals" / "reports" / "bench150"
 SEED = 150
 EARLY_PAIRS = 10
@@ -83,29 +81,18 @@ _AUTH_ERROR = re.compile(r"\b401\b|unauthorized|invalid api key", re.IGNORECASE)
 
 @dataclass(frozen=True)
 class Setup:
-    """What differs between the paid run and the dry run: the agent binary, the envs, and the secret."""
+    """The offline dry run's stub agent, environments, and scrubbed secret."""
 
     agent: Callable[[Item, str], Sequence[str]]
     """The command that stands in for `claude`, per item and arm."""
-    server: Sequence[str]
     server_env: Mapping[str, str]
     base_env: Mapping[str, str]
     """The agent's whole environment (`arms.agent_env` of the caller's)."""
     secret: str
     """Scrubbed from every kept artifact."""
-    auth_provider: str = ""
-    """The one auth.json provider entry the agent's model needs; empty copies no auth."""
-    server_python: str = ""
-    """The study venv interpreter the sandbox launcher wraps; empty is the offline dry-run shape."""
     timeout_s: float = arms.RUN_TIMEOUT_S
-    flags: Callable[[Item, str, Path], Sequence[str]] | None = None
-    """Argv after the agent binary. None uses the Claude command; the Pi arm supplies its own."""
     trace: Callable[[Iterable[str]], stream.Trace] | None = None
     """Stream parser. None uses the Claude stream-json parser."""
-    cross_check: Callable[[Sequence[Mapping[str, Any]], stream.Trace], None] | None = None
-    """Proxy-vs-stream check for a B or C run. None uses the Claude check."""
-    login_keychain: bool = False
-    """Claude runs only. Pi and the third-party bench model get no keychain path."""
 
     def __post_init__(self) -> None:
         if not self.secret:
@@ -132,10 +119,10 @@ def mcp_config(arm: str, sandbox: Path, setup: Setup) -> dict[str, Any]:
     pi entry): the published tools sit in the model's initial tool list instead of behind the
     adapter's lazy gateway, which recorded runs show the model never walks on its own (ADR-0036).
     Every path in the document is inside `sandbox`: the servers run from copies placed there, the
-    interpreter is the sandbox symlink, and the relay log is written there and copied out to the
+    interpreter is the sandbox launcher, and the relay log is written there and copied out to the
     run's records after the run.
     """
-    python = arms.sandbox_python(sandbox, setup.server_python or None)
+    python = arms.sandbox_python(sandbox)
     servers = arms.copy_servers(sandbox, "bench")
     config = arms.mcp_config("A", sandbox=sandbox, server_env={})
     if arm in ("B", "C"):
@@ -169,10 +156,6 @@ def jev_auth_error(calls: Sequence[Mapping[str, Any]]) -> bool:
     )
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
-
-
 def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) -> dict[str, Any]:
     run_id = f"{item.id}.{arm}"
     run_dir = out / run_id
@@ -180,16 +163,8 @@ def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) ->
     stop: RuntimeError | None = None
     text, addendum = prompt.render(item), prompt.addendum(arm)
     command = AgentCommand(
-        argv=lambda config: [
-            *setup.agent(item, arm),
-            *(
-                setup.flags(item, arm, config)
-                if setup.flags is not None
-                else arms.claude_command("claude", text, config, addendum)[1:]
-            ),
-        ],
+        argv=lambda config: [*setup.agent(item, arm), *arms.claude_command("claude", text, config, addendum)[1:]],
         timeout_s=setup.timeout_s,
-        login_keychain=setup.login_keychain,
     )
     with run_agent(
         command,
@@ -198,7 +173,6 @@ def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) ->
         secret=setup.secret,
         run_dir=run_dir,
         parse=setup.trace,
-        auth_provider=setup.auth_provider or None,
     ) as run:
         status = run.status
 
@@ -210,7 +184,7 @@ def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) ->
             jev_down = arm in ("B", "C") and trace.mcp_servers and trace.mcp_servers.get("jev") != "connected"
             if status == "ok" and jev_down:
                 status = f"failed: jev server {trace.mcp_servers.get('jev')}"
-            calls = _read_jsonl(jev_log)
+            calls = read_relay_log(jev_log)
             use: str | None = None
             timings: list[spans.CallTiming] | None = None
             cross_check = None
@@ -221,7 +195,7 @@ def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) ->
             elif arm in ("B", "C"):
                 use = gate.use_gate(calls) if arm == "C" else gate.automatic_note(calls)
                 try:
-                    (setup.cross_check or gate.cross_check)(calls, trace)
+                    gate.cross_check(calls, trace)
                 except gate.HarnessMismatchError as mismatch:
                     cross_check, stop = str(mismatch), mismatch
                     status = f"stopped: harness mismatch: {mismatch}"
@@ -410,16 +384,10 @@ def failed_record(
 class _SavedResults:
     rows: dict[Path, dict[str, Any]]
     incomplete: list[Path]
-    charges: dict[str, float]
 
 
 def _records(out: Path) -> _SavedResults:
-    charges: dict[str, float] = {}
-
     def valid(row: dict[str, Any]) -> bool:
-        # read_records has already matched run_id to its directory. An unusable grading
-        # row still reserves the bound, and keeps evidence of any larger charge.
-        run_id = row["run_id"]
         if (
             isinstance(row.get("status"), str)
             and row["status"].startswith(chart.GRADING_FAILURE)
@@ -427,39 +395,28 @@ def _records(out: Path) -> _SavedResults:
         ):
             # Old graders wrote a placeholder zero after losing the cost. Preserve the original file.
             row["jev_cost_usd"] = None
-        cost = booked_amount(row.get("jev_cost_usd"), POLICY.run_bound_usd)
-        charges[run_id] = max(cost, POLICY.run_bound_usd)
         try:
             record = _BenchRecord.model_validate(row)
         except ValidationError:
             return False
         if (
             record.arm not in ARMS
-            or run_id != f"{record.item}.{record.arm}"
+            or record.run_id != f"{record.item}.{record.arm}"
             or not all((record.item.strip(), record.status.strip(), record.tool.strip(), record.family.strip()))
         ):
             return False
-        charges[run_id] = cost
         return True
 
     rows, incomplete = read_records(out.glob("*/result.json"), required=("run_id",), valid=valid)
-    return _SavedResults(rows, incomplete, charges)
+    return _SavedResults(rows, incomplete)
 
 
 def load_records(out: Path) -> list[dict[str, Any]]:
     return list(_records(out).rows.values())
 
 
-def recorded_model(out: Path) -> str | None:
-    path = out / "model.txt"
-    if not path.is_file():
-        return None
-    text = path.read_text(encoding="utf-8").strip()
-    return text or None
-
-
-def recorded_thinking(out: Path) -> str | None:
-    path = out / "thinking.txt"
+def _recorded_text(out: Path, filename: str) -> str | None:
+    path = out / filename
     if not path.is_file():
         return None
     text = path.read_text(encoding="utf-8").strip()
@@ -492,8 +449,8 @@ def write_report(out: Path, *, stop: str, sample: bool, labeled_items: int | Non
             sample=sample,
             stop=stop,
             labeled_items=labeled_items,
-            model_id=recorded_model(out),
-            thinking=recorded_thinking(out),
+            model_id=_recorded_text(out, "model.txt"),
+            thinking=_recorded_text(out, "thinking.txt"),
         ),
         encoding="utf-8",
     )
@@ -503,8 +460,8 @@ def write_report(out: Path, *, stop: str, sample: bool, labeled_items: int | Non
 def publish(out: Path, *, stop: str, labeled_items: int) -> tuple[Path, Path]:
     """The deliverable chart and numbers table, citing the run records. Raw transcripts stay gitignored."""
     records, stop = _report_inputs(out, stop)
-    model_id = recorded_model(out)
-    thinking = recorded_thinking(out)
+    model_id = _recorded_text(out, "model.txt")
+    thinking = _recorded_text(out, "thinking.txt")
     reports = arms.REPO_ROOT / "evals" / "reports"
     chart_path = reports / "bench150.html"
     table_path = reports / "bench150.md"
@@ -537,25 +494,11 @@ def _load_book(
     book = SpendLedger.load(out / "ledger.json", POLICY)
     plan = schedule(items, seed)
     saved = _records(out)
-    prior = incomplete_message(saved.incomplete, out) if saved.incomplete else None
-    for item, order in plan:
-        for arm in order:
-            run_id = f"{item.id}.{arm}"
-            if run_id in book.runs or not agent_started(out / run_id):
-                continue
-            charge = saved.charges.get(run_id, book.policy.run_bound_usd)
-            try:
-                book.record(run_id, charge)
-            except ValueError:
-                # Concurrent resume checks may recover the same charge. A different booking is a conflict.
-                if book.runs.get(run_id) != charge:
-                    raise
+    shortfall = recover_attempts(
+        book, out, (f"{item.id}.{arm}" for item, order in plan for arm in order), saved.rows, cost_key="jev_cost_usd"
+    )
+    prior = incomplete_message(saved.incomplete, out) if saved.incomplete else shortfall
     for row in saved.rows.values():
-        rid = row["run_id"]
-        required = saved.charges[rid]
-        if rid in book.runs and book.runs[rid] < required:
-            kind = "unfinished Jev reserve" if row["jev_cost_usd"] is None else "recorded Jev cost"
-            prior = prior or f"stopped: {rid} booked below its {kind} of ${required:g}"
         prior = prior or analysis.terminal_reason(row)
     return book, plan, prior
 
@@ -573,8 +516,8 @@ def runs_remain(items: Sequence[Item], out: Path, *, seed: int = SEED) -> bool:
     return False
 
 
-def run_bench(items: Sequence[Item], setup: Setup, out: Path, *, seed: int = SEED) -> str:
-    """Run every triplet not yet recorded, within the caps; returns why it stopped."""
+def run_bench(items: Sequence[Item], setup: Setup | None, out: Path, *, seed: int = SEED) -> str:
+    """Return the bench status and run pending triplets only with an offline setup."""
     book, plan, prior = _load_book(items, out, seed)
     if prior:
         return prior
@@ -596,6 +539,8 @@ def run_bench(items: Sequence[Item], setup: Setup, out: Path, *, seed: int = SEE
             continue
         if reason := book.blocker(len(pending)):
             return f"stopped before {item.id}: {reason}"
+        if setup is None:
+            raise BenchRefusedError(_CONFINEMENT_REFUSAL)
         for arm in pending:
             run_id = f"{item.id}.{arm}"
             sys.stderr.write(f"run {run_id} (spent ${book.spent:.2f})\n")
@@ -625,7 +570,7 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
     args = parser.parse_args(argv)
     try:
         stop = live(environ, OUT, seed=args.seed, agent=args.agent, allow_draft=args.allow_draft)
-    except (BenchRefusedError, AgentSetupError) as refusal:
+    except BenchRefusedError as refusal:
         sys.stderr.write(f"refused: {refusal}\n")
         return 2
     items = load_items()
@@ -634,7 +579,7 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
     summary = {
         "stop": stop,
         "labeled_items": labeled,
-        "model": recorded_model(OUT),
+        "model": _recorded_text(OUT, "model.txt"),
         **analysis.headline(triplets),
         "per_tool": analysis.per_tool(triplets, {item.id: item for item in items}),
     }
@@ -657,7 +602,7 @@ def live(
     if environ.get(LIVE_FLAG) != "1":
         raise BenchRefusedError(f"the bench calls paid providers; set {LIVE_FLAG}=1 to run it")
     try:
-        key = arms.study_key(environ)
+        arms.study_key(environ)
     except ValueError as error:
         raise BenchRefusedError(str(error)) from error
     items = load_items() if items is None else items
@@ -666,11 +611,7 @@ def live(
         raise BenchRefusedError(f"{len(unfrozen)} of {len(items)} items are not frozen (first: {unfrozen[0]})")
     if agent not in ("claude", "pi"):
         raise BenchRefusedError(f"unknown agent {agent!r}; one of claude, pi")
-    base_env = arms.agent_env(environ)
-    agent_path = base_env["PATH"]
-    server_env = {"JEV_PROVIDER": "typesafe", "JEV_MCP_MODEL": arms.JEV_MODEL, "JEV_MCP_LOG_LEVEL": "DEBUG"}
-    binary = shutil.which(agent, path=agent_path)
-    if binary is None:
+    if shutil.which(agent, path=arms.agent_env(environ)["PATH"]) is None:
         raise BenchRefusedError(f"{agent} not found on PATH")
     if agent == "pi":
         from evals.bench import pi
@@ -679,37 +620,9 @@ def live(
             pi.adapter_path()
         except pi.AdapterMissing as error:
             raise BenchRefusedError(str(error)) from error
-        setup = Setup(
-            agent=lambda _item, _arm: [binary],
-            server=arms.jev_command(),
-            server_env=server_env,
-            base_env=base_env,
-            secret=key,
-            flags=pi.flags,
-            trace=pi.parse,
-            cross_check=pi.cross_check,
-            auth_provider=pi.BENCH_MODEL.split("/")[0],
-        )
-    else:
-        setup = Setup(
-            agent=lambda _item, _arm: [binary],
-            server=arms.jev_command(),
-            server_env=server_env,
-            base_env=base_env,
-            secret=key,
-            login_keychain=True,
-        )
-    # A finished bench, or one already stopped, has nothing left to launch and returns without
-    # touching a provider. A bench with anything left to launch refuses here (F11): its live path
-    # still runs through the unconfined `run_agent`, and ADR-0074 admits no unconfined live run.
-    # Routing the bench through `evals.confinement.run_confined` is the named follow-up.
     if runs_remain(items, out, seed=seed):
-        raise BenchRefusedError(
-            "the bench's live path is not yet confined (ADR-0074): routing it through "
-            "evals.confinement.run_confined is the named follow-up; no live bench run starts "
-            "until then"
-        )
-    return run_bench(items, setup, out, seed=seed)
+        raise BenchRefusedError(_CONFINEMENT_REFUSAL)
+    return run_bench(items, None, out, seed=seed)
 
 
 if __name__ == "__main__":

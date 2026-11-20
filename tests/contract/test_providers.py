@@ -19,11 +19,13 @@ import respx
 
 from jev_judge_mcp.domain import ChoiceQuestion, NoulCriteria, NoulQuestion, Question, ScoreQuestion, Usage
 from jev_judge_mcp.errors import REDACTED, Redactor
-from jev_judge_mcp.providers import NO_RETRIES, JevProvider, ProviderError, ProviderTimeoutError
+from jev_judge_mcp.providers import NO_RETRIES, JevProvider, ProviderError, ProviderTimeoutError, RetryPolicy
 from jev_judge_mcp.providers.cloudflare import CloudflareProvider, cloudflare_slug
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.openrouter import OpenRouterProvider, openrouter_slug
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+from jev_judge_mcp.tools.base import code_of
+from tests.support.retries import fast_retries as fast_retries
 from tests.support.secrets import secret_env
 
 pytestmark = pytest.mark.anyio
@@ -92,6 +94,8 @@ class Wire:
     """A fake HTTP peer shared by both mocking mechanisms."""
 
     handler: Handler
+    response_headers: dict[str, str] = field(default_factory=dict[str, str])
+    retry: RetryPolicy | None = NO_RETRIES
     sent: list[Sent] = field(default_factory=list[Sent])
 
     async def respond(self, url: str, headers: dict[str, str], content: bytes) -> Reply:
@@ -102,7 +106,7 @@ class Wire:
     def transport2(self) -> httpx2.MockTransport:
         async def handle(request: httpx2.Request) -> httpx2.Response:
             status, content = await self.respond(str(request.url), dict(request.headers), await request.aread())
-            return httpx2.Response(status, content=content)
+            return httpx2.Response(status, content=content, headers=self.response_headers)
 
         return httpx2.MockTransport(handle)
 
@@ -129,7 +133,7 @@ def _compatible(wire: Wire) -> JevProvider:
     # Retries off here: single-attempt, deterministic; the bounded default is covered in
     # tests/contract/test_provider_retries.py (ADR-0057).
     return CompatibleProvider(
-        REDACT, api_key=SECRETS["JEV_API_KEY"], base_url="https://jev.example/v1/systemone", retry=NO_RETRIES
+        REDACT, api_key=SECRETS["JEV_API_KEY"], base_url="https://jev.example/v1/systemone", retry=wire.retry
     )
 
 
@@ -139,17 +143,17 @@ def _typesafe(wire: Wire) -> JevProvider:
         api_key=SECRETS["TYPESAFE_API_KEY"],
         base_url="https://typesafe.example",
         transport=wire.transport2(),
-        retry=NO_RETRIES,
+        retry=wire.retry,
     )
 
 
 def _openrouter(wire: Wire) -> JevProvider:
-    return OpenRouterProvider(REDACT, api_key=SECRETS["OPENROUTER_API_KEY"], retry=NO_RETRIES)
+    return OpenRouterProvider(REDACT, api_key=SECRETS["OPENROUTER_API_KEY"], retry=wire.retry)
 
 
 def _cloudflare(wire: Wire) -> JevProvider:
     return CloudflareProvider(
-        REDACT, api_token=SECRETS["JEV_CLOUDFLARE_API_TOKEN"], account_id="acct-1", retry=NO_RETRIES
+        REDACT, api_token=SECRETS["JEV_CLOUDFLARE_API_TOKEN"], account_id="acct-1", retry=wire.retry
     )
 
 
@@ -237,12 +241,14 @@ class Peer:
         self.case = case
         self.router = router
 
-    def provider(self, handler: Handler) -> tuple[JevProvider, Wire]:
-        wire = Wire(handler)
+    def provider(
+        self, handler: Handler, *, headers: dict[str, str] | None = None, retry: RetryPolicy | None = NO_RETRIES
+    ) -> tuple[JevProvider, Wire]:
+        wire = Wire(handler, headers or {}, retry)
 
         async def side_effect(request: httpx.Request) -> httpx.Response:
             status, content = await wire.respond(str(request.url), dict(request.headers), request.content)
-            return httpx.Response(status, content=content)
+            return httpx.Response(status, content=content, headers=wire.response_headers)
 
         self.router.post(self.case.url).mock(side_effect=side_effect)
         return self.case.make(wire), wire
@@ -377,6 +383,33 @@ async def test_model_name_passthrough(case: Case, peer: Peer, requested: str, bo
     assert evaluation.model == case.reported_model(requested, body_model)
 
 
+@pytest.mark.parametrize(
+    ("body_value", "headers", "expected_id", "expected_model"),
+    [
+        ("x" * 1024, {"X-Request-Id": "header-id"}, "x" * 1024, "x" * 1024),
+        ("x" * 1025, {"X-Request-Id": "header-id"}, "header-id", None),
+        ("bad\ntrace", {}, None, None),
+        ("bad\u007ftrace", {"X-Request-Id": "bad\ttrace", "Request-Id": "fallback"}, "fallback", None),
+        ("café", {"X-Typesafe-Request-Id": "x" * 1025}, None, None),
+    ],
+    ids=["at-cap", "too-long-body", "control", "bad-first-header", "non-ascii-and-long-header"],
+)
+async def test_response_metadata_requires_bounded_printable_ascii(
+    case: Case,
+    peer: Peer,
+    body_value: str,
+    headers: dict[str, str],
+    expected_id: str | None,
+    expected_model: str | None,
+) -> None:
+    provider, _ = peer.provider(
+        reply(case.wrap({"answers": {}, "model": body_value, "request_id": body_value})), headers=headers
+    )
+    evaluation = await evaluate(provider)
+    assert evaluation.request_id == expected_id
+    assert evaluation.model == case.reported_model("jev-latest", expected_model)
+
+
 @pytest.mark.parametrize("status", [401, 403, 404, 422])
 async def test_http_error_echoing_every_secret_is_redacted(case: Case, peer: Peer, status: int) -> None:
     echoed = {"error": f"denied for {case.authorization}", "seen": [*SECRETS.values(), *EXTRA_MARKERS]}
@@ -399,6 +432,38 @@ async def test_http_error_body_is_redacted_before_the_200_unit_cut(case: Case, p
 
     assert key[:5] not in message
     assert_no_secret(message)
+
+
+@pytest.mark.parametrize(
+    ("status", "code", "attempts"), [(401, "auth", 1), (429, "quota", 3), (503, "provider", 1), (529, "provider", 1)]
+)
+async def test_oversized_http_errors_keep_status_and_retry_classification(
+    case: Case, peer: Peer, fast_retries: list[float], status: int, code: str, attempts: int
+) -> None:
+    body = b'{"error":"oversized' + b"x" * (64 * 1024) + b'"}'
+    provider, wire = peer.provider(reply(body, status), retry=None)
+
+    with pytest.raises(ProviderError) as caught:
+        await evaluate(provider)
+
+    assert code_of(caught.value) == code
+    assert caught.value.status == status
+    assert str(caught.value).startswith(case.label)
+    assert "oversized" in str(caught.value)
+    assert ("Completion is uncertain." in str(caught.value)) == (status >= 500)
+    assert len(wire.sent) == attempts
+    assert fast_retries == ([0.5, 1.0] if status == 429 else [])
+
+
+async def test_deeply_nested_error_keeps_its_status_and_body_prefix(case: Case, peer: Peer) -> None:
+    body = b"[" * 800 + b"0" + b"]" * 800
+    provider, _ = peer.provider(reply(body, 401))
+
+    with pytest.raises(ProviderError) as caught:
+        await evaluate(provider)
+
+    assert code_of(caught.value) == "auth"
+    assert str(caught.value) == f"{case.label} 401: " + "[" * 200
 
 
 async def test_connection_error_text_is_redacted(case: Case, peer: Peer) -> None:

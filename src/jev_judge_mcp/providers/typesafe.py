@@ -11,24 +11,24 @@ from collections.abc import Mapping
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, override
 
+import httpx
 from pydantic import RootModel
 
 from jev_judge_mcp.domain import JsonValue
 from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.providers.base import (
-    BoundedStream,
     Evaluation,
     JevProvider,
     ProviderConnectionError,
     ProviderDeliveryError,
     ProviderError,
     ProviderName,
+    bounded_response_hook,
     decode_body,
     origin_of,
     parse_envelope,
+    pre_send_timeout,
     refuse_credentials_in_url,
-    request_id_of,
-    response_limit,
 )
 from jev_judge_mcp.providers.retry import RetryPolicy, retry_after_seconds
 from jev_judge_mcp.serialize import stringify_compact
@@ -62,20 +62,7 @@ def sdk_importable() -> bool:
 
 
 async def _remember_headers(response: "httpx2.Response") -> None:
-    """The SDK returns the body only. Keep this response's headers for ``request_id_of``."""
-    import httpx2
-
-    limit = response_limit(response.is_success, response.headers.get("content-encoding"))
-    if response.is_stream_consumed:
-        if len(response.content) > limit:
-            raise ProviderError(f"provider response exceeds the {limit}-byte limit")
-    else:
-
-        class Stream(BoundedStream, httpx2.AsyncByteStream):
-            pass
-
-        assert isinstance(response.stream, httpx2.AsyncByteStream)
-        response.stream = Stream(response.stream, limit)
+    """The SDK returns the body only. Keep its headers for envelope parsing."""
     _response_headers.set(response.headers)
 
 
@@ -149,7 +136,10 @@ class TypeSafeProvider(JevProvider):
                 timeout=None,
                 transport=self._transport,
                 headers={"Accept-Encoding": "identity"},
-                event_hooks={"request": [self._reject_cross_origin], "response": [_remember_headers]},
+                event_hooks={
+                    "request": [self._reject_cross_origin],
+                    "response": [bounded_response_hook(httpx2.AsyncByteStream), _remember_headers],
+                },
             )
             self._client = AsyncTypeSafeClient(
                 api_key=self._api_key,
@@ -169,6 +159,7 @@ class TypeSafeProvider(JevProvider):
         import httpx2
         from typesafe_sdk import TypeSafeAPIConnectionError, TypeSafeAPIError
 
+        before_send = pre_send_timeout(timeout)
         token = _response_headers.set(None)
         try:
             try:
@@ -178,21 +169,23 @@ class TypeSafeProvider(JevProvider):
                     cast(Any, state),
                     cast(Any, questions),
                     model=model,
-                    # `timeout` is this attempt's deadline from `evaluate` (ADR-0057). `None` must wait, as
-                    # fetch does, for a direct `_send` caller: the SDK reads a bare `None` as its 10 s default.
-                    timeout=httpx2.Timeout(None) if timeout is None else timeout,
+                    timeout=httpx2.Timeout(timeout, connect=before_send, pool=before_send),
                     response_model=_RawBody,
                 )
             except TypeSafeAPIError as error:
                 raise self._status_error(
                     error.status,
                     _body_text(error.body),
-                    retry_after=retry_after_seconds(_response_headers.get() or {}),
+                    retry_after=retry_after_seconds(error.headers),
                 ) from None
             except TypeSafeAPIConnectionError as error:
                 # The SDK writes `Connection error: {cause}`; a reset's cause has an empty message.
                 cause = error.__cause__
-                if isinstance(cause, (httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.PoolTimeout)):
+                if isinstance(cause, httpx2.ConnectTimeout):
+                    raise httpx.ConnectTimeout(str(cause)) from None
+                if isinstance(cause, httpx2.PoolTimeout):
+                    raise httpx.PoolTimeout(str(cause)) from None
+                if isinstance(cause, httpx2.ConnectError):
                     raise ProviderConnectionError(f"{self.label} request failed: {error}") from None
                 if isinstance(error, TimeoutError):
                     raise
@@ -201,15 +194,14 @@ class TypeSafeProvider(JevProvider):
             headers = _response_headers.get()
         finally:
             _response_headers.reset(token)
-        envelope = parse_envelope(response.root, self.label)
+        envelope = parse_envelope(response.root, self.label, headers)
         # The reference reports the requested model, never one from the body (`provider.ts:122`).
-        # A header-only id is kept, matching the compatible provider (ADR-0068).
         return Evaluation(
             envelope.answers,
             envelope.usage,
             self.name,
             model,
-            request_id=envelope.request_id or request_id_of({}, headers),
+            request_id=envelope.request_id,
         )
 
     @override

@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import httpx2
 import pytest
@@ -147,14 +147,15 @@ def anyio_backend() -> str:
 @pytest.mark.anyio
 async def test_eval_runtime_provider_disables_retries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The eval runtime's provider runs with retries off (ADR-0057), so one tool call is at most one
-    bounded request: a retryable 500 is answered by exactly one request on the wire, where the
-    server's default policy would make three attempts.
+    bounded request even when the provider responds with a retryable 429.
 
     No network: the counting transport is injected at the provider's own constructor, the boundary
     the factory builds through. The fixture key never leaves the redactor.
     """
     from jev_judge_mcp.domain import NoulCriteria, NoulQuestion
+    from jev_judge_mcp.errors import Redactor
     from jev_judge_mcp.providers import ProviderError
+    from jev_judge_mcp.providers.retry import RetryPolicy
     from jev_judge_mcp.providers.typesafe import TypeSafeProvider
     from jev_judge_mcp.settings import Settings
 
@@ -166,13 +167,17 @@ async def test_eval_runtime_provider_disables_retries(tmp_path: Path, monkeypatc
 
     def retryable(request: httpx2.Request) -> httpx2.Response:
         sent.append(request)
-        return httpx2.Response(500, text="no")
+        return httpx2.Response(429, headers={"Retry-After": "0"}, text="no")
 
     class Counting(TypeSafeProvider):
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            super().__init__(*args, transport=httpx2.MockTransport(retryable), **kwargs)
+        def __init__(
+            self, redact: Redactor, *, api_key: str, base_url: str | None, retry: RetryPolicy | None = None
+        ) -> None:
+            super().__init__(
+                redact, api_key=api_key, base_url=base_url, retry=retry, transport=httpx2.MockTransport(retryable)
+            )
 
-    monkeypatch.setattr("jev_judge_mcp.providers.typesafe.TypeSafeProvider", Counting)
+    monkeypatch.setattr("jev_judge_mcp.providers.resolver.TypeSafeProvider", Counting)
     provider = live.typesafe_without_retries(Settings())
     try:
         with pytest.raises(ProviderError):

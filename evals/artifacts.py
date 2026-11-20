@@ -31,25 +31,29 @@ def write_json(path: Path, payload: Mapping[str, Any]) -> None:
             temporary.unlink(missing_ok=True)
 
 
+def read_result(path: Path) -> dict[str, Any] | None:
+    try:
+        row: object = json.loads(read_artifact(path).decode("utf-8"))
+    except (ValueError, OSError, RecursionError):
+        return None
+    return cast(dict[str, Any], row) if isinstance(row, dict) else None
+
+
 def read_records(
     paths: Iterable[Path], *, required: tuple[str, ...], valid: Callable[[dict[str, Any]], bool]
 ) -> tuple[dict[Path, dict[str, Any]], list[Path]]:
     records: dict[Path, dict[str, Any]] = {}
     incomplete: list[Path] = []
     for path in sorted(paths):
-        try:
-            row: object = json.loads(read_artifact(path).decode("utf-8"))
-        except (ValueError, OSError, RecursionError):
-            row = None
-        if isinstance(row, dict):
-            record = cast(dict[str, Any], row)
-            if (
-                all(isinstance(record.get(key), str) and record[key] for key in required)
-                and record["run_id"] == path.parent.name
-                and valid(record)
-            ):
-                records[path] = record
-                continue
+        record = read_result(path)
+        if (
+            record is not None
+            and all(isinstance(record.get(key), str) and record[key] for key in required)
+            and record["run_id"] == path.parent.name
+            and valid(record)
+        ):
+            records[path] = record
+            continue
         incomplete.append(path)
     return records, incomplete
 

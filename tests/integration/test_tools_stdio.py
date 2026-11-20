@@ -32,7 +32,7 @@ def call(request_id: int, name: str, arguments: dict[str, Any]) -> dict[str, Any
 
 
 def test_worker_census_ignores_a_decoy_command_line() -> None:
-    decoy_cmd = [sys.executable, "-c", "input()", "/decoy/python", "-m", WORKER_MODULE]
+    decoy_cmd = [sys.executable, "-c", "input()", "/decoy/python", "-P", "-m", WORKER_MODULE]
     with StdioServer(decoy_cmd) as decoy, StdioServer() as server:
         server.initialize()
         assert worker_pids(server.process.pid)
@@ -47,7 +47,7 @@ def test_worker_census_retains_a_worker_after_its_launcher_exits() -> None:
     # Keep the worker's stdin open from the test while its immediate parent exits.
     launcher = """
 import json, subprocess, sys
-worker = subprocess.Popen([sys.executable, "-m", sys.argv[1]], stdout=subprocess.DEVNULL)
+worker = subprocess.Popen([sys.executable, "-P", "-m", sys.argv[1]], stdout=subprocess.DEVNULL)
 print(json.dumps({"pid": worker.pid}), flush=True)
 """
     with StdioServer([sys.executable, "-c", launcher, WORKER_MODULE]) as server:

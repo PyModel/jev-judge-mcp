@@ -12,7 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, cast
 
-from evals.artifacts import RESULT_BYTES_MAX, read_artifact, write_json
+from evals.artifacts import RESULT_BYTES_MAX, read_artifact, read_result, write_json
 
 JEV_PUBLISHED_USD_PER_MTOK_INPUT = 0.042
 """TypeSafe's published list price (docs/jev_docs/models.md). Output tokens are free."""
@@ -275,8 +275,27 @@ class SpendLedger:
             self._state.publish(self.path, self.policy.max_usd, {**self.runs, run_id: cost_usd})
 
 
+_STARTED_MARKER = "agent.started"
+
+
+def mark_agent_started(run_dir: Path) -> None:
+    """Persist the launch handoff before a subprocess can spend."""
+    fd = os.open(run_dir / _STARTED_MARKER, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    # The run and study directories may have just been created.
+    for directory in (run_dir, run_dir.parent, run_dir.parent.parent):
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
 def agent_started(run_dir: Path) -> bool:
-    return any((run_dir / name).is_file() for name in ("result.json", "stream.jsonl", "claude.stderr"))
+    return any((run_dir / name).is_file() for name in (_STARTED_MARKER, "result.json", "stream.jsonl", "claude.stderr"))
 
 
 def book_outcome(ledger: SpendLedger, run_id: str, result_path: Path, *, cost_key: str = "cost_usd") -> None:
@@ -284,9 +303,6 @@ def book_outcome(ledger: SpendLedger, run_id: str, result_path: Path, *, cost_ke
     with _mutex:
         if run_id in ledger.runs:
             return
-        try:
-            row: object = json.loads(read_artifact(result_path).decode("utf-8"))
-        except (ValueError, OSError, RecursionError):
-            row = None
-        raw = cast(dict[str, Any], row).get(cost_key) if isinstance(row, dict) else None
+        row = read_result(result_path)
+        raw = row.get(cost_key) if row is not None else None
         ledger.record(run_id, booked_amount(raw, ledger.policy.run_bound_usd))

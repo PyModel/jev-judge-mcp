@@ -10,36 +10,29 @@ import os
 import re
 import stat
 import sys
-import tempfile
 from collections.abc import Callable, Generator, Mapping
 from pathlib import Path
 from typing import TypeGuard
 
 from jev_judge_mcp.domain import is_json_object
-from jev_judge_mcp.fsutil import read_bounded
+from jev_judge_mcp.fsutil import (
+    ensure_directory,
+    private_dir,
+    read_bounded,
+    require_private_dir,
+    stage_write,
+    sync_directory,
+    write_private_atomic,
+)
 from jev_judge_mcp.install.errors import ConfigChangedError, InstallError
 from jev_judge_mcp.install.redact import canonical_hash_payload
 
 INSTALL_FILE_BYTES_MAX = 16 * 1024 * 1024
+BACKUPS_PER_TARGET = 3
 
 
 def entry_hash(entry: Mapping[str, object]) -> str:
     return hashlib.sha256(canonical_hash_payload(entry).encode()).hexdigest()
-
-
-def _ensure_directory(path: Path, mode: int) -> None:
-    if path.is_dir():
-        return
-    _ensure_directory(path.parent, mode)
-    path.mkdir(mode=mode, exist_ok=True)
-    _sync_directory(path.parent)
-
-
-def ensure_private_dir(path: Path) -> None:
-    if path.is_symlink():
-        raise InstallError(f"installer state directory is a symlink: {path}")
-    _ensure_directory(path, 0o700)
-    os.chmod(path, 0o700)
 
 
 def file_mode(path: Path) -> int | None:
@@ -66,34 +59,6 @@ def _encoded_file(text: str, path: Path) -> bytes:
     if len(data) > INSTALL_FILE_BYTES_MAX:
         raise InstallError(f"{path} would exceed the {INSTALL_FILE_BYTES_MAX}-byte installer file limit")
     return data
-
-
-def _write_all(fd: int, data: bytes) -> None:
-    """`os.write` may take fewer bytes than offered; loop until every byte is down."""
-    view = memoryview(data)
-    while view:
-        written = os.write(fd, view)
-        if not written:
-            raise OSError("short write made no progress")
-        view = view[written:]
-
-
-def _write_temporary(directory: Path, prefix: str, data: bytes, mode: int) -> str:
-    """A fully written, synced, mode-set temporary file beside the target, or no file at all:
-    a failure at any step unlinks it before the error propagates."""
-    fd, temporary = tempfile.mkstemp(dir=directory, prefix=prefix)
-    try:
-        try:
-            _write_all(fd, data)
-            os.fchmod(fd, mode)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(temporary)
-        raise
-    return temporary
 
 
 def _exchange_files(left: Path, right: Path) -> None:
@@ -128,13 +93,14 @@ def atomic_write(
     """Publish without clobbering a new file or losing a concurrent edit. Journal the staging name before committing."""
     data = _encoded_file(text, path)
     real = path.resolve() if path.is_symlink() else path
-    _ensure_directory(real.parent, 0o777)
+    ensure_directory(real.parent, 0o777)
     if read_bytes(real) != expected:
         raise ConfigChangedError(f"{path}: changed during install, re-run")
-    staged = Path(_write_temporary(real.parent, ".jev-install-", data, mode))
+    staged = stage_write(real.parent, ".jev-install-", data, mode)
     retain = False
     try:
         if journal is not None:
+            sync_directory(real.parent)
             journal(staged.name)
         if expected is None:
             try:
@@ -150,7 +116,7 @@ def atomic_write(
                 if isinstance(exc, FileNotFoundError):
                     raise ConfigChangedError(f"{path}: changed during install, re-run") from exc
                 raise
-            _sync_directory(real.parent)
+            sync_directory(real.parent)
             try:
                 displaced = _displaced_digest(staged)
             except OSError as exc:
@@ -161,46 +127,61 @@ def atomic_write(
     finally:
         if not retain:
             staged.unlink()
-    _sync_directory(real.parent)
+    sync_directory(real.parent)
 
 
 def write_backup(state_dir: Path, stamp: str, target: str, suffix: str, data: bytes) -> Path:
     """Copy a config aside before the first change. The copy can hold other tools' secrets."""
-    ensure_private_dir(state_dir)
-    backups = state_dir / "backups"
-    ensure_private_dir(backups)
-    directory = backups / stamp
-    ensure_private_dir(directory)
-    destination = directory / f"{target}{suffix or '.txt'}"
+    private_dir(state_dir)
+    backups = private_dir(state_dir / "backups")
+    directory = private_dir(backups / stamp)
+    suffix = suffix or ".txt"
+    staged = stage_write(directory, f"{target}-", data, 0o600, suffix=suffix)
+    destination = directory / f"{target}{suffix}"
     try:
-        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.link(staged, destination)
     except FileExistsError:
-        fd, unique = tempfile.mkstemp(dir=directory, prefix=f"{target}-", suffix=suffix or ".txt")
-        destination = Path(unique)
-    try:
-        try:
-            _write_all(fd, data)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        _sync_directory(directory)
+        destination = staged
     except BaseException:
-        destination.unlink()
+        staged.unlink()
         raise
+    else:
+        staged.unlink()
+    sync_directory(directory)
     return destination
 
 
-def _sync_directory(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+def prune_backups(state_dir: Path, target: str) -> None:
+    """Keep the newest completed copies of this target across all timestamp folders."""
+    root = state_dir / "backups"
     try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+        require_private_dir(root)
+    except FileNotFoundError:
+        return
+    pattern = re.compile(rf"{re.escape(target)}(?:-[a-z0-9_]+)?\.[^.]+")
+    copies: list[tuple[int, Path]] = []
+    for directory in root.iterdir():
+        if directory.is_symlink() or not directory.is_dir():
+            continue
+        for copy in directory.iterdir():
+            if pattern.fullmatch(copy.name):
+                info = copy.lstat()
+                if stat.S_ISREG(info.st_mode):
+                    copies.append((info.st_mtime_ns, copy))
+    changed: set[Path] = set()
+    for _, copy in sorted(copies, reverse=True)[BACKUPS_PER_TARGET:]:
+        copy.unlink()
+        changed.add(copy.parent)
+    for directory in changed:
+        sync_directory(directory)
+        if not any(directory.iterdir()):
+            directory.rmdir()
+            sync_directory(root)
 
 
 @contextlib.contextmanager
 def state_lock(directory: Path) -> Generator[None, None, None]:
-    ensure_private_dir(directory)
+    private_dir(directory)
     fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         try:
@@ -275,27 +256,37 @@ def load_targets(path: Path, *, recover: bool) -> dict[str, dict[str, object]]:
     except OSError as exc:
         raise InstallError(f"cannot recover installer state: inspect {config} ({exc.strerror})") from exc
     staging = pending.get("staging")
+    saved: Path | None = None
+    displaced = None
     if staging is not None:
         if not isinstance(staging, str) or not re.fullmatch(r"\.jev-install-[a-zA-Z0-9_-]+", staging):
             raise InstallError("invalid staging name in pending installer state")
-        if current == after and before is not None:
-            saved = Path(config).resolve().with_name(staging)
-            try:
-                displaced = _displaced_digest(saved)
-            except OSError:
-                displaced = "unreadable"
-            if displaced is not None and displaced != before:
-                if recover:
-                    write_state(path, {"targets": targets})
-                raise InstallError(_conflict(Path(config), saved))
-    if current == after:
+        saved = Path(config).resolve().with_name(staging)
+        try:
+            displaced = _displaced_digest(saved)
+        except OSError:
+            displaced = "unreadable"
+    unexchanged = before is not None and displaced == after
+    if current == after and not unexchanged:
+        if before is not None and displaced is not None and displaced != before:
+            assert saved is not None
+            if recover:
+                write_state(path, {"targets": targets})
+            raise InstallError(_conflict(Path(config), saved))
         if record is None:
             targets.pop(key, None)
         else:
             targets[key] = record
-    elif current != before:
+    elif current != before and displaced != after:
         raise InstallError(f"config changed during installer recovery; inspect {config} and {path}")
     if recover:
+        if saved is not None:
+            try:
+                saved.unlink()
+            except FileNotFoundError:
+                pass
+            else:
+                sync_directory(saved.parent)
         write_state(path, {"targets": targets})
     return targets
 
@@ -311,13 +302,5 @@ def ownership_key(targets: Mapping[str, object], target: str, path: Path, name: 
 
 
 def write_state(path: Path, state: Mapping[str, object]) -> None:
-    ensure_private_dir(path.parent)
     text = json.dumps(state, indent=2, sort_keys=True) + "\n"
-    temporary = _write_temporary(path.parent, ".jev-state-", _encoded_file(text, path), 0o600)
-    try:
-        os.replace(temporary, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(temporary)
-        raise
-    _sync_directory(path.parent)
+    write_private_atomic(path, _encoded_file(text, path))

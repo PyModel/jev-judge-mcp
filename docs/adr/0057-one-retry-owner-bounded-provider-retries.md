@@ -20,29 +20,25 @@ leaves one definition and one test suite, and the SDK's policy is explicitly dis
 implicitly default.
 
 `Runtime.ask` still passes no whole-call deadline: the client's MCP cancellation (ADR-0011) remains
-the recovery path for the call. What changes is that every attempt is bounded and transient failures
-are retried, all inside the caller's deadline when there is one (the hook's 30 s, ADR-0035; setup's
+the recovery path for the call. Every attempt is bounded and eligible failures are retried, all
+inside the caller's deadline when there is one (the hook's 30 s, ADR-0035; setup's
 30 s). This supersedes ADR-0021's "Tier A keeps the reference's no-deadline behavior"; the registry
 entry `stdio-no-provider-deadline` becomes `stdio-attempt-deadline`.
 
-### Retried, and never retried
+### Retry eligibility
 
-Retried: transient transport failures — a per-attempt timeout, and connect, read, write, close,
-remote-protocol (a reset), and proxy errors — plus the status codes `408`, `429`, and `500`–`599` —
-the SDK's own default set. A request that cannot be made or sent is final, never retried: a local
-protocol error or an unsupported URL scheme. So are any other 4xx, an envelope or validation error,
-`ProviderConfigError`, the credentials-in-URL refusal, the cross-origin redirect refusal (ADR-0023),
-and a cancelled call. Cancellation is a `BaseException`: it is never classified, never swallowed,
-and stops an attempt or a backoff sleep at once. An SDK connection error whose cause has no message
-(a reset) is wrapped in a `ProviderConnectionError` so it keeps today's text and is still classified
-as the transient connection failure it is.
+HTTP `429` and transport failures while establishing a connection or acquiring a pool slot are
+eligible for retry. HTTP `408`, `5xx`, read and write failures, resets with unknown delivery,
+and unspecified timeouts are terminal. Local protocol errors, unsupported schemes, validation and
+configuration errors, credentials in a URL, and cross-origin redirect refusals (ADR-0023) are also
+terminal. Cancellation propagates immediately during an attempt or backoff sleep.
 
 ### The numbers, and the evidence behind them
 
 - **3 attempts** (one call + two retries): the SDK's own default `max_retries=2`.
 - **Backoff 0.5 s doubling to a 5.0 s cap, 25% subtractive jitter**: the SDK's default shape.
-- **`Retry-After` (delay seconds or HTTP date) and `retry-after-ms` honored, capped at 5 s**: the
-  SDK honors the headers but not a cap; an unbounded server-chosen wait is not a bounded policy.
+- **`Retry-After` (delay seconds or HTTP date) and `retry-after-ms` set a minimum**: use the
+  larger of the server hint and generated backoff. The overall budget bounds admission.
 - **Per-attempt timeout 30 s.** Measured provider latency in this repo's records is 70–500 ms
   (`docs/ROADMAP.md`); the official pages say most queries complete in about 100 ms
   (https://docs.typesafe.ai/concepts/how-to-build-with-system-one.md).
@@ -56,22 +52,18 @@ as the transient connection failure it is.
 - **Overall budget 90 s**: three attempts at their 30 s deadline plus bounded delays. It is a hard
   bound on the whole call: every attempt is capped at the budget time left, not only at the
   per-attempt timeout, so with `timeout=None` the worst case — three hung attempts plus delays —
-  still finishes at or under 90 s. A retry whose delay would reach the budget (elapsed + delay ≥
-  budget) is skipped. When the caller passed a deadline, the caller's remaining budget binds
+  still finishes at or under 90 s. A retry requires at least 1 s after elapsed time and the
+  delay are deducted. When the caller passed a deadline, the caller's remaining budget binds
   instead — retries can never run past it. A timeout the caller's own remaining time cut keeps the
   caller-timeout text; a timeout the policy budget cut (only possible with a deadline above the
   budget) is exhausted-retry text, naming the attempts.
 
 ### Double billing
 
-Retrying an attempt that ended without a response can bill the call twice: a request can already
-have reached the server when a read error or a reset ends it, and a timeout only proves the answer
-was not received, not that the work was not done. A Jev evaluation is a read-only judgment, so the
-risk is cost, not state corruption; the attempt cap bounds it at three bills per call. Retries on
-connection refusals, 408/429 and 5xx carry no such ambiguity — the request never completed — and a
-caller with a hard cap (below) opts out entirely. Backoff delays are strictly positive: zero cannot
-disable backoff, because a policy that retries without waiting would amplify the failure it is
-reacting to.
+An attempt can be billed if a read error, reset, or unspecified timeout follows acceptance.
+Automatic retries stop on those failures. A connection or pool-acquisition failure precedes
+delivery, and HTTP `429` explicitly rejects the request. Callers with hard caps can opt out
+entirely. Generated backoff stays strictly positive to avoid amplifying the failure.
 
 ### One injection point turns retries off
 
@@ -84,10 +76,9 @@ retries.
 
 ### Errors and logs
 
-A failure with no retry behind it — the first attempt failed and the policy is off, the failure is
-not transient, or the caller's deadline ended the call — keeps today's exact error text, byte for
-byte. When retries happened and all failed, the final error names the provider, the attempt count,
-and the last failure:
+A single-attempt policy keeps the recorded error wording. Under a retry-enabled policy, an
+ambiguous timeout or transport failure can add “Completion is uncertain.” When retries are
+exhausted, the final error names the provider, the attempt count, and the last failure:
 
 `{label} request failed after {n} attempts: last failure: {status: body | the attempt timed out | cause}`
 
@@ -130,10 +121,34 @@ could charge twice. A server retry delay is a minimum. If that minimum reaches t
 deadline, the attempt ends and the server's response is returned. The attempt cap and generated
 backoff retain their existing bounds.
 
-Providers request identity encoding and cap successful responses at 8 MiB and errors at 64 KiB.
-An encoding the client did not request or a body exceeding the applicable bound ends the call
-before JSON decoding.
+Providers request identity encoding, cap successful responses at 8 MiB, and truncate streamed
+error bodies at 64 KiB. An encoding the client did not request or an oversized successful
+response ends the call before JSON decoding.
 
 Paid callers inspecting a provider failure can read `ProviderError.delivery_uncertain` under every
 retry policy, including `NO_RETRIES`. A true value means the provider may have accepted the
 evaluation. The single-attempt message retains its historical wording.
+
+## Amendment (2026-11-19) — transport deadlines and bounded response handling
+
+- Raw HTTP and the TypeSafe SDK set connect and pool timeouts to one quarter of the active
+  attempt cap. Connection acquisition and establishment can time out before the outer deadline,
+  preserving pre-delivery retry classification.
+- Retry delay is the greater of generated backoff and the server minimum. The next attempt
+  requires at least 1 s after that delay within the caller or policy horizon, allowing headroom
+  over Jev's measured 70–500 ms latency. If a 429 retry cannot fit, return that response's quota
+  error.
+- The shared response reader retains up to 64 KiB from streamed error bodies. Already-buffered
+  errors pass through with their original content. Both preserve the HTTP status, provider label,
+  and retry classification, and the diagnostic uses a short excerpt. A successful body over
+  8 MiB still raises a size-limit error. Error serialization handles the full nesting depth
+  of the JSON decoder.
+- Delete `ProviderError.delivery_uncertain`. F33 requested the field for paid callers, which
+  never read it. The eval ledger books conservative bounds. The retry-enabled path still uses
+  “Completion is uncertain.” for ambiguous timeouts and transport failures.
+- The shared envelope parser accepts upstream model and request-ID strings of 1–1,024 printable
+  ASCII characters. Invalid strings are treated as absent. A valid body request ID takes
+  precedence over a valid response header. Cache reads apply the same bounds to existing
+  entries. An invalid recorded model or request ID makes the entry a cache miss. Adapters share
+  case-insensitive header lookup and default port values.
+- Delete the unused `RetryPolicy.statuses` field. HTTP 429 remains the sole retryable status.

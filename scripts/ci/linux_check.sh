@@ -14,6 +14,7 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+source "$SCRIPT_DIR/run_bounded.sh"
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd -P)
 DOCKERFILE="$REPO_ROOT/docker/ci-linux.Dockerfile"
 # The tag carries the Dockerfile's content hash: a changed image recipe (a Node bump, a new
@@ -78,7 +79,7 @@ STAGE_START=0
 
 # A missing system tool the tests shell out to is a gate failure, not a skipped test: the
 # image must provide what ubuntu-latest provides.
-for tool in uv uvx git make ps node python3; do
+for tool in uv uvx git make ps jq rg node python3; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		echo "pre-push: check 'linux:tools' failed for $LABEL: $tool is missing from the CI image; rerun with: make ci-linux"
 		exit 1
@@ -117,6 +118,9 @@ if [ "$NODE_VERSION" != "v24.19.0" ]; then
 	exit 1
 fi
 run make:parity 1800 make parity
+run make:policy-replay 1800 make policy-replay
+# ci.yml's security job installs ripgrep before make security; the image already bakes it.
+run ripgrep-install 300 bash scripts/ci/install_ripgrep.sh
 run make:security 1200 make security
 run make:build 1200 make build
 run make:smoke 3600 make smoke
@@ -177,36 +181,15 @@ fi
 cat >"$RUNNER.onecpu" <<'ONECPU_EOF'
 #!/usr/bin/env bash
 set -eux
-apt-get update -qq && apt-get install -y -qq make git procps >/dev/null
+apt-get update -qq && apt-get install -y -qq make git procps ripgrep >/dev/null
 useradd -m runner
 cp -r /src /home/runner/app && chown -R runner:runner /home/runner/app
 su runner -c "cd ~/app && uv sync --locked --all-extras && CI=true make security"
 ONECPU_EOF
 chmod 755 "$RUNNER.onecpu"
-# Portable watchdog, same contract as the native leg's.
-run_bounded() {
-	local seconds=$1 pid watchdog status=0
-	shift
-	"$@" &
-	pid=$!
-	(
-		sleep "$seconds"
-		pkill -TERM -P "$pid" 2>/dev/null || true
-		kill -TERM "$pid" 2>/dev/null
-	) >/dev/null 2>&1 &
-	watchdog=$!
-	wait "$pid" || status=$?
-	pkill -TERM -P "$watchdog" 2>/dev/null || true
-	# The subshell may have already torn itself down (its pkill woke it the moment this
-	# side's pkill killed its sleep); losing that race must not kill the leg (set -e).
-	kill "$watchdog" 2>/dev/null || true
-	wait "$watchdog" 2>/dev/null || true
-	return "$status"
-}
-run_bounded 1800 docker run --rm --cpus 1 --name "jev-onecpu-$$" \
+if ! run_bounded 1800 docker run --rm --cpus 1 --name "jev-onecpu-$$" \
 	--entrypoint sh -e CI=true -v "$SRC":/src:ro -v "$RUNNER.onecpu":/onecpu.sh:ro \
-	"$ONECPU_IMAGE" /onecpu.sh
-if [ $? -ne 0 ]; then
+	"$ONECPU_IMAGE" /onecpu.sh; then
 	echo "pre-push: check 'linux:security-one-cpu' failed for $LABEL; rerun with: make ci-linux"
 	exit 1
 fi

@@ -8,7 +8,6 @@ from jev_judge_mcp.policy import DEFAULT_CLASSIFY_AUTO_ACCEPT, DEFAULT_MINIMUM_M
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, caller_actions, define, frame, headline
 from jev_judge_mcp.tools.observed import classification_decision, fail_closed, validate_choice
 from jev_judge_mcp.validation import margin, top_probability
-from jev_judge_mcp.validation.caps import CapLedger
 
 COMPARE_RELATIONS = {
     "same_fact": "Both passages state the same underlying fact or claim",
@@ -91,12 +90,10 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             f'Judging only the aspect "{aspect}" of the two passages in the state, which relation holds?',
             ASPECT_RELATIONS,
         )
-    # The schema rejects a passage over its cap first, so this ledger never records a cut.
-    ledger = CapLedger()
     state = {
         "purpose": args.get("purpose"),
-        "passage_a": ledger.text(args["passage_a"], COMPARE.passage_max, "context"),
-        "passage_b": ledger.text(args["passage_b"], COMPARE.passage_max, "context"),
+        "passage_a": args["passage_a"],
+        "passage_b": args["passage_b"],
         "aspects": aspects,
     }
     evaluation = await runtime.ask(state, questions)
@@ -149,7 +146,6 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     return ToolResult(
         frame("jev_compare", evaluation, body),
         action=headline(caller_actions([overall["decision"]])),  # the aspects are not the headline
-        truncated=ledger.scopes,
     )
 
 

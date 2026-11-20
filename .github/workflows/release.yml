@@ -1,6 +1,6 @@
 name: Release
 
-# A merged release is built and installed with read-only credentials. Only verified
+# The build attests the distributions and a read-only job verifies them. Only verified
 # artifacts reach the GitHub and PyPI publishing jobs. A manual main-branch retry
 # overrides the automatic PYPI_PUBLISH hold and requires an original verification receipt.
 on:
@@ -33,6 +33,7 @@ jobs:
     name: Version
     if: github.ref == 'refs/heads/main' && inputs.republish_tag == ''
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write # release commits, tags, draft releases
       pull-requests: write # the release pull request
@@ -57,8 +58,11 @@ jobs:
     needs: version
     if: needs.version.outputs.release_created == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     env:
       TAG: ${{ needs.version.outputs.tag_name }}
       TAG_SHA: ${{ needs.version.outputs.sha }}
@@ -99,6 +103,11 @@ jobs:
           set -euo pipefail
           sha256sum -- *.whl *.tar.gz > SHA256SUMS.txt
           sha256sum SHA256SUMS.txt | cut -d " " -f 1 | sed "s/^/digest=/" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/assets/*.whl
+            ${{ runner.temp }}/assets/*.tar.gz
       - id: stage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -110,6 +119,7 @@ jobs:
     name: Verify staged distributions
     needs: [version, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     env:
@@ -142,7 +152,9 @@ jobs:
           test "$(sha256sum SHA256SUMS.txt | cut -d ' ' -f 1)" = "$BUILT_MANIFEST"
           venv="$RUNNER_TEMP/verify-venv"
           uv venv --python "$(cat "$GITHUB_WORKSPACE/.python-version")" "$venv"
-          uv pip install --python "$venv/bin/python" ./*.whl
+          (cd "$GITHUB_WORKSPACE" && uv export --frozen --no-dev --no-emit-project) > "$RUNNER_TEMP/runtime.txt"
+          uv pip install --python "$venv/bin/python" --require-hashes -r "$RUNNER_TEMP/runtime.txt"
+          uv pip install --python "$venv/bin/python" --no-deps ./*.whl
           "$venv/bin/python" -I "$GITHUB_WORKSPACE/scripts/check_release_version.py" installed "$TAG"
 
   publish:
@@ -150,6 +162,7 @@ jobs:
     name: Verify and publish
     needs: [version, build, verify]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
     env:
@@ -226,6 +239,7 @@ jobs:
       ((needs.publish.result == 'success' && vars.PYPI_PUBLISH == 'true') ||
       (github.event_name == 'workflow_dispatch' && inputs.republish_tag != ''))
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       actions: read
@@ -294,6 +308,7 @@ jobs:
     needs: prepare_pypi
     if: "!cancelled() && needs.prepare_pypi.result == 'success'"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       id-token: write
     environment: pypi
@@ -313,4 +328,5 @@ jobs:
           set -euo pipefail
           digest=$(sha256sum -- *.whl *.tar.gz | sha256sum | cut -d ' ' -f 1)
           test "$digest" = "$VERIFIED_MANIFEST"
+          # GitHub stores the provenance. This workflow produces no PEP 740 files for uv to upload.
           uv publish --trusted-publishing always --no-attestations ./*.whl ./*.tar.gz

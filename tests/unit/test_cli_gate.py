@@ -3,7 +3,9 @@
 import json
 import re
 import subprocess
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -405,3 +407,30 @@ def test_cli_filters_configured_values_from_local_evidence(tmp_path: Path, monke
     outcome = cli.run_gate(["--diff", "HEAD", "--claims", "claims.json", "--tests", "tests.log"], provider=provider)
     assert outcome.exit_code == 0 and provider.requests
     assert marker not in str(provider.requests)
+
+
+def test_required_completion_hook_asks_when_the_gate_handler_crashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def broken(_args: dict[str, Any], _runtime: cli.Runtime) -> Any:
+        raise RuntimeError("gate handler crashed")
+
+    monkeypatch.setattr(
+        cli, "TOOLS", tuple(replace(tool, handler=broken) if tool.name == "jev_gate" else tool for tool in cli.TOOLS)
+    )
+    monkeypatch.chdir(repo_with_diff(tmp_path))
+    code = completion_hook_main(
+        [],
+        text=_PUSH,
+        environ={
+            "JEV_HOOK_REQUIRED": "1",
+            "JEV_COMPLETION_DIFF": "HEAD~1",
+            "JEV_COMPLETION_CLAIMS": "claims.json",
+            "JEV_COMPLETION_TESTS": "tests.log",
+        },
+        provider=FakeProvider({}),
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.out and _ask(captured.out) == "ask"
+    assert "(internal)" in captured.out

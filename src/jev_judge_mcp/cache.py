@@ -34,7 +34,7 @@ import anyio
 from jev_judge_mcp import fsutil
 from jev_judge_mcp.domain import JsonValue, Question, Usage, questions_to_wire
 from jev_judge_mcp.domain.json import decode_json
-from jev_judge_mcp.providers.base import Evaluation, ProviderName, usage_counts
+from jev_judge_mcp.providers.base import Evaluation, ProviderName, metadata_text, usage_counts
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.settings import Settings
 
@@ -70,7 +70,6 @@ def request_key(
 _ENTRY = re.compile(r"[0-9a-f]{64}\.json")
 _STAGE = re.compile(r"\.[0-9a-f]{64}\.json\.[a-z0-9_]{8}")
 _STAGE_GRACE = 86_400
-_REQUEST_ID_MAX = 1024
 _RECORD_BYTES_MAX = 32 * 1024 * 1024
 _RECORDS = "jev-records-v1"
 
@@ -160,7 +159,6 @@ def lookup(
     answers = record.get("answers")
     usage = record.get("usage")
     name = record.get("provider")
-    recorded_model = record.get("model")
     if not isinstance(answers, dict) or name != provider:
         return None
     # The envelope's own rule (finite, non-negative, bool is not a number): a record that the
@@ -172,15 +170,20 @@ def lookup(
     reported = cast(dict[str, object], usage).get("reported", any(counts))
     if not isinstance(reported, bool):
         return None
-    request_id = record.get("request_id")
-    if request_id is not None and (not isinstance(request_id, str) or not 0 < len(request_id) <= _REQUEST_ID_MAX):
+    raw_id = record.get("request_id")
+    request_id = metadata_text(raw_id)
+    if raw_id is not None and request_id is None:
+        return None
+    raw_model = record.get("model")
+    recorded_model = metadata_text(raw_model)
+    if raw_model is not None and recorded_model is None:
         return None
     logger.debug("cache hit")
     return Evaluation(
         answers=cast(dict[str, object], answers),
         usage=Usage(*counts, reported=reported),
         provider=provider,
-        model=recorded_model if isinstance(recorded_model, str) else model,
+        model=model if recorded_model is None else recorded_model,
         request_id=request_id,
     )
 
@@ -200,7 +203,7 @@ def store(
 
     Entries hold provider answers, usage, model and request provenance. Answers can contain sensitive text.
     """
-    if not _enabled(settings) or (evaluation.request_id is not None and len(evaluation.request_id) > _REQUEST_ID_MAX):
+    if not _enabled(settings):
         return
     # Keep the server's unsupported-platform diagnostic reachable before the first cache write.
     import fcntl

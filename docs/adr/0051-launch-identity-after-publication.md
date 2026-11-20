@@ -51,3 +51,12 @@ configured agent.
   published package, and `--remove` still removes entries of either shape.
 - ADR-0033's remaining decisions (one named entry per agent, key handling, GUI file modes, Codex
   TOML, OpenCode JSONC, Pi adapter, Pythinker desktop) are unchanged.
+
+## Amendment (2026-11-19): share the launch check and require a version for ownership records
+
+- Each run performs one handshake for its shared launch command and records the result
+  for every newly written entry and outstanding verification using that command.
+- The PyPI pin and ownership records use the same installed version lookup. If the
+  distribution metadata is missing, the installer cannot write a new ownership record.
+  This also applies to checkout writes. Install the checkout in its environment before
+  running `install --from-checkout`, as in the README.

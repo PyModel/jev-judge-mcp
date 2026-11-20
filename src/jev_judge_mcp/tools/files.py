@@ -14,7 +14,7 @@ import anyio
 
 from jev_judge_mcp.domain import Question, Usage
 from jev_judge_mcp.gate_budget import GateBudgetError, check_gate_budget
-from jev_judge_mcp.gate_diagnostics import Blocker, review_blockers, size_blocker
+from jev_judge_mcp.gate_diagnostics import Blocker, size_blocker
 from jev_judge_mcp.limits import GATE, GateCaps
 from jev_judge_mcp.policy import Action
 from jev_judge_mcp.providers import Evaluation
@@ -24,7 +24,6 @@ from jev_judge_mcp.tools.base import Runtime, ToolError
 from jev_judge_mcp.tools.gate_evidence import Citations, add_citations, grounded_review
 from jev_judge_mcp.tools.observed import worst_action
 from jev_judge_mcp.tools.review_half import (
-    ReviewDocs,
     ReviewHalf,
     ReviewSettings,
     project_review,
@@ -32,11 +31,6 @@ from jev_judge_mcp.tools.review_half import (
     review_questions,
 )
 from jev_judge_mcp.validation.caps import CapLedger, CapScope, exceeds, gate_diff_aggregate_error, gate_diff_files_error
-
-REVIEW_FANOUT = 8
-"""Per-file reviews one file list holds open at once. The sequential pass this replaced held one; a
-64-file list at once would be a paid burst the provider's rate limit was never measured against.
-The ADR-0069 process cap (`JEV_MCP_MAX_INFLIGHT`) still applies on top (ADR-0066 amendment)."""
 
 
 def file_patches(diff: object) -> list[dict[str, str]]:
@@ -89,7 +83,6 @@ class FileListReview:
     evaluations: list[Evaluation]
     reviewed_paths: list[str]
     unreviewed: list[str]
-    unhashed_tests: bool
     truncated: bool
     """Whether any file's documents were cut; an unreviewed file is `partial`, never a cut."""
     scopes: frozenset[CapScope]
@@ -182,10 +175,9 @@ async def review_file_list(
     """
     fitting = [dict(item) for item in files if length(item["patch"]) <= doc_units]
     unreviewed = [item["path"] for item in files if length(item["patch"]) > doc_units]
-    asked: list[tuple[CapLedger, ReviewDocs, Evaluation] | None] = [None] * len(fitting)
+    asked: list[tuple[CapLedger, Evaluation] | None] = [None] * len(fitting)
     failures: list[tuple[int, Exception]] = []
 
-    fan_out = anyio.CapacityLimiter(REVIEW_FANOUT)
     context_limit = min(doc_units, GATE.aggregate_evidence_units // max(1, len(fitting)))
     peers = [(file, _wire_units(file)) for file in fitting]
     sources = [(item, _wire_units(item)) for item in evidence]
@@ -193,7 +185,7 @@ async def review_file_list(
 
     pointers: list[Citations] = []
 
-    prepared: list[tuple[CapLedger, ReviewDocs, dict[str, object], dict[str, Question]]] = []
+    prepared: list[tuple[CapLedger, dict[str, object], dict[str, Question]]] = []
     for index, item in enumerate(fitting):
         ledger = CapLedger()
         docs = review_docs({**args, "diff": item["patch"]}, ledger, doc_units)
@@ -220,14 +212,13 @@ async def review_file_list(
                 "limit_units": limit,
                 "omitted": missing,
             }
-        if gate_framing is not None:
-            pointers.append(add_citations(state, questions, [{"id": "diff", "kind": "diff", "text": docs.diff}]))
-        prepared.append((ledger, docs, state, questions))
+        pointers.append(add_citations(state, questions, [{"id": "diff", "kind": "diff", "text": docs.diff}]))
+        prepared.append((ledger, state, questions))
 
     async def review(index: int) -> None:
-        ledger, docs, state, questions = prepared[index]
+        ledger, state, questions = prepared[index]
         try:
-            async with fan_out:
+            async with runtime.file_fanout:
                 evaluation = await runtime.ask(state, questions)
         except Exception as error:
             # One failed file fails the call, as the sequential pass did. Cancel the siblings so no
@@ -236,10 +227,8 @@ async def review_file_list(
             failures.append((index, error))
             task_group.cancel_scope.cancel()
             return
-        asked[index] = (ledger, docs, evaluation)
+        asked[index] = (ledger, evaluation)
 
-    # One task per fitting file; `REVIEW_FANOUT` bounds how many ask at once, and the ADR-0069
-    # process cap in `runtime.ask` still applies on top.
     async with anyio.create_task_group() as task_group:
         for index in range(len(fitting)):
             task_group.start_soon(review, index)
@@ -249,36 +238,32 @@ async def review_file_list(
     halves: list[ReviewHalf] = []
     evaluations: list[Evaluation] = []
     reviewed_paths: list[str] = []
-    unhashed_tests = False
     truncated = False
     scopes: frozenset[CapScope] = frozenset()
     blockers: list[Blocker] = []
     for item, result in zip(fitting, asked, strict=True):
         assert result is not None  # every task either stored its result or recorded a failure
-        ledger, docs, evaluation = result
+        ledger, evaluation = result
         half = project_review(evaluation.answers, settings, ledger.context_cut)
         index = len(reviewed_paths)
-        if gate_framing is None:
-            reasons = review_blockers(half.payload)
-        else:
-            half, reasons = grounded_review(
-                half, evaluation.answers, pointers[index], settings.thresholds.auto_accept, path=item["path"]
-            )
-            if half.action != "auto" and index in omissions:
-                names = {
-                    "path": item["path"],
-                    **{f"evidence[{i}]": str(source["id"]) for i, source in enumerate(evidence)},
-                    **{f"reviewed_files[{i}]": peer["path"] for i, peer in enumerate(fitting)},
+        half, reasons = grounded_review(
+            half, evaluation.answers, pointers[index], settings.thresholds.auto_accept, path=item["path"]
+        )
+        if gate_framing is not None and half.action != "auto" and index in omissions:
+            names = {
+                "path": item["path"],
+                **{f"evidence[{i}]": str(source["id"]) for i, source in enumerate(evidence)},
+                **{f"reviewed_files[{i}]": peer["path"] for i, peer in enumerate(fitting)},
+            }
+            missing_names = [names[key] for key in cast(list[str], omissions[index]["omitted"])]
+            reasons.append(
+                {
+                    "field": "context",
+                    "code": "context_omitted",
+                    "missing": missing_names,
+                    "next_check": f"Resubmit {item['path']} with omitted context: {', '.join(missing_names)}.",
                 }
-                missing_names = [names[key] for key in cast(list[str], omissions[index]["omitted"])]
-                reasons.append(
-                    {
-                        "field": "context",
-                        "code": "context_omitted",
-                        "missing": missing_names,
-                        "next_check": f"Resubmit {item['path']} with omitted context: {', '.join(missing_names)}.",
-                    }
-                )
+            )
         halves.append(half)
         for reason in reasons:
             target = f"{item['path']} (reviewed_files[{index}], {reason['field']})"
@@ -292,8 +277,6 @@ async def review_file_list(
             )
         evaluations.append(evaluation)
         reviewed_paths.append(item["path"])
-        if docs.tests and not args.get("tests_sha256"):
-            unhashed_tests = True
         truncated = truncated or ledger.context_cut
         scopes |= ledger.scopes
     blockers.extend(
@@ -306,7 +289,6 @@ async def review_file_list(
         evaluations,
         reviewed_paths,
         unreviewed,
-        unhashed_tests,
         truncated,
         scopes,
         blockers,

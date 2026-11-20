@@ -7,7 +7,6 @@ log from the repo and calls ``jev_gate``. Neither path branches on a harness.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import shlex
 import stat
@@ -29,16 +28,15 @@ from jev_judge_mcp.hook_render import render_decision
 from jev_judge_mcp.identity import reported_version
 from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import GATE
-from jev_judge_mcp.policy import POLICY_VERSION, worst_action
-from jev_judge_mcp.policy.actions import Action
+from jev_judge_mcp.policy import POLICY_VERSION
 from jev_judge_mcp.providers import JevProvider
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset, gate_range
-from jev_judge_mcp.tools.base import ToolError
+from jev_judge_mcp.tools.base import ToolError, code_of
 from jev_judge_mcp.tools.file_state import is_secret_store, pinned_directory, resolve_scoped
-from jev_judge_mcp.tools.toolset import ToolOutcome, code_of
+from jev_judge_mcp.tools.toolset import ToolOutcome
 
 SCHEMA_VERSION = 1
 _USAGE_JUDGE = "jev-judge-mcp judge: usage: jev-judge-mcp judge <tool>\n"
@@ -99,7 +97,7 @@ def run_gate(argv: Sequence[str], *, provider: JevProvider | None = None) -> Dec
         arguments = _gate_arguments(options)
     except CliError as error:
         return _failure(error.code, str(error), tool="jev_gate", exit_code=error.exit_code)
-    return _run_tool("jev_gate", arguments, provider=provider)
+    return _run_tool("jev_gate", arguments, provider=provider, tests_read_from_file=True)
 
 
 def calibrate_main(argv: Sequence[str]) -> int:
@@ -157,7 +155,6 @@ def _gate_arguments(options: Mapping[str, str]) -> dict[str, object]:
         "claims": [redact(redact_credential_literals(claim)) for claim in claims],
         "evidence": [{"id": "cli", "text": "Read by jev-judge-mcp gate from the local repo."}],
         "tests": tests_text,
-        "tests_sha256": hashlib.sha256(tests_text.encode("utf-8")).hexdigest(),
     }
 
 
@@ -229,44 +226,47 @@ def _claims(text: str, request: str | None) -> tuple[str, list[str]]:
     return request, claims
 
 
-def _run_tool(name: str, arguments: Mapping[str, object], *, provider: JevProvider | None) -> Decision:
+def _run_tool(
+    name: str, arguments: Mapping[str, object], *, provider: JevProvider | None, tests_read_from_file: bool = False
+) -> Decision:
     known = {tool.name for tool in TOOLS}
     if name not in known:
         return _failure("invalid_arguments", f"unknown tool {name}", tool=name, exit_code=2)
     try:
-        outcome = anyio.run(_execute, name, dict(arguments), provider)
+        outcome = anyio.run(_execute, name, dict(arguments), provider, tests_read_from_file)
     except Exception as error:
         return _failure(code_of(error), str(error), tool=name)
     if outcome.is_error:
         body: object = outcome.payload if outcome.payload is not None else outcome.text
-        return _failure(outcome.error_code or "provider", outcome.text, tool=name, payload=body)
+        return _failure(outcome.error_code or "internal", outcome.text, tool=name, payload=body)
     payload = outcome.payload if outcome.payload is not None else {"text": outcome.text}
-    action, unresolved = _reported(name, outcome, payload)
     codes = payload.get("reason_codes")
     return _success(
         tool=name,
-        action=action,
+        action=outcome.action,
         reason_codes=list(codes) if isinstance(codes, list) else [],
         confidence=_confidence(payload),
         usage=payload.get("usage"),
         payload=payload,
-        unresolved=unresolved,
+        unresolved=outcome.unresolved,
     )
 
 
-async def _execute(name: str, arguments: dict[str, Any], provider: JevProvider | None) -> ToolOutcome:
-    toolset = Toolset(_runtime(provider), TOOLS)
+async def _execute(
+    name: str, arguments: dict[str, Any], provider: JevProvider | None, tests_read_from_file: bool
+) -> ToolOutcome:
+    toolset = Toolset(_runtime(provider, tests_read_from_file=tests_read_from_file), TOOLS)
     try:
         return await toolset.execute(name, arguments)
     finally:
         await toolset.aclose()
 
 
-def _runtime(provider: JevProvider | None) -> Runtime:
+def _runtime(provider: JevProvider | None, *, tests_read_from_file: bool) -> Runtime:
     settings = load_settings()
     if provider is None:
-        return Runtime(settings)
-    return Runtime(settings, provider_factory=lambda _settings: provider)
+        return Runtime(settings, tests_read_from_file=tests_read_from_file)
+    return Runtime(settings, provider_factory=lambda _settings: provider, tests_read_from_file=tests_read_from_file)
 
 
 def _emit(decision: Decision) -> int:
@@ -275,128 +275,6 @@ def _emit(decision: Decision) -> int:
     if decision.rendered:
         sys.stdout.write(decision.rendered)
     return decision.exit_code
-
-
-_ACTIONS: tuple[Action, ...] = ("auto", "review", "escalate")
-"""The Action vocabulary a payload decision reports (ADR-0064 amendment)."""
-
-
-def _top_action(payload: object) -> tuple[str | None, bool]:
-    """jev_gate, jev_gate_range, and jev_review: the payload's own top-level `action`."""
-    action = payload.get("action") if isinstance(payload, dict) else None
-    if not isinstance(action, str):
-        return None, True
-    return action, action != "auto"
-
-
-def _screen_action(payload: object) -> tuple[str | None, bool]:
-    """jev_screen: `recommendation.action`; only `pass` is the green light."""
-    recommendation = payload.get("recommendation") if isinstance(payload, dict) else None
-    action = recommendation.get("action") if isinstance(recommendation, dict) else None
-    if not isinstance(action, str):
-        return None, True
-    return action, action != "pass"
-
-
-def _row_action(key: str) -> Callable[[object], tuple[str | None, bool]]:
-    """jev_verify and jev_classify: the worst per-row `action`/`decision`."""
-
-    def decide(payload: object) -> tuple[str | None, bool]:
-        rows = payload.get("results") if isinstance(payload, dict) else None
-        values = [row.get(key) for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
-        actions: list[Action] = []
-        for value in values:
-            if value in _ACTIONS:
-                actions.append(value)
-        if not actions:
-            return None, True
-        action = worst_action(actions)
-        return action, action != "auto"
-
-    return decide
-
-
-def _compare_action(payload: object) -> tuple[str | None, bool]:
-    """jev_compare: `overall.decision`; per-aspect decisions are not the headline (ADR-0013)."""
-    overall = payload.get("overall") if isinstance(payload, dict) else None
-    decision = overall.get("decision") if isinstance(overall, dict) else None
-    if decision not in ("auto", "review"):
-        return None, True
-    return decision, decision != "auto"
-
-
-def _status_clean(payload: object) -> tuple[str | None, bool]:
-    """jev_find and jev_rerank: no action vocabulary; only `invalid_response` is unresolved."""
-    status = payload.get("status") if isinstance(payload, dict) else None
-    return None, status == "invalid_response"
-
-
-def _score_clean(payload: object) -> tuple[str | None, bool]:
-    """jev_score, jev_file_judge, and jev_ask: no action vocabulary; resolved only on `ok`."""
-    status = payload.get("status") if isinstance(payload, dict) else None
-    return None, status != "ok"
-
-
-def _files_clean(payload: object) -> tuple[str | None, bool]:
-    """jev_files_judge: the batch resolves when every judged file projected a clean answer.
-
-    No results at all (everything pruned or every call failed) stays unresolved: the call ran but
-    judged nothing.
-    """
-    results = payload.get("results") if isinstance(payload, dict) else None
-    if not isinstance(results, list) or not results:
-        return None, True
-    return None, any(result.get("status") != "ok" for result in results if isinstance(result, dict))
-
-
-def _decide_clean(payload: object) -> tuple[str | None, bool]:
-    """jev_decide: no action vocabulary; unresolved when no candidate was selected or an escape hatch won."""
-    recommendation = payload.get("recommendation") if isinstance(payload, dict) else None
-    if not isinstance(recommendation, dict):
-        return None, True
-    return None, recommendation.get("selected") is None or recommendation.get("escaped") is True
-
-
-TOOL_DECISIONS: Mapping[str, Callable[[object], tuple[str | None, bool]]] = {
-    "jev_verify": _row_action("action"),
-    "jev_screen": _screen_action,
-    "jev_find": _status_clean,
-    "jev_classify": _row_action("decision"),
-    "jev_decide": _decide_clean,
-    "jev_rerank": _status_clean,
-    "jev_compare": _compare_action,
-    "jev_review": _top_action,
-    "jev_gate": _top_action,
-    "jev_score": _score_clean,
-    "jev_file_judge": _score_clean,
-    "jev_ask": _score_clean,
-    "jev_files_judge": _files_clean,
-    "jev_gate_range": _top_action,
-}
-"""Payload decision fields → (`action`, `unresolved`), in registry order.
-
-jev_extract is not here: its two headlines are on the outcome, computed where the rows are
-(ADR-0064 amendment). The guard in `tests/unit/test_cli_judge.py` fails when a tool registers
-without a mapping and is not extract. Only the mapped green lights — `auto`, screen's `pass`,
-a selected jev_decide candidate, find/rerank without `invalid_response`, score's `ok`, a fully
-clean files batch, extract's call headline `auto` — resolve."""
-
-
-def _reported(name: str, outcome: ToolOutcome, payload: object) -> tuple[str | None, bool]:
-    """The DecisionResult `action` and `unresolved`. Extract reads the outcome; the rest read payload fields."""
-    if name == "jev_extract":
-        headlines = outcome.extract
-        action = None if headlines is None else headlines.call_action
-        return action, action != "auto"
-    return _decision(name, payload)
-
-
-def _decision(name: str, payload: object) -> tuple[str | None, bool]:
-    """`action` and `unresolved` from `name`'s own payload field. Not used for jev_extract."""
-    resolve = TOOL_DECISIONS.get(name)
-    if resolve is None:
-        return None, True
-    return resolve(payload)
 
 
 def _confidence(payload: object) -> float | None:

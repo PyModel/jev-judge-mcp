@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from urllib.parse import urlsplit
 
 REDACTED = "[redacted]"
+DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 class Redactor:
@@ -56,7 +57,7 @@ def _normalized_url(secret: str) -> str | None:
         return None
     if not parts.scheme or not host:
         return None
-    default = {"http": 80, "https": 443}.get(parts.scheme.lower())
+    default = DEFAULT_PORTS.get(parts.scheme.lower())
     authority = host.lower() + (f":{port}" if port is not None and port != default else "")
     userinfo, at, _ = parts.netloc.rpartition("@")
     if at:
@@ -75,7 +76,14 @@ class RedactingFilter(logging.Filter):
         self._redact = redact
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = self._redact(record.getMessage())
+        try:
+            message = record.getMessage()
+        except Exception:
+            try:
+                message = f"{record.msg!s} {record.args!r}"
+            except Exception:
+                message = "<unformattable log message>"
+        record.msg = self._redact(message)
         record.args = None
         if record.exc_info is not None:
             # Render the traceback now, redacted, so the formatter never sees the raw exception.

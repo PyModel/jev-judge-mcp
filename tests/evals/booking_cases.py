@@ -156,7 +156,6 @@ def bench_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Loop:
     items = load_items(Path(__file__).resolve().parent / "data" / "bench-dryrun.jsonl")[:1]
     setup = bench_run.Setup(
         agent=lambda _item, _arm: ["unused"],
-        server=[],
         server_env={},
         base_env={"PATH": "/usr/bin:/bin"},
         secret=SCRUB,

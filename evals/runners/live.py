@@ -39,27 +39,11 @@ still fires before the first request, so an accidental large run never starts.
 
 
 def typesafe_without_retries(settings: "Settings") -> "JevProvider":
-    """The eval runtime's provider factory: the resolved TypeSafe provider with retries off.
-
-    Mirrors `resolve_provider`'s typesafe branch — stored-key fallback and its redaction, base URL,
-    the missing-key refusal (ADR-0046/0017) — and passes `NO_RETRIES` (ADR-0057) like the paid
-    security gate (`tests/security/test_live_typesafe.py`): one tool call, at most one provider
-    request. The server keeps the default bounded policy, which would let one tool call cost up to
-    three requests; a capped budget run may not.
-    """
-    from jev_judge_mcp import keyfile
-    from jev_judge_mcp.errors import Redactor
+    """Use the server's provider configuration with at most one request per tool call."""
     from jev_judge_mcp.providers import NO_RETRIES
-    from jev_judge_mcp.providers.base import ProviderConfigError
-    from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+    from jev_judge_mcp.providers.resolver import resolve_provider
 
-    stored = keyfile.stored_key(settings)
-    redact = Redactor([*settings.secret_values(), stored] if stored else settings.secret_values())
-    api_key = (settings.typesafe_api_key.get_secret_value() if settings.typesafe_api_key else "") or stored
-    if not api_key:
-        raise ProviderConfigError("JEV_PROVIDER=typesafe but TYPESAFE_API_KEY is not set.")
-    base_url = (settings.typesafe_base_url.get_secret_value() if settings.typesafe_base_url else "") or None
-    return TypeSafeProvider(redact, api_key=api_key, base_url=base_url, retry=NO_RETRIES)
+    return resolve_provider(settings, retry=NO_RETRIES)
 
 
 class LiveRunRefusedError(RuntimeError):

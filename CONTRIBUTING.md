@@ -110,10 +110,11 @@ live behavior.
 
 The Release workflow (`.github/workflows/release.yml`) opens a release pull
 request from Conventional Commits on `main`. Merging it creates the draft
-GitHub Release and its `v<version>` tag. A read-only job builds the tagged
-commit with a hash-locked backend and stages the wheel, sdist and checksums in
-an immutable Actions artifact. Another read-only job installs the staged wheel
-in a fresh environment. The publisher uploads missing files, records
+GitHub Release and its `v<version>` tag. The build job uses a hash-locked backend,
+attests the wheel and sdist in GitHub, and stages both distributions and their checksums
+in an immutable Actions artifact. A read-only verification job installs the base runtime
+from `uv.lock` with hashes in a fresh environment, installs the staged wheel with dependency
+resolution disabled, and checks its installed version. The publisher uploads missing files, records
 the verified checksums and compares every asset's name, upload state and SHA-256 digest
 before and after GitHub publication. A failed check on the public assets stops automatic
 PyPI upload. Inspect the public release against the saved receipt before distributing it.

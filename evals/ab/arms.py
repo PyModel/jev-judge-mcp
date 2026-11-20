@@ -6,24 +6,17 @@ recording proxy, and one sentence to the system addendum telling the agent to us
 for the judgment the task hinges on. Nothing else differs (`tests/evals/test_ab_harness.py` checks).
 """
 
-import email
-import fcntl
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import sys
-import sysconfig
 import tempfile
-import uuid
-import zipfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
 from evals.agent import RELAY_LOG
-from evals.artifacts import write_json
 from evals.relay import private_opener
 
 ARMS = ("A", "B")
@@ -80,98 +73,9 @@ def addendum(arm: str, agent: str, tool: str) -> str:
     return SYSTEM_ADDENDUM if arm == "A" else f"{SYSTEM_ADDENDUM} {jev_sentence(agent, tool)}"
 
 
-def jev_command() -> list[str]:
-    """This worktree's Python server."""
-    return [sys.executable, "-m", "jev_judge_mcp"]
-
-
 def digest(path: Path) -> str:
     with path.open("rb") as source:
         return hashlib.file_digest(source, "sha256").hexdigest()
-
-
-def study_venv(root: Path, wheel: Path) -> Path:
-    """Return a verified wheel install outside the checkout for the host sandbox launcher."""
-    try:
-        archive = zipfile.ZipFile(wheel)
-    except zipfile.BadZipFile as error:
-        raise ValueError("invalid study wheel") from error
-    with archive:
-        metadata = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
-        if len(metadata) != 1:
-            raise ValueError("study wheel lacks unique package metadata")
-        info = email.message_from_bytes(archive.read(metadata[0]))
-        if info["Name"] != "jev-judge-mcp" or not info["Version"]:
-            raise ValueError("expected a jev-judge-mcp study wheel")
-    manifest = {
-        "wheel": digest(wheel),
-        "lock": digest(REPO_ROOT / "uv.lock"),
-        "python": sys.version,
-        "executable": os.path.realpath(sys.executable),
-        "platform": sysconfig.get_platform(),
-    }
-    identity = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
-    cache = root / ("jev-study-" + identity)
-    cache.mkdir(mode=0o700, parents=True, exist_ok=True)
-    marker = cache / "ready.json"
-    probe = [
-        "-I",
-        "-c",
-        "import jev_judge_mcp; from importlib.metadata import version; print(version('jev-judge-mcp'))",
-    ]
-
-    def valid(python: Path) -> bool:
-        if not python.is_file():
-            return False
-        result = subprocess.run([str(python), *probe], check=False, capture_output=True, text=True, timeout=30)
-        return result.returncode == 0 and result.stdout.strip() == info["Version"]
-
-    with (cache / "install.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        if marker.exists():
-            try:
-                ready = json.loads(marker.read_text(encoding="utf-8"))
-            except (ValueError, UnicodeError):
-                ready = None
-            if isinstance(ready, dict) and cast(dict[str, Any], ready).get("inputs") == manifest:
-                name = cast(dict[str, Any], ready).get("environment")
-                if isinstance(name, str) and name.startswith("venv-") and Path(name).name == name:
-                    python = cache / name / "bin/python"
-                    if valid(python):
-                        return python
-        venv = cache / f"venv-{uuid.uuid4().hex}"
-        venv.mkdir(mode=0o700)
-        python = venv / "bin/python"
-        try:
-            subprocess.run(
-                [
-                    "uv",
-                    "sync",
-                    "--locked",
-                    "--no-install-project",
-                    "--no-dev",
-                    "--extra",
-                    "typesafe",
-                    "--python",
-                    sys.executable,
-                ],
-                env={**os.environ, "UV_PROJECT_ENVIRONMENT": str(venv)},
-                cwd=REPO_ROOT,
-                check=True,
-                timeout=300,
-            )
-            subprocess.run(
-                ["uv", "pip", "install", "--python", str(python), "--no-deps", str(wheel.resolve())],
-                check=True,
-                timeout=120,
-            )
-            if digest(wheel) != manifest["wheel"] or not valid(python):
-                raise RuntimeError("study wheel changed or its interpreter failed verification")
-            write_json(marker, {"inputs": manifest, "environment": venv.name})
-        except BaseException:
-            shutil.rmtree(venv)
-            raise
-        return python
 
 
 def ensure_wheel(destination: Path | None = None) -> Path:
@@ -188,21 +92,13 @@ def ensure_wheel(destination: Path | None = None) -> Path:
         return target
 
 
-def sandbox_python(sandbox: Path, interpreter: str | None = None) -> Path:
-    """A sandbox-local interpreter for the servers: `sandbox/bin/python3`, a launcher for the study
-    venv's python.
-
-    The agent reads its own MCP config (recorded runs show it did), so the config text must name no
-    host path outside the run sandbox. `interpreter` is the per-study venv built from the wheel
-    (`study_venv`) — neutral, outside the repo. Empty falls back to this process's interpreter,
-    which names the repo and is the offline dry-run shape only.
-    """
+def sandbox_python(sandbox: Path) -> Path:
+    """Write a sandbox-local launcher for the offline dry run's Python interpreter."""
     bin_dir = sandbox / "bin"
     bin_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     launcher = bin_dir / "python3"
     if not launcher.exists():
-        target = interpreter or sys.executable
-        launcher.write_text(f'#!/bin/sh\nexec {target!r} "$@"\n', encoding="utf-8")
+        launcher.write_text(f'#!/bin/sh\nexec {sys.executable!r} "$@"\n', encoding="utf-8")
         launcher.chmod(0o755)
     return launcher
 
@@ -259,16 +155,14 @@ def keyfile_env(sandbox: Path, api_key: str) -> dict[str, str]:
     return {"JEV_MCP_KEY_FILE": str(path)}
 
 
-def mcp_config(
-    arm: str, *, sandbox: Path, server_env: Mapping[str, str], api_key: str = "", interpreter: str | None = None
-) -> dict[str, Any]:
+def mcp_config(arm: str, *, sandbox: Path, server_env: Mapping[str, str], api_key: str = "") -> dict[str, Any]:
     """The `--mcp-config` document, built against the run's private sandbox.
 
     Every path in the document is inside `sandbox`: the servers run from copies placed there, the
-    interpreter is the sandbox symlink, and the relay log is written there and copied out to the
+    interpreter is the sandbox launcher, and the relay log is written there and copied out to the
     run's records after the run. Only B carries `server_env`.
     """
-    python = sandbox_python(sandbox, interpreter)
+    python = sandbox_python(sandbox)
     servers = copy_servers(sandbox, "ab")
     harness = {
         "type": "stdio",

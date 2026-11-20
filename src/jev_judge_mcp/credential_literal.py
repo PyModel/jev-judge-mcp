@@ -44,10 +44,13 @@ _FORMATS: tuple[tuple[re.Pattern[str], Callable[[re.Match[str]], bool] | None], 
 # identifier-run boundary, so a long run of key characters costs one pass, not one pass per
 # offset: the leftmost match of the unanchored pattern always began at that boundary anyway (the
 # greedy run absorbs the same word from there), and only the quoted value's span is used.
-_ASSIGNMENT = re.compile(
+_FIELD_NAME_PATTERN = (
     r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]*(?:password|passwd|secret[_-]?key|api[_-]?key|access[_-]?key|private[_-]?key|"
     r"credential|secret|token)s?"
-    r"[\"']?\s*[:=]\s*"
+)
+_SECRET_FIELD = re.compile(_FIELD_NAME_PATTERN + r"\Z", re.IGNORECASE)
+_ASSIGNMENT = re.compile(
+    _FIELD_NAME_PATTERN + r"[\"']?\s*[:=]\s*"
     # The opening quote of the value. An f-string prefix never opens the literal.
     r"(?<![fF])([\"'])",
     re.IGNORECASE,
@@ -107,6 +110,11 @@ def has_credential_literal(text: str) -> bool:
     """Whether the text carries a credential literal: a known token format or an assigned
     quoted high-entropy value."""
     return next(_literals(text), None) is not None
+
+
+def has_credential_field(name: str, value: str) -> bool:
+    """A decoded JSON field assigning a high-entropy string to a secret-named key."""
+    return _SECRET_FIELD.search(name) is not None and _high_entropy(value)
 
 
 def redact_credential_literals(text: str, redact: Redactor | None = None) -> str:

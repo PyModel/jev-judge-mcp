@@ -73,3 +73,8 @@ observation and the verdict, so its reason could only say "denied" without namin
 - Questions, criteria wording, thresholds, and the notice live in `hook.py` and
   `hook_render.py`. Changing any of them is a hook change, guarded by the hook tests at the
   judge boundary.
+
+## Amendment (2026-11-19): inspect decoded write inputs
+
+Write and Edit check and redact decoded strings throughout `tool_input`, including nested
+objects and arrays, before rendering JSON for judgment. A detected literal denies locally.

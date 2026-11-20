@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 
 from jev_judge_mcp.cli import judge_main
-from tests.support.jev import FakeProvider
+from tests.support.jev import NO_DEFECT, FakeProvider, choice
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "risk_proportional_thresholds.py"
@@ -47,6 +47,7 @@ _REVIEW_ANSWERS = {
     "test_gap": {"score": 0, "confidence": 0.85},
     "blast_radius": {"score": 0, "confidence": 0.93},
     "safe_to_apply": {"noul": 0.97},
+    "defect_kind": NO_DEFECT,
 }
 _REVIEW_ARGS = {"request": "fix the parser", "diff": "+ return error on malformed input"}
 
@@ -62,6 +63,8 @@ _GATE_ANSWERS = {
     "test_gap": {"score": 0, "confidence": 0.95},
     "blast_radius": {"score": 0, "confidence": 0.95},
     "safe_to_apply": {"noul": 0.95},
+    "defect_kind": NO_DEFECT,
+    "source_0": choice("evidence", "evidence", "diff", "none"),
     "claim_0": {
         "choice": "verified",
         "confidence": 0.82,

@@ -3,10 +3,11 @@
 import ast
 import io
 import json
+import logging
 import sys
 from collections.abc import Mapping
 from pathlib import Path
-from typing import ClassVar, override
+from typing import ClassVar, NoReturn, override
 
 import anyio
 import httpx
@@ -29,7 +30,7 @@ from jev_judge_mcp.providers.base import ProviderName
 from jev_judge_mcp.providers.resolver import resolve_model
 from jev_judge_mcp.server import hook_requested, installer_requested
 from jev_judge_mcp.server import main as server_main
-from jev_judge_mcp.settings import load_settings
+from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.tools import TOOLS
 
 _HOOK = Path(__file__).resolve().parents[2] / "src" / "jev_judge_mcp" / "hook.py"
@@ -369,8 +370,20 @@ def test_outside_repo_write_denies_without_a_provider(
     assert reason.endswith(FINAL_BLOCK_NOTICE)
 
 
+@pytest.mark.parametrize(
+    ("tool", "content"),
+    [
+        ("Write", {"content": "api_key = 'sk-live-A1b2C3d4E5f6G7h8I9j0K1'\n"}),
+        ("Write", {"content": 'api_key = "A1b2C3d4E5f6G7h8I9j0K1"\n'}),
+        ("Write", {"content": "first line\nghp_A1b2C3d4E5f6G7h8I9j0K1"}),
+        ("Edit", {"new_string": "line\tghp_A1b2C3d4E5f6G7h8I9j0K1"}),
+        ("Edit", {"edits": [{"new_string": 'api_key = "A1b2C3d4E5f6G7h8I9j0K1"'}]}),
+        ("Edit", {"edits": [{"api_key": "A1b2C3d4E5f6G7h8I9j0K1"}]}),
+    ],
+    ids=["single-quoted", "double-quoted", "line-start", "after-tab", "nested", "named-field"],
+)
 def test_credential_literal_write_denies_without_a_provider(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tool: str, content: dict[str, object]
 ) -> None:
     """A known-format credential literal in the content is deterministic evidence: deny before
     any provider exists. The raw secret never leaves the process."""
@@ -380,8 +393,7 @@ def test_credential_literal_write_denies_without_a_provider(
         raise AssertionError("provider constructed")
 
     monkeypatch.setattr("jev_judge_mcp.hook.resolve_provider", boom)
-    literal = "sk-live-A1b2C3d4E5f6G7h8I9j0K1"  # long, mixed case, and carries a digit
-    event = _write_event(tool_input={"file_path": "src/a.py", "content": f"api_key = '{literal}'\n"})
+    event = _write_event(tool_name=tool, tool_input={"file_path": "src/a.py", **content})
     code = main(["gate"], text=event, environ={}, provider=None)
     captured = capsys.readouterr()
     assert code == 0
@@ -800,6 +812,102 @@ def test_required_flag_asks_on_bad_stdin_instead_of_silence(capsys: pytest.Captu
     decision = json.loads(captured.out)
     assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
     assert "allow" not in captured.out
+
+
+@pytest.mark.parametrize("required", [False, True], ids=["optional", "required"])
+@pytest.mark.parametrize(
+    ("command", "body", "setting"),
+    [
+        (["hook", "gate"], _event("echo hi").encode(), ("JEV_MCP_LOG_LEVEL", "verbose")),
+        (["hook", "gate"], _event("echo hi").encode(), ("JEV_MCP_HTTP_TOKEN", "short")),
+        (["hook", "gate"], b"\xff", None),
+        (["hook", "gate"], b'{"tool_name":"Bash","tool_input":{"command":"echo \xff"}}', None),
+        (["completion-hook"], b"\xff", None),
+        (["completion-hook"], _event("git push").encode(), ("JEV_MCP_LOG_LEVEL", "verbose")),
+        (["hook", "screen"], b"\xff", None),
+        (["hook", "compact-cut"], b"\xff", None),
+    ],
+    ids=[
+        "settings",
+        "short-secret",
+        "utf8",
+        "utf8-in-string",
+        "completion-utf8",
+        "completion-settings",
+        "screen",
+        "compact",
+    ],
+)
+def test_cli_hook_contains_unexpected_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    required: bool,
+    command: list[str],
+    body: bytes,
+    setting: tuple[str, str] | None,
+) -> None:
+    if setting is not None:
+        monkeypatch.setenv(*setting)
+    provider = _run_cli_hook(monkeypatch, required, command, body)
+    _assert_contained(capsys, required, command)
+    assert provider.states == []
+
+
+def _run_cli_hook(
+    monkeypatch: pytest.MonkeyPatch, required: bool, command: list[str], body: bytes
+) -> RecordingProvider:
+    """Run the hook through the server entry point and return the provider it was handed."""
+    monkeypatch.delenv("JEV_HOOK_REQUIRED", raising=False)
+    if required:
+        monkeypatch.setenv("JEV_HOOK_REQUIRED", "1")
+    monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", *command])
+    errors = "surrogateescape" if body.startswith(b'{"tool_name":"Bash"') else "strict"
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(body), encoding="utf-8", errors=errors))
+    provider = RecordingProvider(
+        {"effect": _answered("read_only", 0.875, 0.9, options=_EFFECT), "destructive_intent": _noul(0.05)}
+    )
+
+    def resolve_provider(_settings: Settings) -> RecordingProvider:
+        return provider
+
+    monkeypatch.setattr("jev_judge_mcp.hook.resolve_provider", resolve_provider)
+    root = logging.getLogger()
+    monkeypatch.setattr(root, "handlers", [])
+    monkeypatch.setattr(root, "level", root.level)
+    with pytest.raises(SystemExit) as exit_info:
+        server_main()
+    assert exit_info.value.code == 0
+    return provider
+
+
+def _assert_contained(capsys: pytest.CaptureFixture[str], required: bool, command: list[str]) -> None:
+    captured = capsys.readouterr()
+    if required and command[-1] in {"gate", "completion-hook"}:
+        assert json.loads(captured.out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+        assert captured.err == ""
+    else:
+        assert captured.out == ""
+        assert captured.err.count("\n") == 1
+
+
+@pytest.mark.parametrize("required", [False, True], ids=["optional", "required"])
+def test_cli_hook_contains_a_crash_inside_the_hook(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], required: bool
+) -> None:
+    def crash(*_args: object) -> NoReturn:
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr("jev_judge_mcp.hook._plan", crash)
+    provider = _run_cli_hook(monkeypatch, required, ["hook", "gate"], _event("echo hi").encode())
+    _assert_contained(capsys, required, ["hook", "gate"])
+    assert provider.states == []
+
+
+def test_deeply_nested_tool_input_is_judged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Serialization accepts every depth decode_json does, so deep input is judged, not dropped."""
+    body = b'{"tool_name":"Bash","tool_input":' + b"[" * 600 + b"null" + b"]" * 600 + b"}"
+    provider = _run_cli_hook(monkeypatch, True, ["hook", "gate"], body)
+    assert len(provider.states) == 1
 
 
 def test_hook_module_is_not_the_completion_tool() -> None:

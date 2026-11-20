@@ -4,12 +4,15 @@ import contextlib
 import json
 import os
 import pickle
+import re
 import signal
 import subprocess
 import sys
 import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import anyio
 import pytest
@@ -26,6 +29,7 @@ from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from jev_judge_mcp.validation import validate_choice, validate_extract_choice
 from tests.support.jev import FakeProvider, call_tool, text_of
+from tests.support.workers import alive
 
 pytestmark = pytest.mark.anyio
 
@@ -61,6 +65,20 @@ async def test_no_candidates_means_no_request_and_no_provider_resolution() -> No
     assert '"provider": "none"' in text
     assert '"usage": null' in text
     assert '"reason": "no_regex_matches"' in text
+
+
+async def test_compile_errors_are_rejected_without_compiling_on_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Fixed-width in the dialect, but beyond stdlib re's lookbehind width limit.
+    compile_in_parent = Mock(wraps=re.compile)
+    monkeypatch.setattr(re, "compile", compile_in_parent)
+    outcome = await call_tool("jev_extract", build("(?<=(?:a{2147483647}){3})b"), {})
+    result = outcome.payload["results"][0]
+    assert result["status"] == "invalid_pattern"
+    assert result["reason"] == (
+        "unsupported regular expression: the pattern cannot be matched here (looks too much behind) "
+        "is outside the supported subset"
+    )
+    assert not any("2147483647" in str(call.args[0]) for call in compile_in_parent.call_args_list)
 
 
 async def test_value_is_the_verbatim_candidate_even_across_surrogates() -> None:
@@ -162,6 +180,25 @@ async def test_timeout_is_invalid_pattern_within_budget_while_other_calls_run() 
     assert '"status": "invalid_pattern"' in slow_text[0]
     assert 1.0 <= finished["slow"] < 1.2
     assert max(t for name, t in finished.items() if name != "slow") < 0.6
+
+
+async def test_warm_worker_does_not_import_from_the_callers_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "imported"
+    original = Path(pickle.__file__).read_text(encoding="utf-8")
+    (tmp_path / "pickle.py").write_text(
+        original + f"\nfrom pathlib import Path\nPath({str(marker)!r}).touch()\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    pool = ProcessRegexExecutor(size=1)
+    try:
+        await pool.warm()
+        matches = await pool.find(translate("[A-Z]{3}-\\d+", "g"), to_units(DOCUMENT), deadline=time.monotonic() + 5)
+    finally:
+        await pool.aclose()
+    assert matches == Matches(["ABC-123", "ABC-124"], False, 0)
+    assert not marker.exists()
 
 
 async def test_cancelled_call_kills_its_worker_and_the_pool_recovers() -> None:
@@ -377,7 +414,7 @@ def test_an_orphaned_worker_ends_itself_after_the_deadline() -> None:
     job = pickle.dumps((translate("(a|aa)+$", "g").source, 0, to_units(SLOW_DOCUMENT), 0.2, *caps))
     started = time.monotonic()
     worker = subprocess.run(
-        [sys.executable, "-m", "jev_judge_mcp.extract.worker"],
+        [sys.executable, "-P", "-m", "jev_judge_mcp.extract.worker"],
         input=len(job).to_bytes(4) + job,
         capture_output=True,
         timeout=10,
@@ -404,13 +441,28 @@ async def test_saturated_admission_reports_capacity_not_a_pattern_problem() -> N
     del first
 
 
-async def test_a_closed_pool_refuses_and_starts_no_worker() -> None:
-    """Close is final: a later `find` is `Invalid(NOT_STARTED)` with no process spawned, and a
-    second close is a no-op — nothing can outlive the pool."""
+async def test_a_closed_pool_refuses_and_starts_no_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Close reaps the original worker, and neither `warm` nor `find` can resurrect the pool."""
+    pids: list[int] = []
+    real_open = anyio.open_process
+
+    async def record_spawn(*args: object, **kwargs: object) -> anyio.abc.Process:
+        process = await real_open(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+        pids.append(process.pid)
+        return process
+
+    monkeypatch.setattr(anyio, "open_process", record_spawn)
     pool = ProcessRegexExecutor(size=1)
-    await pool.warm()
-    await pool.aclose()
-    result = await pool.find(translate("[A-Z]{3}-\\d+", "g"), to_units(DOCUMENT), deadline=deadline())
-    assert result == Invalid(Unavailable.NOT_STARTED)
-    assert pool._idle == []  # pyright: ignore[reportPrivateUsage]
-    await pool.aclose()
+    try:
+        await pool.warm()
+        (pid,) = pids
+        assert alive(pid)
+        await pool.aclose()
+        await pool.warm()
+        result = await pool.find(translate("[A-Z]{3}-\\d+", "g"), to_units(DOCUMENT), deadline=deadline())
+        assert result == Invalid(Unavailable.NOT_STARTED)
+        assert not any(map(alive, pids))
+        assert pids == [pid]
+        assert pool._idle == []  # pyright: ignore[reportPrivateUsage]
+    finally:
+        await pool.aclose()

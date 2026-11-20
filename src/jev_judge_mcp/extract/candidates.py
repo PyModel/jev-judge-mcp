@@ -73,4 +73,10 @@ async def find_candidates(executor: RegexExecutor, pattern: str, flags: str, uni
         case Timeout():
             return Refused("timeout", REGEX_TIMEOUT_REASON)
         case Invalid(cause):
+            if isinstance(cause, str):
+                return Refused(
+                    "rejected",
+                    f"unsupported regular expression: the pattern cannot be matched here ({cause}) "
+                    "is outside the supported subset",
+                )
             return Refused("worker_error", _UNAVAILABLE_REASONS[cause])

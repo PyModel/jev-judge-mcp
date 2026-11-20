@@ -160,3 +160,50 @@ async def test_a_caller_note_literally_named_none_still_blocks_auto() -> None:
     assert row["verdict"] == "verified" and row["confidence"] == 0.97
     assert row["action"] == "review"
     assert row["supporting_evidence"] is None  # the hatch still reads as no source on the wire
+
+
+async def test_one_caller_note_is_policy_source_without_changing_supporting_evidence() -> None:
+    args = {
+        "claims": ["Tests pass."],
+        "evidence": [{"id": "note", "kind": "caller_note", "text": "I ran the tests."}],
+    }
+    outcome = await call_tool("jev_verify", args, {"relation_claim0": _relation(0.97, present=True)})
+    assert not outcome.is_error, outcome.text
+    row = outcome.payload["results"][0]
+    assert row["action"] == "review"
+    assert row["supporting_evidence"] is None
+    assert "source_claim0" not in outcome.requests[0][1]
+
+
+@pytest.mark.parametrize("source", ["valid", "malformed", "missing"])
+async def test_a_source_question_cannot_clear_caller_note_review(source: str) -> None:
+    args = {
+        "claims": ["Tests pass."],
+        "evidence": [
+            {"id": "a", "kind": "caller_note", "text": "I ran the tests."},
+            {"id": "b", "kind": "caller_note", "text": "They passed."},
+        ],
+    }
+    answers = {"relation_claim0": _relation(0.97, present=True)}
+    if source != "missing":
+        answers["source_claim0"] = {
+            "choice": "a" if source == "valid" else "unknown",
+            "probabilities": {"a": 1, "b": 0, "none": 0},
+        }
+    outcome = await call_tool("jev_verify", args, answers)
+    assert not outcome.is_error, outcome.text
+    row = outcome.payload["results"][0]
+    assert (row["verdict"], row["action"]) == ("verified", "review")
+    assert row["supporting_evidence"] == ("a" if source == "valid" else None)
+
+
+async def test_a_confident_contradiction_keeps_auto_without_standing() -> None:
+    relation = {
+        "choice": "contradicts",
+        "probabilities": {"supports": 0, "contradicts": 1, "says_nothing": 0},
+        "confidence": 1,
+    }
+    outcome = await call_tool("jev_verify", ONE_CLAIM, {"relation_claim0": relation})
+    assert not outcome.is_error, outcome.text
+    row = outcome.payload["results"][0]
+    assert (row["verdict"], row["action"], row["stands"]) == ("contradicted", "auto", False)

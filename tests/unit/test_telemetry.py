@@ -218,7 +218,7 @@ HEADLINES: dict[str, tuple[str | None, str | None]] = {
     "jev_rerank": (None, None),
     "jev_compare": ("auto", "review"),
     "jev_extract": ("auto", "review"),
-    "jev_review": ("auto", "escalate"),
+    "jev_review": ("auto", "review"),
     "jev_gate": ("auto", "review"),
 }
 """(permissive, hostile) headline Action per tool, `None` for a call that returns none."""

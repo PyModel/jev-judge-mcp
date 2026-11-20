@@ -28,6 +28,28 @@ from evals.ab.tasks import SNAPSHOT, Task, protected_files
 ACCEPTANCE_MODULE = "test_acceptance"
 GRADE_TIMEOUT_S = 120
 
+
+def hardened_git(workdir: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run Git in an agent tree with host config, hooks and fsmonitor disabled."""
+    env = {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "HOME": "/nonexistent",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    return subprocess.run(
+        ["git", "-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "core.hooksPath=", *args],
+        cwd=workdir,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+
+
 _RUNNER = """
 import json, sys, unittest
 out = {}

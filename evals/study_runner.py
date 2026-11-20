@@ -4,6 +4,7 @@ One module owns run → record → write → failed record → book. Each study 
 contents. A failed record is the success record's keys (`record_row`); it does not keep a second list.
 
 Booking happens once, in `run_recorded`:
+- `InfrastructureStop` books an explicit charge or recovers the outcome of a started agent.
 - `KeyboardInterrupt` and `SystemExit` call `book_outcome` (the result file's finite selected cost, else the run bound).
 - `stop` may turn an `Exception` into a returned reason after booking `cost_key` from the written file.
   The bench uses this for `AuthRejected` and `ServerUnreachable`.
@@ -16,12 +17,61 @@ Success books `record[cost_key]`. The A/B study uses `cost_usd`. The bench uses 
 dollar cap does not include agent spend. Unverifiable charges reserve the run bound.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from evals.artifacts import write_json
-from evals.spend import SpendLedger, book_outcome, booked_amount
+from evals.artifacts import read_result, write_json
+from evals.spend import SpendLedger, agent_started, amount, book_outcome, booked_amount
+
+
+class InfrastructureStop(BaseException):
+    """Stop the study without synthesizing an agent failure record."""
+
+    def __init__(self, reason: str, incurred_usd: float | None = None) -> None:
+        super().__init__(reason)
+        self.incurred_usd = incurred_usd
+
+
+def recover_attempts(
+    ledger: SpendLedger,
+    out: Path,
+    run_ids: Iterable[str],
+    records: Mapping[Path, Mapping[str, Any]],
+    *,
+    cost_key: str,
+) -> str | None:
+    """Book started attempts once and flag existing charges below the required amount."""
+    bound = ledger.policy.run_bound_usd
+    prior = None
+    for run_id in dict.fromkeys((*run_ids, *ledger.runs)):
+        run_dir = out / run_id
+        existing = ledger.runs.get(run_id)
+        if existing is None and not agent_started(run_dir):
+            continue
+        path = run_dir / "result.json"
+        row = records.get(path)
+        measured = None
+        if row is not None:
+            measured = amount(row.get(cost_key))
+            charge = bound if measured is None else measured
+        elif existing is None:
+            raw = read_result(path)
+            charge = (
+                max(bound, booked_amount(raw.get(cost_key), bound)) if raw and raw.get("run_id") == run_id else bound
+            )
+        else:
+            continue
+        if existing is None:
+            try:
+                ledger.record(run_id, charge)
+            except ValueError:
+                if ledger.runs.get(run_id) != charge:
+                    raise
+        elif existing < charge and prior is None:
+            kind = "unfinished reserve" if measured is None else "recorded cost"
+            prior = f"stopped: {run_id} booked below its {kind} of ${charge:g}"
+    return prior
 
 
 def record_row(keys: Sequence[str], values: Mapping[str, Any]) -> dict[str, Any]:
@@ -69,11 +119,17 @@ def run_recorded(
 ) -> Mapping[str, Any] | str:
     """Run one recorded attempt and book it. See the module docstring for which exception books what.
 
-    A string return is a stop reason (`stop`). The attempt is already booked. The caller returns it
-    instead of continuing the study.
+    A string return is a stop reason. The caller returns it instead of continuing the study.
     """
     try:
         record = execute()
+    except InfrastructureStop as error:
+        if run_id not in ledger.runs:
+            if (charge := amount(error.incurred_usd)) is not None:
+                ledger.record(run_id, charge)
+            elif agent_started(result_path.parent):
+                book_outcome(ledger, run_id, result_path, cost_key=cost_key)
+        return f"stopped: isolation infrastructure: {error}"
     except (KeyboardInterrupt, SystemExit):
         book_outcome(ledger, run_id, result_path, cost_key=cost_key)
         raise

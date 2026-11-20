@@ -18,7 +18,8 @@ from jev_judge_mcp.domain import ChoiceQuestion, NoulCriteria, NoulQuestion, Que
 from jev_judge_mcp.domain.json import JsonValue
 from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.keyfile import redaction_values, stored_key_path
-from jev_judge_mcp.limits import FILE_JUDGE
+from jev_judge_mcp.limits import FILE_JUDGE, SANITIZE_ID_UNITS
+from jev_judge_mcp.responses import nearest_level
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.arguments import Refinement
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
@@ -163,14 +164,18 @@ def build_question(kind: str, instructions: str, criteria: object) -> Question:
             descriptions[key] = value
         return NoulQuestion(instructions, NoulCriteria(true=descriptions["true"], false=descriptions["false"]))
     if kind == "choice":
-        options = list(entries)
-        if not FILE_JUDGE.choice_options_min <= len(options) <= FILE_JUDGE.choice_options_max:
+        if not FILE_JUDGE.choice_options_min <= len(entries) <= FILE_JUDGE.choice_options_max:
             raise ToolError(
                 f"choice criteria needs {FILE_JUDGE.choice_options_min}-{FILE_JUDGE.choice_options_max} options, "
-                f"got {len(options)}.",
+                f"got {len(entries)}.",
                 code="invalid_arguments",
             )
         for option, description in entries.items():
+            if not 1 <= length(option) <= SANITIZE_ID_UNITS:
+                raise ToolError(
+                    f"choice criteria keys must contain 1-{SANITIZE_ID_UNITS} UTF-16 units.",
+                    code="invalid_arguments",
+                )
             if not isinstance(description, str) or length(description) > FILE_JUDGE.choice_option_units_max:
                 raise ToolError(
                     f"choice criteria `{option}` must be a description of at most "
@@ -199,13 +204,9 @@ def project_answer(kind: str, answer: object, expected: Sequence[str]) -> tuple[
     parsed = validate_rubric_answer(answer, len(expected))
     if parsed is None:
         return ({"score": None, "nearest_level": None, "probabilities": None, "confidence": None}, INVALID)
-    # Ties go to the lower level: min() keeps the first minimum, and the keys are in level order.
-    # The levels themselves are the caller's own input and are not echoed: the payload carries the
-    # typed answer only.
-    nearest = min(range(len(expected)), key=lambda index: abs(index - parsed.score))
     body = {
         "score": parsed.score,
-        "nearest_level": nearest,
+        "nearest_level": nearest_level(parsed.score, len(expected)),
         "probabilities": parsed.probabilities,
         "confidence": parsed.confidence,
     }

@@ -7,12 +7,13 @@ import httpx
 from jev_judge_mcp.domain import JsonValue, is_json_object
 from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.providers.base import (
+    ERROR_BYTES_MAX,
     Evaluation,
     HttpProvider,
     ProviderName,
     decode_body,
+    decode_text,
     parse_envelope,
-    request_id_of,
 )
 from jev_judge_mcp.providers.retry import RetryPolicy, retry_after_seconds
 from jev_judge_mcp.serialize import stringify_compact
@@ -50,6 +51,7 @@ class CloudflareProvider(HttpProvider):
             self._url,
             {"Authorization": f"Bearer {self._api_token}"},
             {"model": slug, "input": {"state": state, "questions": questions}},
+            timeout,
         )
         # `.json().catch(() => ({}))`: an unparseable body is an empty object here, not null.
         parsed = decode_body(response.content)
@@ -57,9 +59,14 @@ class CloudflareProvider(HttpProvider):
         record: dict[str, object] = body if is_json_object(body) else {}
         errors = record.get("errors")
         if not response.is_success or record.get("success") is False:
+            # Truncation can leave a JSON prefix that still contains the diagnostic.
+            if parsed is None and not response.is_success and len(response.content) == ERROR_BYTES_MAX:
+                detail = decode_text(response.content)
+            else:
+                detail = stringify_compact(body if errors is None else errors)
             raise self._status_error(
                 response.status_code,
-                stringify_compact(body if errors is None else errors),
+                detail,
                 retry_after=retry_after_seconds(response.headers),
             )
         # The v4 envelope double-nests: `result.result` holds the model output.
@@ -73,12 +80,11 @@ class CloudflareProvider(HttpProvider):
             inner = outer.get("result")
         payload = inner if inner is not None else outer if outer is not None else body
         # ADR-0003: the unwrapped payload gets the uniform envelope rules; the reference used `answers ?? {}`.
-        envelope = parse_envelope(payload, self.label)
+        envelope = parse_envelope(payload, self.label, response.headers)
         return Evaluation(
             envelope.answers,
             envelope.usage,
             self.name,
             envelope.model_or(slug),
-            # A header-only id is kept, as the compatible provider keeps it (ADR-0068).
-            request_id=envelope.request_id or request_id_of({}, response.headers),
+            request_id=envelope.request_id,
         )

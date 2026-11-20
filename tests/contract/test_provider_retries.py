@@ -23,6 +23,7 @@ from jev_judge_mcp.providers import NO_RETRIES, JevProvider, ProviderError, Prov
 from jev_judge_mcp.providers import retry as retry_timing
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+from jev_judge_mcp.tools.base import code_of
 from tests.support.retries import ControlledClock
 from tests.support.retries import controlled_clock as controlled_clock
 from tests.support.retries import fast_retries as fast_retries
@@ -124,7 +125,7 @@ async def test_success_after_a_transient_status(fast_retries: list[float], statu
 async def test_long_retry_after_stops_at_the_budget(fast_retries: list[float]) -> None:
     sent: list[httpx.Request] = []
     responses = [
-        httpx.Response(429, text="slow down", headers={"retry-after-ms": "250"}),
+        httpx.Response(429, text="slow down", headers={"retry-after-ms": "6000"}),
         httpx.Response(429, text="really", headers={"Retry-After": "3600"}),
         httpx.Response(200, content=OK),
     ]
@@ -133,8 +134,28 @@ async def test_long_retry_after_stops_at_the_budget(fast_retries: list[float]) -
         message = await failure(provider(), timeout=None)
 
     assert "429" in message
-    assert fast_retries == [0.25]
+    assert fast_retries == [6.0]
     assert len(sent) == 2
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Retry-After": "0"},
+        {"Retry-After-Ms": "0"},
+        {"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"},
+    ],
+    ids=["zero-seconds", "zero-ms", "past-date"],
+)
+async def test_zero_retry_after_still_waits_for_backoff(fast_retries: list[float], headers: dict[str, str]) -> None:
+    sent: list[httpx.Request] = []
+    with respx.mock() as router:
+        router.post(URL).mock(
+            side_effect=serving([httpx.Response(429, headers=headers), httpx.Response(200, content=OK)], sent)
+        )
+        await evaluate(provider())
+    assert len(sent) == 2
+    assert fast_retries == [0.5]
 
 
 async def test_success_after_a_connection_refusal(fast_retries: list[float]) -> None:
@@ -160,6 +181,32 @@ async def test_success_after_a_connect_timeout() -> None:
 
     assert evaluation.answers["q"]["noul"] == 0.9
     assert len(sent) == 2
+
+
+@pytest.mark.parametrize("sdk", [False, True], ids=["httpx", "typesafe-sdk"])
+async def test_a_stalled_connection_retries_without_uncertain_completion(
+    monkeypatch: pytest.MonkeyPatch, fast_retries: list[float], sdk: bool
+) -> None:
+    connects: list[str] = []
+
+    async def hang(remote_host: str, **_kwargs: object) -> None:
+        connects.append(remote_host)
+        await anyio.sleep_forever()
+
+    monkeypatch.setattr(anyio, "connect_tcp", hang)
+    for key in ("ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "http_proxy", "https_proxy"):
+        monkeypatch.delenv(key, raising=False)
+    policy = RetryPolicy(per_attempt_timeout=0.2, max_attempts=2)
+    endpoint = (
+        TypeSafeProvider(Redactor([SECRET]), api_key=SECRET, base_url=URL, retry=policy) if sdk else provider(policy)
+    )
+
+    message = await failure(endpoint)
+
+    assert len(connects) == 2, message
+    assert fast_retries == [0.5]
+    assert "failed after 2 attempts" in message
+    assert "Completion is uncertain" not in message
 
 
 # --- Exhausted retries ---
@@ -282,7 +329,7 @@ async def test_a_cross_origin_redirect_is_refused_and_not_retried(fast_retries: 
 
 
 async def test_the_overall_budget_stops_retries(monkeypatch: pytest.MonkeyPatch, fast_retries: list[float]) -> None:
-    """A retry whose delay would reach the budget is skipped; the final error names both attempts."""
+    """A retry with too little time left is skipped; the final error names both attempts."""
     # Reads: start; attempt 1's remaining budget; attempt 1's elapsed; attempt 2's; attempt 2's elapsed.
     ticks = iter([0.0, 0.0, 0.0, 0.6, 0.6])
     monkeypatch.setattr(retry_timing, "clock", lambda: next(ticks))
@@ -290,11 +337,11 @@ async def test_the_overall_budget_stops_retries(monkeypatch: pytest.MonkeyPatch,
     responses = [httpx.Response(429, text="down"), httpx.Response(429, text="down")]
     with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
         router.post(URL).mock(side_effect=serving(responses, sent))
-        message = await failure(provider(RetryPolicy(budget=1.0)))
+        message = await failure(provider(RetryPolicy(budget=2.0)))
 
     assert message == "Jev-compatible endpoint request failed after 2 attempts: last failure: 429: down"
     assert len(sent) == 2
-    assert fast_retries == [0.5]  # the second delay (1.0 from elapsed 0.6) would reach the 1.0 s budget
+    assert fast_retries == [0.5]  # the second delay would leave 0.4 s
 
 
 async def test_a_first_failure_stopped_by_the_budget_keeps_todays_text(
@@ -313,6 +360,37 @@ async def test_a_first_failure_stopped_by_the_budget_keeps_todays_text(
     assert fast_retries == []
 
 
+@pytest.mark.parametrize(
+    ("retry_after", "should_retry"),
+    [("1.999", False), ("1.001", False), ("0.999", True)],
+    ids=["one-millisecond-left", "below-one-second", "above-one-second"],
+)
+async def test_retry_after_requires_a_useful_attempt(
+    controlled_clock: ControlledClock, retry_after: str, should_retry: bool
+) -> None:
+    sent: list[httpx.Request] = []
+    responses = [
+        httpx.Response(429, text="slow down", headers={"Retry-After": retry_after}),
+        httpx.Response(200, content=OK),
+    ]
+    with respx.mock(assert_all_called=False) as router:
+        router.post(URL).mock(side_effect=serving(responses, sent))
+        subject = provider(RetryPolicy(budget=2.0))
+        if should_retry:
+            evaluation = await evaluate(subject, timeout=None)
+            assert evaluation.answers["q"]["noul"] == 0.9
+            assert len(sent) == 2
+            assert controlled_clock.delays == [float(retry_after)]
+            return
+        with pytest.raises(ProviderError) as caught:
+            await evaluate(subject, timeout=None)
+
+    assert code_of(caught.value) == "quota"
+    assert str(caught.value) == "Jev-compatible endpoint 429: slow down"
+    assert len(sent) == 1
+    assert controlled_clock.delays == []
+
+
 async def test_the_overall_budget_bounds_even_full_length_attempts(
     monkeypatch: pytest.MonkeyPatch, controlled_clock: ControlledClock
 ) -> None:
@@ -320,11 +398,11 @@ async def test_the_overall_budget_bounds_even_full_length_attempts(
     call never runs past `budget` — the last attempt is shorter than its per-attempt timeout.
 
     Deterministic timeline: three full-length attempts (each consumes exactly the cap the loop
-    armed it with — the worst case the budget must bound), 10 ms backoffs, a 500 ms budget. The
+    armed it with — the worst case the budget must bound), 10 ms backoffs, a 5.5 s budget. The
     injected clock carries the timeline, so no assertion depends on runner speed (ADR-0057).
     """
     policy = RetryPolicy(
-        per_attempt_timeout=0.2, budget=0.5, backoff_initial=0.01, backoff_max=0.01, backoff_jitter=0.0
+        per_attempt_timeout=2.0, budget=5.5, backoff_initial=0.01, backoff_max=0.01, backoff_jitter=0.0
     )
     sent: list[httpx.Request] = []
     caps = spying_fail_after(monkeypatch)
@@ -341,10 +419,10 @@ async def test_the_overall_budget_bounds_even_full_length_attempts(
     assert caps[0] is None  # no caller deadline: the whole-call scope is unbounded
     attempt_caps: list[float] = [cap for cap in caps[1:] if cap is not None]
     assert len(attempt_caps) == 3
-    assert attempt_caps[0] == 0.2 and attempt_caps[1] == 0.2
-    assert attempt_caps[2] < 0.2  # the budget, not the per-attempt timeout, cut the last attempt
-    assert sum(attempt_caps) <= 0.5  # the whole call stays inside the budget
-    assert controlled_clock.now == pytest.approx(0.5)  # the budget is consumed exactly, never exceeded
+    assert attempt_caps[0] == 2.0 and attempt_caps[1] == 2.0
+    assert attempt_caps[2] < 2.0  # the budget cut the last attempt
+    assert sum(attempt_caps) <= 5.5
+    assert controlled_clock.now == pytest.approx(5.5)
     assert controlled_clock.delays == [0.01, 0.01]
 
 
@@ -354,12 +432,12 @@ async def test_a_budget_bound_timeout_is_not_reported_as_the_callers(
     """R5: a caller deadline larger than the policy budget does not turn the budget-bound timeout of
     the last attempt into the caller's. The budget ends the call; the exhausted-retry text reports it.
 
-    Same deterministic timeline as R3's test — three full-length attempts, 10 ms backoffs, a 500 ms
-    budget — plus a caller deadline of 1 s, twice the budget: every attempt cap comes from the
+    Same deterministic timeline as R3's test — three full-length attempts, 10 ms backoffs, a 5.5 s
+    budget — plus a caller deadline of 11 s, twice the budget: every attempt cap comes from the
     budget, and the caller's deadline never binds, whatever the runner's speed.
     """
     policy = RetryPolicy(
-        per_attempt_timeout=0.2, budget=0.5, backoff_initial=0.01, backoff_max=0.01, backoff_jitter=0.0
+        per_attempt_timeout=2.0, budget=5.5, backoff_initial=0.01, backoff_max=0.01, backoff_jitter=0.0
     )
     sent: list[httpx.Request] = []
     caps = spying_fail_after(monkeypatch)
@@ -367,12 +445,12 @@ async def test_a_budget_bound_timeout_is_not_reported_as_the_callers(
     with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
         router.post(URL).mock(side_effect=full_length_stall(controlled_clock, sent, caps))
         with pytest.raises(ProviderTimeoutError) as caught:
-            await evaluate(provider(policy), timeout=1.0)
+            await evaluate(provider(policy), timeout=11.0)
 
-    assert caps[0] == 1.0  # the caller's deadline armed the whole-call scope …
+    assert caps[0] == 11.0  # the caller's deadline armed the whole-call scope
     attempt_caps: list[float] = [cap for cap in caps[1:] if cap is not None]
-    assert attempt_caps == [0.2, 0.2, pytest.approx(0.08)]  # … but the budget capped every attempt
-    assert controlled_clock.now == pytest.approx(0.5)  # the budget, not the caller's 1 s, ended the call
+    assert attempt_caps == [2.0, 2.0, pytest.approx(1.48)]
+    assert controlled_clock.now == pytest.approx(5.5)
     assert str(caught.value) == (
         "Jev-compatible endpoint request failed after 3 attempts: last failure: the attempt timed out"
     )
@@ -511,7 +589,7 @@ async def test_a_typesafe_429_honors_retry_after_ms_then_succeeds(fast_retries: 
     def handler(request: httpx2.Request) -> httpx2.Response:
         requested.append(request)
         if len(requested) == 1:
-            return httpx2.Response(429, content=b"slow down", headers={"retry-after-ms": "250"})
+            return httpx2.Response(429, content=b"slow down", headers={"retry-after-ms": "750"})
         return httpx2.Response(200, content=OK)
 
     sdk_provider = typesafe_provider(handler)
@@ -522,7 +600,7 @@ async def test_a_typesafe_429_honors_retry_after_ms_then_succeeds(fast_retries: 
 
     assert evaluation.provider == "typesafe"
     assert len(requested) == 2
-    assert fast_retries == [0.25]
+    assert fast_retries == [0.75]
 
 
 @pytest.mark.parametrize("status", [429, 503])
@@ -555,11 +633,8 @@ async def test_a_caller_deadline_on_a_single_attempt_keeps_todays_timeout_text()
     assert len(sent) == 1
 
 
-@pytest.mark.parametrize(
-    ("failure", "uncertain"),
-    [(httpx.ReadTimeout("late"), True), (httpx.ConnectTimeout("early"), False), (httpx.Response(503), True)],
-)
-async def test_single_attempt_carries_delivery_metadata(failure: object, uncertain: bool) -> None:
+@pytest.mark.parametrize("failure", [httpx.ReadTimeout("late"), httpx.ConnectTimeout("early"), httpx.Response(503)])
+async def test_single_attempt_carries_no_delivery_metadata(failure: object) -> None:
     sent: list[httpx.Request] = []
     with respx.mock() as router:
         router.post(URL).mock(side_effect=serving([failure], sent))
@@ -567,4 +642,4 @@ async def test_single_attempt_carries_delivery_metadata(failure: object, uncerta
             await evaluate(provider(NO_RETRIES))
     assert len(sent) == 1
     assert "Completion is uncertain" not in str(caught.value)
-    assert caught.value.delivery_uncertain is uncertain
+    assert not hasattr(caught.value, "delivery_uncertain")

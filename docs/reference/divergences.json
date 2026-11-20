@@ -128,6 +128,20 @@
       "python_behavior": "stdlib re matches a narrower translated subset; patterns outside it get invalid_pattern with a named reason, and re stalling like V8 keeps the timeout fixtures honest."
     },
     {
+      "id": "extract-modifier-group",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0018-extract-runs-on-stdlib-re-with-a-narrower-subset.md",
+      "tests": [
+        "tests/unit/test_extract_dialect.py::test_pattern_refusals_are_named",
+        "tests/parity/test_extract_differential.py::test_candidates_match_v8"
+      ],
+      "fixtures": [],
+      "reference_behavior": "Node 24 accepts ES2025 modifier groups, such as (?i:ab)c, which matches ABc in ABc abC.",
+      "python_behavior": "Modifier groups return invalid_pattern with the reason unsupported regular expression: a modifier group is outside the supported subset."
+    },
+    {
       "id": "extract-deadline-includes-queue",
       "surface": "result",
       "tier": "both",
@@ -165,7 +179,21 @@
       ],
       "fixtures": [],
       "reference_behavior": "askJev passes no timeout of its own. The typesafe path still gets the pinned SDK 0.6.0 default of 10s per attempt; the fetch-based providers pass no timeout, so a hung connection waits until the client cancels.",
-      "python_behavior": "Runtime.ask still passes no whole-call deadline (the client's MCP cancellation is the recovery path for the call), but every provider attempt is bounded by the retry policy's 30 s per-attempt deadline and the whole bounded sequence by its 90 s budget, so a hung connection becomes a bounded, retryable failure and a transient one is retried (ADR-0057)."
+      "python_behavior": "Runtime.ask passes no whole-call deadline. Each provider attempt is capped at 30 s within a 90 s retry budget. Only HTTP 429 and pre-delivery connection or pool failures retry. A retry waits at least the generated backoff and the server hint and requires at least 1 s for the next attempt (ADR-0057)."
+    },
+    {
+      "id": "provider-response-bounds",
+      "surface": "provider",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0057-one-retry-owner-bounded-provider-retries.md",
+      "tests": [
+        "tests/contract/test_providers.py::test_response_metadata_requires_bounded_printable_ascii",
+        "tests/contract/test_providers.py::test_oversized_http_errors_keep_status_and_retry_classification"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The recorded reference contract does not prescribe limits for provider response bodies or metadata strings.",
+      "python_behavior": "Success bodies are capped at 8 MiB. Streamed errors retain up to 64 KiB, already-buffered errors pass through intact, and status is preserved. Upstream model and request-ID strings must be nonempty printable ASCII of at most 1,024 characters."
     },
     {
       "id": "http-tier-b-experimental",
@@ -778,6 +806,68 @@
       "fixtures": [],
       "reference_behavior": "Threshold-only uncertainty can escalate and a confident contradiction escalates without a counterexample.",
       "python_behavior": "The gate asks bounded evidence-pointer questions. A change rolls up file and claim reasons and gives one next check. Escalations require a named and cited defect, a cited contradiction or an explicit refusal. The program-response-fields fixture projection retains the frozen score and probability assertions."
+    },
+    {
+      "id": "tool-correctness",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0083-fail-closed-tool-results.md",
+      "tests": [
+        "tests/parity/test_tool_fixtures.py",
+        "tests/unit/test_verify.py",
+        "tests/unit/test_grounded_gate.py",
+        "tests/unit/test_gate_next_checks.py",
+        "tests/unit/test_cli_gate.py",
+        "tests/unit/test_files_judge.py",
+        "tests/contract/test_file_judge.py",
+        "tests/contract/test_files_judge.py",
+        "tests/unit/test_file_diff.py"
+      ],
+      "fixtures": [],
+      "verify_holds": [
+        "mock-144#0",
+        "mock-151#2",
+        "mock-151#3",
+        "mock-151#4",
+        "mock-151#5",
+        "mock-151#6",
+        "mock-151#7",
+        "mock-151#8",
+        "mock-151#9",
+        "mock-151#10",
+        "mock-151#11"
+      ],
+      "reference_behavior": "Missing optional answers can leave a reference decision at auto. Review thresholds can escalate without a cited line. Some diagnostics and file judgment capabilities are Python extensions.",
+      "python_behavior": "Verification and gates hold rows on invalid auxiliary source or defect answers. Verification reports stands only for verified auto rows. Review and gate share grounded diagnostics. The program-response-fields projection compares the recorded decisions with these policy changes applied. Internal errors, file batch provenance, citation IDs and hunk lines, choice keys, and diagnostic field shapes are pinned by the listed boundary tests."
+    },
+    {
+      "id": "remove-tests-format",
+      "surface": "tool_schema",
+      "tier": "tier_a",
+      "status": "sanctioned",
+      "adr": "docs/adr/0083-fail-closed-tool-results.md",
+      "tests": [
+        "tests/contract/test_tools_list.py",
+        "tests/unit/test_file_diff.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The reference tool schemas do not declare tests_format. The previous Python file-list schema extension advertised it.",
+      "python_behavior": "Gate and review drop tests_format from their published schemas. Test provenance follows who read the log."
+    },
+    {
+      "id": "remove-tests-sha256",
+      "surface": "tool_schema",
+      "tier": "tier_a",
+      "status": "sanctioned",
+      "adr": "docs/adr/0083-fail-closed-tool-results.md",
+      "tests": [
+        "tests/contract/test_tools_list.py",
+        "tests/unit/test_file_diff.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The reference tool schemas do not declare tests_sha256. The previous Python file-list schema extension advertised it.",
+      "python_behavior": "Gate and review drop tests_sha256 from their published schemas. Test provenance follows who read the log."
     },
     {
       "id": "session-source-version",

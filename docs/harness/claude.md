@@ -34,12 +34,11 @@ Headless runs need an allow-rule. `acceptEdits` covers file edits. Add the publi
 
 `mcp__jev` allows the whole server in one rule. The installer does not write either form.
 
-`jev_ask` is safe to allow because its `command` argument is off unless the operator sets
-`JEV_ASK_COMMANDS=1` in the server environment: enabling it lets the server run what Jev judges
-read-only without a harness prompt, so decide that in the server's launch configuration, not in a
-permission file. Enabling it is not containment: the denylist blocks named clients such as `curl`
-and `ssh`, but an interpreter one-liner like `python -c` or `node -e` passes the denylist and can
-still reach the network. Run the server under your own sandbox when command isolation matters.
+`jev_ask` accepts commands only when the operator sets `JEV_ASK_COMMANDS=1` in the server's
+launch environment. It validates commands and their options against closed read-only allowlists
+and runs them directly as argv without a shell or harness prompt. An accepted command adds redacted
+output to state and uses one provider call for the questions. See the `jev_ask` section of the
+[tool contract](../tools.md) for allowed commands, allowed options, and limits.
 
 ## Routing skill
 
@@ -59,7 +58,7 @@ The judgment is routed by the event's tool name (ADR-0076). A `Bash` action is j
 
 `JEV_GATE_STATE` is the environment variable `src/jev_judge_mcp/hook.py` reads when it builds judged state. Unset, or whitespace only, it is omitted. Otherwise the stripped value is the next line after the event's cwd and permission mode, before the proposed action. `redact_action` runs on the action description and input. It does not run on `JEV_GATE_STATE`. That text is sent to the provider, so it is not a place to put a key. Provider URL, model, and credentials stay the process configuration in ADR-0008. The hook loads those the same way the server does. It reads no further hook variable, and the thresholds — the 0.5 / 0.4 confidence floors for the effect and fallback questions, 0.7 for the destructive-intent and credential questions — are constants in `src/jev_judge_mcp/hook.py`, not environment variables.
 
-Stdin that is not a JSON object, or a missing provider credential, exits 0 with a stderr line and no decision. A provider failure asks, with reason `unreachable`. Set `JEV_HOOK_REQUIRED=1` only when this hook is the enforcer: those pre-call failures then ask instead of staying silent (ADR-0065). The default is unchanged.
+Invalid stdin, missing provider credentials, invalid settings, and unexpected local hook errors exit 0 with a stderr line and no decision. Set `JEV_HOOK_REQUIRED=1` when this hook is the enforcer so these failures ask (ADR-0065). A provider failure asks with reason `unreachable`.
 
 ## Screen hook
 
@@ -79,4 +78,4 @@ The hook reads at most the newest 8 MiB of the event's `transcript_path` and kee
 
 ## Completion hook
 
-`jev-judge-mcp completion-hook` is not `hook gate`. Claude Code PreToolUse matches tool names, not the command text ([hooks reference](https://code.claude.com/docs/en/hooks)). [`completion.hooks.json`](completion.hooks.json) therefore matches `Bash`. The program, not the matcher, keeps the command filter: `git push`, `gh pr create`, and `gh pr merge` reach the gate; any other Bash command exits 0 with no stdout. `install` does not enable the fragment. A missing credential fails open: empty stdout, `error.code` on stderr, never an allow. Set `JEV_HOOK_REQUIRED=1` when this hook is the enforcer: missing credentials, bad stdin, and a gate error that never reached the provider then ask instead of staying silent (ADR-0065). The default stays fail-open. The command is the executable path in [`completion.hooks.json`](completion.hooks.json), not `uv run --directory`, for the same cwd reason as the command hook. The command reads `JEV_COMPLETION_DIFF`, `JEV_COMPLETION_CLAIMS`, and `JEV_COMPLETION_TESTS`; without `JEV_COMPLETION_DIFF` it judges the commits the push sends (`@{upstream}..HEAD`, else the last commit) and abstains when that range is empty. The command filter reads the line as the shell does: `cd repo && git push` and `git -C repo push` reach the gate too (ADR-0064 amendment).
+`jev-judge-mcp completion-hook` is not `hook gate`. Claude Code PreToolUse matches tool names, not the command text ([hooks reference](https://code.claude.com/docs/en/hooks)). [`completion.hooks.json`](completion.hooks.json) therefore matches `Bash`. The program, not the matcher, keeps the command filter: `git push`, `gh pr create`, and `gh pr merge` reach the gate; any other Bash command exits 0 with no stdout. `install` does not enable the fragment. A missing credential fails open: empty stdout, `error.code` on stderr, never an allow. Set `JEV_HOOK_REQUIRED=1` when this hook is the enforcer: missing credentials, bad stdin, invalid settings, pre-provider gate failures, and unexpected local errors then ask (ADR-0065). The default stays fail-open. The command is the executable path in [`completion.hooks.json`](completion.hooks.json), not `uv run --directory`, for the same cwd reason as the command hook. The command reads `JEV_COMPLETION_DIFF`, `JEV_COMPLETION_CLAIMS`, and `JEV_COMPLETION_TESTS`; without `JEV_COMPLETION_DIFF` it judges the commits the push sends (`@{upstream}..HEAD`, else the last commit) and abstains when that range is empty. The command filter reads the line as the shell does: `cd repo && git push` and `git -C repo push` reach the gate too (ADR-0064 amendment).

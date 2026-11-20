@@ -42,11 +42,16 @@ def note_blocks_auto(action: str, support: object, evidence: Sequence[Mapping[st
 
 
 def verify_claim_action(
-    confidence: float | None, auto_accept: float, source: object, evidence: Sequence[Mapping[str, object]]
+    confidence: float | None,
+    auto_accept: float,
+    source: object,
+    evidence: Sequence[Mapping[str, object]],
+    *,
+    source_invalid: bool = False,
 ) -> Action:
     """jev_verify's row action: review for an unknown confidence (ADR-0043), `verify_action` otherwise,
     and never auto on a caller note alone (ADR-0067). `source` is the raw source answer."""
-    action: Action = "review" if confidence is None else verify_action(confidence, auto_accept)
+    action: Action = "review" if confidence is None or source_invalid else verify_action(confidence, auto_accept)
     return "review" if note_blocks_auto(action, source, evidence) else action
 
 
@@ -96,6 +101,7 @@ def gate_reason_codes(
     action: Action,
     thresholds: PolicyThresholds,
     caller_note: bool = False,
+    source_invalid: bool = False,
 ) -> list[str]:
     """The gate's reason codes, in `GATE_REASON_CODES` order (`index.ts:1472-1482`).
 
@@ -107,7 +113,7 @@ def gate_reason_codes(
     codes: list[str] = []
     if truncated:
         codes.append("incomplete_context")
-    if review_invalid or len(valid) < len(claims):
+    if review_invalid or source_invalid or len(valid) < len(claims):
         codes.append("invalid_response")
     if review_action == "escalate":
         codes.append("review_escalated")

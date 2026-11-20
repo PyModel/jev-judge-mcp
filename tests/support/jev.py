@@ -14,6 +14,13 @@ from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 
 
+def choice(selected: str, *labels: str) -> dict[str, object]:
+    return {"choice": selected, "confidence": 1, "probabilities": {key: int(key == selected) for key in labels}}
+
+
+NO_DEFECT = choice("none", "none", "wrong_result", "state_change", "error_handling", "safety_refusal")
+
+
 class FakeProvider(JevProvider):
     """Returns `answers` as given, including values no JSON body could carry (NaN, infinity)."""
 

@@ -45,3 +45,20 @@ Agents each keep their own MCP config, and several of those files are shared wit
   into the rewritten file. The rewritten file simply no longer carries it. Everything else about
   failed parses and foreign entries is unchanged.
 
+## Amendment (2026-11-19): preserve neighboring config and bound private backups
+
+- JSON and JSONC removal splices the named property and one adjacent comma using source
+  offsets. JSONC trailing commas, comments outside the edited property, and CRLF line
+  endings are supported. Duplicate keys along the edited path must be made unique before
+  installation. OpenCode distinguishes a v1 server named `servers` from its v2 map by shape.
+- Codex edits keep comment headings adjacent to the following table. The installer parses
+  its proposed output before publishing and checks the requested entry, the rest of the
+  parsed config, and the affected comment structure. A validation error leaves that
+  target's config untouched.
+- Recovery compares the staged digest with the prepared replacement. An unexchanged
+  replacement can be discarded even when the agent has since rewritten the config.
+  Completed recovery removes the staging file and preserves other targets' records.
+  A displaced concurrent edit still remains available for reconciliation.
+- Installer state and backups use the shared private-directory checks. After a successful
+  config write, the installer retains the three newest backups for that target. Pi adapter
+  detection uses the same 16 MiB regular-file limit and BOM-tolerant decoding as config reads.

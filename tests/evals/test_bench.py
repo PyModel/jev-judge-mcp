@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 from collections import Counter
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Any, cast
 
 import pytest
 
+from evals import study_runner
 from evals.ab import ledger as pilot_ledger
 from evals.ab import stream
 from evals.ab.ledger import RUN_BOUND_USD
@@ -29,7 +31,7 @@ from evals.runners.manifest import load_cases
 from evals.scorers.tools import SCORERS, Example
 from evals.spend import SpendLedger
 from jev_judge_mcp.tools import TOOLS
-from jev_judge_mcp.tools.arguments import parse_arguments
+from jev_judge_mcp.tools.arguments import compile_argument_schema
 from tests.evals import booking_cases
 from tests.support.agent_stubs import dead_login, reaches_model
 
@@ -79,7 +81,7 @@ def test_every_input_is_a_valid_call_of_its_tool() -> None:
     tools = {tool.name: tool for tool in TOOLS}
     for item in ITEMS:
         tool = tools[item.tool]
-        parse_arguments(tool.name, tool.definition.input_schema, item.input, tool.refinements)
+        compile_argument_schema(tool.name, tool.definition.input_schema, tool.refinements)(item.input)
 
 
 def test_load_cases_reads_the_bench_file() -> None:
@@ -187,7 +189,6 @@ def test_the_arms_differ_only_in_the_jev_sentence() -> None:
     assert prompt.addendum("A") == prompt.BENCH_ADDENDUM
     assert prompt.addendum("B") == prompt.BENCH_ADDENDUM
     assert prompt.addendum("C") == f"{prompt.BENCH_ADDENDUM} {prompt.JEV_SENTENCE}"
-    assert prompt.addendum("C", agent="pi") == f"{prompt.BENCH_ADDENDUM} {prompt.JEV_SENTENCE_PI}"
     assert "mcp__jev__" in prompt.JEV_SENTENCE
     assert "mcp__jev__" not in prompt.addendum("A") and "mcp__jev__" not in prompt.addendum("B")
     # The shared addendum never names Jev and never forbids looking at tools: that sentence is what
@@ -195,9 +196,6 @@ def test_the_arms_differ_only_in_the_jev_sentence() -> None:
     for arm in ("A", "B"):
         assert "jev" not in prompt.addendum(arm).lower()
         assert "do not look" not in prompt.addendum(arm)
-    # C's Pi sentence names the now-visible tools, not the adapter's gateway dance.
-    assert "gateway" not in prompt.JEV_SENTENCE_PI.lower()
-    assert "jev_" in prompt.JEV_SENTENCE_PI
 
 
 def test_the_bench_exposes_the_jev_tools_directly(tmp_path: Path) -> None:
@@ -207,7 +205,6 @@ def test_the_bench_exposes_the_jev_tools_directly(tmp_path: Path) -> None:
     """
     setup = run.Setup(
         agent=lambda _item, _arm: ["agent"],
-        server=["server"],
         server_env={},
         base_env={},
         secret="synthetic-secret",  # noqa: S106 - a fixture value, never a real key
@@ -312,21 +309,12 @@ def test_wrapped_answers_run_through_the_existing_scorers_unchanged() -> None:
 # --- stats ------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("split", "weaker"),
-    [((9, 1), (8, 2)), ((15, 5), (14, 6)), ((21, 9), (20, 10)), ((27, 13), (26, 14)), ((33, 17), (32, 18))],
-)
-def test_mcnemar_matches_the_plan_minimum_detectable_table(split: tuple[int, int], weaker: tuple[int, int]) -> None:
-    assert stats.mcnemar_exact(*split) < 0.05
-    assert stats.mcnemar_exact(*weaker) >= 0.05
-    assert stats.mcnemar_exact(*split) == stats.mcnemar_exact(*split[::-1])
-
-
 def test_exact_binomial_edges() -> None:
-    assert stats.mcnemar_exact(0, 0) == 1.0
-    assert stats.mcnemar_exact(5, 5) == 1.0
-    assert stats.mcnemar_exact(10, 0) == pytest.approx(2 / 1024)
-    assert stats.sign_test([1.0, 2.0, -0.5, 0.0]) == stats.two_sided_binomial_p(2, 1)
+    assert stats.sign_test([]) == 1.0
+    assert stats.sign_test([0.0, 0.0]) == 1.0
+    assert stats.sign_test([1.0] * 5 + [-1.0] * 5) == 1.0
+    assert stats.sign_test([1.0] * 10 + [0.0]) == pytest.approx(2 / 1024)
+    assert stats.sign_test([1.0, 2.0, -0.5, 0.0]) == 1.0
     with pytest.raises(ValueError):
         stats.two_sided_binomial_p(-1, 2)
 
@@ -797,6 +785,32 @@ def test_a_finished_bench_does_not_preflight_again(tmp_path: Path) -> None:
     assert not log.exists()
 
 
+def test_a_live_bench_refuses_if_a_saved_attempt_disappears_after_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A changed ledger cannot turn inspection of a finished bench into an unconfined launch."""
+    _agent_bin(tmp_path / "bin", "claude", "raise SystemExit(0)")
+    out = tmp_path / "out"
+    out.mkdir()
+    path = out / "ledger.json"
+    path.write_text(json.dumps({"runs": {f"{_FROZEN.id}.{arm}": 0.0 for arm in "ABC"}}), encoding="utf-8")
+    runs_remain = run.runs_remain
+
+    def after_admission(items: Sequence[Item], out: Path, *, seed: int) -> bool:
+        remaining = runs_remain(items, out, seed=seed)
+        assert not remaining
+        path.unlink()
+        return remaining
+
+    def no_sandbox(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("live bench reached the unconfined agent")
+
+    monkeypatch.setattr(run, "runs_remain", after_admission)
+    monkeypatch.setattr(run, "run_agent", no_sandbox)
+    with pytest.raises(run.BenchRefusedError, match="not yet confined"):
+        run.live(_bench_env(tmp_path / "bin", tmp_path), out, items=(_FROZEN,))
+
+
 @pytest.mark.parametrize("agent", ["claude", "pi"])
 def test_a_live_bench_refuses_before_any_host_sandbox_prep(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], agent: str
@@ -823,7 +837,7 @@ def test_a_live_bench_refuses_before_any_host_sandbox_prep(
 
 def test_setup_needs_a_secret_to_scrub() -> None:
     with pytest.raises(ValueError, match="non-empty key"):
-        run.Setup(agent=lambda _i, _a: [], server=[], server_env={}, base_env={}, secret="")
+        run.Setup(agent=lambda _i, _a: [], server_env={}, base_env={}, secret="")
 
 
 # --- the recorded stream-json sample ----------------------------------------------------------------
@@ -879,7 +893,6 @@ def test_a_connection_error_is_booked_and_is_not_a_triplet(tmp_path: Path) -> No
     scrub = "bench-offline-scrub"
     setup = run.Setup(
         agent=agent,
-        server=[sys.executable, "-c", "raise SystemExit(0)"],
         server_env={},
         base_env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
         secret=scrub,
@@ -1138,14 +1151,14 @@ def test_concurrent_resume_checks_recover_one_charge(tmp_path: Path, monkeypatch
     run_id = loop.ids[0]
     loop.seed(run_id, 0.17)
     both_read = threading.Barrier(2)
-    started = run.agent_started
+    started = study_runner.agent_started
 
     def simultaneous_check(path: Path) -> bool:
         if path.name == run_id:
             both_read.wait(timeout=5)
         return started(path)
 
-    monkeypatch.setattr(run, "agent_started", simultaneous_check)
+    monkeypatch.setattr(study_runner, "agent_started", simultaneous_check)
     with ThreadPoolExecutor(max_workers=2) as pool:
         checks = [pool.submit(run.runs_remain, items, loop.out) for _ in range(2)]
         assert all(check.result(timeout=10) for check in checks)

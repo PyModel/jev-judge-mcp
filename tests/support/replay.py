@@ -96,7 +96,9 @@ async def replay_call(call: FixtureCall, monkeypatch: pytest.MonkeyPatch) -> Non
     content = result.content[0]
     assert content.type == "text", call.id
     observed = (
-        frozen_review_fields(content.text, expected_text) if divergences(call) and not expected_error else content.text
+        frozen_review_fields(content.text, expected_text, call.payload["arguments"])
+        if divergences(call) and not expected_error
+        else content.text
     )
     assert observed == expected_text, call.id
     assert bool(result.is_error) == expected_error, call.id

@@ -108,7 +108,8 @@ async def test_every_skip_is_reported_with_its_reason_and_costs_no_call(tmp_path
     assert outcome.requests and len(outcome.requests) == 1
 
 
-async def test_an_all_skip_batch_answers_with_zero_calls() -> None:
+async def test_an_all_skip_batch_answers_with_zero_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JEV_MCP_MODEL", "jev-local-test")
     outcome = await call_tool("jev_files_judge", noul_args(["missing.md"]), {"file": {"noul": 0.9}})
     assert not outcome.is_error, outcome.text
     payload = outcome.payload
@@ -117,6 +118,7 @@ async def test_an_all_skip_batch_answers_with_zero_calls() -> None:
     assert payload["calls"] == 0
     assert payload["usage"] is None
     assert payload["provider"] == "none"
+    assert payload["model"] == "jev-local-test"
     assert outcome.requests == []
 
 

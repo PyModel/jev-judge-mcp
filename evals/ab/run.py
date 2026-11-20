@@ -38,20 +38,18 @@ from typing import Any, cast
 from evals.ab import arms, ledger, outcomes, report, stream, tasks, unsafe
 from evals.ab.grade import old_rule_success, run_correct
 from evals.agent import (
-    PREFLIGHT_TIMEOUT_S,
     AgentCommand,
-    AgentPreflightError,
     AgentRunResult,
     AgentSetupError,
     container_boundary,
     exploration_paths,
+    read_relay_log,
     real_agent_dir,
     run_agent,
-    run_preflight,
     scoped_models,
     write_preflight,
 )
-from evals.artifacts import incomplete_message, read_records, write_json
+from evals.artifacts import incomplete_message, read_artifact, read_records, write_json
 from evals.bench import pi
 from evals.confinement.launch import (
     CONTAINER_ADAPTER,
@@ -70,8 +68,8 @@ from evals.confinement.launch import (
     run_confined,
 )
 from evals.isolation import IsolationInfrastructureError, postprocess
-from evals.spend import SpendLedger, agent_started, amount, book_outcome, reconciliation_notes
-from evals.study_runner import record_row, run_recorded, write_record
+from evals.spend import SpendLedger, agent_started, amount, reconciliation_notes
+from evals.study_runner import InfrastructureStop, record_row, recover_attempts, run_recorded, write_record
 
 LIVE_FLAG = "JEV_AB_LIVE"
 AGENTS = ("claude", "pi")
@@ -97,20 +95,6 @@ class StudyRefusedError(RuntimeError):
     pass
 
 
-class _InfrastructureStop(BaseException):
-    """Escapes `write_record` and `run_recorded`.
-
-    An infrastructure failure is not an `Exception` the study runner would book as an unfinished
-    agent run, and it is not a failed-agent result. The study books `incurred_usd` when the agent
-    already ran, then stops.
-    """
-
-    def __init__(self, reason: str, incurred_usd: float | None) -> None:
-        super().__init__(reason)
-        self.reason = reason
-        self.incurred_usd = incurred_usd
-
-
 @dataclass(frozen=True)
 class Setup:
     """What differs between the live study and the offline dry run."""
@@ -129,8 +113,6 @@ class Setup:
     """The grader's interpreter."""
     auth_provider: str = ""
     """The one auth.json provider entry the agent's model needs; empty copies no auth."""
-    server_python: str = ""
-    """The study venv interpreter the sandbox launcher wraps; empty is the offline dry-run shape."""
     timeout_s: float = arms.RUN_TIMEOUT_S
     confinement: ConfinementSpec | None = None
     """The broker + container boundary live runs use (ADR-0074); None is the offline dry run."""
@@ -185,49 +167,6 @@ def run_id(task_id: str, arm: str, repeat: int) -> str:
     return f"{task_id}.{arm}.r{repeat}"
 
 
-def preflight(setup: Setup, out: Path | None = None) -> AgentRunResult:
-    """One prompt through `run_agent`'s own env, before the first paid run of a study.
-
-    A preflight that never reaches the model refuses the batch and books nothing. When `out` is given,
-    the cost is written to `preflight.json` either way, so a report can add it and a rerun of a
-    finished study is not what records it. Only Claude gets the login-keychain link.
-    """
-    try:
-        result = run_preflight(
-            lambda config: [
-                *setup.binary,
-                *argv_tail(setup.agent, "Reply with the single word ok.", config, arms.SYSTEM_ADDENDUM),
-            ],
-            base_env=setup.base_env,
-            secret=setup.secret,
-            mcp_config={},
-            login_keychain=setup.agent == "claude",
-            parse=parser_for(setup.agent),
-            timeout_s=PREFLIGHT_TIMEOUT_S,
-            auth_provider=setup.auth_provider or None,
-        )
-    except AgentPreflightError as error:
-        if out is not None:
-            write_preflight(out, cost_usd=error.cost_usd, model=error.model)
-        raise StudyRefusedError(
-            f"{setup.agent} preflight could not reach its model ({error}); refusing the batch before any run is booked"
-        ) from error
-    if out is not None:
-        write_preflight(out, cost_usd=_usd(result), model=result.trace.model)
-    return result
-
-
-def _usd(result: AgentRunResult) -> float | None:
-    cost = result.trace.result_field("total_cost_usd")
-    if isinstance(cost, bool) or not isinstance(cost, int | float):
-        return None
-    return float(cost)
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
-
-
 def arm_spec(spec: ConfinementSpec, arm: str) -> ConfinementSpec:
     """The run's boundary, per arm: the without-Jev arm gets no TypeSafe upstream at all, so no
     in-container TypeSafe shim starts and its broker has no route to answer one — treatment
@@ -273,8 +212,7 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
             ) as run:
                 record = _record_inside(run_dir, run, rid, task, arm, repeat, setup, book, jev_log)
         except ConfinementError as error:
-            # The agent container did not start. No trace, no incurred cost, no failed-agent result.
-            raise _InfrastructureStop(str(error), None) from error
+            raise InfrastructureStop(str(error)) from error
     else:
         command = AgentCommand(
             argv=lambda config: [*setup.binary, *argv_tail(setup.agent, prompt, config, addendum)],
@@ -288,7 +226,6 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
                 sandbox=sandbox,
                 server_env=setup.server_env,
                 api_key=setup.secret if arm == "B" else "",
-                interpreter=setup.server_python or None,
             ),
             base_env=setup.base_env,
             secret=setup.secret,
@@ -435,12 +372,6 @@ def _outcome_record(
     return record_row(_RECORD_KEYS, values)
 
 
-def _incurred_usd(run: AgentRunResult, book: SpendLedger, jev_log: Path) -> float:
-    """The cost the agent already incurred, from its trace and the Jev log. Not the run bound unless
-    the agent reported no usable cost — that clamp is `SpendLedger.cost_of`, not a synthesized failure."""
-    return book.cost_of(run.trace.result_field("total_cost_usd"), _read_jsonl(jev_log)).total_usd
-
-
 def _record(
     rid: str,
     task: tasks.Task,
@@ -462,11 +393,17 @@ def _record(
             reference_ids=setup.reference_ids,
         )
     except IsolationInfrastructureError as error:
-        raise _InfrastructureStop(str(error), _incurred_usd(run, book, jev_log)) from error
+        incurred = amount(error.incurred_usd)
+        if incurred is None:
+            try:
+                incurred = book.cost_of(trace.result_field("total_cost_usd"), read_relay_log(jev_log)).total_usd
+            except (OSError, ValueError, RecursionError) as read_error:
+                error.add_note(f"Relay cost evidence could not be read: {type(read_error).__name__}")
+        raise InfrastructureStop(str(error), incurred) from error
     (run_dir / "diff.patch").write_text(graded.patch, encoding="utf-8")
     result = graded.grade
     protected = frozenset(tasks.protected_files())
-    calls = _read_jsonl(jev_log)
+    calls = read_relay_log(jev_log)
     reached = outcomes.reached_model(trace)
     chosen = outcomes.decision(trace.result_field("result"), task.judgment)
     cycles = outcomes.test_cycles(trace.tool_uses)
@@ -594,7 +531,7 @@ def failed_record(
             "decision": None,
             "decision_correct": None,
             "agent_cost_usd": run_bound,
-            "jev_cost_usd": 0.0,
+            "jev_cost_usd": None,
             "cost_usd": run_bound,
             "agent_cost_reported": False,
             "unsafe": [],
@@ -617,22 +554,29 @@ def schedule(
 
 def _load_book(
     setup: Setup, out: Path, *, repeats: int, seed: int
-) -> tuple[SpendLedger, list[tuple[tasks.Task, int, tuple[str, ...]]]]:
-    """The ledger after already-started runs are booked, and the plan those runs came from."""
+) -> tuple[SpendLedger, list[tuple[tasks.Task, int, tuple[str, ...]]], str | None]:
+    """Recover charges and check recorded outcomes before admitting another pair."""
     book = SpendLedger.load(out / "ledger.json", setup.policy or ledger.POLICIES[setup.agent])
     plan = schedule(setup.task_list, repeats, seed)
-    for task, repeat, order in plan:
-        for arm in order:
-            rid = run_id(task.id, arm, repeat)
-            if agent_started(out / rid):
-                book_outcome(book, rid, out / rid / "result.json")
-    return book, plan
+    records, incomplete = _records(out)
+    shortfall = recover_attempts(
+        book,
+        out,
+        (run_id(task.id, arm, repeat) for task, repeat, order in plan for arm in order),
+        records,
+        cost_key="cost_usd",
+    )
+    prior = incomplete_message(incomplete, out) if incomplete else shortfall
+    for row in records.values():
+        if row.get("failure_category") == "escape":
+            prior = prior or f"stopped: sandbox escape on {row['run_id']} (recorded earlier)"
+    return book, plan, prior
 
 
 def runs_remain(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int = SEED) -> bool:
     """True when a study call would launch at least one run. A finished study does not."""
-    book, plan = _load_book(setup, out, repeats=repeats, seed=seed)
-    if _prior_stop(out):
+    book, plan, prior = _load_book(setup, out, repeats=repeats, seed=seed)
+    if prior:
         return False
     for task, repeat, order in plan:
         pending = sum(run_id(task.id, arm, repeat) not in book.runs for arm in order)
@@ -647,8 +591,8 @@ def study(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int =
     A recorded escape stops the study: the agent left its boundary, so nothing recorded after it is
     comparable until the escape is understood. The guard also fires on resume, before any new run.
     """
-    book, plan = _load_book(setup, out, repeats=repeats, seed=seed)
-    if prior := _prior_stop(out):
+    book, plan, prior = _load_book(setup, out, repeats=repeats, seed=seed)
+    if prior:
         return prior
     for task, repeat, order in plan:
         pending = [arm for arm in order if run_id(task.id, arm, repeat) not in book.runs]
@@ -659,18 +603,15 @@ def study(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int =
         for arm in pending:
             rid = run_id(task.id, arm, repeat)
             sys.stderr.write(f"run {setup.agent} {rid} (spent ${book.spent:.2f})\n")
-            try:
-                record = run_recorded(
-                    book,
-                    rid,
-                    out / rid / "result.json",
-                    lambda task=task, arm=arm, repeat=repeat: run_one(task, arm, repeat, setup, book, out),
-                )
-            except _InfrastructureStop as stop:
-                if stop.incurred_usd is not None and rid not in book.runs:
-                    book.record(rid, stop.incurred_usd)
-                return f"stopped: isolation infrastructure: {stop.reason}"
-            if isinstance(record, Mapping) and record.get("failure_category") == "escape":
+            record = run_recorded(
+                book,
+                rid,
+                out / rid / "result.json",
+                lambda task=task, arm=arm, repeat=repeat: run_one(task, arm, repeat, setup, book, out),
+            )
+            if isinstance(record, str):
+                return record
+            if record.get("failure_category") == "escape":
                 return f"stopped: sandbox escape on {rid}"
     records, incomplete = _records(out)
     if incomplete:
@@ -702,15 +643,8 @@ def container_env(agent: str) -> dict[str, str]:
     return env
 
 
-def derived_records(out: Path) -> list[dict[str, Any]]:
-    """The records with the failure category and the exploration evidence derived from the kept
-    grade fields and streams, not as stored: a canary fix re-renders a finished study without a
-    rerun, and the category keeps one owner (`outcomes.failure_category`). An escape stays an
-    escape — that is the voided-study stop, not a derived value."""
-    return _derive(_records(out, all_agents=True)[0])
-
-
 def _derive(stored: Mapping[Path, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recompute failure categories and exploration from saved evidence, preserving escapes."""
     derived: list[dict[str, Any]] = []
     for result_path, record in stored.items():
         row = dict(record)
@@ -770,22 +704,12 @@ def _records(out: Path, *, all_agents: bool = False) -> tuple[dict[Path, dict[st
     )
 
 
-def _prior_stop(out: Path) -> str | None:
-    records, incomplete = _records(out)
-    if incomplete:
-        return incomplete_message(incomplete, out)
-    for row in records.values():
-        if row.get("failure_category") == "escape":
-            return f"stopped: sandbox escape on {row['run_id']} (recorded earlier)"
-    return None
-
-
 def load_records(out: Path) -> list[dict[str, Any]]:
     return list(_records(out, all_agents=True)[0].values())
 
 
 def load_meta(out: Path) -> dict[str, dict[str, Any]]:
-    return {p.parent.name: json.loads(p.read_text(encoding="utf-8")) for p in sorted(out.glob("*/meta.json"))}
+    return {p.parent.name: _read_meta(p) for p in sorted(out.glob("*/meta.json"))}
 
 
 def source_revision() -> str:
@@ -877,24 +801,29 @@ def meta_for(
     }
 
 
+def _read_meta(path: Path) -> dict[str, Any]:
+    try:
+        stored: object = json.loads(read_artifact(path).decode("utf-8"))
+    except (ValueError, OSError, RecursionError) as error:
+        raise StudyRefusedError(f"Unreadable study metadata at {path}") from error
+    if not isinstance(stored, dict):
+        raise StudyRefusedError(f"Invalid study metadata at {path}")
+    return cast(dict[str, Any], stored)
+
+
 def pin_meta(out: Path, current: Mapping[str, Any], *, check_only: bool = False) -> None:
     """Write the study's meta on its first run; refuse a resume whose pinned fields differ."""
     path = out / "meta.json"
-    if path.exists():
-        try:
-            stored: object = json.loads(path.read_text(encoding="utf-8"))
-        except (ValueError, OSError) as error:
-            raise StudyRefusedError(f"Unreadable study metadata at {path}") from error
-        if not isinstance(stored, dict):
-            raise StudyRefusedError(f"Invalid study metadata at {path}")
-        changed = [key for key in PINNED if key not in current or cast(dict[str, Any], stored).get(key) != current[key]]
+    if path.exists() or path.is_symlink():
+        stored = _read_meta(path)
+        changed = [key for key in PINNED if key not in current or stored.get(key) != current[key]]
         if changed:
             raise StudyRefusedError(
                 f"{out} was recorded under a different {', '.join(changed)}; pairs must not span two setups. "
                 "Move the directory aside to start a new study"
             )
         return
-    if (out / "ledger.json").exists() or any(out.glob("*/result.json")):
+    if (out / "ledger.json").exists() or any(agent_started(run_dir) for run_dir in out.glob("*")):
         raise StudyRefusedError(
             f"{out} contains historical runs without comparable metadata; start a new study directory"
         )

@@ -204,7 +204,8 @@ def test_package_code_runs_without_release_write_permissions() -> None:
     assert executions
     for job in executions:
         assert "contents: read" in job
-        assert ": write" not in job
+        writes = set(re.findall(r"^      (\S+): write", job, re.M))
+        assert writes <= ({"id-token", "attestations"} if "uv build" in job else set())
         assert "persist-credentials: true" not in job
 
 
@@ -234,6 +235,57 @@ def workflow_command(name: str) -> str:
     match = re.search(r"^        run: \|\n((?:          [^\n]*\n|\n)+)", step, re.M)
     assert match
     return textwrap.dedent(match[1])
+
+
+def test_release_verification_installs_locked_runtime_before_wheel(tmp_path: Path) -> None:
+    installed = importlib.metadata.version("jev-judge-mcp")
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    dist(assets, installed, installed)
+    manifest = assets / "SHA256SUMS.txt"
+    files = [*assets.glob("*.whl"), *assets.glob("*.tar.gz")]
+    manifest.write_text("".join(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n" for p in files))
+    python = tmp_path / "python"
+    python.write_text('#!/bin/bash\nexec "$TEST_PYTHON" "$@"\n')
+    python.chmod(0o700)
+    uv = tmp_path / "uv"
+    uv.write_text(
+        "#!/bin/bash\n"
+        'printf "%s\\n" "$(pwd -P): $*" >> "$RUNNER_TEMP/uv-calls"\n'
+        'case "$1" in\n'
+        '  venv) mkdir -p "$4/bin" && cp "$RUNNER_TEMP/python" "$4/bin/python" ;;\n'
+        '  export) printf "runtime==1 --hash=sha256:abc\\n" ;;\n'
+        "  pip) exit 0 ;;\n"
+        "  *) exit 2 ;;\n"
+        "esac\n"
+    )
+    uv.chmod(0o700)
+    result = subprocess.run(
+        ["bash", "-ec", workflow_command("Install the wheel into a fresh venv and check the installed version")],
+        cwd=SCRIPT.parents[1],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "RUNNER_TEMP": str(tmp_path),
+            "GITHUB_WORKSPACE": str(SCRIPT.parents[1]),
+            "BUILT_MANIFEST": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            "TAG": f"v{installed}",
+            "TEST_PYTHON": sys.executable,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    _, *calls = (tmp_path / "uv-calls").read_text().splitlines()
+    python = tmp_path / "verify-venv/bin/python"
+    assert calls == [
+        f"{SCRIPT.parents[1]}: export --frozen --no-dev --no-emit-project",
+        f"{assets.resolve()}: pip install --python {python} --require-hashes -r {tmp_path / 'runtime.txt'}",
+        f"{assets.resolve()}: pip install --python {python} --no-deps ./jev_judge_mcp-{installed}-py3-none-any.whl",
+    ]
+    assert (tmp_path / "runtime.txt").read_text() == "runtime==1 --hash=sha256:abc\n"
+    assert f"release version check passed: {installed}" in result.stdout
 
 
 @pytest.mark.parametrize(

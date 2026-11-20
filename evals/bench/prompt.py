@@ -21,17 +21,13 @@ BENCH_ADDENDUM = (
 also said "do not look for files or other sources"; that sentence suppressed the very tool use arm B
 exists to observe, so it is gone. The question material is still declared complete."""
 JEV_SENTENCE = "Before you answer, call at least one mcp__jev__ tool on this question and use its result."
-JEV_SENTENCE_PI = "Before you answer, call at least one of the jev_ tools on this question and use its result."
-"""The jev server is eager and direct in the bench config, so the published tools (`jev_verify`, ...)
-are already in the model's tool list: C's sentence names them, not the adapter's gateway dance."""
 
 
-def addendum(arm: str, agent: str = "claude") -> str:
+def addendum(arm: str) -> str:
     """A and B share the addendum. C adds the one sentence that tells the agent to call Jev."""
     if arm != "C":
         return BENCH_ADDENDUM
-    sentence = JEV_SENTENCE_PI if agent == "pi" else JEV_SENTENCE
-    return f"{BENCH_ADDENDUM} {sentence}"
+    return f"{BENCH_ADDENDUM} {JEV_SENTENCE}"
 
 
 def _block(title: str, text: object) -> str:

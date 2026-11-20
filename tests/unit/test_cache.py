@@ -14,7 +14,7 @@ import pytest
 
 from jev_judge_mcp import cache
 from jev_judge_mcp.domain import JsonValue, Question, Usage
-from jev_judge_mcp.providers import Evaluation
+from jev_judge_mcp.providers import Evaluation, ProviderName
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import Runtime
 from tests.support.jev import FakeProvider
@@ -414,7 +414,7 @@ async def test_scout_001_never_sweeps_legacy_directory(
     assert len(list(cache_env.iterdir())) == (1 if cap else 2)
 
 
-@pytest.mark.parametrize("identifier,expected_calls", [(None, 1), (42, 2), ("x" * 1025, 2)])
+@pytest.mark.parametrize("identifier,expected_calls", [(None, 1), (42, 2), ("x" * 1025, 2), ("bad\ntrace", 2)])
 async def test_scout_025_validates_legacy_request_ids(cache_env: Path, identifier: object, expected_calls: int) -> None:
     provider = FakeProvider(ANSWERS)
     runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
@@ -431,6 +431,33 @@ async def test_scout_025_validates_legacy_request_ids(cache_env: Path, identifie
     legacy.write_text(json.dumps(record))
     assert (await runtime.ask({}, _question())).request_id is None
     assert len(provider.requests) == expected_calls
+
+
+@pytest.mark.parametrize(
+    ("provider", "recorded_model", "expected"),
+    [
+        ("compatible", "x" * 1025, None),
+        ("cloudflare", "bad\nmodel", None),
+        ("openrouter", "bad\nmodel", None),
+        ("cloudflare", "provider-version", "provider-version"),
+    ],
+    ids=["oversized", "cloudflare-control", "openrouter-control", "valid"],
+)
+def test_legacy_upstream_model_is_bounded_on_replay(
+    cache_env: Path, provider: ProviderName, recorded_model: str, expected: str | None
+) -> None:
+    settings = load_settings()
+    questions = _question()
+    evaluation = Evaluation({}, Usage(1, 1), provider, recorded_model)
+    cache.store(settings, provider, "", "jev-latest", {}, questions, evaluation)
+
+    replayed = cache.lookup(settings, provider, "", "jev-latest", {}, questions)
+
+    if expected is None:
+        assert replayed is None
+    else:
+        assert replayed is not None
+        assert replayed.model == expected
 
 
 async def test_scout_035_each_call_serializes_its_identity_once(

@@ -535,7 +535,6 @@ def test_study_and_bench_time_out_the_same_way(tmp_path: Path) -> None:
     item = load_items(Path(__file__).resolve().parent / "data" / "bench-dryrun.jsonl")[0]
     setup = run.Setup(
         agent=lambda _item, _arm: _sleeper(tmp_path),
-        server=[],
         server_env={},
         base_env={"PATH": "/usr/bin:/bin"},
         secret=KEY,
@@ -615,7 +614,6 @@ def test_a_bench_forced_run_whose_server_is_not_connected_fails(
     item = load_items(Path(__file__).resolve().parent / "data" / "bench-dryrun.jsonl")[0]
     setup = run.Setup(
         agent=lambda _item, _arm: _reporting(servers),
-        server=[],
         server_env={},
         base_env={"PATH": "/usr/bin:/bin"},
         secret=KEY,

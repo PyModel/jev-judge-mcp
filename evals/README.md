@@ -17,7 +17,7 @@ neither lives here.
 | `python -m evals.external.jevbench <checkout>` | none | A8: reads a JevBench checkout's public items as data (sha256-pinned, never executed) and writes `datasets/jevbench-public.jsonl` + its manifest; see § External benchmark |
 | `JEV_AB_LIVE=1 make ab AGENT=claude\|pi` | **live, paid** | L4 agent outcome study (below); writes `reports/agent-outcomes.md`. Runs confined (ADR-0074): broker sidecar + `--network none` agent container, no credential inside. `python -m evals.ab.run --report-only` re-renders it offline |
 | `make confinement-adversarial` | none (fake upstreams) | ADR-0074's Docker-marked adversarial suite and confined stub-agent workflow; skips cleanly without a Docker daemon |
-| `JEV_BENCH_LIVE=1 python -m evals.bench.run` | **live, paid** | The 150-question before/after bench (below). Not wired to any make target; refuses while any item label is not `frozen` |
+| `JEV_BENCH_LIVE=1 python -m evals.bench.run` | saved runs only | Reports saved 150-question bench results. The CLI refuses new runs until a confined launcher exists (ADR-0074). Label validation still requires `frozen` items by default. |
 
 The live runner refuses to start unless `JEV_EVAL_LIVE=1` is in its environment, when the server's
 resolved model is not the manifest's pinned model (`jev-latest` is never a pin), and when cases ×
@@ -194,7 +194,7 @@ call's round trip. Older summaries can undercount `jev_gate_range` actions. Reco
 | `ab/proxy.py` | Recorder on `evals/relay.py`: per `tools/call` round-trip ms, isError, `usage.input_tokens`, action, headline Action, model. Never logs arguments, text, or error messages |
 | `ab/review_server.py` | `request_human_review`, in both arms |
 | `ab/unsafe.py`, `ab/stream.py` | Unsafe-action rules over tool calls; Claude stream-json to frontier calls, context and output tokens (Pi's parser is `bench/pi.py`) |
-| `ab/ledger.py` | One `SpendPolicy` per agent: 66 runs (11 manifest tasks x 2 arms x 3 repeats), 25 USD, checked per pair. Pi's stock worst case is the local loopback model's Jev headroom only; a paid remote pi model refuses without `JEV_AB_RUN_BOUND_USD` (its per-run ceiling, which bounds the pair check). `JEV_AB_MAX_USD` lowers the 25 USD for one invocation (min of the two; a value that is not a finite number >= 0 refuses the run) and the effective cap is persisted in `ledger.json`, so a resume — or a higher value — cannot raise it |
+| `ab/ledger.py` | One `SpendPolicy` per agent: 66 runs (11 manifest tasks x 2 arms x 3 repeats), 25 USD, checked per pair. Pi's stock worst case is the local loopback model's Jev headroom only; a paid remote pi model refuses without `JEV_AB_RUN_BOUND_USD` (its per-run ceiling, which bounds the pair check). `JEV_AB_MAX_USD` can lower the cap to a finite non-negative amount. The effective cap persists in `ledger.json` across resumes, even if the variable is unset or raised |
 | `ab/run.py`, `ab/report.py` | Seeded pair schedule, the runner and its refusals, the pinned-setup guard, and the markdown report |
 
 `JEV_AB_MODEL` selects the pi arm's model (the confined D3 re-run pins
@@ -257,8 +257,8 @@ triplets, committed as a sample; it is not a bench result.
 | `bench/gate.py` | Use gate (a C run needs a successful Jev answer from `jev-1.13.0`; a B run that never calls Jev is "did not call Jev", not a failure), proxy-vs-stream cross-check (an `unanswered` row matches a stream error or a missing result) |
 | `bench/proxy.py` | Bench recorder on the relay: seq, epoch timestamps, arguments and result text (or a JSON-RPC error's message); refuses a run's calls past its own `BENCH_REQUEST_CAP` (25, inside `JEV_RUN_BOUND_USD`; not `make eval-live`'s cap), and every id-less or batched `tools/call` |
 | `bench/spans.py` | Server DEBUG spans to per-call S2-S5 timings, by order only; overlapping calls are unattributed |
-| `bench/stats.py`, `bench/analysis.py` | Exact McNemar and sign tests on `jev_judge_mcp.calibration.bounds`' binomial; complete pairs, early stops; `per_tool`, each tool's own scorer over the wrapped answers of labeled items (in `summary.json`). Screen's primary metric is structurally null there: agent answers carry no injection probability |
-| `bench/ledger.py`, `bench/run.py` | The bench's own `SpendPolicy`: 450 runs / 25 USD of Jev spend, checked per triplet, spent independently of the pilot's; seeded triplet schedule; one-prompt Pi preflight; a provider connection, auth, or rate-limit error stops the run and is not an arm result; the runner and its refusals |
+| `bench/stats.py`, `bench/analysis.py` | Exact sign test for paired wall-time differences using `jev_judge_mcp.calibration.bounds`; complete triplets, early stops; `per_tool`, each tool's own scorer over the wrapped answers of labeled items (in `summary.json`). Screen's primary metric is structurally null there: agent answers carry no injection probability |
+| `bench/ledger.py`, `bench/run.py` | The bench's own `SpendPolicy`: 450 runs / 25 USD of Jev spend, checked per triplet, spent independently of the pilot's; seeded triplet schedule; a provider connection, auth, or rate-limit error stops execution and books the attempt separately from arm results; CLI refusal for pending paid runs (ADR-0074) |
 | `bench/chart.py` | The results view: one self-contained HTML file, inline SVG bars (accuracy, items/min, total wall time) for A, B, and C |
 
 Tests: `tests/evals/test_agent.py` (the shared runner, and the pilot and bench driving it with stand-in

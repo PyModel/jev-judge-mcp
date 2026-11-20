@@ -8,6 +8,7 @@ fact is authored here. `DIVERGENT` is a projection of the registry, and the inte
 
 import json
 from collections.abc import Callable, Mapping
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -161,11 +162,18 @@ def _chain(previous: Expectation) -> Expectation:
     return expect
 
 
+_AUXILIARY_HOLDS = frozenset(
+    next(entry for entry in REGISTRY["divergences"] if entry["id"] == "tool-correctness")["verify_holds"]
+)
+
 for _entry in REGISTRY["divergences"]:
     if _entry["id"] == "program-response-fields":
         for _fid in _entry["fixtures"]:
             _previous = _EXPECTATIONS.get(_fid)
-            _EXPECTATIONS[_fid] = expect_program if _previous is None else _chain(_previous)
+            if _previous is not None:
+                _EXPECTATIONS[_fid] = _chain(_previous)
+            else:
+                _EXPECTATIONS[_fid] = partial(expect_program, verify_hold=_fid in _AUXILIARY_HOLDS)
 
 _UNEXPECTED = sorted(
     {fid for divergence in REGISTRY["divergences"] for fid in divergence["fixtures"]} - _EXPECTATIONS.keys()

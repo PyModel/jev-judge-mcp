@@ -19,7 +19,7 @@ import pytest
 
 from jev_judge_mcp.limits import GATE
 from tests.support.git_repo import commit_files, repo_with_diff, set_config
-from tests.support.jev import call_tool
+from tests.support.jev import NO_DEFECT, call_tool, choice
 
 pytestmark = pytest.mark.anyio
 
@@ -141,6 +141,8 @@ async def test_withheld_files_never_stand_on_a_siblings_judgment(
         "test_gap": {"score": 0, "confidence": 0.95},
         "blast_radius": {"score": 0, "confidence": 0.95},
         "safe_to_apply": {"noul": probability},
+        "defect_kind": NO_DEFECT,
+        "source_0": choice("ci", "ci", "diff_x.py", "none"),
         "claim_0": {
             "choice": "verified",
             "confidence": 0.95,

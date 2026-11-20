@@ -14,14 +14,18 @@ import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from anyio import to_thread
 from mcp.types import CallToolResult, TextContent, Tool
 
+from jev_judge_mcp.credential_literal import redact_credential_literals
+from jev_judge_mcp.errors import Redactor
+from jev_judge_mcp.keyfile import redaction_values
 from jev_judge_mcp.policy.actions import Action
-from jev_judge_mcp.providers import ProviderConfigError, ProviderError, ProviderTimeoutError
+from jev_judge_mcp.providers import ProviderConfigError, ProviderError
 from jev_judge_mcp.serialize import stringify, stringify_compact
 from jev_judge_mcp.telemetry import ACTIONS, CAP_SCOPES, Span
 from jev_judge_mcp.tools.arguments import INVALID_PARAMS, ArgumentParser, ArgumentsError, compile_argument_schema
-from jev_judge_mcp.tools.base import ExtractHeadlines, JevTool, Runtime, ToolError, ToolResult
+from jev_judge_mcp.tools.base import ExtractHeadlines, JevTool, Runtime, ToolError, ToolResult, code_of
 from jev_judge_mcp.validation.caps import CapScope
 
 logger = logging.getLogger("jev_judge_mcp.telemetry")
@@ -38,8 +42,9 @@ class ToolOutcome:
     payload: Mapping[str, object] | None
     text: str
     is_error: bool
-    action: Action | None
+    action: str | None
     error_code: str | None
+    unresolved: bool = True
     item_actions: tuple[Action, ...] = ()
     truncated: frozenset[CapScope] = frozenset()
     extract: ExtractHeadlines | None = None
@@ -106,7 +111,12 @@ class Toolset:
             else:
                 # Tool name only. The traceback is the diagnostic; argument text stays out of the log.
                 logger.exception("tool %s raised", name)
-            return _error_outcome(str(error), code_of(error))
+            code = code_of(error)
+            message = str(error)
+            if code == "internal":
+                secrets = await to_thread.run_sync(redaction_values, self.runtime.settings)
+                message = redact_credential_literals(message, Redactor(secrets))
+            return _error_outcome(message, code)
         span.attributes["outcome"] = "error_payload" if result.is_error else "ok"
         for scope in CAP_SCOPES:
             span.attributes[f"truncated.{scope}"] = scope in result.truncated
@@ -125,35 +135,6 @@ class Toolset:
         await self.runtime.awarm()
 
 
-def code_of(error: BaseException) -> str:
-    """The one error-code mapping. It reads the exception type and status, never the text.
-
-    ProviderConfigError is `auth` for every provider, including a malformed OpenRouter key.
-    A 401 is `auth` and a 429 is `quota` from `ProviderError.status` (ADR-0072). A 400 whose body
-    carried `error_type` `max_tokens_exceeded` is `input_too_large`: the model's context window, which
-    the caller fixes by splitting (ADR-0079). A timeout is
-    `timeout`. Argument errors are `invalid_arguments`. A ToolError carries the code its raise
-    site set. Everything else a provider raised is `provider`.
-    """
-    if isinstance(error, ProviderConfigError):
-        return "auth"
-    if isinstance(error, ProviderTimeoutError):
-        return "timeout"
-    if isinstance(error, ProviderError):
-        if error.status == 401:
-            return "auth"
-        if error.status == 429:
-            return "quota"
-        if error.status == 400 and error.error_type == "max_tokens_exceeded":
-            return "input_too_large"
-        return "provider"
-    if isinstance(error, ArgumentsError):
-        return "invalid_arguments"
-    if isinstance(error, ToolError):
-        return error.code
-    return "provider"
-
-
 def render_call(outcome: ToolOutcome) -> CallToolResult:
     """MCP bytes for an outcome. The first block is `text`, unchanged (ADR-0006, ADR-0062)."""
     if not outcome.is_error:
@@ -162,7 +143,7 @@ def render_call(outcome: ToolOutcome) -> CallToolResult:
             structured_content=None,
             is_error=False,
         )
-    code = outcome.error_code or "provider"
+    code = outcome.error_code or "internal"
     return CallToolResult(
         content=[
             TextContent(type="text", text=outcome.text),
@@ -188,24 +169,13 @@ def _error_outcome(text: str, code: str) -> ToolOutcome:
 
 
 def _from_result(result: ToolResult) -> ToolOutcome:
-    text = stringify(result.payload)
-    if result.is_error:
-        return ToolOutcome(
-            payload=result.payload,
-            text=text,
-            is_error=True,
-            action=result.action,
-            error_code=result.error_code or "provider",
-            item_actions=result.item_actions,
-            truncated=result.truncated,
-            extract=result.extract,
-        )
     return ToolOutcome(
         payload=result.payload,
-        text=text,
-        is_error=False,
-        action=result.action,
-        error_code=None,
+        text=stringify(result.payload),
+        is_error=result.is_error,
+        action=result.decision_action,
+        error_code=(result.error_code or "internal") if result.is_error else None,
+        unresolved=result.is_error or result.decision_unresolved,
         item_actions=result.item_actions,
         truncated=result.truncated,
         extract=result.extract,

@@ -7,12 +7,13 @@ import signal
 import subprocess
 import time
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from typing import IO, cast
 
 from jev_judge_mcp.domain import is_json_object
 from jev_judge_mcp.install.launch import SERVER_NAME
+from jev_judge_mcp.install.redact import redact_diagnostic
 from jev_judge_mcp.tools import TOOLS
 
 EXPECTED_TOOLS: tuple[str, ...] = tuple(tool.name for tool in TOOLS)
@@ -31,6 +32,7 @@ class VerifyError(Exception):
     """The server did not answer the install check. The message has no secrets."""
 
 
+STDERR_CAPTURE_BYTES = 16 * 1024
 STDOUT_LINE_BYTES = 1024 * 1024
 STDOUT_TOTAL_BYTES = 4 * STDOUT_LINE_BYTES
 STDOUT_MESSAGES = 256
@@ -62,10 +64,16 @@ class _Output:
     def _stderr(self, chunk: bytes) -> None:
         parts = chunk.split(b"\n")
         for i, part in enumerate(parts):
-            self.stderr.extend(part[: STDERR_LINE_LIMIT - len(self.stderr)])
+            self.stderr.extend(part[: STDERR_CAPTURE_BYTES + 1 - len(self.stderr)])
             if i < len(parts) - 1:
-                self.tail.append(self.stderr.decode("utf-8", errors="replace").rstrip("\r"))
-                self.stderr.clear()
+                self._save_stderr_line()
+
+    def _save_stderr_line(self) -> None:
+        if len(self.stderr) > STDERR_CAPTURE_BYTES:
+            self.tail.append("[oversized stderr line omitted]")
+        else:
+            self.tail.append(self.stderr.decode("utf-8", errors="replace").rstrip("\r"))
+        self.stderr.clear()
 
     def read(self, timeout: float, *, finishing: bool = False) -> None:
         for key, _events in self.selector.select(timeout):
@@ -107,16 +115,17 @@ class _Output:
         while self.selector.get_map() and time.monotonic() < deadline:
             self.read(max(0, deadline - time.monotonic()), finishing=True)
 
-    def finish(self) -> str:
+    def finish(self, secrets: Sequence[str]) -> str:
         # Read remaining pipe bytes after reaping, even if a descendant kept a pipe open.
         self.drain(0.2)
         if self.stderr:
-            self.tail.append(self.stderr.decode("utf-8", errors="replace"))
-        lines = [f"  {line}" for line in self.tail if line]
+            self._save_stderr_line()
+        safe = redact_diagnostic("\n".join(self.tail), secrets) if any(self.tail) else ""
+        lines = ["  " + line.encode()[:STDERR_LINE_LIMIT].decode(errors="ignore") for line in safe.splitlines() if line]
         return "the child's stderr, last lines:\n" + "\n".join(lines) if lines else ""
 
 
-def verify_command(command: list[str], *, timeout: float = 30.0) -> None:
+def verify_command(command: list[str], *, timeout: float = 30.0, secrets: Sequence[str] = ()) -> None:
     """Speak MCP over stdio, with one deadline for the handshake."""
     with (
         selectors.DefaultSelector() as selector,
@@ -154,15 +163,16 @@ def verify_command(command: list[str], *, timeout: float = 30.0) -> None:
                     with suppress(subprocess.TimeoutExpired):
                         process.wait(timeout=1)
             finally:
-                if process.returncode is None:
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except (ProcessLookupError, PermissionError):
-                        # Darwin can return EPERM for an exited process group. Popen checks its child before signaling.
-                        process.kill()
-                    process.wait()
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    # Darwin can return EPERM for an exited process group.
+                    process.kill()
+                process.wait()
         if error:
-            suffix = output.finish() if output is not None and not isinstance(error, _OutputLimit) else ""
+            suffix = output.finish(secrets) if output is not None and not isinstance(error, _OutputLimit) else ""
             raise VerifyError(f"{error}; {suffix}" if suffix else str(error))
 
 
@@ -202,8 +212,7 @@ def _send(stdin: IO[bytes], message: Mapping[str, object]) -> None:
 
 
 def _read_response(reader: _Output, request_id: int, deadline: float) -> dict[str, object]:
-    # A line that is not our reply (a notification, a log) is ignored until the id matches.
-    # The body is never returned to the caller, so a secret in it cannot reach the summary.
+    # Only a response envelope can complete a request. Diagnostics exclude its body.
     while time.monotonic() < deadline:
         line = reader.line(deadline)
         if line is None:
@@ -212,9 +221,16 @@ def _read_response(reader: _Output, request_id: int, deadline: float) -> dict[st
             parsed: object = json.loads(line)
         except (ValueError, RecursionError):
             continue
-        if not is_json_object(parsed) or parsed.get("id") != request_id:
+        if (
+            not is_json_object(parsed)
+            or parsed.get("jsonrpc") != "2.0"
+            or "method" in parsed
+            or ("result" in parsed) == ("error" in parsed)
+            or type(parsed.get("id")) is not int
+            or parsed["id"] != request_id
+        ):
             continue
-        if parsed.get("error") is not None:
+        if "error" in parsed:
             raise VerifyError("server returned an error")
         result = parsed.get("result")
         if not is_json_object(result):

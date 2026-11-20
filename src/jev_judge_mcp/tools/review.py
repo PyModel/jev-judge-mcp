@@ -7,14 +7,13 @@ Both are re-exported here for their callers.
 
 from typing import Any
 
-from jev_judge_mcp.gate_diagnostics import input_cuts, review_blockers
+from jev_judge_mcp.gate_diagnostics import input_cuts
 from jev_judge_mcp.limits import REVIEW
 from jev_judge_mcp.responses import SCORE_SCALE
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
 from jev_judge_mcp.tools.files import FileListReview, combined, file_list_refusal, file_patches, review_file_list
-from jev_judge_mcp.tools.observed import (
-    file_list_action,
-)
+from jev_judge_mcp.tools.gate_evidence import add_citations, grounded_review
+from jev_judge_mcp.tools.observed import file_list_action
 from jev_judge_mcp.tools.review_half import (
     ANTI_INJECTION,
     RUBRICS,
@@ -73,11 +72,6 @@ DEFINITION = define(
                 ],
             },
             "tests": {"type": "string", "description": "Reported test output, if any. Truncated at the same cap."},
-            "tests_format": {"type": "string", "description": "text, junit, or tap. Omitted text is self-reported."},
-            "tests_sha256": {
-                "type": "string",
-                "description": "Hash of a tests log the caller read. Unhashed text is self-reported.",
-            },
             "auto_accept": {
                 "type": "number",
                 "minimum": 0,
@@ -119,12 +113,15 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         "diff": docs.diff,
         "tests": docs.tests,
     }
-    evaluation = await runtime.ask(state, review_questions())
+    questions = review_questions()
+    citations = add_citations(state, questions, [{"id": "diff", "kind": "diff", "text": docs.diff}])
+    evaluation = await runtime.ask(state, questions)
     review = project_review(evaluation.answers, settings, truncated)
+    review, blockers = grounded_review(review, evaluation.answers, citations, settings.thresholds.auto_accept)
     if review.action != "auto":
         cuts = input_cuts(args, [], REVIEW.doc_units) if truncated else []
-        review.payload["blockers"] = [*review_blockers(review.payload), *cuts]
-    if docs.tests and not args.get("tests_sha256"):
+        review.payload["blockers"] = [*blockers, *cuts]
+    if docs.tests:
         review.payload["tests_weight"] = "self_reported"
     return ToolResult(
         frame(
@@ -155,6 +152,8 @@ async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: Re
             "score_scale": list(SCORE_SCALE),
             "blockers": reviewed.blockers,
         }
+        if args.get("tests"):
+            payload["tests_weight"] = "self_reported"
         return ToolResult(frame("jev_review", None, payload, model=runtime.model), action="review")
     action = file_list_action([half.action for half in reviewed.halves], bool(reviewed.unreviewed))
     # `truncated` reports cuts, as the string path's does; an unreviewed file is `partial`, not a cut.
@@ -164,7 +163,7 @@ async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: Re
     if action != "auto":
         cuts = input_cuts(args, [], REVIEW.doc_units) if reviewed.truncated else []
         payload["blockers"] = [*reviewed.blockers, *cuts]
-    if reviewed.unhashed_tests:
+    if args.get("tests"):
         payload["tests_weight"] = "self_reported"
     return ToolResult(
         frame("jev_review", combined(reviewed.evaluations), payload), action=action, truncated=reviewed.scopes

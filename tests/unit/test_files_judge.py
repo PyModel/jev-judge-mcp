@@ -18,7 +18,7 @@ from mcp.types import TextContent
 
 from jev_judge_mcp.domain import JsonValue, Usage
 from jev_judge_mcp.limits import FILES_JUDGE
-from jev_judge_mcp.providers import Evaluation, ProviderConfigError
+from jev_judge_mcp.providers import Evaluation, ProviderConfigError, ProviderError
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from jev_judge_mcp.tools.files_judge import plan
@@ -247,7 +247,7 @@ class CountingProvider(FakeProvider):
         try:
             await asyncio.sleep(0.01)
             if self.fail and self.fail in path:
-                raise RuntimeError("the provider is down")
+                raise ProviderError("the provider is down")
             return Evaluation(dict(PERMISSIVE), Usage(1, 1), self.name, model)
         finally:
             self.in_flight -= 1
@@ -278,28 +278,38 @@ async def test_the_fan_out_is_bounded_by_the_inflight_cap(tmp_path: Path, monkey
 
 
 @pytest.mark.anyio
-async def test_without_a_cap_the_calls_overlap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    for index in range(4):
+async def test_the_default_fan_out_caps_twenty_provider_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    for index in range(20):
         make(tmp_path / f"f{index}.txt")
     monkeypatch.chdir(tmp_path)
     provider = CountingProvider()
     result = await call_batch(provider)
     assert not result.is_error
-    assert provider.max_in_flight == 4
+    assert provider.max_in_flight == 8
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("all_fail", [False, True], ids=["partial", "all-fail"])
 async def test_a_per_file_failure_is_a_skip_that_keeps_the_batch_and_the_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, all_fail: bool
 ) -> None:
     make(tmp_path / "a_fails.txt")
     make(tmp_path / "b_ok.txt")
     make(tmp_path / "c_ok.txt")
     monkeypatch.chdir(tmp_path)
-    provider = CountingProvider(fail="a_fails")
+    provider = CountingProvider(fail=".txt" if all_fail else "a_fails")
     result = await call_batch(provider)
     assert not result.is_error
     payload = json.loads(result.content[0].text)
+    assert payload["provider"] == "compatible"
+    if all_fail:
+        assert payload["results"] == []
+        assert payload["skipped"] == [
+            {"path": path, "reason": "call_failed:provider"} for path in ("a_fails.txt", "b_ok.txt", "c_ok.txt")
+        ]
+        assert payload["calls"] == 3
+        assert payload["usage"] is None
+        return
     assert [row["path"] for row in payload["results"]] == ["b_ok.txt", "c_ok.txt"]
     assert payload["skipped"] == [{"path": "a_fails.txt", "reason": "call_failed:provider"}]
     assert payload["calls"] == 3

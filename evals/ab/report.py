@@ -125,10 +125,6 @@ def pair_exclusion(arms: Mapping[str, Record]) -> str | None:
     return "; ".join(reasons) or None
 
 
-def measured_pairs(records: Sequence[Record]) -> dict[tuple[str, str, int], Pair]:
-    return {key: (arms["A"], arms["B"]) for key, arms in pairs(records).items() if pair_exclusion(arms) is None}
-
-
 def _num(value: float) -> str:
     return f"{value:.1f}" if abs(value) < 1000 else f"{value:.0f}"
 
@@ -404,8 +400,14 @@ def _runs_table(runs: Sequence[Record]) -> list[str]:
 
 def agent_section(agent: str, records: Sequence[Record], meta: Mapping[str, Any]) -> list[str]:
     grouped = {key: arms for key, arms in pairs(records).items() if key[0] == agent}
-    measured = [(arms["A"], arms["B"]) for arms in grouped.values() if pair_exclusion(arms) is None]
-    excluded = {key: pair_exclusion(arms) for key, arms in grouped.items() if pair_exclusion(arms) is not None}
+    measured: list[Pair] = []
+    excluded: Counter[str] = Counter()
+    for arms in grouped.values():
+        reason = pair_exclusion(arms)
+        if reason is None:
+            measured.append((arms["A"], arms["B"]))
+        else:
+            excluded[reason] += 1
     lines = [f"## {agent}", ""]
     if meta:
         lines += [
@@ -417,9 +419,8 @@ def agent_section(agent: str, records: Sequence[Record], meta: Mapping[str, Any]
         ]
     lines += [f"Runs recorded: {len(records)}. Pairs: {len(grouped)}. Measured pairs: {len(measured)}.", ""]
     if excluded:
-        counts = Counter(str(reason) for reason in excluded.values())
         lines += ["Excluded pairs (not evidence of any Jev effect):", ""]
-        lines += [f"- {count} x {reason}" for reason, count in counts.most_common()]
+        lines += [f"- {count} x {reason}" for reason, count in excluded.most_common()]
         lines.append("")
     if not measured:
         lines += [

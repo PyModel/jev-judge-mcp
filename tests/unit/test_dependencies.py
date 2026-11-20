@@ -1,9 +1,15 @@
 """The third-party `regex` module stays out: stdlib `re` is the ADR-0004 engine (ADR-0018)."""
 
 import ast
+import os
 import re
+import shlex
+import shutil
+import subprocess
 import tomllib
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -51,3 +57,84 @@ def test_roadmap_mcp_row_quotes_the_pyproject_pin() -> None:
         if line.startswith("| MCP |")
     )
     assert f"`{pin}`" in row
+
+
+def test_confinement_image_stages_a_fresh_wheel_and_locked_typesafe_runtime(tmp_path: Path) -> None:
+    shutil.copy(ROOT / "Makefile", tmp_path)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    stale = dist / "jev_judge_mcp-old.whl"
+    stale.touch()
+    uv = tmp_path / "uv"
+    uv.write_text(
+        "#!/bin/bash\n"
+        'case "$1" in\n'
+        "  build) shift; out=dist; while [[ $# -gt 0 ]]; do\n"
+        '    if [[ "$1" == --out-dir ]]; then out=$2; shift; fi; shift; done\n'
+        '    touch "$out/jev_judge_mcp-current.whl" ;;\n'
+        '  export) printf "%s\\n" "$*" > export-args; printf "typesafe-sdk==1 --hash=sha256:abc\\n" ;;\n'
+        "  *) exit 2 ;;\n"
+        "esac\n"
+    )
+    docker = tmp_path / "docker"
+    docker.write_text(
+        '#!/bin/bash\nfor context in "$@"; do :; done\necho "$context" > context\n'
+        'find "$context" -maxdepth 1 -type f -exec basename {} \\; > inputs\n'
+        'if [[ -f "$context/requirements.txt" ]]; then cat "$context/requirements.txt" > requirements; fi\n'
+    )
+    for stub in (uv, docker):
+        stub.chmod(0o700)
+    result = subprocess.run(
+        ["make", "confinement-image"],
+        cwd=tmp_path,
+        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "TMPDIR": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert set((tmp_path / "inputs").read_text().splitlines()) == {"jev_judge_mcp-current.whl", "requirements.txt"}
+    assert (tmp_path / "export-args").read_text().split() == [
+        "export",
+        "--frozen",
+        "--no-dev",
+        "--no-emit-project",
+        "--extra",
+        "typesafe",
+    ]
+    assert (tmp_path / "requirements").read_text() == "typesafe-sdk==1 --hash=sha256:abc\n"
+    assert stale.exists()
+    assert not Path((tmp_path / "context").read_text().strip()).exists()
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_confinement_install_consumes_one_wheel_and_locked_requirements(tmp_path: Path, count: int) -> None:
+    dockerfile = (ROOT / "docker/eval-agent.Dockerfile").read_text()
+    before, command = dockerfile.rsplit("\nRUN ", 1)
+    copy = next(line for line in reversed(before.splitlines()) if line.startswith("COPY "))
+    destination = shlex.split(copy)[-1].rstrip("/")
+    (tmp_path / "requirements.txt").write_text("typesafe-sdk==1 --hash=sha256:abc\n")
+    for i in range(count):
+        (tmp_path / f"jev_judge_mcp-0.{i}-py3-none-any.whl").touch()
+    result = subprocess.run(
+        [
+            "sh",
+            "-ec",
+            'pip() { printf "pip %s\\n" "$*"; }; python3() { printf "python3 %s\\n" "$*"; };\n'
+            + command.replace(destination, str(tmp_path)),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    if count != 1:
+        assert result.returncode != 0
+        assert not result.stdout
+        return
+    assert result.returncode == 0, result.stderr
+    runtime, package, check = result.stdout.splitlines()
+    assert "--require-hashes" in runtime.split() and runtime.endswith(f"-r {tmp_path / 'requirements.txt'}")
+    assert "--no-deps" in package.split() and package.endswith("jev_judge_mcp-0.0-py3-none-any.whl")
+    assert check.startswith("python3 -c import jev_judge_mcp")

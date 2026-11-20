@@ -28,7 +28,7 @@ from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import FILE_JUDGE, FILES_JUDGE
 from jev_judge_mcp.providers import Evaluation, ProviderConfigError
-from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
+from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, code_of, define, frame
 from jev_judge_mcp.tools.file_judge import (
     KIND_REFINEMENT,
     KINDS,
@@ -39,7 +39,6 @@ from jev_judge_mcp.tools.file_judge import (
 )
 from jev_judge_mcp.tools.file_state import pinned_directory, read_state, resolve_scoped
 from jev_judge_mcp.tools.files import combined
-from jev_judge_mcp.tools.toolset import code_of
 
 logger = logging.getLogger(__name__)
 
@@ -511,9 +510,10 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     async def judge(index: int) -> None:
         path_text, content = survivors[index]
         try:
-            evaluations[index] = await runtime.ask(
-                {"path": redact_credential_literals(path_text, redact), "content": content}, {QUESTION_ID: question}
-            )
+            async with runtime.file_fanout:
+                evaluations[index] = await runtime.ask(
+                    {"path": redact_credential_literals(path_text, redact), "content": content}, {QUESTION_ID: question}
+                )
         except ProviderConfigError as error:
             # The server cannot ask at all — not a per-file failure. Cancel the siblings and re-raise
             # outside the group, so the kernel's `auth` refusal keeps its code (the raw group would
@@ -523,9 +523,6 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         except Exception as error:  # a per-file failure is a skip, never a batch error (ADR-0077)
             failures.append((index, {"path": path_text, "reason": f"call_failed:{code_of(error)}"}))
 
-    # One call per surviving file; the ADR-0069 in-flight cap in `runtime.ask` bounds the overlap
-    # (the semaphore and the provider resolution it fronts are built synchronously, so concurrent
-    # first calls cannot double-construct it).
     async with anyio.create_task_group() as task_group:
         for index in range(len(survivors)):
             task_group.start_soon(judge, index)
@@ -550,7 +547,16 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         "skipped": skipped + [record for _, record in sorted(failures)],
         "calls": len(survivors),
     }
-    return ToolResult(frame("jev_files_judge", combined(asked) if asked else None, body))
+    return ToolResult(
+        frame(
+            "jev_files_judge",
+            combined(asked) if asked else None,
+            body,
+            model=runtime.model,
+            provider=runtime.provider_name if survivors else "none",
+        ),
+        unresolved=not results or any(result["status"] != "ok" for result in results),
+    )
 
 
 TOOL = JevTool(DEFINITION, handle, {"kind": KIND_REFINEMENT})

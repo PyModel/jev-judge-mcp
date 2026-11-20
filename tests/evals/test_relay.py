@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -105,7 +106,9 @@ def _reap(pid_path: Path) -> None:
         pass
 
 
-def _run_until_dead(argv: list[str], server_source: str, messages: list[Any], pid_path: Path) -> tuple[str, str]:
+def _run_until_dead(
+    argv: list[str], server_source: str, messages: list[Any], pid_path: Path, *, stderr: int = subprocess.PIPE
+) -> tuple[str, str]:
     """Run a relay until it exits. Returns stderr and the log text captured at SIGTERM."""
     server = pid_path.with_name("server.py")
     marker = pid_path.with_name("at-term.txt")
@@ -114,7 +117,7 @@ def _run_until_dead(argv: list[str], server_source: str, messages: list[Any], pi
         argv,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=stderr,
         cwd=REPO,
     )
     try:
@@ -125,7 +128,7 @@ def _run_until_dead(argv: list[str], server_source: str, messages: list[Any], pi
                     _out, err = proc.communicate(timeout=1)
                 except subprocess.TimeoutExpired as exc:
                     err = exc.stderr or b""
-                raise AssertionError(f"proxy exited before the server wrote its pid\n{err.decode()}")
+                raise AssertionError(f"proxy exited before the server wrote its pid\n{(err or b'').decode()}")
             if time.monotonic() > deadline:
                 raise AssertionError("server pid was never written")
             time.sleep(0.02)
@@ -136,11 +139,15 @@ def _run_until_dead(argv: list[str], server_source: str, messages: list[Any], pi
             _out, err = proc.communicate(timeout=30)
         except subprocess.TimeoutExpired as exc:
             raise AssertionError(f"relay did not exit\n{(exc.stderr or b'').decode()}") from exc
+        assert proc.returncode != 0
         captured = marker.read_text(encoding="utf-8") if marker.exists() else ""
-        return err.decode(), captured
+        return (err or b"").decode(), captured
     finally:
         if proc.poll() is None:
             proc.kill()
+            for pipe in (proc.stdin, proc.stdout, proc.stderr):
+                if pipe is not None:
+                    pipe.close()
             proc.wait(timeout=5)
         _reap(pid_path)
 
@@ -427,7 +434,26 @@ def test_response_raise_logs_the_recorders_unanswered_row_and_kills_the_child(pr
         _reap(pid)
 
 
-def test_recorder_close_raise_writes_fallback_rows_and_kills_the_child(tmp_path: Path) -> None:
+@pytest.fixture(params=[False, True], ids=["drained-stderr", "full-unread-stderr"])
+def relay_stderr(request: pytest.FixtureRequest) -> Iterator[int]:
+    if not request.param:
+        yield subprocess.PIPE
+        return
+    reader, writer = os.pipe()
+    try:
+        os.set_blocking(writer, False)
+        for chunk in (b"x" * 512, b"x"):
+            with pytest.raises(BlockingIOError):
+                while True:
+                    os.write(writer, chunk)
+        os.set_blocking(writer, True)
+        yield writer
+    finally:
+        os.close(writer)
+        os.close(reader)
+
+
+def test_recorder_close_raise_writes_fallback_rows_and_kills_the_child(tmp_path: Path, relay_stderr: int) -> None:
     """recorder.close also raises. The call it did not log is a fallback row, and seq does not collide."""
     log = tmp_path / "calls.jsonl"
     pid = tmp_path / "server.pid"
@@ -441,6 +467,7 @@ def test_recorder_close_raise_writes_fallback_rows_and_kills_the_child(tmp_path:
                 _tools_call(2, {"name": "jev_screen", "arguments": {"k": 2}}),
             ],
             pid,
+            stderr=relay_stderr,
         )
         rows = _rows(at_term)
         assert {row["tool"] for row in rows} == {"jev_verify", "jev_screen"}
@@ -501,7 +528,10 @@ def test_scout_022_idle_client_survives_but_outstanding_request_expires(tmp_path
             assert proxy.stdin is not None
             proxy.stdin.write((json.dumps(_call(1)) + "\n").encode())
             proxy.stdin.flush()
-            assert proxy.wait(timeout=4) != 0
+            # Keep client input open while communicate drains both output pipes.
+            with os.fdopen(os.dup(proxy.stdin.fileno()), "wb"):
+                proxy.communicate(timeout=4)
+            assert proxy.returncode != 0
             assert json.loads(marker.read_text())["unanswered"] is True
             _assert_dead(pid)
         finally:

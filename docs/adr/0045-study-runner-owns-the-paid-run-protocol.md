@@ -19,3 +19,19 @@ ADR-0026 put the agent run, the relay, and the spend ledger in one place each, a
 - An interruption between result publication and ledger booking preserves the same charge on recovery. Bench grading failures record unknown spend as `null`. On recovery, older grading failures with a placeholder zero reserve the run bound.
 - No parity surface. `evals/relay.py` and `evals/agent.py` are unchanged.
 - This amends ADR-0026: the protocol around the shared agent run and ledger has one owner. Grading, gates, and the fields inside a row stay in each caller.
+
+## Amendment 2026-11-19: account for a launch before capture finishes
+
+- Both agent launchers durably publish `agent.started` before capture, syncing the marker and
+  its directory entries. A crash after that handoff leaves a chargeable attempt even if the
+  transcript never appears. Recovery still recognizes transcripts and results from older runs.
+- Both studies use `study_runner` to recover a started attempt once and exclude it from scheduling.
+  A validated result supplies the selected finite charge, including a measured zero. A missing
+  charge reserves the bound. An invalid result reserves at least the bound and can only raise
+  that amount with a finite charge whose run ID matches the attempt. Existing bookings below
+  the charge supported by a valid result stop the study for reconciliation.
+- An infrastructure stop carries a measured charge when one is available. Otherwise the runner
+  uses the saved result or the bound after launch, and leaves failures before the launch handoff
+  unbooked. It stops without synthesizing an agent failure. A/B failure records use `null` for
+  unmeasured Jev spend.
+- A/B reads pinned metadata for resume and reporting through the bounded artifact reader.

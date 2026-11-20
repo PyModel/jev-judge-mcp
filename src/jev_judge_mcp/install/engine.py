@@ -7,15 +7,16 @@ from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from jev_judge_mcp.credential_literal import redact_credential_literals
+from jev_judge_mcp.domain import is_json_object
 from jev_judge_mcp.install.documents import (
+    codex_entry_path,
+    codex_headings_preserved,
     json_entry_path,
-    read_codex_entry,
+    read_codex,
     read_entry,
-    read_text,
     remove_codex,
     remove_json,
     render_codex,
@@ -31,11 +32,13 @@ from jev_judge_mcp.install.fs import (
     load_targets,
     mode_is_loose,
     ownership_key,
+    prune_backups,
     read_bytes,
     state_lock,
     write_backup,
     write_state,
 )
+from jev_judge_mcp.install.jsonedit import check_path, loads, preserved_comments
 from jev_judge_mcp.install.launch import (
     PACKAGE,
     Launch,
@@ -43,6 +46,7 @@ from jev_judge_mcp.install.launch import (
     claude_desktop_entry,
     codex_entry,
     cursor_entry,
+    installed_version,
     omp_entry,
     opencode_entry,
     pi_entry,
@@ -58,7 +62,8 @@ from jev_judge_mcp.install.layout import (
     pythinker_desktop_installed,
     running_on_macos,
 )
-from jev_judge_mcp.install.redact import holds_literal, redact_text
+from jev_judge_mcp.install.redact import holds_literal, redact_diagnostic, redact_text
+from jev_judge_mcp.install.values import is_json_array
 
 TARGETS: tuple[str, ...] = (
     "claude-code",
@@ -71,10 +76,6 @@ TARGETS: tuple[str, ...] = (
     "pythinker",
 )
 _NAME = re.compile(r"[A-Za-z0-9._-]+")
-
-
-def _empty_bins() -> dict[str, bool]:
-    return {}
 
 
 _CHECKS: dict[str, str] = {
@@ -103,7 +104,7 @@ class Request:
     desktop_key: str | None = None
     secrets: tuple[str, ...] = ()
     platform: str = "darwin"
-    bins: Mapping[str, bool] = field(default_factory=_empty_bins)
+    bins: Mapping[str, bool] = field(default_factory=dict[str, bool])
     key_in_environment: bool = False
     confirmer: Callable[[str], bool] | None = None
     chooser: Callable[[str], tuple[str, ...]] | None = None
@@ -347,8 +348,11 @@ def _plan(request: Request, target: str, hits: list[_Hit], targets: Mapping[str,
             False,
         )
     try:
-        current, servers, text, before = _load(target, path, request.name)
-        note = _other_servers(servers, request.name)
+        before = read_bytes(path)
+        text = before.decode("utf-8-sig") if before is not None else ""
+        document, entry_path = _parse_config(target, text, request.name)
+        current = read_entry(document, entry_path)
+        note = _other_servers(server_map(document, entry_path), request.name)
         desired = _desired(target, request.launch, literal_key)
         record = targets.get(ownership_key(targets, target, path, request.name), {})
         if record and (record["name"] != request.name or record["path"] != str(path.absolute())):
@@ -360,6 +364,8 @@ def _plan(request: Request, target: str, hits: list[_Hit], targets: Mapping[str,
         elif target == "claude-desktop" and literal_key is None and not request.remove:
             return _Action(target, path, "skip", "needs --desktop-key before the key is written", False, True)
         action = _classify(request, target, path, current, desired, recorded, text, before)
+        if action.after is not None:
+            _check_render(target, request.name, text, action.after, document, entry_path, action.entry)
         if (
             action.kind == "up to date"
             and request.verify is not None
@@ -435,89 +441,95 @@ def _classify(
     text: str,
     before: bytes | None,
 ) -> _Action:
+    owned = current is not None and recorded is not None and recorded == entry_hash(current)
     if request.remove:
-        if current is None:
-            return _Action(target, path, "skip", "no entry to remove", False, True, before)
-        if recorded is not None and recorded == entry_hash(current):
-            after = _render_remove(target, text, request.name)
-            return _Action(
-                target,
-                path,
-                "remove",
-                "",
-                False,
-                True,
-                before,
-                after,
-                None,
-                False,
-                _diff(path, text, after, request.secrets),
-            )
-        return _Action(target, path, "skip", "left foreign entry", False, True, before)
-
-    if current is None:
-        after = _render_set(target, text, request.name, desired)
-        return _Action(
-            target,
-            path,
-            "add",
-            "",
-            False,
-            True,
-            before,
-            after,
-            desired,
-            False,
-            _diff(path, text, after, request.secrets),
-        )
-    if _same(current, desired):
-        return _Action(target, path, "up to date", "", False, True, before, None, current)
-    if recorded is not None and recorded == entry_hash(current):
-        after = _render_set(target, text, request.name, desired)
-        return _Action(
-            target,
-            path,
-            "update",
-            "",
-            True,
-            True,
-            before,
-            after,
-            desired,
-            False,
-            _diff(path, text, after, request.secrets),
-        )
-    if request.force:
-        after = _render_set(target, text, request.name, desired)
-        return _Action(
-            target,
-            path,
-            "update",
-            "replacing foreign entry",
-            True,
-            True,
-            before,
-            after,
-            desired,
-            False,
-            _diff(path, text, after, request.secrets),
-        )
-    return _Action(target, path, "skip", "foreign entry (use --force)", False, True, before, None, current)
+        if not owned:
+            reason = "no entry to remove" if current is None else "left foreign entry"
+            return _Action(target, path, "skip", reason, False, True, before)
+        kind, after, entry = "remove", _render_remove(target, text, request.name), None
+    else:
+        if current is not None and _same(current, desired):
+            return _Action(target, path, "up to date", "", False, True, before, None, current)
+        if current is not None and not (owned or request.force):
+            return _Action(target, path, "skip", "foreign entry (use --force)", False, True, before, None, current)
+        kind = "add" if current is None else "update"
+        after, entry = _render_set(target, text, request.name, desired), desired
+    message = "replacing foreign entry" if kind == "update" and not owned else ""
+    return _Action(
+        target,
+        path,
+        kind,
+        message,
+        kind == "update",
+        True,
+        before,
+        after,
+        entry,
+        False,
+        _diff(path, text, after, request.secrets),
+    )
 
 
-def _load(target: str, path: Path, name: str) -> tuple[dict[str, object] | None, dict[str, object], str, bytes | None]:
-    before = read_bytes(path)
-    if before is None:
-        return None, {}, "", None
-    # utf-8-sig drops a leading BOM (files authored on, or copied from, Windows carry one); the
-    # rewritten file simply no longer has it.
-    text = before.decode("utf-8-sig")
+def _parse_config(target: str, text: str, name: str) -> tuple[dict[str, object], list[str]]:
     if target == "codex":
-        entry, servers = read_codex_entry(text, name)
-        return entry, servers, text, before
-    document = read_text(text)
-    path_keys = json_entry_path(target, document, name)
-    return read_entry(document, path_keys), server_map(document, path_keys), text, before
+        document = read_codex(text)
+        return document, codex_entry_path(document, name)
+    document = loads(text)
+    path = json_entry_path(target, document, name)
+    assert is_json_object(document)
+    check_path(text, path)
+    return document, path
+
+
+def _check_render(
+    target: str,
+    name: str,
+    before: str,
+    after: str,
+    expected: dict[str, object],
+    path: list[str],
+    entry: dict[str, object] | None,
+) -> None:
+    try:
+        actual, actual_path = _parse_config(target, after, name)
+        if actual_path != path or not _same_value(read_entry(actual, path), entry):
+            raise ConfigShapeError("the requested entry was not rendered")
+        parent = expected
+        for key in path[:-1]:
+            nested = parent.setdefault(key, {})
+            assert is_json_object(nested)
+            parent = nested
+        if entry is None:
+            parent.pop(path[-1])
+        else:
+            parent[path[-1]] = entry
+        if not _same_value(actual, expected):
+            raise ConfigShapeError("unrelated config values changed")
+        if target == "codex":
+            if not codex_headings_preserved(before, after, name):
+                raise ConfigShapeError("unrelated TOML table headings changed")
+        else:
+            if preserved_comments(before, path) != preserved_comments(after, path):
+                raise ConfigShapeError("unrelated JSONC comments changed")
+            if "\r\n" in before and "\n" not in before.replace("\r\n", "") and "\n" in after.replace("\r\n", ""):
+                raise ConfigShapeError("the JSONC newline style changed")
+    except (ConfigParseError, ConfigShapeError, RecursionError) as exc:
+        reason = str(exc) if isinstance(exc, (ConfigParseError, ConfigShapeError)) else "nesting is too deep"
+        raise ConfigShapeError(
+            f"rendered config failed validation ({reason}); inspect the config before retrying"
+        ) from exc
+
+
+def _same_value(left: object, right: object) -> bool:
+    if type(left) is not type(right):
+        return False
+    if is_json_object(left) and is_json_object(right):
+        return left.keys() == right.keys() and all(_same_value(left[key], right[key]) for key in left)
+    if is_json_array(left) and is_json_array(right):
+        return len(left) == len(right) and all(_same_value(a, b) for a, b in zip(left, right, strict=True))
+    if isinstance(left, float):
+        return repr(left) == repr(right)
+    return left == right
 
 
 def _render_set(target: str, text: str, name: str, entry: Mapping[str, object]) -> str:
@@ -597,7 +609,7 @@ def _record(request: Request, action: _Action) -> dict[str, object]:
     return {
         "path": str(action.path.absolute()),
         "name": request.name,
-        "installer_version": _version(),
+        "installer_version": installed_version(),
         "entry_sha256": entry_hash(action.entry),
     }
 
@@ -622,11 +634,12 @@ def _apply(request: Request, actions: list[_Action], targets: dict[str, dict[str
     # would land in the state file stops the install while no config has been touched.
     _refuse_secret({"targets": _planned_targets(request, actions, targets)}, request.secrets)
     stamp = request.stamp or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    verification: list[tuple[_Action, dict[str, object]]] = []
     for action in actions:
         if action.kind == "verify":
             assert action.path is not None
             key = ownership_key(targets, action.target, action.path, request.name)
-            _verify(request, action, targets[key], targets)
+            verification.append((action, targets[key]))
             continue
         if action.after is None or action.path is None or not action.ok:
             continue
@@ -684,23 +697,31 @@ def _apply(request: Request, actions: list[_Action], targets: dict[str, dict[str
         else:
             targets[key] = record
         write_state(state_path, {"targets": targets})
+        prune_backups(request.layout.state_dir(), action.target)
         warning = _mode_warning(action.path, holds_literal(action.entry) or action.literal)
         if warning and warning not in action.message:
             action.message = (action.message + " " + warning).strip()
         if record is not None and request.verify is not None:
-            _verify(request, action, record, targets)
+            verification.append((action, record))
+    if verification:
+        _verify(request, verification, targets)
 
 
-def _verify(request: Request, action: _Action, record: dict[str, object], targets: Mapping[str, object]) -> None:
+def _verify(
+    request: Request, verification: list[tuple[_Action, dict[str, object]]], targets: Mapping[str, object]
+) -> None:
     assert request.verify is not None
     try:
         request.verify(request.launch.invoke())
     except Exception as exc:
-        action.ok = False
-        action.message = (action.message + f" verify failed: {exc}").strip()
-    if record.get("verified") is not action.ok:
-        record["verified"] = action.ok
-        write_state(request.layout.state_file(), {"targets": targets})
+        diagnostic = redact_diagnostic(str(exc), request.secrets)
+        for action, _ in verification:
+            action.ok = False
+            action.message = (action.message + f" verify failed: {diagnostic}").strip()
+        return
+    for _, record in verification:
+        record["verified"] = True
+    write_state(request.layout.state_file(), {"targets": targets})
 
 
 def _prepare_write(request: Request, action: _Action, stamp: str) -> None:
@@ -768,10 +789,3 @@ def _exit_code(actions: list[_Action], pi_failed: bool) -> int:
     if pi_failed or any(not action.ok for action in actions):
         return 1
     return 0
-
-
-def _version() -> str:
-    try:
-        return version(PACKAGE)
-    except PackageNotFoundError:
-        return "0.0.0"
