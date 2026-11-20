@@ -107,7 +107,7 @@ def installed_version() -> str:
     except PackageNotFoundError as exc:
         raise InstallError(
             f"{PACKAGE} is not installed in this environment, so its version cannot be pinned; "
-            "install the package, or use --from-checkout"
+            "install the package in this environment before retrying"
         ) from exc
 
 

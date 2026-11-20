@@ -81,3 +81,15 @@ and the stored key was never consulted — the exact GUI case this ADR exists fo
   variable is set.
 - Tests: `tests/unit/test_settings.py`, `tests/unit/test_resolver.py`, `tests/unit/test_doctor.py`,
   and the startup line in `tests/integration/test_stdio.py`.
+
+## Amendment (2026-11-19): validate the opened key and sync its publication
+
+- The reader checks the opened file descriptor. The key must be a regular file owned by
+  the effective user or root, with group and other write bits clear. This accepts
+  qualifying read-only secret mounts. A rejected file produces a warning naming its
+  path and the reason, without exposing the key.
+- The shared private writer requires a private directory owned by the effective user.
+  It syncs the file before replacing the name and syncs the parent directory after
+  replacement. A sync failure is reported to the caller.
+- An empty `TYPESAFE_API_KEY` uses the hidden prompt. `setup` reports a refused key store
+  as a command error and exits non-zero.

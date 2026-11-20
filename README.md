@@ -56,11 +56,11 @@ To migrate a previous checkout install, rerun the installer and select the same 
 uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install
 ```
 
-It updates each installer-owned entry to `jev-judge-mcp[typesafe]==<installed version>` and preserves foreign entries. The post-write check may download the pinned version from PyPI. If the check fails, the command exits non-zero and `install --remove` can still remove the entry.
+It updates each installer-owned entry to `jev-judge-mcp[typesafe]==<installed version>` and preserves foreign entries. One post-write check covers the shared launch command across all selected agents and may download the pinned version from PyPI. If the check fails, the command exits non-zero and `install --remove` can still remove the entry.
 
 Restart your agent. The tools show up as `jev_verify`, `jev_gate`, and so on (`mcp__jev__*` in Claude Code).
 
-`setup` reads the key from `TYPESAFE_API_KEY`, or asks for it at a hidden prompt. It never takes the key as an argument, so the key stays out of your shell history. It makes one live call to check the key and writes nothing if TypeSafe rejects it. A good key goes to `~/.config/jev-mcp/key`, readable only by you. The server uses that file whenever `TYPESAFE_API_KEY` is unset, so agents you start without exporting the key still work. When the variable is set, it wins.
+`setup` reads the key from `TYPESAFE_API_KEY`. If the variable is unset or empty, it asks at a hidden prompt. It never takes the key as an argument, so the key stays out of your shell history. It makes one live call to check the key and writes nothing if TypeSafe rejects it. A good key goes to `~/.config/jev-mcp/key`, readable only by you. The server uses that file whenever `TYPESAFE_API_KEY` is unset or empty, so agents you start without exporting the key still work. A non-empty key in the variable takes precedence.
 
 `install` finds the agents on your machine, shows what it will change, and asks before writing. It supports Claude Code, Claude Desktop, Codex (CLI and the ChatGPT app), Cursor, OpenCode, Pi, omp, and Pythinker.
 

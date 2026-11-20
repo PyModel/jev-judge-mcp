@@ -10,11 +10,14 @@ import logging
 import os
 import stat
 from pathlib import Path
+from threading import Lock
 
 from jev_judge_mcp import fsutil
 from jev_judge_mcp.settings import Settings
 
 logger = logging.getLogger("jev_judge_mcp.keyfile")
+_warned_rejections: set[tuple[Path, str]] = set()
+_warning_lock = Lock()
 
 
 def stored_key_path(settings: Settings) -> Path:
@@ -32,19 +35,36 @@ path, a device, a dump) is not a key and reads as empty, never as a hang or a tr
 def stored_key(settings: Settings) -> str:
     """The stored key, or `""`. Missing, unreadable, undecodable, oversized, or blank stores as
     empty — never an error."""
+    path = stored_key_path(settings)
     try:
-        with open(
-            stored_key_path(settings), "rb", opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK)
-        ) as handle:
-            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-                return ""
+        with open(path, "rb", opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK)) as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                return _reject_key_file(path, "not a regular file")
+            if info.st_uid not in (0, os.geteuid()):
+                return _reject_key_file(path, "owned by neither root nor the effective user")
+            if info.st_mode & 0o022:
+                return _reject_key_file(path, "group or other can write")
             data = handle.read(KEY_FILE_BYTES_MAX + 1)
         if len(data) > KEY_FILE_BYTES_MAX:
             return ""
         # utf-8-sig drops a leading BOM when present and is otherwise plain UTF-8.
         return data.decode("utf-8-sig").strip()
+    except IsADirectoryError:
+        return _reject_key_file(path, "not a regular file")
     except (OSError, UnicodeDecodeError):
         return ""
+
+
+def _reject_key_file(path: Path, reason: str) -> str:
+    """Warn once per path and reason across resolver and redaction reads."""
+    rejection = (path, reason)
+    with _warning_lock:
+        if rejection in _warned_rejections:
+            return ""
+        _warned_rejections.add(rejection)
+    logger.warning("Ignoring TypeSafe key file %s: %s", path, reason)
+    return ""
 
 
 def redaction_values(settings: Settings) -> list[str]:
