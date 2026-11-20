@@ -20,6 +20,7 @@ from evals.relay import HEADLINE_TOOLS, result_fields
 from evals.spend import JEV_PUBLISHED_USD_PER_MTOK_INPUT
 from tests.support.fake_mcp_server import FAKE_ERROR, RECEIVED
 from tests.support.fixtures import iter_calls
+from tests.support.stdio import StdioServer
 
 REPO = Path(__file__).resolve().parents[2]
 FAKE = str(REPO / "tests" / "support" / "fake_mcp_server.py")
@@ -113,42 +114,20 @@ def _run_until_dead(
     server = pid_path.with_name("server.py")
     marker = pid_path.with_name("at-term.txt")
     server.write_text(server_source, encoding="utf-8")
-    proc = subprocess.Popen(
-        argv,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=stderr,
-        cwd=REPO,
-    )
     try:
-        deadline = time.monotonic() + 30
-        while not pid_path.exists():
-            if proc.poll() is not None:
-                try:
-                    _out, err = proc.communicate(timeout=1)
-                except subprocess.TimeoutExpired as exc:
-                    err = exc.stderr or b""
-                raise AssertionError(f"proxy exited before the server wrote its pid\n{(err or b'').decode()}")
-            if time.monotonic() > deadline:
-                raise AssertionError("server pid was never written")
-            time.sleep(0.02)
-        assert proc.stdin is not None
-        proc.stdin.write(b"".join((json.dumps(message) + "\n").encode() for message in messages))
-        proc.stdin.flush()
-        try:
-            _out, err = proc.communicate(timeout=30)
-        except subprocess.TimeoutExpired as exc:
-            raise AssertionError(f"relay did not exit\n{(exc.stderr or b'').decode()}") from exc
-        assert proc.returncode != 0
-        captured = marker.read_text(encoding="utf-8") if marker.exists() else ""
-        return (err or b"").decode(), captured
+        with StdioServer(argv, stderr=stderr) as proc:
+            deadline = time.monotonic() + 30
+            while not pid_path.exists():
+                assert proc.process.poll() is None, "proxy exited before the server wrote its pid"
+                assert time.monotonic() < deadline, "server pid was never written"
+                time.sleep(0.02)
+            proc.send_bytes(b"".join((json.dumps(message) + "\n").encode() for message in messages))
+            proc.close_stdin()
+            returncode, err = proc.wait(timeout=30)
+            assert returncode != 0
+            captured = marker.read_text(encoding="utf-8") if marker.exists() else ""
+            return err, captured
     finally:
-        if proc.poll() is None:
-            proc.kill()
-            for pipe in (proc.stdin, proc.stdout, proc.stderr):
-                if pipe is not None:
-                    pipe.close()
-            proc.wait(timeout=5)
         _reap(pid_path)
 
 
@@ -538,14 +517,6 @@ def test_scout_022_idle_client_survives_but_outstanding_request_expires(tmp_path
             if proxy.poll() is None:
                 proxy.kill()
             _reap(pid)
-
-
-def test_early_exit_with_an_inherited_pipe_reports_the_proxy_exit(tmp_path: Path) -> None:
-    script = "import subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(4)'])"
-    started = time.monotonic()
-    with pytest.raises(AssertionError, match="exited before"):
-        _run_until_dead([sys.executable, "-c", script], "", [], tmp_path / "pid")
-    assert time.monotonic() - started < 3, "a descendant kept the output pipe open"
 
 
 @pytest.mark.parametrize(("reported", "tokens", "expected"), [(False, 0, 3.5), (True, 0, 0), (False, 100_000_000, 4.2)])

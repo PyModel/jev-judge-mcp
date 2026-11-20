@@ -6,13 +6,16 @@ the module's internals. Docker is not involved: the same stdlib file is what the
 mounts, and the Docker-marked adversarial suite covers the container path end to end.
 """
 
+import gzip
 import json
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, ClassVar
@@ -34,6 +37,7 @@ class _Upstream(BaseHTTPRequestHandler):
 
     seen: ClassVar[list[dict[str, Any]]] = []
     echo_key = False
+    gzip_reply = False
 
     def _record(self, body: bytes) -> None:
         self.seen.append(
@@ -55,6 +59,14 @@ class _Upstream(BaseHTTPRequestHandler):
         self._record(body)
         answer = {"answers": {"q": {"choice": "a", "confidence": 0.99, "probabilities": {"a": 0.99, "b": 0.01}}}}
         payload = json.dumps(answer).encode()
+        if self.gzip_reply:
+            payload = gzip.compress(json.dumps({"echo": KEY}).encode())
+            self.send_response(200)
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if _Upstream.echo_key:
             payload = json.dumps({"note": f"your key is {KEY}", "answers": answer["answers"]}).encode()
             self.send_response(200)
@@ -81,11 +93,17 @@ class _Upstream(BaseHTTPRequestHandler):
         pass
 
 
-def _start_upstream() -> tuple[ThreadingHTTPServer, int]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _Upstream)
+class _GzipUpstream(_Upstream):
+    gzip_reply = True
+
+
+def _start_upstream(resources: ExitStack, handler: type[_Upstream] = _Upstream) -> int:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    resources.callback(server.server_close)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    return server, server.server_address[1]
+    resources.callback(server.shutdown)
+    return server.server_address[1]
 
 
 def _call(
@@ -120,87 +138,84 @@ def _call(
 
 
 @pytest.fixture()
-def stack(tmp_path: Path) -> Any:
+def stack(request: pytest.FixtureRequest) -> Any:
     """A running broker against two fake upstreams (one per allowlisted destination).
 
     The socket lives under a short `/tmp` root: macOS caps an AF_UNIX path at 104 bytes, which a
     pytest tmp_path (deep under /private/var/folders) can exceed."""
-    import tempfile
-
-    short_root = Path(tempfile.mkdtemp(prefix="jevbrk-", dir="/tmp"))
-    server, port = _start_upstream()
-    provider_server, provider_port = _start_upstream()
-    grants = short_root / "grants"
-    grants.mkdir()
-    key_file = short_root / "typesafe.key"
-    key_file.write_text(KEY + "\n", encoding="utf-8")
-    provider_key_file = short_root / "provider.key"
-    provider_key_file.write_text(PROVIDER_KEY + "\n", encoding="utf-8")
-    sock_path = short_root / "broker.sock"
-    config = {
-        "listen": str(sock_path),
-        "grants_dir": str(grants),
-        "upstreams": [
-            {
-                "name": "typesafe",
-                "scheme": "http",
-                "host": "127.0.0.1",
-                "port": port,
-                "methods": ["POST"],
-                "paths": ["/v1/systemone"],
-                "credential_file": str(key_file),
-                "credential_header": "Authorization",
-                "credential_scheme": "Bearer ",
-            },
-            {
-                "name": "model-provider",
-                "scheme": "http",
-                "host": "127.0.0.1",
-                "port": provider_port,
-                "methods": ["POST", "GET"],
-                "paths": ["/chat/completions", "/models"],
-                "base_path": "/zen/go/v1",
-                "credential_file": str(provider_key_file),
-                "credential_header": "Authorization",
-                "credential_scheme": "Bearer ",
-            },
-        ],
-        "max_lifetime_s": 3600,
-    }
-    config_path = short_root / "broker-config.json"
-    config_path.write_text(json.dumps(config), encoding="utf-8")
-    log_path = short_root / "broker.log"
-    log = open(log_path, "w")
-    proc = subprocess.Popen([sys.executable, str(BROKER), str(config_path)], stdout=subprocess.DEVNULL, stderr=log)
-    deadline = time.time() + 20
-    while not sock_path.exists():
-        if proc.poll() is not None:
-            log.close()
-            raise AssertionError(f"broker exited at startup: {log_path.read_text()}")
-        if time.time() > deadline:
-            proc.kill()
-            log.close()
-            raise AssertionError("broker socket never appeared")
-        time.sleep(0.05)
-    try:
-        yield {
-            "proc": proc,
-            "sock": str(sock_path),
-            "port": port,
-            "provider_port": provider_port,
-            "grants": grants,
-            "log": log_path,
+    with ExitStack() as resources:
+        short_root = Path(resources.enter_context(tempfile.TemporaryDirectory(prefix="jevbrk-", dir="/tmp")))
+        handler = _GzipUpstream if getattr(request, "param", None) == "gzip" else _Upstream
+        port = _start_upstream(resources, handler)
+        provider_port = _start_upstream(resources)
+        grants = short_root / "grants"
+        grants.mkdir()
+        key_file = short_root / "typesafe.key"
+        key_file.write_text(KEY + "\n", encoding="utf-8")
+        provider_key_file = short_root / "provider.key"
+        provider_key_file.write_text(PROVIDER_KEY + "\n", encoding="utf-8")
+        sock_path = short_root / "broker.sock"
+        config = {
+            "listen": str(sock_path),
+            "grants_dir": str(grants),
+            "upstreams": [
+                {
+                    "name": "typesafe",
+                    "scheme": "http",
+                    "host": "127.0.0.1",
+                    "port": port,
+                    "methods": ["POST"],
+                    "paths": ["/v1/systemone"],
+                    "credential_file": str(key_file),
+                    "credential_header": "Authorization",
+                    "credential_scheme": "Bearer ",
+                },
+                {
+                    "name": "model-provider",
+                    "scheme": "http",
+                    "host": "127.0.0.1",
+                    "port": provider_port,
+                    "methods": ["POST", "GET"],
+                    "paths": ["/chat/completions", "/models"],
+                    "base_path": "/zen/go/v1",
+                    "credential_file": str(provider_key_file),
+                    "credential_header": "Authorization",
+                    "credential_scheme": "Bearer ",
+                },
+            ],
+            "max_lifetime_s": 3600,
         }
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        log.close()
-        server.shutdown()
-        provider_server.shutdown()
-        shutil.rmtree(short_root, ignore_errors=True)
+        config_path = short_root / "broker-config.json"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        log_path = short_root / "broker.log"
+        with log_path.open("w") as log:
+            proc = subprocess.Popen(
+                [sys.executable, str(BROKER), str(config_path)], stdout=subprocess.DEVNULL, stderr=log
+            )
+            try:
+                deadline = time.monotonic() + 20
+                while True:
+                    assert proc.poll() is None, f"broker exited at startup: {log_path.read_text()}"
+                    if sock_path.exists():
+                        break
+                    assert time.monotonic() < deadline, f"broker socket never appeared: {log_path.read_text()}"
+                    time.sleep(0.05)
+                yield {
+                    "proc": proc,
+                    "sock": str(sock_path),
+                    "port": port,
+                    "provider_port": provider_port,
+                    "grants": grants,
+                    "log": log_path,
+                }
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
 
 
 def test_broker_records_upstream_usage_before_releasing_the_reply(
@@ -446,70 +461,53 @@ def test_the_broker_forces_identity_encoding_and_strips_method_overrides(stack: 
     assert seen["method_override"] is None
 
 
-def test_an_encoded_upstream_response_is_refused_not_decoded(tmp_path: Path) -> None:
+@pytest.mark.parametrize("stack", ["gzip"], indirect=True)
+def test_an_encoded_upstream_response_is_refused_not_decoded(stack: Any) -> None:
     """F6: a gzip body the broker cannot scan never crosses back, even when it carries the key."""
-    import gzip
-    import threading
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    cap = mint_capability(stack["grants"], 60)
+    header, _ = _call(stack["sock"], cap.token, "POST", "127.0.0.1", "/v1/systemone", port=stack["port"])
+    assert header.get("error") == "upstream"
+    assert "gzip" in str(header.get("detail"))
 
-    class _Gzipper(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:
-            self.rfile.read(int(self.headers.get("Content-Length") or 0))
-            payload = gzip.compress(json.dumps({"echo": KEY}).encode())
-            self.send_response(200)
-            self.send_header("Content-Encoding", "gzip")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
 
-        def log_message(self, format: str, *args: Any) -> None:
-            pass
+def test_the_broker_fixture_reaps_its_child_after_a_call_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    peer = tmp_path / "broker.py"
+    peer.write_text(
+        "import json, sys, time\n"
+        "from pathlib import Path\n"
+        "Path(json.loads(Path(sys.argv[1]).read_text())['listen']).touch()\n"
+        "time.sleep(30)\n"
+    )
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _Gzipper)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    import tempfile
+    def failed_call(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("call failed after broker startup")
 
-    short_root = Path(tempfile.mkdtemp(prefix="jevbrk-", dir="/tmp"))
-    try:
-        key_file = short_root / "typesafe.key"
-        key_file.write_text(KEY + "\n", encoding="utf-8")
-        grants = short_root / "grants"
-        grants.mkdir()
-        sock_path = short_root / "broker.sock"
-        config = {
-            "listen": str(sock_path),
-            "grants_dir": str(grants),
-            "max_lifetime_s": 600,
-            "upstreams": [
-                {
-                    "name": "typesafe",
-                    "scheme": "http",
-                    "host": "127.0.0.1",
-                    "port": server.server_address[1],
-                    "methods": ["POST"],
-                    "paths": ["/v1/systemone"],
-                    "credential_file": str(key_file),
-                }
-            ],
-        }
-        config_path = short_root / "broker-config.json"
-        config_path.write_text(json.dumps(config), encoding="utf-8")
-        proc = subprocess.Popen(
-            [sys.executable, str(BROKER), str(config_path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        deadline = time.time() + 20
-        while not sock_path.exists() and time.time() < deadline:
-            time.sleep(0.05)
-        cap = mint_capability(grants, 60)
-        header, _ = _call(
-            str(sock_path), cap.token, "POST", "127.0.0.1", "/v1/systemone", port=server.server_address[1]
-        )
-        proc.terminate()
-        assert header.get("error") == "upstream"
-        assert "gzip" in str(header.get("detail"))
-    finally:
-        server.shutdown()
-        shutil.rmtree(short_root, ignore_errors=True)
+    def upstream_port(_resources: ExitStack, _handler: type[_Upstream] = _Upstream) -> int:
+        return 12345
+
+    monkeypatch.setitem(globals(), "BROKER", peer)
+    monkeypatch.setitem(globals(), "_start_upstream", upstream_port)
+    monkeypatch.setitem(globals(), "_call", failed_call)
+
+    child: subprocess.Popen[bytes] | None = None
+
+    def check_reaped() -> None:
+        if child is not None:
+            try:
+                assert child.returncode is not None, "the broker was not reaped"
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait()
+
+    request.addfinalizer(check_reaped)
+    data = request.getfixturevalue("stack")
+    child = data["proc"]
+    assert child is not None and child.poll() is None
+    with pytest.raises(RuntimeError, match="call failed after broker startup"):
+        test_an_encoded_upstream_response_is_refused_not_decoded(data)
 
 
 def test_the_broker_refuses_to_start_without_a_self_bound_deadline(tmp_path: Path) -> None:
