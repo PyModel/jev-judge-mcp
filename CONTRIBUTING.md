@@ -107,8 +107,9 @@ live behavior.
 
 The maintainer squash-merges every pull request; merge commits and rebase merges are off. The
 pull request title becomes the one commit on `main`, and release-please turns it into the
-changelog entry: `feat`, `fix` and `perf` titles are listed and start the next release, while
-`docs`, `ci`, `test`, `chore`, `refactor`, `build` and `style` titles are not listed.
+changelog entry. With the `python` release type, `feat`, `fix`, `perf`, `deps`, `revert` and `docs`
+titles are listed and start the next release. `ci`, `test`, `chore`, `refactor`, `build` and
+`style` titles are not listed unless they carry the breaking marker `!`.
 
 ## Releases
 

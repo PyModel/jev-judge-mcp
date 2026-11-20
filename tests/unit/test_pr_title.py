@@ -25,6 +25,7 @@ def run(title: str | None) -> subprocess.CompletedProcess[str]:
         "feat(gate): say who settles each held row",
         "feat!: refuse colliding caller IDs",
         "chore(main): release 0.12.0",
+        "deps: update the locked runtime",
         "ci: check pull request titles",
         "docs: backfill the 0.11.0 changelog",
     ],
@@ -63,6 +64,9 @@ def test_the_workflow_rechecks_edited_titles_through_the_environment() -> None:
     workflow = (ROOT / ".github/workflows/pr-title.yml").read_text()
     assert "types: [opened, edited, reopened, synchronize]" in workflow
     assert "run: uv run --no-project python scripts/check_pr_title.py" in workflow
-    assert "PR_TITLE: ${{ github.event.pull_request.title }}" in workflow
-    run_lines = [line for line in workflow.splitlines() if line.lstrip().startswith("- run:")]
-    assert all("github.event" not in line for line in run_lines), "the title must not be interpolated into a script"
+    # Every expression that reads the event, anywhere in the file, including multi-line run blocks.
+    reads = [line.strip() for line in workflow.splitlines() if "github.event" in line]
+    assert reads == [
+        "group: pr-title-${{ github.event.pull_request.number }}",
+        "PR_TITLE: ${{ github.event.pull_request.title }}",
+    ], "the title must reach the check only through the environment"

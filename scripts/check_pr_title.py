@@ -12,7 +12,7 @@ import os
 import re
 import sys
 
-TYPES = ("build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test")
+TYPES = ("build", "chore", "ci", "deps", "docs", "feat", "fix", "perf", "refactor", "revert", "style", "test")
 TITLE = re.compile(rf"(?:{'|'.join(TYPES)})(?:\([\w./-]+\))?!?: \S.*", re.ASCII)
 
 
