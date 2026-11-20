@@ -7,7 +7,7 @@ import logging
 import sys
 from collections.abc import Mapping
 from pathlib import Path
-from typing import ClassVar, override
+from typing import ClassVar, NoReturn, override
 
 import anyio
 import httpx
@@ -822,7 +822,6 @@ def test_required_flag_asks_on_bad_stdin_instead_of_silence(capsys: pytest.Captu
         (["hook", "gate"], _event("echo hi").encode(), ("JEV_MCP_HTTP_TOKEN", "short")),
         (["hook", "gate"], b"\xff", None),
         (["hook", "gate"], b'{"tool_name":"Bash","tool_input":{"command":"echo \xff"}}', None),
-        (["hook", "gate"], b'{"tool_input":' + b"[" * 600 + b"null" + b"]" * 600 + b"}", None),
         (["completion-hook"], b"\xff", None),
         (["completion-hook"], _event("git push").encode(), ("JEV_MCP_LOG_LEVEL", "verbose")),
         (["hook", "screen"], b"\xff", None),
@@ -833,7 +832,6 @@ def test_required_flag_asks_on_bad_stdin_instead_of_silence(capsys: pytest.Captu
         "short-secret",
         "utf8",
         "utf8-in-string",
-        "deep-json",
         "completion-utf8",
         "completion-settings",
         "screen",
@@ -848,11 +846,20 @@ def test_cli_hook_contains_unexpected_failures(
     body: bytes,
     setting: tuple[str, str] | None,
 ) -> None:
+    if setting is not None:
+        monkeypatch.setenv(*setting)
+    provider = _run_cli_hook(monkeypatch, required, command, body)
+    _assert_contained(capsys, required, command)
+    assert provider.states == []
+
+
+def _run_cli_hook(
+    monkeypatch: pytest.MonkeyPatch, required: bool, command: list[str], body: bytes
+) -> RecordingProvider:
+    """Run the hook through the server entry point and return the provider it was handed."""
     monkeypatch.delenv("JEV_HOOK_REQUIRED", raising=False)
     if required:
         monkeypatch.setenv("JEV_HOOK_REQUIRED", "1")
-    if setting is not None:
-        monkeypatch.setenv(*setting)
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", *command])
     errors = "surrogateescape" if body.startswith(b'{"tool_name":"Bash"') else "strict"
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(body), encoding="utf-8", errors=errors))
@@ -867,11 +874,13 @@ def test_cli_hook_contains_unexpected_failures(
     root = logging.getLogger()
     monkeypatch.setattr(root, "handlers", [])
     monkeypatch.setattr(root, "level", root.level)
-
     with pytest.raises(SystemExit) as exit_info:
         server_main()
-
     assert exit_info.value.code == 0
+    return provider
+
+
+def _assert_contained(capsys: pytest.CaptureFixture[str], required: bool, command: list[str]) -> None:
     captured = capsys.readouterr()
     if required and command[-1] in {"gate", "completion-hook"}:
         assert json.loads(captured.out)["hookSpecificOutput"]["permissionDecision"] == "ask"
@@ -879,7 +888,26 @@ def test_cli_hook_contains_unexpected_failures(
     else:
         assert captured.out == ""
         assert captured.err.count("\n") == 1
+
+
+@pytest.mark.parametrize("required", [False, True], ids=["optional", "required"])
+def test_cli_hook_contains_a_crash_inside_the_hook(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], required: bool
+) -> None:
+    def crash(*_args: object) -> NoReturn:
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr("jev_judge_mcp.hook._plan", crash)
+    provider = _run_cli_hook(monkeypatch, required, ["hook", "gate"], _event("echo hi").encode())
+    _assert_contained(capsys, required, ["hook", "gate"])
     assert provider.states == []
+
+
+def test_deeply_nested_tool_input_is_judged(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Serialization accepts every depth decode_json does, so deep input is judged, not dropped."""
+    body = b'{"tool_name":"Bash","tool_input":' + b"[" * 600 + b"null" + b"]" * 600 + b"}"
+    provider = _run_cli_hook(monkeypatch, True, ["hook", "gate"], body)
+    assert len(provider.states) == 1
 
 
 def test_hook_module_is_not_the_completion_tool() -> None:
