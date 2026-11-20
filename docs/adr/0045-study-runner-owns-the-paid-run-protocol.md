@@ -35,3 +35,16 @@ ADR-0026 put the agent run, the relay, and the spend ledger in one place each, a
   unbooked. It stops without synthesizing an agent failure. A/B failure records use `null` for
   unmeasured Jev spend.
 - A/B reads pinned metadata for resume and reporting through the bounded artifact reader.
+
+## Amendment 2026-11-19: book confined A/B Jev usage from broker receipts
+
+A/B prices TypeSafe input tokens from the private broker journal in ADR-0074. Every started
+request needs a settlement with upstream usage, and the journal needs a matching final seal.
+Missing, unreadable, inconsistent, or incomplete receipts book at least the run bound for Jev.
+Any known receipt costs above the bound are retained.
+
+The relay remains diagnostic evidence. The study compares its billable input-token total
+against the broker's total and records tampering or disagreement in `jev_metering_issue`.
+Metering issues exclude the pair from the outcome analysis. A valid receipt set still prices
+the run when the relay fails this check. Confined A/B post-processing failures preserve the
+receipt-backed charge in a failed result for the shared study runner to book.

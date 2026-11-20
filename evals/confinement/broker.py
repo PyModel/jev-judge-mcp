@@ -5,6 +5,7 @@ docker volume, and forwards each allowlisted request to its upstream with the re
 injected. It never returns, logs, or echoes a credential: client credential headers are stripped
 (the agent's config carries only a placeholder), upstream responses are scanned and redacted, and
 every receipt and refusal is one JSON line on stderr naming method/host/path/status only.
+TypeSafe usage is also journaled to the private `receipts_path` when supplied.
 
 Config::
 
@@ -49,9 +50,10 @@ from collections.abc import Sequence
 from typing import Any, cast
 
 try:  # Package import on the host; sibling import when mounted flat into the sidecar.
-    from evals.confinement import protocol
+    from evals.confinement import protocol, receipts
 except ImportError:  # pragma: no cover - the container path, exercised by the Docker tests
     import protocol
+    import receipts
 
 UPSTREAM_TIMEOUT_S = 180.0
 """One forwarded request's connect+read budget. The run's wall timeout bounds the whole study."""
@@ -85,6 +87,7 @@ class Broker:
     def __init__(self, config: dict[str, Any]) -> None:
         self.listen_path = str(config["listen"])
         self.grants_dir = str(config["grants_dir"])
+        self.journal = receipts.Journal(str(config["receipts_path"])) if "receipts_path" in config else None
         self.credentials: list[tuple[str, bytes]] = []
         """Every credential value loaded, for the response redaction scan."""
         self.upstreams: dict[tuple[str, str, int], dict[str, Any]] = {}
@@ -196,6 +199,9 @@ class Broker:
             if scheme.lower() == "https"
             else http.client.HTTPConnection(host, port, timeout=UPSTREAM_TIMEOUT_S)
         )
+        journal = self.journal if upstream["name"] == "typesafe" else None
+        ticket = journal.start() if journal is not None else None
+        tokens = None
         try:
             connection.request(
                 method.upper(),
@@ -212,6 +218,8 @@ class Broker:
             raw = response.read(protocol.MAX_BODY_BYTES + 1)
             if len(raw) > protocol.MAX_BODY_BYTES:
                 raise Refused("upstream", "upstream response exceeds the protocol cap")
+            if ticket is not None:
+                tokens = receipts.response_tokens(raw)
             received = [[name, value] for name, value in response.getheaders() if name.lower() not in HOP]
             body_out, headers_out = self._redact(raw, received)
             return response.status, headers_out, body_out
@@ -219,6 +227,8 @@ class Broker:
             raise Refused("upstream", f"upstream unreachable: {type(error).__name__}") from None
         finally:
             connection.close()
+            if journal is not None and ticket is not None:
+                journal.settle(ticket, tokens)
 
     # --- serving ------------------------------------------------------------------------
 
@@ -326,6 +336,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         timer.cancel()
         server.server_close()
+        if broker.journal is not None:
+            broker.journal.seal()
         try:
             os.unlink(broker.listen_path)
         except OSError:

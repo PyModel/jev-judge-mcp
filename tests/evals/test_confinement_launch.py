@@ -4,18 +4,24 @@ the spec the Docker-marked adversarial suite then executes for real.
 """
 
 import json
+import os
 import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
 
 import pytest
 
-from evals.ab import arms
+from evals.ab import arms, ledger, tasks
+from evals.ab import run as ab_run
+from evals.ab.grade import grade
 from evals.agent import AgentCommand, container_boundary, escape_scan, exploration_paths, secret_scan
 from evals.confinement import launch
+from evals.isolation import IsolationResult
+from evals.spend import SpendLedger
 
 KEY = "sk-launch-fake-typesafe-key-0123456789abcdefNOTREAL"
 PROVIDER_KEY = "sk-launch-fake-provider-key-0123456789abcdefNOTREAL"
@@ -442,6 +448,116 @@ def test_a_relay_copy_never_follows_a_planted_symlink(tmp_path: Path) -> None:
     assert launch.copy_regular_nofollow(directory, tmp_path / "nope") is False
 
 
+@pytest.mark.parametrize(
+    ("alteration", "relay_tokens", "receipt_tokens", "expected_cost", "diagnostic"),
+    [
+        ("intact", 1_000_000, 1_000_000, 0.042, None),
+        ("symlink", 1_000_000, 1_000_000, 0.042, "tampered"),
+        ("hardlink", 1_000_000, 1_000_000, 0.042, "tampered"),
+        ("truncated", None, 1_000_000, 0.042, "disagree"),
+        ("mismatch", 1, 10_000_000, 0.42, "disagree"),
+        ("oversized", 10_000_000, 10_000_000, 0.42, "unreadable"),
+        ("missing-receipts", None, None, 0.25, "missing"),
+        ("unfinished-receipts", None, 1_000_000, 0.25, "incomplete"),
+        ("inconsistent-receipts", None, 10_000_000, 0.42, "inconsistent"),
+        ("unreadable-receipts", None, 1_000_000, 0.25, "unreadable"),
+        ("teardown-failure", 10_000_000, 10_000_000, 0.42, None),
+    ],
+)
+def test_confined_ab_books_broker_usage_despite_relay_tampering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+    alteration: str,
+    relay_tokens: int | None,
+    receipt_tokens: int | None,
+    expected_cost: float,
+    diagnostic: str | None,
+) -> None:
+    archive_source: Path | None = None
+    events: list[dict[str, object]] = []
+
+    def docker(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal archive_source
+        if "jev-eval=broker" in argv:
+            archive_source = None
+            events.clear()
+        for mount in _mounts(argv):
+            if mount.endswith(":/receipts.jsonl"):
+                archive_source = Path(mount.removesuffix(":/receipts.jsonl"))
+        if argv[:2] == ["docker", "stop"] and archive_source is not None and events:
+            if alteration != "unfinished-receipts":
+                events.append({"event": "seal", "started": 2 if alteration == "inconsistent-receipts" else 1})
+            archive_source.write_text("".join(json.dumps(row) + "\n" for row in events))
+            if alteration == "unreadable-receipts":
+                archive_source.symlink_to(archive_source.rename(archive_source.with_suffix(".other")))
+        if (
+            alteration == "teardown-failure"
+            and archive_source is not None
+            and argv[:3] == ["docker", "rm", "-f"]
+            and argv[-1].startswith("jev-eval-broker-")
+        ):
+            return subprocess.CompletedProcess(argv, 1, "", "unable to remove")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    def capture(argv: list[str], **_kwargs: object) -> tuple[str, str, int]:
+        assert all("/receipts.jsonl" not in mount for mount in _mounts(argv))
+        scratch = Path(next(mount.removesuffix(":/scratch") for mount in _mounts(argv) if mount.endswith(":/scratch")))
+        log = scratch / "jev-calls.jsonl"
+        evidence = "" if relay_tokens is None else json.dumps({"input_tokens": relay_tokens}) + "\n"
+        log.write_text(evidence)
+        if alteration == "oversized":
+            with log.open("r+b") as handle:
+                handle.truncate(launch.STDOUT_CAP_BYTES + 1)
+        if alteration in ("symlink", "hardlink"):
+            other = log.rename(scratch / "other.jsonl")
+            if alteration == "symlink":
+                log.symlink_to(other)
+            else:
+                os.link(other, log)
+        if archive_source is not None and receipt_tokens is not None:
+            events.extend([{"event": "open"}, {"event": "start", "id": 1}])
+            if alteration != "unfinished-receipts":
+                events.append({"event": "settle", "id": 1, "input_tokens": receipt_tokens})
+        return json.dumps({"type": "result", "total_cost_usd": agent_cost}), "", 0
+
+    task = tasks.load_task("j1-refund-window")
+    tree = tmp_path / "tree"
+    tasks.materialize(task, tree)
+    graded = grade(tree, task, sys.executable)
+    monkeypatch.setattr(ab_run, "postprocess", Mock(return_value=IsolationResult("", graded)))
+    monkeypatch.setattr(ab_run, "parser_for", Mock(return_value=ab_run.stream.parse))
+    monkeypatch.setattr(launch, "docker_run", docker)
+    monkeypatch.setattr(launch, "wait_for_broker", Mock())
+    monkeypatch.setattr(launch, "capture_output", capture)
+    if alteration == "teardown-failure":
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+        request.addfinalizer(launch.reap)
+    setup = ab_run.Setup("pi", (), {}, {}, KEY, sys.executable, confinement=_spec(tmp_path), task_list=(task,))
+    out = tmp_path / "study"
+
+    agent_cost = 1.7 if alteration == "teardown-failure" else 0
+    result = ab_run.study(setup, out, repeats=1)
+    if alteration == "teardown-failure":
+        assert result.startswith("stopped: isolation infrastructure:")
+    else:
+        assert result == "all 1 pairs recorded"
+    rid = ab_run.run_id(task.id, "B", 1)
+    row = json.loads((out / rid / "result.json").read_text())
+    with_book = SpendLedger.load(out / "ledger.json", ledger.POLICIES["pi"])
+    try:
+        assert with_book.runs[rid] == pytest.approx(expected_cost + agent_cost)
+    finally:
+        with_book.close()
+    assert row["jev_cost_usd"] == pytest.approx(expected_cost)
+    if diagnostic is None:
+        assert row["jev_metering_issue"] is None
+    else:
+        assert diagnostic in row["jev_metering_issue"]
+    if receipt_tokens is not None and alteration != "unreadable-receipts":
+        assert (out / rid / "broker-receipts.jsonl").is_file()
+
+
 def test_a_secret_in_the_container_env_is_refused_before_anything_starts(tmp_path: Path) -> None:
     spec = _spec(tmp_path, env={"HOME": "/scratch/home", "TYPESAFE_API_KEY": KEY})
     from evals.agent import AgentCommand
@@ -563,29 +679,27 @@ def test_relay_budget_is_shared_and_overflow_unwinds(
         (scratch / "jev-calls.jsonl").write_bytes(b"12345")
         (scratch / "jev-calls.stderr").write_bytes(b"6789")
 
-    def run() -> None:
-        with launch.run_confined(
-            agent.AgentCommand(argv=lambda _: ["true"], timeout_s=1),
-            spec=_spec(tmp_path),
-            mcp_config={},
-            secret=KEY,
-            run_dir=records,
-            scratch_files=relays,
-        ):
-            pass
-
-    if budget == 8:
-        with pytest.raises(OSError, match=r"incomplete.*relay"):
-            run()
-    else:
-        run()
-        assert (records / "jev-calls.stderr").read_bytes() == b"6789"
+    with launch.run_confined(
+        agent.AgentCommand(argv=lambda _: ["true"], timeout_s=1),
+        spec=_spec(tmp_path),
+        mcp_config={},
+        secret=KEY,
+        run_dir=records,
+        scratch_files=relays,
+    ) as run:
+        if budget == 8:
+            assert run.relay_issue == "relay log tampered or unreadable (jev-calls.stderr)"
+            assert not (records / "jev-calls.stderr").exists()
+        else:
+            assert run.relay_issue is None
+            assert (records / "jev-calls.stderr").read_bytes() == b"6789"
     cleanup.assert_called_once()
     volume = cleanup.call_args.kwargs["volume"]
     label = f"{launch.LEASE_LABEL}={volume.removeprefix('jev-eval-sock-')}"
-    volume_call, broker_call, agent_removal = docker.call_args_list
+    volume_call, broker_call, agent_removal, broker_stop = docker.call_args_list
     assert all(label in call.args[0] for call in (volume_call, broker_call))
     assert agent_removal.args[0] == ["docker", "rm", "-f", cleanup.call_args.kwargs["agent_name"]]
+    assert broker_stop.args[0] == ["docker", "stop", "-t", "2", cleanup.call_args.kwargs["broker_name"]]
     assert label in capture.call_args.args[0]
     assert sum(p.stat().st_size for p in records.glob("jev-calls.*")) <= budget
 

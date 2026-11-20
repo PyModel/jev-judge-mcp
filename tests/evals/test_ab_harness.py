@@ -110,6 +110,65 @@ def test_import_error_fails_every_test_of_that_module(tmp_path: Path) -> None:
     assert len(expected_ids(task, PYTHON)) == result.acceptance_total + result.original_total
 
 
+@pytest.mark.parametrize(
+    ("attack", "task_id", "source"),
+    [
+        (
+            "testcase-run",
+            "j1-refund-window",
+            "import unittest\nunittest.TestCase.run = lambda test, result: result.addSuccess(test)\n",
+        ),
+        (
+            "result-addfailure",
+            "j2-ticket-route",
+            "import unittest\n"
+            "for cls in [unittest.TestResult, *unittest.TestResult.__subclasses__()]:\n"
+            "    cls.addFailure = lambda result, test, err: result.addSuccess(test)\n"
+            "def route(text): return 'general'\n",
+        ),
+        (
+            "forged-stdout",
+            "j1-refund-window",
+            "import os\nprint({forged!r}, flush=True)\nos._exit(0)\n",
+        ),
+        (
+            "custom-equality",
+            "j6-docs-vs-code",
+            "class AlwaysEqual:\n    def __eq__(self, other): return True\n"
+            "def restocking_fee(*args): return AlwaysEqual()\n",
+        ),
+        (
+            "custom-value-error",
+            "j1-refund-window",
+            "class ValueError(ValueError): pass\n"
+            "original = refund_allowed\n"
+            "def refund_allowed(*args):\n"
+            "    try: return original(*args)\n"
+            "    except ValueError.__base__ as exc: raise ValueError(str(exc)) from exc\n",
+        ),
+        ("hang", "j1-refund-window", "import time\ndef refund_allowed(*args): time.sleep(60)\n"),
+    ],
+    ids=lambda value: value if isinstance(value, str) and "\n" not in value and not value.startswith("j") else "",
+)
+def test_agent_code_cannot_supply_the_grade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, attack: str, task_id: str, source: str
+) -> None:
+    task = tasks.load_task(task_id)
+    tree = _tree(tmp_path, task, solution=task.reference if attack == "custom-value-error" else None)
+    expected = expected_ids(task, PYTHON)
+    module = tree / f"{task.target_module}.py"
+    module.write_text(module.read_text() + "\n" + source.format(forged=json.dumps(dict.fromkeys(expected, "pass"))))
+    if attack == "hang":
+        monkeypatch.setattr("evals.ab.grade.GRADE_TIMEOUT_S", 8)
+
+    result = grade(tree, task, PYTHON, expected=expected)
+
+    assert not result.correct
+    assert result.acceptance_passed < result.acceptance_total
+    if attack == "hang":
+        assert 0 < result.original_passed < result.original_total
+
+
 def test_agent_edits_to_tests_do_not_count(tmp_path: Path) -> None:
     task = tasks.load_task("j2-ticket-route")
     tree = _tree(tmp_path, task, solution=task.reference)

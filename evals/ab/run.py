@@ -67,8 +67,9 @@ from evals.confinement.launch import (
     reap,
     run_confined,
 )
+from evals.confinement.receipts import MAX_RECEIPT_BYTES, RECEIPT_FILE, ReceiptUsage, input_tokens, read_usage
 from evals.isolation import IsolationInfrastructureError, postprocess
-from evals.spend import SpendLedger, agent_started, amount, reconciliation_notes
+from evals.spend import RunCost, SpendLedger, agent_started, amount, reconciliation_notes
 from evals.study_runner import InfrastructureStop, record_row, recover_attempts, run_recorded, write_record
 
 LIVE_FLAG = "JEV_AB_LIVE"
@@ -212,7 +213,10 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
             ) as run:
                 record = _record_inside(run_dir, run, rid, task, arm, repeat, setup, book, jev_log)
         except ConfinementError as error:
-            raise InfrastructureStop(str(error)) from error
+            incurred = None
+            if arm == "B" and not (run_dir / "result.json").is_file() and agent_started(run_dir):
+                incurred = _receipt_cost(book, None, _broker_usage(run_dir)).total_usd
+            raise InfrastructureStop(str(error), incurred) from error
     else:
         command = AgentCommand(
             argv=lambda config: [*setup.binary, *argv_tail(setup.agent, prompt, config, addendum)],
@@ -253,7 +257,13 @@ def _record_inside(
     still exists. Shared by the macOS sandbox and the confined container path (ADR-0074)."""
 
     def failed(error: Exception) -> dict[str, Any]:
-        return failed_record(rid, task, arm, repeat, setup.agent, run, book.policy.run_bound_usd, error)
+        row = failed_record(rid, task, arm, repeat, setup.agent, run, book.policy.run_bound_usd, error)
+        if setup.confinement is not None and arm == "B":
+            _, cost, issue = _run_metering(run, arm, True, book, jev_log)
+            row.update(
+                jev_cost_usd=cost.jev_usd, cost_usd=max(row["cost_usd"], cost.total_usd), jev_metering_issue=issue
+            )
+        return row
 
     return write_record(
         run_dir / "result.json",
@@ -323,6 +333,7 @@ _RECORD_KEYS = (
     "tool_calls",
     "jev_calls",
     "jev_call_log",
+    "jev_metering_issue",
     "test_cycles",
     "retries",
     "wrong_branches",
@@ -372,6 +383,52 @@ def _outcome_record(
     return record_row(_RECORD_KEYS, values)
 
 
+def _broker_usage(run_dir: Path) -> ReceiptUsage:
+    try:
+        return read_usage(read_artifact(run_dir / RECEIPT_FILE, max_bytes=MAX_RECEIPT_BYTES))
+    except FileNotFoundError:
+        return ReceiptUsage((), "broker receipts missing")
+    except (OSError, ValueError):
+        return ReceiptUsage((), "broker receipts unreadable")
+
+
+def _receipt_cost(book: SpendLedger, agent_cost: float | None, receipts: ReceiptUsage) -> RunCost:
+    rows: list[dict[str, int]] = [{"input_tokens": tokens} for tokens in receipts.tokens]
+    if receipts.issue:
+        rows.append({})
+    return book.cost_of(agent_cost, rows)
+
+
+def _run_metering(
+    run: AgentRunResult, arm: str, confined: bool, book: SpendLedger, jev_log: Path
+) -> tuple[list[dict[str, Any]], RunCost, str | None]:
+    agent_cost = run.trace.result_field("total_cost_usd")
+    if not confined:
+        calls = read_relay_log(jev_log)
+        return calls, book.cost_of(agent_cost, calls), None
+    relay_issue = run.relay_issue
+    try:
+        calls = read_relay_log(jev_log)
+    except (OSError, ValueError, RecursionError):
+        calls = []
+        relay_issue = "relay log tampered or unreadable"
+    if arm == "A":
+        return calls, book.cost_of(agent_cost, []), relay_issue
+    receipts = _broker_usage(jev_log.parent)
+    if run.receipt_issue:
+        receipts = replace(receipts, issue=run.receipt_issue)
+    if relay_issue is None and receipts.issue is None:
+        relay_tokens = [
+            input_tokens(row.get("input_tokens")) if row.get("usage_reported", True) is True else None
+            for row in calls
+            if row.get("refused") is not True
+        ]
+        if any(tokens is None for tokens in relay_tokens) or sum(t or 0 for t in relay_tokens) != sum(receipts.tokens):
+            relay_issue = "broker receipts and relay log disagree"
+    issues = "; ".join(issue for issue in (receipts.issue, relay_issue) if issue)
+    return calls, _receipt_cost(book, agent_cost, receipts), issues or None
+
+
 def _record(
     rid: str,
     task: tasks.Task,
@@ -394,20 +451,20 @@ def _record(
         )
     except IsolationInfrastructureError as error:
         incurred = amount(error.incurred_usd)
-        if incurred is None:
+        if incurred is None or (setup.confinement is not None and arm == "B"):
             try:
-                incurred = book.cost_of(trace.result_field("total_cost_usd"), read_relay_log(jev_log)).total_usd
+                _, cost, _ = _run_metering(run, arm, setup.confinement is not None, book, jev_log)
+                incurred = max(incurred or 0.0, cost.total_usd)
             except (OSError, ValueError, RecursionError) as read_error:
-                error.add_note(f"Relay cost evidence could not be read: {type(read_error).__name__}")
+                error.add_note(f"Cost evidence could not be read: {type(read_error).__name__}")
         raise InfrastructureStop(str(error), incurred) from error
     (run_dir / "diff.patch").write_text(graded.patch, encoding="utf-8")
     result = graded.grade
     protected = frozenset(tasks.protected_files())
-    calls = read_relay_log(jev_log)
+    calls, cost, metering_issue = _run_metering(run, arm, setup.confinement is not None, book, jev_log)
     reached = outcomes.reached_model(trace)
     chosen = outcomes.decision(trace.result_field("result"), task.judgment)
     cycles = outcomes.test_cycles(trace.tool_uses)
-    cost = book.cost_of(trace.result_field("total_cost_usd"), calls)
     matches = outcomes.decision_correct(chosen, task.judgment)
     stream_path = run_dir / "stream.jsonl"
     stream_text = stream_path.read_text(encoding="utf-8") if stream_path.is_file() else ""
@@ -426,7 +483,9 @@ def _record(
             "status": run.status,
             "jev_tool_called": bool(outcomes.jev_rows(calls)),
             "jev_gate": outcomes.jev_gate(calls) if arm == "B" else None,
-            "measurement": outcomes.measurement(
+            "measurement": "harness error"
+            if metering_issue
+            else outcomes.measurement(
                 arm,
                 status=run.status,
                 reached=reached,
@@ -468,6 +527,7 @@ def _record(
             "jev_answer": answer,
             "jev_calls": len(outcomes.jev_rows(calls)),
             "jev_call_log": calls,
+            "jev_metering_issue": metering_issue,
             "test_cycles": cycles,
             "retries": max(cycles - 1, 0),
             "wrong_branches": outcomes.wrong_branches(trace.tool_uses, task.judgment),
@@ -525,6 +585,7 @@ def failed_record(
             "jev_answer": None,
             "jev_calls": 0,
             "jev_call_log": [],
+            "jev_metering_issue": None,
             "test_cycles": 0,
             "retries": 0,
             "wrong_branches": None,
@@ -608,6 +669,7 @@ def study(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int =
                 rid,
                 out / rid / "result.json",
                 lambda task=task, arm=arm, repeat=repeat: run_one(task, arm, repeat, setup, book, out),
+                file_cost=(Exception,) if setup.confinement is not None else (),
             )
             if isinstance(record, str):
                 return record

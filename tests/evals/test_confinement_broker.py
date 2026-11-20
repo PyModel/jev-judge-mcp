@@ -19,7 +19,7 @@ from typing import Any, ClassVar
 
 import pytest
 
-from evals.confinement import protocol
+from evals.confinement import broker, protocol
 from evals.confinement.launch import CLOCK, mint_capability
 
 REPO = Path(__file__).resolve().parents[2]
@@ -201,6 +201,76 @@ def stack(tmp_path: Path) -> Any:
         server.shutdown()
         provider_server.shutdown()
         shutil.rmtree(short_root, ignore_errors=True)
+
+
+def test_broker_records_upstream_usage_before_releasing_the_reply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import Mock
+
+    cap = mint_capability(tmp_path, 60)
+    key = tmp_path / "key"
+    key.write_text(KEY)
+    receipts = tmp_path / "receipts.jsonl"
+    receipts.touch()
+    sidecar = broker.Broker(
+        {
+            "listen": str(tmp_path / "socket"),
+            "grants_dir": str(tmp_path),
+            "receipts_path": str(receipts),
+            "upstreams": [
+                {
+                    "name": "typesafe",
+                    "scheme": "http",
+                    "host": "fake.typesafe",
+                    "port": 80,
+                    "methods": ["POST"],
+                    "paths": ["/v1/systemone"],
+                    "credential_file": str(key),
+                }
+            ],
+        }
+    )
+
+    def recorded() -> list[dict[str, object]]:
+        return [json.loads(line) for line in receipts.read_text().splitlines()]
+
+    before_fetch: list[dict[str, object]] = []
+    before_reply: list[dict[str, object]] = []
+    send_frame = protocol.send_frame
+
+    def fetch(*_args: object, **_kwargs: object) -> None:
+        before_fetch.extend(recorded())
+
+    def reply(sock: socket.socket, header: dict[str, Any], body: bytes) -> None:
+        before_reply.extend(recorded())
+        send_frame(sock, header, body)
+
+    payload = b'{"answers":{},"usage":{"input_tokens":19,"output_tokens":3}}'
+    response = Mock(status=200, getheader=Mock(return_value=None), getheaders=Mock(return_value=[]))
+    response.read.return_value = payload
+    connection = Mock(request=Mock(side_effect=fetch), getresponse=Mock(return_value=response))
+    monkeypatch.setattr(broker.http.client, "HTTPConnection", Mock(return_value=connection))
+    monkeypatch.setattr(protocol, "send_frame", reply)
+    client, server = socket.socketpair()
+    with client, server:
+        client.settimeout(1)
+        send_frame(
+            client,
+            {
+                "cap": cap.token,
+                "method": "POST",
+                "scheme": "http",
+                "host": "fake.typesafe",
+                "port": 80,
+                "path": "/v1/systemone",
+            },
+            b"{}",
+        )
+        sidecar.handle(server)
+        assert protocol.recv_frame(client)[1] == payload
+        assert before_fetch == [{"event": "open"}, {"event": "start", "id": 1}]
+        assert before_reply == [*before_fetch, {"event": "settle", "id": 1, "input_tokens": 19}]
 
 
 def test_an_allowlisted_call_relays_and_injects_the_real_key(stack: Any) -> None:
