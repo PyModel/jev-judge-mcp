@@ -4,6 +4,9 @@ the spec the Docker-marked adversarial suite then executes for real.
 """
 
 import json
+import signal
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
@@ -11,7 +14,7 @@ from unittest.mock import Mock
 import pytest
 
 from evals.ab import arms
-from evals.agent import container_boundary, escape_scan, exploration_paths, secret_scan
+from evals.agent import AgentCommand, container_boundary, escape_scan, exploration_paths, secret_scan
 from evals.confinement import launch
 
 KEY = "sk-launch-fake-typesafe-key-0123456789abcdefNOTREAL"
@@ -520,12 +523,14 @@ def test_scout_011_confined_partial_setup_releases_every_directory(
     monkeypatch.setattr(Path, "mkdir", mkdir)
     monkeypatch.setattr(launch, "docker_run", docker)
     monkeypatch.setattr(launch, "teardown", teardown)
-    with pytest.raises(OSError, match=failure):
+    message = "synthetic volume creation failure" if failure == "teardown" else failure
+    with pytest.raises(OSError, match=message) as primary:
         with launch.run_confined(
             AgentCommand(argv=lambda _: ["true"], timeout_s=1), spec=spec, mcp_config={}, secret=KEY, run_dir=run_dir
         ):
             pytest.fail("setup was expected to stop")
     if failure == "teardown":
+        assert primary.value.__notes__ == ["Confinement cleanup also failed: OSError"]
         # Uncertain Docker cleanup keeps only its owner identity for the next reaper.
         [retry] = owned.iterdir()
         assert [p.name for p in retry.iterdir()] == [launch.LEASE_MARKER]
@@ -579,10 +584,67 @@ def test_relay_budget_is_shared_and_overflow_unwinds(
     cleanup.assert_called_once()
     volume = cleanup.call_args.kwargs["volume"]
     label = f"{launch.LEASE_LABEL}={volume.removeprefix('jev-eval-sock-')}"
-    assert len(docker.call_args_list) == 2
-    assert all(label in call.args[0] for call in docker.call_args_list)
+    volume_call, broker_call, agent_removal = docker.call_args_list
+    assert all(label in call.args[0] for call in (volume_call, broker_call))
+    assert agent_removal.args[0] == ["docker", "rm", "-f", cleanup.call_args.kwargs["agent_name"]]
     assert label in capture.call_args.args[0]
     assert sum(p.stat().st_size for p in records.glob("jev-calls.*")) <= budget
+
+
+@pytest.mark.parametrize("returncode", [0, None], ids=["exit", "timeout"])
+def test_the_agent_is_removed_before_its_final_relay_log_is_copied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, returncode: int | None
+) -> None:
+    records = tmp_path / "records"
+    active: str | None = None
+    relay: Path | None = None
+
+    def capture(argv: list[str], **_kwargs: object) -> tuple[str, str, int | None]:
+        nonlocal active, relay
+        active = argv[argv.index("--name") + 1]
+        scratch = next(mount.removesuffix(":/scratch") for mount in _mounts(argv) if mount.endswith(":/scratch"))
+        relay = Path(scratch) / "jev-calls.jsonl"
+        return "", "", returncode
+
+    def docker(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal active
+        if active is not None and argv == ["docker", "rm", "-f", active]:
+            assert relay is not None
+            relay.write_text('{"input_tokens":1}\n')
+            active = None
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(launch, "capture_output", capture)
+    monkeypatch.setattr(launch, "docker_run", docker)
+    monkeypatch.setattr(launch, "wait_for_broker", Mock())
+    with launch.run_confined(
+        AgentCommand(argv=lambda _: ["true"], timeout_s=1),
+        spec=_spec(tmp_path),
+        mcp_config={},
+        secret=KEY,
+        run_dir=records,
+    ):
+        assert active is None, "grading can start while the agent container is still running"
+        assert (records / "jev-calls.jsonl").read_text() == '{"input_tokens":1}\n'
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP])
+def test_shutdown_signal_unwinds_cleanup(tmp_path: Path, signum: signal.Signals) -> None:
+    cleanup = tmp_path / "cleanup"
+    script = """
+import os, signal, sys
+from pathlib import Path
+from evals.confinement.launch import exit_on_sigterm
+
+exit_on_sigterm()
+try:
+    os.kill(os.getpid(), int(sys.argv[1]))
+finally:
+    Path(sys.argv[2]).touch()
+"""
+    result = subprocess.run([sys.executable, "-c", script, str(signum), str(cleanup)], check=False, timeout=10)
+    assert cleanup.is_file()
+    assert result.returncode == 128 + signum
 
 
 def test_secret_scan_and_scrub_read_bounded_chunks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

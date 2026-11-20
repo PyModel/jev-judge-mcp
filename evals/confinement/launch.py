@@ -54,6 +54,7 @@ from evals.agent import (
 from evals.agent import (
     copy_regular_nofollow as copy_regular_nofollow,
 )
+from evals.spend import mark_agent_started
 
 BROKER_IMAGE = "python@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f"
 """`python:3.12-slim` by digest. The broker and shim are stdlib-only and mounted in at run time,
@@ -342,11 +343,10 @@ def agent_argv(
     scratch: Path,
     grant_file: Path,
 ) -> list[str]:
-    """`docker run --rm` (attached) for the agent: no network, and only the run's own mounts."""
+    """An attached agent container with no network and only the run's own mounts."""
     argv = [
         "docker",
         "run",
-        "--rm",
         "--name",
         name,
         "--label",
@@ -459,14 +459,17 @@ def teardown(*, agent_name: str, broker_name: str, volume: str) -> None:
     ):
         try:
             _remove_resource(argv)
-        except (ConfinementError, OSError, subprocess.TimeoutExpired) as error:
+        except ConfinementError as error:
             failures.append(error)
     if failures:
         raise ConfinementError("could not finish Docker teardown") from failures[0]
 
 
 def _remove_resource(argv: list[str]) -> None:
-    result = docker_run(argv, check=False, timeout=90)
+    try:
+        result = docker_run(argv, check=False, timeout=90)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ConfinementError(f"could not remove {argv[-1]}") from error
     detail = (result.stderr or "").lower().strip()
     missing = "no such container:" in detail or "no such volume:" in detail or detail.endswith(": no such volume")
     if result.returncode and not missing:
@@ -493,14 +496,35 @@ def directory_lease(path: Path) -> Generator[None]:
 
 
 @contextmanager
+def _cleanup(action: Callable[[], None]) -> Generator[None]:
+    primary: BaseException | None = None
+    try:
+        yield
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        try:
+            action()
+        except Exception as error:
+            if primary is None:
+                if isinstance(error, OSError):
+                    raise ConfinementError("could not finish confinement filesystem cleanup") from error
+                raise
+            primary.add_note(f"Confinement cleanup also failed: {type(error).__name__}")
+
+
+@contextmanager
 def _run_root() -> Generator[Path]:
     root = Path(tempfile.mkdtemp(prefix=f"{RUN_PREFIX}{uuid.uuid4().hex}-"))
     with ExitStack() as locks:
         try:
             locks.enter_context(directory_lease(root))
-            yield root
         finally:
-            clear_leased_directory(root, keep_lease=(root / ".retry-cleanup").exists())
+            locks.enter_context(
+                _cleanup(lambda: clear_leased_directory(root, keep_lease=(root / ".retry-cleanup").exists()))
+            )
+        yield root
 
 
 def clear_leased_directory(root: Path, *, keep_lease: bool = False) -> None:
@@ -531,14 +555,14 @@ def _finish_resources(root: Path, *, agent_name: str, broker_name: str, volume: 
 
 
 def exit_on_sigterm() -> None:
-    """SIGTERM raises SystemExit, so `finally` blocks and context managers unwind (F5): teardown
-    runs instead of the default terminate-on-the-spot, which leaked every container and mount."""
+    """Raise SystemExit on shutdown signals so teardown and booking can unwind."""
     import signal
 
     def handler(signum: int, _frame: Any) -> None:
         raise SystemExit(128 + signum)
 
     signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGHUP, handler)
 
 
 def _reap_resources(run_id: str, removed: dict[str, list[str]]) -> None:
@@ -638,7 +662,7 @@ def run_confined(
     ensure_private_run_dir(run_dir)
     with ExitStack() as resources:
         for value in secrets:
-            resources.callback(secret_scrub, run_dir, value)
+            resources.enter_context(_cleanup(lambda value=value: secret_scrub(run_dir, value)))
         root = resources.enter_context(_run_root())
         workdir = Path(tempfile.mkdtemp(prefix="task-", dir=root))
         scratch = root / "scratch"
@@ -682,12 +706,14 @@ def run_confined(
             encoding="utf-8",
         )
         capability = mint_capability(grants, spec.timeout_s + CAPABILITY_MARGIN_S)
-        resources.callback(secret_scrub, run_dir, capability.token)
+        resources.enter_context(_cleanup(lambda: secret_scrub(run_dir, capability.token)))
         (scratch / "entrypoint.sh").write_text(
             entrypoint_text(spec, command.argv(Path(AGENT_CONFIG))), encoding="utf-8"
         )
         (scratch / "entrypoint.sh").chmod(0o755)
-        resources.callback(_finish_resources, root, agent_name=agent_name, broker_name=broker_name, volume=volume)
+        resources.enter_context(
+            _cleanup(lambda: _finish_resources(root, agent_name=agent_name, broker_name=broker_name, volume=volume))
+        )
         docker_run(
             ["docker", "volume", "create", "--label", OWNER_LABEL, "--label", f"{LEASE_LABEL}={root.name}", volume]
         )
@@ -707,11 +733,13 @@ def run_confined(
             spec, name=agent_name, volume=volume, workdir=workdir, scratch=scratch, grant_file=capability.grant_path
         )
         box = container_boundary(dict(spec.env))
+        mark_agent_started(run_dir)
         started = time.perf_counter()
         stdout, stderr, returncode = capture_output(
             argv, cwd=workdir, env=docker_env(), timeout_s=command.timeout_s, cap=STDOUT_CAP_BYTES
         )
         wall = time.perf_counter() - started
+        _remove_resource(["docker", "rm", "-f", agent_name])
         copy_relay_logs(scratch, run_dir)
         raw_hits = write_run_logs(run_dir, stdout, stderr, secrets=secrets)
         trace = (parse or stream.parse)(stdout.splitlines())
@@ -769,7 +797,7 @@ def probe_provider(spec: ConfinementSpec, *, timeout_s: float = 60.0) -> str | N
             _PROBE_SCRIPT.format(scheme=provider.scheme, host=provider.host, port=provider.port, path=models_path),
             encoding="utf-8",
         )
-        try:
+        with _cleanup(lambda: _finish_resources(root, agent_name=probe_name, broker_name=broker_name, volume=volume)):
             docker_run(
                 ["docker", "volume", "create", "--label", OWNER_LABEL, "--label", f"{LEASE_LABEL}={root.name}", volume]
             )
@@ -812,8 +840,6 @@ def probe_provider(spec: ConfinementSpec, *, timeout_s: float = 60.0) -> str | N
                 "/probe.py",
             ]
             result = docker_run(argv, check=False, timeout=timeout_s)
-        finally:
-            _finish_resources(root, agent_name=probe_name, broker_name=broker_name, volume=volume)
         if result.returncode == 0:
             return None
         return ((result.stdout or "").strip() or (result.stderr or "").strip())[-200:]
@@ -879,7 +905,7 @@ def _copy_grade_code(target: Path) -> None:
 
 
 _GRADE_DRIVER = """
-import json, os, subprocess, sys
+import json, os, sys
 from dataclasses import asdict
 from pathlib import Path
 
@@ -892,27 +918,7 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 sys.path.insert(0, "/code")
 from evals.ab import tasks
-from evals.ab.grade import grade, expected_ids
-
-# Hostile-tree-safe git (F1): a clean PATH, no inherited config, hooks and fsmonitor forced off.
-# Repo-local config is still read; command-line -c wins, so a planted hook or fsmonitor does not
-# run even inside the container. The workdir is not on PATH.
-GIT_ENV = {
-    "PATH": "/usr/local/bin:/usr/bin:/bin",
-    "HOME": "/tmp",
-    "GIT_CONFIG_GLOBAL": "/dev/null",
-    "GIT_CONFIG_SYSTEM": "/dev/null",
-    "GIT_CONFIG_NOSYSTEM": "1",
-    "GIT_TERMINAL_PROMPT": "0",
-}
-
-
-def git(*args):
-    return subprocess.run(
-        ["git", "-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "core.hooksPath=", *args],
-        cwd="/tree", env=GIT_ENV, capture_output=True, text=True, check=False,
-    )
-
+from evals.ab.grade import grade, expected_ids, hardened_git
 
 mode, argument = sys.argv[1], sys.argv[2]
 if mode == "reference":
@@ -923,12 +929,13 @@ if mode == "reference":
 
 task = tasks.load_task(argument)
 ids = tuple(json.loads(Path("/reference.json").read_text(encoding="utf-8"))["ids"])
-if (Path("/tree") / ".git").exists():
-    git("add", "-A")
-    Path("/out/diff.patch").write_text(git("diff", "--cached").stdout, encoding="utf-8")
+tree = Path("/tree")
+if (tree / ".git").exists():
+    hardened_git(tree, "add", "-A")
+    Path("/out/diff.patch").write_text(hardened_git(tree, "diff", "--cached").stdout, encoding="utf-8")
 else:
     Path("/out/diff.patch").write_text("", encoding="utf-8")
-result = grade(Path("/tree"), task, sys.executable, expected=ids)
+result = grade(tree, task, sys.executable, expected=ids)
 Path("/out/grade.json").write_text(json.dumps(asdict(result)))
 """
 

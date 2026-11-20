@@ -46,7 +46,10 @@ from pathlib import Path
 from typing import Any, BinaryIO, cast
 
 from evals.ab import stream
+from evals.ab.grade import hardened_git
+from evals.artifacts import read_artifact
 from evals.relay import private_opener
+from evals.spend import amount, mark_agent_started
 
 REDACTED = b"[REDACTED]"
 
@@ -583,6 +586,20 @@ ARTIFACT_CHUNK_BYTES = 64 * 1024
 RELAY_CAP_BYTES = STDOUT_CAP_BYTES
 
 
+def read_relay_log(path: Path) -> list[dict[str, Any]]:
+    try:
+        lines = read_artifact(path, max_bytes=RELAY_CAP_BYTES).splitlines()
+    except FileNotFoundError:
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        row: object = json.loads(line)
+        if not isinstance(row, dict):
+            raise ValueError("relay log rows must be JSON objects")
+        rows.append(cast(dict[str, Any], row))
+    return rows
+
+
 def copy_regular_nofollow(
     source: Path, target: Path, *, limit: int = RELAY_CAP_BYTES, private_source: bool = False
 ) -> bool:
@@ -1056,15 +1073,8 @@ def sandbox_diff(workdir: Path) -> str:
 
     Confined runs do not call this. Their diff is produced inside the container (ADR-0074).
     """
-    subprocess.run(["git", "add", "-A"], cwd=workdir, check=False, capture_output=True)  # noqa: S607
-    done = subprocess.run(
-        ["git", "diff", "--cached"],  # noqa: S607
-        cwd=workdir,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return done.stdout
+    hardened_git(workdir, "add", "-A")
+    return hardened_git(workdir, "diff", "--cached").stdout
 
 
 @contextmanager
@@ -1120,6 +1130,7 @@ def run_agent(
             {**base_env, **command.env, **isolated},
             runtime or runtime_prefixes(base_env.get("PATH", "")),
         )
+        mark_agent_started(run_dir)
         started = time.perf_counter()
         try:
             stdout, stderr, returncode = capture_output(
@@ -1161,12 +1172,6 @@ def run_agent(
             status=run_status(returncode, trace, command.timeout_s),
             escape=escape or None,
         )
-
-
-def _usd(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    return float(value)
 
 
 def preflight_detail(run: AgentRunResult) -> str:
@@ -1223,7 +1228,7 @@ def run_preflight(
             parse=parse,
             auth_provider=auth_provider,
         ) as run:
-            cost = _usd(run.trace.result_field("total_cost_usd"))
+            cost = amount(run.trace.result_field("total_cost_usd"))
             model = run.trace.model
             reached = reached_model(run.trace)
             detail = preflight_detail(run)

@@ -1018,16 +1018,16 @@ def test_a_missing_grade_image_stops_without_host_execution(tmp_path: Path) -> N
     """G9: the grading container cannot start. The planted fsmonitor does not run on the host, and
     `_record` raises the infrastructure stop instead of a failed-agent result."""
     from evals.ab import tasks as ab_tasks
-    from evals.ab.run import _InfrastructureStop  # pyright: ignore[reportPrivateUsage]
+    from evals.study_runner import InfrastructureStop
 
     task = ab_tasks.load_task("j10-control-spec")
     workdir = tmp_path / "tree"
     ab_tasks.materialize(task, workdir)
     marker = tmp_path / "host-marker.txt"
     _plant("fsmonitor", workdir, marker, tmp_path)
-    with pytest.raises(_InfrastructureStop) as stopped:  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(InfrastructureStop) as stopped:
         _production_record("jev-eval-missing:no-such", workdir, ("unused.id",), tmp_path / "run")
-    assert "did not start" in stopped.value.reason
+    assert "did not start" in str(stopped.value)
     assert stopped.value.incurred_usd == pytest.approx(0.01)
     assert not marker.exists()
     assert not (tmp_path / "run" / "result.json").exists()

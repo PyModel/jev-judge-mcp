@@ -48,14 +48,15 @@ from evals.agent import (
     AgentCommand,
     AgentRunResult,
     AgentSetupError,
+    read_relay_log,
     run_agent,
 )
 from evals.artifacts import incomplete_message, read_records
 from evals.bench import analysis, answer, chart, gate, prompt, spans
 from evals.bench.items import Item, load_items
 from evals.bench.ledger import ARMS, POLICY, TRIPLET
-from evals.spend import SpendLedger, agent_started, amount, booked_amount, reconciliation_notes
-from evals.study_runner import record_row, run_recorded, write_record
+from evals.spend import SpendLedger, amount, reconciliation_notes
+from evals.study_runner import record_row, recover_attempts, run_recorded, write_record
 
 LIVE_FLAG = "JEV_BENCH_LIVE"
 OUT = arms.REPO_ROOT / "evals" / "reports" / "bench150"
@@ -169,10 +170,6 @@ def jev_auth_error(calls: Sequence[Mapping[str, Any]]) -> bool:
     )
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
-
-
 def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) -> dict[str, Any]:
     run_id = f"{item.id}.{arm}"
     run_dir = out / run_id
@@ -210,7 +207,7 @@ def run_one(item: Item, arm: str, setup: Setup, book: SpendLedger, out: Path) ->
             jev_down = arm in ("B", "C") and trace.mcp_servers and trace.mcp_servers.get("jev") != "connected"
             if status == "ok" and jev_down:
                 status = f"failed: jev server {trace.mcp_servers.get('jev')}"
-            calls = _read_jsonl(jev_log)
+            calls = read_relay_log(jev_log)
             use: str | None = None
             timings: list[spans.CallTiming] | None = None
             cross_check = None
@@ -410,16 +407,10 @@ def failed_record(
 class _SavedResults:
     rows: dict[Path, dict[str, Any]]
     incomplete: list[Path]
-    charges: dict[str, float]
 
 
 def _records(out: Path) -> _SavedResults:
-    charges: dict[str, float] = {}
-
     def valid(row: dict[str, Any]) -> bool:
-        # read_records has already matched run_id to its directory. An unusable grading
-        # row still reserves the bound, and keeps evidence of any larger charge.
-        run_id = row["run_id"]
         if (
             isinstance(row.get("status"), str)
             and row["status"].startswith(chart.GRADING_FAILURE)
@@ -427,23 +418,20 @@ def _records(out: Path) -> _SavedResults:
         ):
             # Old graders wrote a placeholder zero after losing the cost. Preserve the original file.
             row["jev_cost_usd"] = None
-        cost = booked_amount(row.get("jev_cost_usd"), POLICY.run_bound_usd)
-        charges[run_id] = max(cost, POLICY.run_bound_usd)
         try:
             record = _BenchRecord.model_validate(row)
         except ValidationError:
             return False
         if (
             record.arm not in ARMS
-            or run_id != f"{record.item}.{record.arm}"
+            or record.run_id != f"{record.item}.{record.arm}"
             or not all((record.item.strip(), record.status.strip(), record.tool.strip(), record.family.strip()))
         ):
             return False
-        charges[run_id] = cost
         return True
 
     rows, incomplete = read_records(out.glob("*/result.json"), required=("run_id",), valid=valid)
-    return _SavedResults(rows, incomplete, charges)
+    return _SavedResults(rows, incomplete)
 
 
 def load_records(out: Path) -> list[dict[str, Any]]:
@@ -537,25 +525,11 @@ def _load_book(
     book = SpendLedger.load(out / "ledger.json", POLICY)
     plan = schedule(items, seed)
     saved = _records(out)
-    prior = incomplete_message(saved.incomplete, out) if saved.incomplete else None
-    for item, order in plan:
-        for arm in order:
-            run_id = f"{item.id}.{arm}"
-            if run_id in book.runs or not agent_started(out / run_id):
-                continue
-            charge = saved.charges.get(run_id, book.policy.run_bound_usd)
-            try:
-                book.record(run_id, charge)
-            except ValueError:
-                # Concurrent resume checks may recover the same charge. A different booking is a conflict.
-                if book.runs.get(run_id) != charge:
-                    raise
+    shortfall = recover_attempts(
+        book, out, (f"{item.id}.{arm}" for item, order in plan for arm in order), saved.rows, cost_key="jev_cost_usd"
+    )
+    prior = incomplete_message(saved.incomplete, out) if saved.incomplete else shortfall
     for row in saved.rows.values():
-        rid = row["run_id"]
-        required = saved.charges[rid]
-        if rid in book.runs and book.runs[rid] < required:
-            kind = "unfinished Jev reserve" if row["jev_cost_usd"] is None else "recorded Jev cost"
-            prior = prior or f"stopped: {rid} booked below its {kind} of ${required:g}"
         prior = prior or analysis.terminal_reason(row)
     return book, plan, prior
 

@@ -217,3 +217,15 @@ defect was `_record` diffing and grading the agent workdir in the harness proces
   plugin entry point, sitecustomize/usercustomize, `.git/hooks` and `core.hooksPath`,
   `core.fsmonitor`, a git alias, a symlink out of the workdir, and PATH/PYTHONPATH shadowing. A
   host marker from any of those fails the suite. No paid A/B run is started by that suite.
+
+## Amendment 2026-11-19: stop the agent before reading its work
+
+- The confined launcher persists the launch handoff from ADR-0045 before starting the agent
+  container. It force-removes the container as soon as capture returns, including on timeout,
+  before copying relay logs or passing the workdir to the grader.
+- SIGTERM and SIGHUP unwind the same cleanup path. A secondary cleanup failure preserves the
+  primary error, including an interrupt or an infrastructure stop with a measured cost.
+  Uncertain Docker cleanup retains the lease for the reaper.
+- The offline sandbox and the grading container share the same Git invocation. It uses a fixed
+  environment without inherited Git settings, disables global and system config, hooks and
+  fsmonitor, and sets a 15-second timeout per command.

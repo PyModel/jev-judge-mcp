@@ -18,6 +18,7 @@ from typing import Any, cast
 
 import pytest
 
+from evals import study_runner
 from evals.ab import ledger as pilot_ledger
 from evals.ab import stream
 from evals.ab.ledger import RUN_BOUND_USD
@@ -1138,14 +1139,14 @@ def test_concurrent_resume_checks_recover_one_charge(tmp_path: Path, monkeypatch
     run_id = loop.ids[0]
     loop.seed(run_id, 0.17)
     both_read = threading.Barrier(2)
-    started = run.agent_started
+    started = study_runner.agent_started
 
     def simultaneous_check(path: Path) -> bool:
         if path.name == run_id:
             both_read.wait(timeout=5)
         return started(path)
 
-    monkeypatch.setattr(run, "agent_started", simultaneous_check)
+    monkeypatch.setattr(study_runner, "agent_started", simultaneous_check)
     with ThreadPoolExecutor(max_workers=2) as pool:
         checks = [pool.submit(run.runs_remain, items, loop.out) for _ in range(2)]
         assert all(check.result(timeout=10) for check in checks)

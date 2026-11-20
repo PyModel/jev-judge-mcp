@@ -18,6 +18,7 @@ from evals.ab import run as ab_run
 from evals.ab.grade import changed_protected, compare_source, expected_ids, grade, old_rule_success, run_tests
 from evals.ab.stream import ToolUse, Trace
 from evals.agent import AgentRunResult
+from evals.artifacts import RESULT_BYTES_MAX
 from evals.bench import pi
 from evals.spend import JEV_PUBLISHED_USD_PER_MTOK_INPUT, SpendLedger
 from tests.evals.booking_cases import (
@@ -925,6 +926,19 @@ def test_a_resume_under_another_setup_is_refused(tmp_path: Path) -> None:
             ab_run.pin_meta(tmp_path, {**meta, key: value})
 
 
+@pytest.mark.parametrize("report", [False, True], ids=["resume", "report"])
+def test_oversize_metadata_is_refused(tmp_path: Path, report: bool) -> None:
+    out = tmp_path / "claude"
+    out.mkdir()
+    meta: dict[str, str] = {key: "pinned" for key in ab_run.PINNED}
+    (out / "meta.json").write_text(json.dumps({**meta, "padding": " " * RESULT_BYTES_MAX}))
+    with pytest.raises(ab_run.StudyRefusedError, match="Unreadable study metadata"):
+        if report:
+            ab_run.load_meta(tmp_path)
+        else:
+            ab_run.pin_meta(out, meta, check_only=True)
+
+
 def test_the_history_reports_are_never_a_target() -> None:
     assert ab_run.REPORT.name == "agent-outcomes.md" and ab_run.OUT.name == "agent-outcomes"
     source = (REPO / "evals" / "ab" / "run.py").read_text(encoding="utf-8")
@@ -1371,6 +1385,21 @@ def test_resume_books_the_bound_when_the_seeded_cost_is_nan(tmp_path: Path, monk
     seeded_nan_books_the_bound(ab_loop(tmp_path, monkeypatch))
 
 
+@pytest.mark.parametrize("above_bound", [False, True])
+def test_resume_reserves_at_least_the_bound_for_an_invalid_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, above_bound: bool
+) -> None:
+    from tests.evals.booking_cases import write_result
+
+    loop = ab_loop(tmp_path, monkeypatch)
+    rid = loop.ids[0]
+    charge = loop.bound + 1 if above_bound else 0.25
+    write_result(loop.out, rid, charge, bench_keys=False, wall_s=True)
+    loop.install(lambda *_: pytest.fail("relaunched an incomplete run"))
+    assert "incomplete result records" in loop.go()
+    assert loop.load().runs == {rid: max(charge, loop.bound)}
+
+
 def test_a_grading_timeout_fails_every_test_instead_of_raising(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A hung suite (agent or pristine) is a measured failure: every expected id counts as not
     passed, and the study keeps its record instead of dying in post-processing."""
@@ -1406,6 +1435,7 @@ def test_an_escaped_run_keeps_its_category_on_the_post_processing_failure_path()
     )
     record = ab_run.failed_record("t.A.r1", task, "A", 1, "pi", run, 0.0, KeyError("boom"))
     assert record["failure_category"] == "escape"
+    assert record["jev_cost_usd"] is None
 
 
 def test_out_of_task_exploration_records_the_category_and_keeps_the_grade(tmp_path: Path) -> None:

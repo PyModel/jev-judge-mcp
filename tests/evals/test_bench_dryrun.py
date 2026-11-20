@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from evals import agent
 from evals.ab import arms
 from evals.bench import gate, run, spans
 from evals.bench.items import Item, load_items
@@ -346,6 +347,30 @@ def test_an_operator_interrupt_books_the_bound_and_resume_does_not_relaunch(
 
 def test_a_cancelled_study_does_not_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cancelled_error_does_not_book(bench_loop(tmp_path, monkeypatch))
+
+
+def test_resume_does_not_relaunch_an_agent_that_died_before_capture_finished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class AbruptExit(BaseException):
+        pass
+
+    loop = bench_loop(tmp_path, monkeypatch)
+    first, *rest = loop.ids
+
+    def capture(*_args: object, **_kwargs: object) -> tuple[str, str, int]:
+        raise AbruptExit
+
+    monkeypatch.setattr(agent, "capture_output", capture)
+    with pytest.raises(AbruptExit):
+        loop.go()
+    assert loop.load().runs == {}
+    assert not list(loop.out.glob("*/result.json"))
+    for rid in rest:
+        loop.seed(rid, 0.0)
+    loop.install(lambda *_: pytest.fail("resume relaunched the interrupted agent"))
+    assert loop.go() == f"0 of 1 triplets recorded; incomplete: {first.rsplit('.', 1)[0]}"
+    assert loop.load().runs == {first: loop.bound, **dict.fromkeys(rest, 0.0)}
 
 
 def test_resume_books_a_seeded_result_cost_not_the_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
