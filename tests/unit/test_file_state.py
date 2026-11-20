@@ -7,10 +7,12 @@ directory) is the production behavior.
 
 import os
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.limits import FILE_JUDGE
 from jev_judge_mcp.tools import file_state
 from jev_judge_mcp.tools.base import ToolError
@@ -130,6 +132,12 @@ def test_a_credential_literal_is_redacted_before_it_becomes_state(tmp_path: Path
     assert "keep: this line" in content  # text without a literal passes through unchanged
 
 
+def test_an_unverifiable_key_path_still_refuses_an_existing_file(tmp_path: Path) -> None:
+    path = make(tmp_path / "notes.txt", "ordinary text")
+    key_path = tmp_path / ("a" * (os.pathconf(tmp_path, "PC_NAME_MAX") + 1))
+    refuses("secret_file")(lambda: file_state.read_state(path, key_path=key_path))
+
+
 def test_a_nul_inside_the_window_is_binary(tmp_path: Path) -> None:
     data = b"a" * (FILE_JUDGE.binary_sniff_bytes - 1) + b"\x00"
     refuses("binary_file")(lambda: file_state.read_state(make(tmp_path / "bin.bin", data)))
@@ -157,6 +165,15 @@ def test_a_byte_giant_is_refused(tmp_path: Path) -> None:
     refuses("file_too_large")(lambda: file_state.read_state(giant))
 
 
+def test_redacted_file_content_must_fit_the_same_utf16_cap(tmp_path: Path) -> None:
+    path = make(tmp_path / "notes.txt", "x😀")
+    redact = Redactor(["x"])
+    assert file_state.read_state(path, replace(FILE_JUDGE, file_units_max=12), redact=redact) == "[redacted]😀"
+    refuses("file_too_large")(
+        lambda: file_state.read_state(path, replace(FILE_JUDGE, file_units_max=11), redact=redact)
+    )
+
+
 def test_undecodable_bytes_decode_with_replacement_instead_of_crashing(tmp_path: Path) -> None:
     content = file_state.read_state(make(tmp_path / "broken.txt", b"ok \xff\xfe bad"))
     assert "\ufffd" in content
@@ -174,7 +191,6 @@ def test_scout_004_configured_store_is_excluded_by_identity(tmp_path: Path, capl
 
 
 def test_scout_004_reader_requests_only_the_bounded_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from dataclasses import replace
     from io import BytesIO
 
     received: list[int | None] = []

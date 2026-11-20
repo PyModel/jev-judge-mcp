@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import time
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import Mock
 
@@ -194,6 +195,18 @@ async def test_named_store_is_refused_before_review_and_execution(
     assert "known secret store" in outcome.text
     assert not provider.requests
     runner.assert_not_called()
+
+
+async def test_long_literal_search_with_a_configured_key_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pattern = "a" * (os.pathconf(tmp_path, "PC_NAME_MAX") + 1)
+    (tmp_path / "records.txt").write_text(pattern + "\n")
+    store = tmp_path / "key-store"
+    store.touch()
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(store))
+    provider = FakeProvider({"q0": {"noul": 0.95}})
+    outcome = await _run(provider, f"grep -F {pattern} records.txt", tmp_path, monkeypatch)
+    assert not outcome.is_error, outcome.text
+    assert pattern in cast(dict[str, str], provider.requests[0][0])["command output"]
 
 
 async def test_command_pem_is_masked_before_the_provider_call(tmp_path: Any, monkeypatch: Any) -> None:

@@ -12,6 +12,7 @@ with the ADR-0076 credential-literal detector before it becomes state, so a judg
 config file never ships its secrets to the provider.
 """
 
+import errno
 import logging
 import os
 import stat
@@ -59,7 +60,11 @@ def is_secret_store(path: Path, key_path: Path | None = None) -> bool:
                 return True
         except FileNotFoundError:
             pass
-        except (OSError, RuntimeError):
+        except OSError as error:
+            # A long search literal cannot name a file. Errors checking the key still fail closed.
+            if error.errno != errno.ENAMETOOLONG or error.filename != os.fspath(path):
+                return True
+        except RuntimeError:
             return True
     name = path.name.lower()
     if name in _SECRET_EXACT:
@@ -153,6 +158,7 @@ def read_state(
     content = data.decode("utf-8", errors="replace")
     if length(content) > caps.file_units_max:
         refuse("file_too_large", f"file exceeds the {caps.file_units_max:,}-unit state cap: {path}")
-    # Redaction is the last step, so the cap measures the file as it is on disk, and a clean file
-    # passes through unchanged (the detector is the identity without a literal).
-    return redact_credential_literals(content, redact)
+    redacted = redact_credential_literals(content, redact)
+    if redacted is not content and length(redacted) > caps.file_units_max:
+        refuse("file_too_large", f"redacted file exceeds the {caps.file_units_max:,}-unit state cap: {path}")
+    return redacted
