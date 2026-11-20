@@ -15,6 +15,7 @@ import sys
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -35,8 +36,8 @@ from jev_judge_mcp.redaction.values import register_log_secrets
 from jev_judge_mcp.security import SecurityGuard, build_guard
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import load_settings
-from jev_judge_mcp.tools import TOOLS, Runtime, Toolset, gate_range
-from jev_judge_mcp.tools.base import ToolError, code_of
+from jev_judge_mcp.tools import TOOLS, Runtime, Toolset, gate, gate_range
+from jev_judge_mcp.tools.base import JevTool, ToolError, code_of
 from jev_judge_mcp.tools.file_state import read_state, resolve_scoped
 from jev_judge_mcp.tools.toolset import ToolOutcome
 
@@ -118,10 +119,14 @@ def run_gate(
     if repo is not None and "request" in options:
         options["request"] = redact_action(guard.scrub(options["request"]))
     try:
-        arguments = _gate_arguments(options, repo, Path.cwd() if shell_cwd is None else shell_cwd, guard)
+        arguments, held = _gate_arguments(options, repo, Path.cwd() if shell_cwd is None else shell_cwd, guard)
     except CliError as error:
         return _failure(error.code, str(error), tool="jev_gate", exit_code=error.exit_code)
-    return _run_tool("jev_gate", arguments, provider=provider, tests_read_from_file=True, deadline=deadline)
+    # Held files reach the judgment as unreviewed, as in jev_gate_range.
+    judged = replace(gate.TOOL, handler=partial(gate.handle, withheld=held))
+    return _run_tool(
+        "jev_gate", arguments, provider=provider, tests_read_from_file=True, deadline=deadline, tools=(judged,)
+    )
 
 
 def calibrate_main(argv: Sequence[str]) -> int:
@@ -149,7 +154,7 @@ def _gate_options(argv: Sequence[str]) -> dict[str, str]:
 
 def _gate_arguments(
     options: Mapping[str, str], repo: Path | None, shell_cwd: Path, guard: SecurityGuard
-) -> dict[str, object]:
+) -> tuple[dict[str, object], list[dict[str, str]]]:
     try:
         if repo is None:
             repo = repo_root(shell_cwd)
@@ -164,9 +169,12 @@ def _gate_arguments(
             caps=replace(FILE_JUDGE, file_units_max=GATE.doc_units),
         )
         request, claims = _claims(claims_text, options.get("request"))
-        diff, skipped = gate_range.read_range(options["diff"], guard, cwd=repo)
-        if skipped:
-            raise CliError("secret_file", "range includes a withheld file; review it locally", exit_code=2)
+        diff, held = gate_range.read_range(options["diff"], guard, cwd=repo)
+        if any(item["reason"] == "secret_file" for item in held):
+            raise CliError("secret_file", "range includes a secret store; review it locally", exit_code=2)
+        if not diff:
+            paths = ", ".join(item["path"] for item in held)
+            raise CliError("binary_file", f"range holds only binary files ({paths}); review them locally", exit_code=2)
     except ToolError as error:
         raise CliError(error.code, str(error), exit_code=2) from error
     except GitDiffTooLarge as error:
@@ -179,7 +187,7 @@ def _gate_arguments(
         "claims": [guard.scrub(claim) for claim in claims],
         "evidence": [{"id": "cli", "text": "Read by jev-judge-mcp gate from the local repo."}],
         "tests": tests_text,
-    }
+    }, held
 
 
 def _claims(text: str, request: str | None) -> tuple[str, list[str]]:
@@ -212,12 +220,13 @@ def _run_tool(
     provider: JevProvider | None,
     tests_read_from_file: bool = False,
     deadline: float | None = None,
+    tools: Sequence[JevTool] = TOOLS,
 ) -> Decision:
-    known = {tool.name for tool in TOOLS}
+    known = {tool.name for tool in tools}
     if name not in known:
         return _failure("invalid_arguments", f"unknown tool {name}", tool=name, exit_code=2)
     try:
-        outcome = anyio.run(_execute, name, dict(arguments), provider, tests_read_from_file, deadline)
+        outcome = anyio.run(_execute, name, dict(arguments), provider, tests_read_from_file, deadline, tools)
     except Exception as error:
         return _failure(code_of(error), str(error), tool=name)
     if outcome.is_error:
@@ -242,8 +251,9 @@ async def _execute(
     provider: JevProvider | None,
     tests_read_from_file: bool,
     deadline: float | None,
+    tools: Sequence[JevTool],
 ) -> ToolOutcome:
-    toolset = Toolset(_runtime(provider, tests_read_from_file=tests_read_from_file), TOOLS)
+    toolset = Toolset(_runtime(provider, tests_read_from_file=tests_read_from_file), tools)
     try:
         remaining = None if deadline is None else max(0, deadline - time.monotonic())
         with anyio.move_on_after(remaining):

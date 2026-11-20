@@ -4,7 +4,6 @@ import json
 import re
 import subprocess
 from collections.abc import Mapping
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, override
 
@@ -423,6 +422,31 @@ def test_gate_guards_local_inputs_before_judgment(
     assert not provider.requests
 
 
+@pytest.mark.parametrize("with_text", [True, False], ids=["mixed", "binary_only"])
+def test_gate_holds_a_binary_file_for_local_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_text: bool
+) -> None:
+    from tests.support.git_repo import commit_files
+
+    repo = repo_with_diff(tmp_path)
+    monkeypatch.chdir(repo)
+    commit_files(repo, {".gitattributes": "logo.png -diff\n"})
+    commit_files(repo, {"logo.png": "pixels\n"})
+    provider = FakeProvider({})
+    rev = "HEAD~3" if with_text else "HEAD~1"
+    result = cli.run_gate(["--diff", rev, "--claims", "claims.json", "--tests", "tests.log"], provider=provider)
+    if not with_text:
+        assert (result.exit_code, result.error_code) == (2, "binary_file")
+        assert "logo.png" in json.loads(result.rendered)["error"]["message"]
+        return
+    assert (result.exit_code, result.error_code) == (0, None), result.rendered
+    payload = json.loads(result.rendered)["payload"]
+    assert result.action != "auto"
+    assert payload["skipped"] == [{"path": "logo.png", "reason": "binary"}]
+    assert payload["unreviewed_files"] == ["logo.png"]
+    assert payload["review"]["reviewed_files"] == [".gitattributes", "x.py"]
+
+
 def test_cli_filters_configured_values_from_local_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = repo_with_diff(tmp_path)
     monkeypatch.chdir(repo)
@@ -440,12 +464,10 @@ def test_cli_filters_configured_values_from_local_evidence(tmp_path: Path, monke
 def test_required_completion_hook_asks_when_the_gate_handler_crashes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    async def broken(_args: dict[str, Any], _runtime: cli.Runtime) -> Any:
+    async def broken(_args: dict[str, Any], _runtime: cli.Runtime, **_held: object) -> Any:
         raise RuntimeError("gate handler crashed")
 
-    monkeypatch.setattr(
-        cli, "TOOLS", tuple(replace(tool, handler=broken) if tool.name == "jev_gate" else tool for tool in cli.TOOLS)
-    )
+    monkeypatch.setattr(cli.gate, "handle", broken)
     monkeypatch.chdir(repo_with_diff(tmp_path))
     code = completion_hook_main(
         [],

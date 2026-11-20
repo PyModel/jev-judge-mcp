@@ -448,8 +448,10 @@ revision also lists non-ignored untracked files as `untracked`; for each one, ru
 `git add -N <path>` and recheck. For a mixed range, the tool reviews the remaining patches, lists
 withheld files in `skipped`, and holds the range for local review. If every file is withheld as a
 secret store, it refuses with `secret_file`. The `jev-judge-mcp gate` CLI checks the range from the
-repository root and refuses the entire range with `secret_file` (exit 2) if it withholds even one
-file.
+repository root and refuses the entire range with `secret_file` (exit 2) if it withholds a secret
+store. It holds a binary file as the tool does: the other files are reviewed, the binary is listed
+in `skipped`, and the action is not `auto`. A range of only binary files refuses with `binary_file`
+(exit 2).
 
 A bad or empty range, a missing repository, or a patch whose origin cannot be verified yields
 `invalid_arguments`. If either the ordinary diff or its full-file context exceeds the Git capture

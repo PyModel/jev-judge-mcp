@@ -117,3 +117,8 @@ commit. A PR command for the current branch uses the merge base with the local
 default is the local `origin/HEAD` ref. This works after a push has advanced the upstream.
 Missing refs or an ambiguous PR require an explicit range to get a judgment. Empty ranges
 abstain. The hook never fetches refs.
+
+The gate holds a binary patch as `jev_gate_range` does: the judgment reviews the other files and
+lists the binary as unreviewed, so the action cannot be `auto`. Only a secret store refuses the
+whole range (`secret_file`). A range of only binary files has nothing to review and refuses with
+`binary_file`.
