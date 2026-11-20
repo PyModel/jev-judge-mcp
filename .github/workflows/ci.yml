@@ -12,8 +12,9 @@ concurrency:
 permissions:
   contents: read
 
-# Fast gates (ruff, pyright, unit, property) run in parallel; every remaining stage is
-# gated on all four and then also runs concurrently (no serial chain).
+# Every job starts at once: none waits on another, so the slowest job alone sets the time to a
+# result. Public-repository runner minutes are free, so gating later stages on the fast ones saved
+# nothing and added the fast wave's time to every run.
 jobs:
   ruff:
     runs-on: ubuntu-latest
@@ -76,9 +77,7 @@ jobs:
       - run: make property
       - run: make policy-coverage
 
-  # The remaining stages wait for the fast gates, then run in parallel.
   contract:
-    needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -93,7 +92,6 @@ jobs:
       - run: make contract
 
   parity:
-    needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -114,7 +112,6 @@ jobs:
       - run: make policy-replay
 
   security:
-    needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -134,7 +131,6 @@ jobs:
   # storm's own starts and spins), so the whole security stage reruns as a non-root runner in a
   # `--cpus 1` container — the exact command is proven locally in the same image.
   security-one-cpu:
-    needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -154,7 +150,6 @@ jobs:
           '
 
   build:
-    needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -172,7 +167,6 @@ jobs:
           path: dist/
 
   smoke:
-    needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -195,7 +189,6 @@ jobs:
 
   # Offline eval scorer and calibration tests; never run live.
   eval:
-    needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
