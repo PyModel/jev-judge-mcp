@@ -1,9 +1,9 @@
 """The production `RegexExecutor`: a pool of killable worker processes (ADR-0004, ADR-0016).
 
 A slot is one process (`python -m jev_judge_mcp.extract.worker`) running one pattern at a time, fed
-length-prefixed pickles of plain values over its stdin and stdout, never the server's stdout. Each
-pattern arrives with one absolute deadline, taken before queue admission and spent across admission,
-worker start, IPC, matching, and the reply — no stage resets the clock (ADR-0016). On the deadline,
+length-prefixed pickles over its stdin and stdout, never the server's stdout. The executor takes
+one absolute deadline per pattern before queue admission and spends it across admission, worker start,
+IPC, compilation, matching, and the reply — no stage resets the clock (ADR-0016). On the deadline,
 or on cancellation (ADR-0011), that slot's process is killed and a fresh one is started on the next
 demand; other slots keep running. Admission is bounded: a waiter count at `queue_bound` is
 `Saturated` at once, and a pattern the pool cannot admit before its deadline times out unrun.
@@ -61,11 +61,11 @@ def main() -> None:
     replies.flush()
     while len(header := requests.read(_HEADER)) == _HEADER:
         job = pickle.loads(requests.read(int.from_bytes(header)))  # noqa: S301 - our parent
-        source, flags, units, deadline, max_candidates, max_units = job
-        signal.setitimer(signal.ITIMER_REAL, deadline + _SELF_DEADLINE_GRACE_S)
-        matches = match_all(Translated(source, flags), units, max_candidates, max_units)
+        source, flags, units, budget, max_candidates, max_units = job
+        signal.setitimer(signal.ITIMER_REAL, budget + _SELF_DEADLINE_GRACE_S)
+        result = match_all(Translated(source, flags), units, max_candidates, max_units)
         signal.setitimer(signal.ITIMER_REAL, 0)
-        reply = pickle.dumps((matches.candidates, matches.truncated, matches.too_long))
+        reply = pickle.dumps(result)
         replies.write(len(reply).to_bytes(_HEADER) + reply)
         replies.flush()
 
@@ -86,16 +86,16 @@ class _Slot:
             try:
                 self.process.kill()
             except ProcessLookupError:
-                pass  # already reaped (a worker can die on a bad pattern before kill lands); the goal holds
+                pass  # The worker already exited.
             await self.process.aclose()
 
 
 class ProcessRegexExecutor:
     """At most `size` patterns run at once, each in its own killable process.
 
-    The caller's deadline is a whole-request budget (ADR-0016): admission, worker start, IPC, and
-    matching all spend it. `queue_bound` caps how many patterns may wait for a slot. Each job carries
-    the candidate caps from `caps` (`limits.EXTRACT`), so the worker holds no copy of them.
+    The caller's deadline covers admission, worker start, IPC, compilation, and matching (ADR-0016).
+    `queue_bound` caps how many patterns may wait for a slot. Each job carries the candidate caps
+    from `caps` (`limits.EXTRACT`), so the worker holds no copy of them.
 
     The served pool starts warm (ADR-0058): the server's startup path fills every slot through
     `Runtime.awarm` before any transport runs, because worker startup inside a caller's deadline is
@@ -138,7 +138,7 @@ class ProcessRegexExecutor:
         finally:
             self._limit.release()
 
-    async def _find(self, pattern: Translated, text: str, deadline: float) -> Matches:
+    async def _find(self, pattern: Translated, text: str, deadline: float) -> Matches | Invalid:
         remaining = deadline - monotonic()
         if remaining <= 0:
             raise TimeoutError
@@ -152,19 +152,19 @@ class ProcessRegexExecutor:
                 pass
         return await self._attempt(await self._start(deadline - monotonic()), pattern, text, deadline)
 
-    async def _attempt(self, slot: _Slot, pattern: Translated, text: str, deadline: float) -> Matches:
+    async def _attempt(self, slot: _Slot, pattern: Translated, text: str, deadline: float) -> Matches | Invalid:
         healthy = False
         try:
-            matches = await self._run(slot, pattern, text, deadline - monotonic())
+            result = await self._run(slot, pattern, text, deadline - monotonic())
             healthy = True
-            return matches
+            return result
         finally:
             if healthy and not self._closed:
                 self._idle.append(slot)
             else:
                 await slot.kill()
 
-    async def _run(self, slot: _Slot, pattern: Translated, units: str, budget: float) -> Matches:
+    async def _run(self, slot: _Slot, pattern: Translated, units: str, budget: float) -> Matches | Invalid:
         if budget <= 0:
             raise TimeoutError
         caps = self._caps
@@ -188,8 +188,8 @@ class ProcessRegexExecutor:
             # `ClosedResourceError` too: a slot whose stream was closed is a dead slot, whether the
             # process died with its pipe open (broken) or was reaped first (closed).
             raise _WorkerFailed(Unavailable.NO_RESULT) from None
-        candidates, truncated, too_long = pickle.loads(reply)  # noqa: S301 - our own child
-        return Matches(candidates, truncated, too_long)
+        result: Matches | Invalid = pickle.loads(reply)  # noqa: S301 - our own child
+        return result
 
     async def _start(self, budget: float = _START_TIMEOUT_S) -> _Slot:
         """A ready worker. Raises `TimeoutError` if `budget` runs out first, `_WorkerFailed` on a crash."""
@@ -235,10 +235,13 @@ class ProcessRegexExecutor:
         return process
 
     async def warm(self) -> None:
-        """Fill the pool's slots ahead of demand (ADR-0058). Fails fast on the first worker that
-        will not start; slots already started stay in the idle pool for `aclose` to reap."""
-        while len(self._idle) < self.size:
-            self._idle.append(await self._start())
+        """Fill an open pool ahead of demand (ADR-0058). Fail fast if a worker cannot start."""
+        while not self._closed and len(self._idle) < self.size:
+            slot = await self._start()
+            if self._closed:
+                await slot.kill()
+                return
+            self._idle.append(slot)
 
     async def aclose(self) -> None:
         """Kill every idle worker. Closed is final: a later `find` refuses with `NOT_STARTED`, and a

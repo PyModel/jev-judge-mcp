@@ -30,3 +30,10 @@ subset requires `tests/parity/test_extract_differential.py` (Node) green.
 - Patterns outside the narrower subset get `invalid_pattern` with a named reason — a divergence
   already tagged where a fixture shows it.
 - ADR-0016's deadline model governs the pool; this ADR governs only the engine and the subset.
+
+## Amendment (2026-11-19): ES2025 modifier groups are outside the subset
+
+Node 24 accepts scoped `i`, `m`, and `s` modifiers. For example, `/(?i:ab)c/g` on `ABc abC`
+matches `ABc`. The dialect recognizes the modifier group opener and returns `invalid_pattern`
+with the named reason `unsupported regular expression: a modifier group is outside the supported subset`.
+See `extract-modifier-group` in `docs/reference/divergences.json`.

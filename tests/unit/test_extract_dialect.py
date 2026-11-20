@@ -36,6 +36,9 @@ def test_flags_outside_the_subset_are_named(flag: str) -> None:
     ("pattern", "reason"),
     [
         ("(?<n>a)", f"unsupported regular expression: a named group {OUTSIDE}"),
+        ("(?i:ab)c", f"unsupported regular expression: a modifier group {OUTSIDE}"),
+        ("(?-i:ab)c", f"unsupported regular expression: a modifier group {OUTSIDE}"),
+        ("(?i-:ab)c", f"unsupported regular expression: a modifier group {OUTSIDE}"),
         ("(?<=a*)b", f"unsupported regular expression: variable-length lookbehind {OUTSIDE}"),
         (
             "(?<=(?=a)a)b",
@@ -73,6 +76,9 @@ def test_flags_outside_the_subset_are_named(flag: str) -> None:
             f"unsupported regular expression: a quantifier bound above 2147483647 {OUTSIDE}",
         ),
         ("(?/", "invalid regular expression: invalid group"),
+        ("(?i)", "invalid regular expression: invalid group"),
+        ("(?i-i:ab)", "invalid regular expression: invalid group"),
+        ("(?-:ab)", "invalid regular expression: invalid group"),
         ("(a", "invalid regular expression: unterminated group"),
         ("a)", "invalid regular expression: unmatched ')'"),
         ("[a", "invalid regular expression: unterminated character class"),

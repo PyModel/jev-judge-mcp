@@ -128,6 +128,20 @@
       "python_behavior": "stdlib re matches a narrower translated subset; patterns outside it get invalid_pattern with a named reason, and re stalling like V8 keeps the timeout fixtures honest."
     },
     {
+      "id": "extract-modifier-group",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0018-extract-runs-on-stdlib-re-with-a-narrower-subset.md",
+      "tests": [
+        "tests/unit/test_extract_dialect.py::test_pattern_refusals_are_named",
+        "tests/parity/test_extract_differential.py::test_candidates_match_v8"
+      ],
+      "fixtures": [],
+      "reference_behavior": "Node 24 accepts ES2025 modifier groups, such as (?i:ab)c, which matches ABc in ABc abC.",
+      "python_behavior": "Modifier groups return invalid_pattern with the reason unsupported regular expression: a modifier group is outside the supported subset."
+    },
+    {
       "id": "extract-deadline-includes-queue",
       "surface": "result",
       "tier": "both",

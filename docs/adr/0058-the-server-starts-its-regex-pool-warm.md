@@ -74,3 +74,8 @@ are unchanged. No parity-manifest row exists for either; this ADR owns them.
 
 Workers start with `python -P -m` so the caller's working directory is excluded from the
 implicit module search path. The worker resolves through the existing installation.
+
+## Amendment (2026-11-19): closing the pool ends warming
+
+`ProcessRegexExecutor.warm()` is a no-op after `aclose()`. If shutdown overlaps a worker start
+during warming, the warming call reaps that worker as soon as startup completes.
