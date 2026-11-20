@@ -152,3 +152,8 @@ evaluation. The single-attempt message retains its historical wording.
   entries. An invalid recorded model or request ID makes the entry a cache miss. Adapters share
   case-insensitive header lookup and default port values.
 - Delete the unused `RetryPolicy.statuses` field. HTTP 429 remains the sole retryable status.
+
+## Amendment (2026-11-19): The shared HTTP client handles TypeSafe
+
+ADR-0084 removes the TypeSafe SDK and its retry suppression. All providers use the same
+HTTP transport and `JevProvider.evaluate` owns retries.

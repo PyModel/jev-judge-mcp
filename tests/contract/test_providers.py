@@ -2,29 +2,31 @@
 
 Adapters may differ only in URL, auth, model slug, the request/response envelope, and usage; each
 `Case` below states exactly those differences, and every test runs unchanged against all four.
-HTTP is mocked: respx for the `httpx` providers, an `httpx2.MockTransport` for `typesafe-sdk`,
-which speaks `httpx2`. Cancellation (ADR-0011) has no reference counterpart and is Python-only.
+HTTP is mocked with respx. Cancellation (ADR-0011) is Python-only.
 """
 
 import json
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import anyio
 import httpx
-import httpx2
 import pytest
 import respx
 
 from jev_judge_mcp.domain import ChoiceQuestion, NoulCriteria, NoulQuestion, Question, ScoreQuestion, Usage
 from jev_judge_mcp.errors import REDACTED, Redactor
-from jev_judge_mcp.providers import NO_RETRIES, JevProvider, ProviderError, ProviderTimeoutError, RetryPolicy
+from jev_judge_mcp.providers import NO_RETRIES, JevProvider, ProviderError, ProviderTimeoutError, RetryPolicy, base
 from jev_judge_mcp.providers.cloudflare import CloudflareProvider, cloudflare_slug
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.openrouter import OpenRouterProvider, openrouter_slug
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+from jev_judge_mcp.settings import Settings
+from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from jev_judge_mcp.tools.base import code_of
+from tests.support.jev import text_of
 from tests.support.retries import fast_retries as fast_retries
 from tests.support.secrets import secret_env
 
@@ -78,7 +80,7 @@ class Case:
     label: str
     url: str
     authorization: str
-    make: Callable[["Wire"], JevProvider]
+    make: Callable[[RetryPolicy | None, httpx.AsyncClient | None], JevProvider]
     request_body: Callable[[str], dict[str, Any]]
     """The JSON body sent for a requested model."""
     wrap: Callable[[Any], Any]
@@ -91,24 +93,15 @@ class Case:
 
 @dataclass
 class Wire:
-    """A fake HTTP peer shared by both mocking mechanisms."""
+    """Capture parsed requests and supply each upstream reply."""
 
     handler: Handler
-    response_headers: dict[str, str] = field(default_factory=dict[str, str])
-    retry: RetryPolicy | None = NO_RETRIES
     sent: list[Sent] = field(default_factory=list[Sent])
 
-    async def respond(self, url: str, headers: dict[str, str], content: bytes) -> Reply:
-        body = json.loads(content)
-        self.sent.append(Sent(url, headers, body))
+    async def respond(self, request: httpx.Request) -> Reply:
+        body = json.loads(request.content)
+        self.sent.append(Sent(str(request.url), dict(request.headers), body))
         return await self.handler(body)
-
-    def transport2(self) -> httpx2.MockTransport:
-        async def handle(request: httpx2.Request) -> httpx2.Response:
-            status, content = await self.respond(str(request.url), dict(request.headers), await request.aread())
-            return httpx2.Response(status, content=content, headers=self.response_headers)
-
-        return httpx2.MockTransport(handle)
 
 
 OVERFLOW = "__1e400__"
@@ -129,31 +122,29 @@ def reply(value: Any, status: int = 200) -> Handler:
     return handler
 
 
-def _compatible(wire: Wire) -> JevProvider:
-    # Retries off here: single-attempt, deterministic; the bounded default is covered in
-    # tests/contract/test_provider_retries.py (ADR-0057).
+def _compatible(retry: RetryPolicy | None, client: httpx.AsyncClient | None) -> JevProvider:
     return CompatibleProvider(
-        REDACT, api_key=SECRETS["JEV_API_KEY"], base_url="https://jev.example/v1/systemone", retry=wire.retry
+        REDACT, api_key=SECRETS["JEV_API_KEY"], base_url="https://jev.example/v1/systemone", client=client, retry=retry
     )
 
 
-def _typesafe(wire: Wire) -> JevProvider:
+def _typesafe(retry: RetryPolicy | None, client: httpx.AsyncClient | None) -> JevProvider:
     return TypeSafeProvider(
         REDACT,
         api_key=SECRETS["TYPESAFE_API_KEY"],
-        base_url="https://typesafe.example",
-        transport=wire.transport2(),
-        retry=wire.retry,
+        base_url="https://typesafe.example/prefix///",
+        client=client,
+        retry=retry,
     )
 
 
-def _openrouter(wire: Wire) -> JevProvider:
-    return OpenRouterProvider(REDACT, api_key=SECRETS["OPENROUTER_API_KEY"], retry=wire.retry)
+def _openrouter(retry: RetryPolicy | None, client: httpx.AsyncClient | None) -> JevProvider:
+    return OpenRouterProvider(REDACT, api_key=SECRETS["OPENROUTER_API_KEY"], client=client, retry=retry)
 
 
-def _cloudflare(wire: Wire) -> JevProvider:
+def _cloudflare(retry: RetryPolicy | None, client: httpx.AsyncClient | None) -> JevProvider:
     return CloudflareProvider(
-        REDACT, api_token=SECRETS["JEV_CLOUDFLARE_API_TOKEN"], account_id="acct-1", retry=wire.retry
+        REDACT, api_token=SECRETS["JEV_CLOUDFLARE_API_TOKEN"], account_id="acct-1", client=client, retry=retry
     )
 
 
@@ -176,10 +167,11 @@ CASES = [
     Case(
         id="typesafe",
         label="TypeSafe API",
-        url="https://typesafe.example/v1/systemone",
+        url="https://typesafe.example/prefix/v1/systemone",
         authorization=f"Bearer {SECRETS['TYPESAFE_API_KEY']}",
         make=_typesafe,
-        request_body=_flat,
+        request_body=lambda model: {"state": STATE, "model": model, "questions": WIRE_QUESTIONS},
+        extra_headers={"accept": "application/json"},
         wrap=lambda inner: inner,
         reported_model=lambda model, _: model,
         malformed_why="expected a JSON object.",
@@ -235,7 +227,7 @@ def router() -> Iterator[respx.MockRouter]:
 
 
 class Peer:
-    """Installs one `Wire` behind whichever mechanism the provider under test uses."""
+    """Connects each provider to the same fake upstream."""
 
     def __init__(self, case: Case, router: respx.MockRouter) -> None:
         self.case = case
@@ -244,14 +236,14 @@ class Peer:
     def provider(
         self, handler: Handler, *, headers: dict[str, str] | None = None, retry: RetryPolicy | None = NO_RETRIES
     ) -> tuple[JevProvider, Wire]:
-        wire = Wire(handler, headers or {}, retry)
+        wire = Wire(handler)
 
         async def side_effect(request: httpx.Request) -> httpx.Response:
-            status, content = await wire.respond(str(request.url), dict(request.headers), request.content)
-            return httpx.Response(status, content=content, headers=wire.response_headers)
+            status, content = await wire.respond(request)
+            return httpx.Response(status, content=content, headers=headers)
 
         self.router.post(self.case.url).mock(side_effect=side_effect)
-        return self.case.make(wire), wire
+        return self.case.make(retry, None), wire
 
 
 @pytest.fixture
@@ -287,7 +279,12 @@ async def test_success_passes_raw_answers_and_usage_through(case: Case, peer: Pe
     assert sent.url == case.url
     assert sent.headers["authorization"] == case.authorization
     assert sent.headers["content-type"] == "application/json"
-    assert sent.body == case.request_body("jev-latest")
+    assert sent.headers["accept-encoding"] == "identity"
+    assert sent.headers["user-agent"] == f"python-httpx/{httpx.__version__}"
+    assert not any(name.startswith("x-typesafe-") for name in sent.headers)
+    expected = case.request_body("jev-latest")
+    assert sent.body == expected
+    assert list(sent.body) == list(expected)
     for name, value in case.extra_headers.items():
         assert sent.headers[name] == value
 
@@ -386,37 +383,90 @@ async def test_model_name_passthrough(case: Case, peer: Peer, requested: str, bo
 @pytest.mark.parametrize(
     ("body_value", "headers", "expected_id", "expected_model"),
     [
+        (None, {}, None, None),
+        (None, {"X-Request-Id": "header-id"}, "header-id", None),
+        (None, {"X-TypeSafe-Request-Id": "typesafe-id"}, "typesafe-id", None),
+        ("body-id", {"X-Request-Id": "header-id", "X-TypeSafe-Request-Id": "typesafe-id"}, "body-id", "body-id"),
         ("x" * 1024, {"X-Request-Id": "header-id"}, "x" * 1024, "x" * 1024),
         ("x" * 1025, {"X-Request-Id": "header-id"}, "header-id", None),
         ("bad\ntrace", {}, None, None),
         ("bad\u007ftrace", {"X-Request-Id": "bad\ttrace", "Request-Id": "fallback"}, "fallback", None),
         ("café", {"X-Typesafe-Request-Id": "x" * 1025}, None, None),
     ],
-    ids=["at-cap", "too-long-body", "control", "bad-first-header", "non-ascii-and-long-header"],
+    ids=[
+        "absent",
+        "generic-header",
+        "typesafe-header",
+        "body-wins",
+        "at-cap",
+        "too-long-body",
+        "control",
+        "bad-first-header",
+        "non-ascii-and-long-header",
+    ],
 )
 async def test_response_metadata_requires_bounded_printable_ascii(
     case: Case,
     peer: Peer,
-    body_value: str,
+    body_value: str | None,
     headers: dict[str, str],
     expected_id: str | None,
     expected_model: str | None,
 ) -> None:
-    provider, _ = peer.provider(
-        reply(case.wrap({"answers": {}, "model": body_value, "request_id": body_value})), headers=headers
-    )
+    body: dict[str, Any] = {"answers": {}}
+    if body_value is not None:
+        body.update(model=body_value, request_id=body_value)
+    provider, _ = peer.provider(reply(case.wrap(body)), headers=headers)
     evaluation = await evaluate(provider)
     assert evaluation.request_id == expected_id
     assert evaluation.model == case.reported_model("jev-latest", expected_model)
 
 
-@pytest.mark.parametrize("status", [401, 403, 404, 422])
-async def test_http_error_echoing_every_secret_is_redacted(case: Case, peer: Peer, status: int) -> None:
-    echoed = {"error": f"denied for {case.authorization}", "seen": [*SECRETS.values(), *EXTRA_MARKERS]}
+async def test_file_list_review_frame_keeps_the_upstream_request_id(case: Case, peer: Peer) -> None:
+    answers = {
+        "correctness": {"score": 2, "confidence": 0.95},
+        "spec_match": {"score": 2, "confidence": 0.95},
+        "test_gap": {"score": 0, "confidence": 0.95},
+        "blast_radius": {"score": 0, "confidence": 0.95},
+        "safe_to_apply": {"noul": 0.95},
+    }
+    provider, wire = peer.provider(
+        reply(case.wrap({"answers": answers})), headers={"x-typesafe-request-id": "req-live"}
+    )
+    toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: provider), TOOLS)
+    try:
+        result = await toolset.call(
+            "jev_review",
+            {
+                "request": "fix the parser",
+                "diff": [
+                    {"path": "mathutil.py", "patch": "+ add"},
+                    {"path": "limits.py", "patch": "+ cap"},
+                ],
+            },
+        )
+    finally:
+        await toolset.aclose()
+
+    assert not result.is_error, text_of(result)
+    payload = json.loads(text_of(result))
+    assert len(wire.sent) == 2
+    assert payload["provider"] == case.id
+    assert payload["reviewed_files"] == ["mathutil.py", "limits.py"]
+    assert payload["request_id"] == "req-live"
+
+
+@pytest.mark.parametrize(("status", "code"), [(401, "auth"), (403, "provider"), (404, "provider"), (422, "provider")])
+async def test_http_error_echoing_every_secret_is_redacted(case: Case, peer: Peer, status: int, code: str) -> None:
+    echoed = {"error": f"see 401: denied for {case.authorization}", "seen": [*SECRETS.values(), *EXTRA_MARKERS]}
     provider, _ = peer.provider(reply(echoed, status))
 
-    message = await failure(provider)
+    with pytest.raises(ProviderError) as caught:
+        await evaluate(provider)
 
+    assert caught.value.status == status
+    assert code_of(caught.value) == code
+    message = str(caught.value)
     assert message.startswith(f"{case.label} {status}: ")
     assert REDACTED in message
     assert_no_secret(message)
@@ -466,13 +516,48 @@ async def test_deeply_nested_error_keeps_its_status_and_body_prefix(case: Case, 
     assert str(caught.value) == f"{case.label} 401: " + "[" * 200
 
 
+@pytest.mark.parametrize(
+    ("status", "body", "cloudflare_body"),
+    [
+        (400, '{ "detail": "request rejected" }', '{"detail":"request rejected"}'),
+        (400, f"bad key {SECRETS['TYPESAFE_API_KEY']}", "{}"),
+        (404, "", "{}"),
+    ],
+    ids=["formatted-json", "plain-text", "empty"],
+)
+async def test_http_error_keeps_the_raw_body(
+    case: Case, peer: Peer, status: int, body: str, cloudflare_body: str
+) -> None:
+    provider, _ = peer.provider(reply(body.encode(), status))
+    detail = cloudflare_body if case.id == "cloudflare" else REDACT(body)
+    assert await failure(provider) == f"{case.label} {status}: {detail}"
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "code"),
+    [
+        (400, {"detail": {"error_type": "max_tokens_exceeded"}}, "input_too_large"),
+        (400, {"detail": {"error_type": "invalid_request"}}, "provider"),
+        (400, {"detail": "max_tokens_exceeded"}, "provider"),
+        (422, {"detail": {"error_type": "max_tokens_exceeded"}}, "provider"),
+    ],
+)
+async def test_an_upstream_context_overflow_codes_input_too_large(
+    peer: Peer, status: int, body: object, code: str
+) -> None:
+    provider, _ = peer.provider(reply(body, status))
+
+    with pytest.raises(ProviderError) as caught:
+        await evaluate(provider)
+
+    assert code_of(caught.value) == code
+
+
 async def test_connection_error_text_is_redacted(case: Case, peer: Peer) -> None:
     url = SECRETS["JEV_API_BASE_URL"]
 
     async def refuse(_: dict[str, Any]) -> Reply:
         detail = f"cannot reach {url} ({url.replace('jev.example', 'JEV.EXAMPLE')}/) with {case.authorization}"
-        if case.id == "typesafe":
-            raise httpx2.ConnectError(detail)
         raise httpx.ConnectError(detail)
 
     provider, _ = peer.provider(refuse)
@@ -483,18 +568,98 @@ async def test_connection_error_text_is_redacted(case: Case, peer: Peer) -> None
     assert_no_secret(message)
 
 
-async def test_connection_error_without_a_message_names_its_type(case: Case, peer: Peer) -> None:
-    """A reset surfaces as httpx's `RemoteProtocolError` with an empty message; the cause is its type."""
-
+@pytest.mark.parametrize("error", [httpx.RemoteProtocolError, httpx.ReadError])
+@pytest.mark.parametrize("retry", [NO_RETRIES, None], ids=["one-attempt", "default"])
+async def test_connection_error_without_a_message_names_its_type(
+    case: Case, peer: Peer, fast_retries: list[float], error: type[httpx.TransportError], retry: RetryPolicy | None
+) -> None:
     async def reset(_: dict[str, Any]) -> Reply:
-        if case.id == "typesafe":
-            raise httpx2.RemoteProtocolError("")
-        raise httpx.RemoteProtocolError("")
+        raise error("")
 
-    provider, _ = peer.provider(reset)
+    provider, wire = peer.provider(reset, retry=retry)
+    note = " Completion is uncertain." if retry is None else ""
+    assert await failure(provider) == f"{case.label} request failed: {error.__name__}{note}"
+    assert len(wire.sent) == 1
+    assert fast_retries == []
 
-    sdk = "Connection error: " if case.id == "typesafe" else ""  # typesafe-sdk's own wrapper text
-    assert await failure(provider) == f"{case.label} request failed: {sdk}RemoteProtocolError"
+
+@pytest.mark.parametrize(
+    ("failures", "headers", "delays"),
+    [
+        ([429, 429], {}, [0.5, 1.0]),
+        ([429], {"Retry-After": "2"}, [2.0]),
+        ([429], {"retry-after-ms": "750"}, [0.75]),
+        (["connect"], {}, [0.5]),
+    ],
+    ids=["quota-budget", "retry-after", "retry-after-ms", "connect-refused"],
+)
+async def test_retryable_failures_share_one_attempt_budget(
+    case: Case,
+    peer: Peer,
+    fast_retries: list[float],
+    failures: list[int | str],
+    headers: dict[str, str],
+    delays: list[float],
+) -> None:
+    remaining = iter(failures)
+
+    async def respond(_: dict[str, Any]) -> Reply:
+        match next(remaining, None):
+            case "connect":
+                raise httpx.ConnectError("refused")
+            case int() as status:
+                return status, b"slow down"
+            case _:
+                return 200, body_of(case.wrap({"answers": {"q": 0.5}}))
+
+    provider, wire = peer.provider(respond, headers=headers, retry=None)
+    evaluation = await evaluate(provider)
+    assert evaluation.provider == case.id
+    assert evaluation.answers == {"q": 0.5}
+    assert len(wire.sent) == len(failures) + 1
+    assert fast_retries == delays
+
+
+@pytest.mark.parametrize(
+    ("timeout", "sent"),
+    [
+        (None, {"connect": 7.5, "read": 30.0, "write": 30.0, "pool": 7.5}),
+        (2.5, {"connect": 0.625, "read": 2.5, "write": 2.5, "pool": 0.625}),
+    ],
+    ids=["stdio-default", "bounded"],
+)
+async def test_request_timeout_reaches_the_wire(
+    case: Case, peer: Peer, timeout: float | None, sent: dict[str, float]
+) -> None:
+    provider, _ = peer.provider(reply(case.wrap({"answers": {}})))
+    await evaluate(provider, timeout=timeout)
+    assert peer.router.calls.last.request.extensions["timeout"] == pytest.approx(sent, rel=1e-3)
+
+
+@pytest.mark.parametrize("extra", [False, True], ids=["exact-limit", "over-limit"])
+async def test_unbuffered_success_closes_at_the_byte_limit(
+    case: Case, router: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, extra: bool
+) -> None:
+    body = body_of(case.wrap({"answers": {"q": 1}}))
+    monkeypatch.setattr(base, "SUCCESS_BYTES_MAX", len(body))
+    closed: list[bool] = []
+
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            yield body
+            if extra:
+                yield b" "
+
+        async def aclose(self) -> None:
+            closed.append(True)
+
+    router.post(case.url).mock(return_value=httpx.Response(200, stream=Stream()))
+    provider = case.make(NO_RETRIES, None)
+    if extra:
+        assert "byte limit" in await failure(provider)
+    else:
+        assert (await evaluate(provider)).answers == {"q": 1}
+    assert closed == [True]
 
 
 async def test_timeout_aborts_the_request(case: Case, peer: Peer) -> None:
@@ -555,9 +720,7 @@ def assert_no_secret(message: str) -> None:
         assert secret not in message, message
 
 
-# Same-origin redirects (ADR-0023). The guard lives in HttpProvider, so one concrete provider pins
-# it for all three httpx transports. httpx builds every redirect request; these tests pin that the
-# blocked hop never leaves the process and that followed hops keep httpx's own semantics.
+# Same-origin redirects (ADR-0023).
 
 REDIRECT_ENVELOPE = {"answers": ANSWERS, "usage": {"input_tokens": 1, "output_tokens": 2}, "model": "m"}
 
@@ -566,18 +729,35 @@ def _redirect_provider(url: str) -> CompatibleProvider:
     return CompatibleProvider(REDACT, api_key="jev-secret-0001", base_url=url, retry=NO_RETRIES)
 
 
-async def test_cross_origin_redirect_is_blocked_before_the_next_request_leaves(router: respx.MockRouter) -> None:
-    first = router.post("https://jev.example/v1").mock(
-        return_value=httpx.Response(307, headers={"Location": "https://evil.example/v1"})
+@pytest.mark.parametrize("injected", [False, True], ids=["default-client", "injected-client"])
+async def test_cross_origin_redirect_is_blocked_before_the_next_request_leaves(
+    case: Case, router: respx.MockRouter, injected: bool
+) -> None:
+    away_url = "https://evil.example/v1"
+    first = router.post(case.url).mock(return_value=httpx.Response(307, headers={"Location": away_url}))
+    away = router.post(away_url).mock(return_value=httpx.Response(200, json=case.wrap(REDIRECT_ENVELOPE)))
+    client = httpx.AsyncClient(follow_redirects=True) if injected else None
+    provider = case.make(NO_RETRIES, client)
+
+    assert (
+        await failure(provider) == f"{case.label} request failed: a redirect left the configured origin and was blocked"
     )
-    away = router.post("https://evil.example/v1").mock(return_value=httpx.Response(200, json=REDIRECT_ENVELOPE))
-    provider = _redirect_provider("https://jev.example/v1")
-    with pytest.raises(ProviderError) as caught:
-        await evaluate(provider, timeout=5)
-    await provider.aclose()
-    assert "origin" in str(caught.value)
-    assert first.called
+    assert first.call_count == 1
     assert not away.called
+
+
+@pytest.mark.parametrize("provider_name", ["compatible", "typesafe"])
+async def test_a_base_url_with_credentials_is_refused_before_sending(
+    router: respx.MockRouter, provider_name: str
+) -> None:
+    url = "https://user:pw-9@jev.example/v1"
+    build = TypeSafeProvider if provider_name == "typesafe" else CompatibleProvider
+    provider = build(REDACT, api_key="test-key", base_url=url)
+
+    assert await failure(provider) == (
+        f"{provider.label} request failed: Request cannot be constructed from a URL that includes credentials"
+    )
+    assert not router.calls
 
 
 async def test_scheme_change_is_also_cross_origin(router: respx.MockRouter) -> None:
@@ -649,49 +829,31 @@ async def test_the_redirect_cap_still_applies_and_is_an_owned_error(router: resp
     assert "request failed" in str(caught.value)
 
 
-async def test_an_injected_client_is_gated_like_the_default_one(router: respx.MockRouter) -> None:
-    """ADR-0023 is the provider's guard, not the default client's: a caller-built client follows
-    the same hook, so no transport choice can let the state leave the origin."""
-    first = router.post("https://jev.example/v1").mock(
-        return_value=httpx.Response(307, headers={"Location": "https://evil.example/v1"})
+async def test_typesafe_uses_the_default_url_without_reading_the_environment(
+    router: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TYPESAFE_BASE_URL", "https://unconfigured.example")
+    route = router.post("https://api.typesafe.ai/v1/systemone").mock(
+        return_value=httpx.Response(200, json={"answers": {}})
     )
-    away = router.post("https://evil.example/v1").mock(return_value=httpx.Response(200, json=REDIRECT_ENVELOPE))
-    provider = CompatibleProvider(
-        REDACT,
-        api_key="jev-secret-0001",
-        base_url="https://jev.example/v1",
-        client=httpx.AsyncClient(follow_redirects=True),
-        retry=NO_RETRIES,
-    )
-    with pytest.raises(ProviderError) as caught:
-        await evaluate(provider, timeout=5)
-    await provider.aclose()
-    assert "origin" in str(caught.value)
-    assert first.called
-    assert not away.called
+    provider = TypeSafeProvider(REDACT, api_key=SECRETS["TYPESAFE_API_KEY"], base_url=None, retry=NO_RETRIES)
+    assert (await evaluate(provider)).provider == "typesafe"
+    assert route.call_count == 1
 
 
-async def test_openrouter_and_cloudflare_keep_a_header_only_request_id(router: respx.MockRouter) -> None:
-    """ADR-0068: a `request-id`/`x-request-id` header is kept when the body carries none, for every
-    provider the same way — not only compatible and typesafe."""
-    envelope = {"answers": ANSWERS, "usage": {"input_tokens": 1, "output_tokens": 2}}
-    router.post("https://openrouter.ai/api/alpha/decisions").mock(
-        return_value=httpx.Response(200, json=envelope, headers={"x-request-id": "or-hdr-1"})
+async def test_typesafe_redacts_the_bearer_token_when_its_configured_key_has_padding(
+    router: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from jev_judge_mcp.providers import resolve_provider
+
+    key = SECRETS["TYPESAFE_API_KEY"]
+    monkeypatch.setenv("TYPESAFE_API_KEY", f"  {key}  ")
+    monkeypatch.setenv("TYPESAFE_BASE_URL", "https://typesafe.example")
+    monkeypatch.setenv("JEV_PROVIDER", "typesafe")
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(tmp_path / "unused"))
+    route = router.post("https://typesafe.example/v1/systemone").mock(
+        return_value=httpx.Response(400, text=f"bad key: {key}")
     )
-    router.post("https://api.cloudflare.com/client/v4/accounts/acct-1/ai/run").mock(
-        return_value=httpx.Response(
-            200,
-            json={"success": True, "result": {"state": "Completed", "result": envelope}},
-            headers={"x-request-id": "cf-hdr-1"},
-        )
-    )
-    openrouter = OpenRouterProvider(REDACT, api_key=SECRETS["OPENROUTER_API_KEY"], retry=NO_RETRIES)
-    cloudflare = CloudflareProvider(
-        REDACT, api_token=SECRETS["JEV_CLOUDFLARE_API_TOKEN"], account_id="acct-1", retry=NO_RETRIES
-    )
-    try:
-        assert (await evaluate(openrouter)).request_id == "or-hdr-1"
-        assert (await evaluate(cloudflare)).request_id == "cf-hdr-1"
-    finally:
-        await openrouter.aclose()
-        await cloudflare.aclose()
+
+    assert await failure(resolve_provider(Settings())) == f"TypeSafe API 400: bad key: {REDACTED}"
+    assert route.calls.last.request.headers["authorization"] == f"Bearer {key}"

@@ -10,3 +10,7 @@ We target Python ≥3.12 with `mcp>=2.2,<3` and build on `mcp.server.mcpserver.M
 - Phase 1 must prove the negotiated protocol version and `tools/list` output against the TS snapshot before any tool is ported.
 - The `tools/list` diff parses both JSON documents, sorts object keys recursively, and requires exact equality of `name`, `title`, `description`, `inputSchema`, and `execution`. `execution.taskSupport` is `"forbidden"` on every tool, as in the snapshot. Key order is normalized by that sort. A different schema dialect is a bug in the schema we publish.
 - `serverInfo.name` is `jev-mcp` (ADR-0009). `serverInfo.version` is this distribution's version. The reference reports its package version, `0.5.0` (`index.ts:74-77`). The initialize comparison ignores `serverInfo.version`.
+
+## Amendment (2026-11-19): TypeSafe transport dependency removed
+
+ADR-0084 removes the `typesafe-sdk` dependency. The Python floor and MCP SDK decision still apply.

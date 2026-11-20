@@ -41,7 +41,7 @@ Changes from the pasted plan: `validation/` split from `policy/` (validation rej
 | MCP | `mcp>=2.2,<2.3` | `MCPServer` and private internals (`_lowlevel_server`); capped to the tested minor |
 | HTTP | `httpx` | all raw providers |
 | Models/config | `pydantic>=2`, `pydantic-settings` | |
-| TypeSafe | `typesafe-sdk` (optional extra) | **not** `typesafe` — unrelated package |
+| TypeSafe | `httpx` | Shared provider transport (ADR-0084) |
 | Regex | — (stdlib `re`) | `regex` finishes catastrophic patterns V8 cannot; ADR-0018 |
 | TOML | `tomlkit` | the installer edits `~/.codex/config.toml` in place |
 | Dev | `pytest`, `anyio`, `respx`, `hypothesis`, `pytest-cov`, `ruff`, `pyright`, `pytest-benchmark` | |
@@ -98,7 +98,7 @@ Pure ports of `verifyAction`, `screenRecommendation`, `existsVerdict`, `rankCand
 
 `JevProvider.evaluate(state, questions, model, timeout) -> Evaluation`. Resolver reproduces the auto order including the Vercel slot (ADR-0007). Uniform envelope validation (ADR-0003), redaction on every provider (ADR-0008), cancellation propagates to `httpx` (ADR-0011 — the reference does not cancel, so this is a divergence, tested Python-only).
 
-Order: compatible (P0 prio, easiest to fake) → TypeSafe via `typesafe-sdk` → OpenRouter (`jev-latest → jev-1.13`, then a `typesafe/` prefix unless the slug already has one) → Cloudflare (double-nested `result.result`; `state` errors only when it is a string other than `Completed`). Redaction covers the ADR-0008 secret list.
+Order: compatible (P0 prio, easiest to fake) → TypeSafe via `POST /v1/systemone` → OpenRouter (`jev-latest → jev-1.13`, then a `typesafe/` prefix unless the slug already has one) → Cloudflare (double-nested `result.result`; `state` errors only when it is a string other than `Completed`). Redaction covers the ADR-0008 secret list.
 
 **Accept:** one shared contract suite per provider: success, malformed body, non-object answers, bad usage, non-string model, HTTP error with key echoed in body (must be redacted), timeout, client cancel, model-name passthrough. Adapters may differ only in URL, auth, slug, request/response envelope, usage.
 

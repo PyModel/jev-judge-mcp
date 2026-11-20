@@ -606,22 +606,15 @@ def test_limits_page_names_529_as_terminal() -> None:
     assert "`529 Overloaded` ends the attempt because completion is uncertain" in page
 
 
-def test_retry_docstring_states_the_installed_sdk_timeouts() -> None:
-    """H1: the policy docstring must name the SDK timeouts it does not copy, not call them open."""
-    import importlib.metadata
+def test_retry_docstring_states_the_shared_timeouts() -> None:
+    from jev_judge_mcp.providers.retry import RetryPolicy
 
-    from typesafe_sdk import RetryPolicy
-    from typesafe_sdk.constants import DEFAULT_TIMEOUT
-
-    from jev_judge_mcp.providers.retry import RetryPolicy as ServerPolicy
-
-    text = ServerPolicy.__doc__ or ""
-    assert importlib.metadata.version("typesafe-sdk") in text
-    assert f"{DEFAULT_TIMEOUT:g} s per HTTP operation" in text
-    assert f"{RetryPolicy().timeout:g} s total retry budget" in text
-    assert "leaves open" not in text
-    assert ServerPolicy().per_attempt_timeout == 30.0
-    assert ServerPolicy().budget == 90.0
+    policy = RetryPolicy()
+    text = RetryPolicy.__doc__ or ""
+    assert f"{policy.per_attempt_timeout:g} s per attempt" in text
+    assert f"a {policy.budget:g} s overall budget" in text
+    assert policy.per_attempt_timeout == 30.0
+    assert policy.budget == 90.0
 
 
 def test_stdio_deadline_reference_names_the_sdk_default() -> None:
@@ -632,8 +625,8 @@ def test_stdio_deadline_reference_names_the_sdk_default() -> None:
     assert "10s" in behavior
 
 
-def test_sdk_redirect_registry_matches_the_guard() -> None:
-    """The SDK transport has an origin hook. The gap sentence must not stay the current rule."""
+def test_typesafe_redirect_registry_matches_the_shared_guard() -> None:
+    """The sanctioned TypeSafe divergence is covered at the shared HTTP boundary."""
     entry = _divergence("typesafe-sdk-redirect-policy")
     rules, _, _amendment = _ADR_0023.read_text(encoding="utf-8").partition("## Amendment")
     tests = entry["tests"]
@@ -641,7 +634,7 @@ def test_sdk_redirect_registry_matches_the_guard() -> None:
     assert "not guarded" not in str(entry["python_behavior"])
     assert "outside this guard's reach" not in rules
     assert entry["status"] == "sanctioned"
-    assert "tests/unit/test_providers.py" in tests
+    assert "tests/contract/test_providers.py" in tests
 
 
 def test_classify_card_does_not_claim_the_default_margin_binds() -> None:

@@ -42,3 +42,9 @@ The implementation-rules bullet that placed the typesafe-sdk transport outside t
 withdrawn. `providers/typesafe.py` installs the origin check on the client the SDK is given, and
 `tests/unit/test_providers.py` pins a blocked cross-origin hop. `typesafe-sdk-redirect-policy` is
 sanctioned, not a gap.
+
+## Amendment (2026-11-19): TypeSafe uses the shared origin guard
+
+ADR-0084 moves TypeSafe to the same `HttpProvider` request hook used by the other HTTP
+providers. The shared contract exercises TypeSafe with the default client and an injected
+client. The sanctioned divergence remains `typesafe-sdk-redirect-policy`.

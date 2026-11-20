@@ -58,7 +58,7 @@ def prepare(
     from jev_judge_mcp.server import configure_logging, validate_secrets_redactable
 
     validate_secrets_redactable(settings)
-    configure_logging(settings.log_level, redaction_values(settings), telemetry_payloads=settings.telemetry_payloads)
+    configure_logging(settings.log_level, redaction_values(settings))
     model = resolve_model(settings)
     if provider is not None:
         return provider, model

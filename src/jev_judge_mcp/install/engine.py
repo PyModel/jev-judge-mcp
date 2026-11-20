@@ -196,7 +196,7 @@ def _validate(request: Request) -> None:
     if not supported_spec(request.launch.spec):
         raise InstallError(
             "unsupported launch spec; use the version-pinned PyPI spec "
-            "'jev-judge-mcp[typesafe]==<version>' or a checkout spec '<absolute path>[typesafe]'"
+            "'jev-judge-mcp==<version>' or a checkout spec '<absolute path>'"
         )
 
 

@@ -23,11 +23,11 @@ You need Python 3.12+, [uv](https://docs.astral.sh/uv/), a POSIX system (Linux o
 
 ```sh
 # verify your key, then store it
-uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp setup
+uvx --from jev-judge-mcp jev-judge-mcp setup
 # add the server to your agents
-uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install
+uvx --from jev-judge-mcp jev-judge-mcp install
 # check the configuration, offline
-uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp doctor
+uvx --from jev-judge-mcp jev-judge-mcp doctor
 ```
 
 Every entry the installer writes also requests a Python the package itself declares — `--python '>=3.12'`, taken from the package's `Requires-Python` metadata (ADR-0053). On a machine whose first interpreter is older (Ubuntu 22.04's 3.10, macOS system 3.9), uv picks or downloads one that qualifies instead of refusing to start the server.
@@ -40,23 +40,19 @@ To develop against an unreleased tree, install from a clone and pass `--from-che
 ```sh
 git clone https://github.com/PyModel/jev-judge-mcp
 cd jev-judge-mcp
-uv sync --extra typesafe
+uv sync
 uv run jev-judge-mcp install --from-checkout
 ```
 
-That extra is only for running the server. Development and `make typecheck` need the full sync:
-`uv sync --locked --all-extras` — a plain `uv sync` fails `make typecheck` with confusing
-`Import "typesafe_sdk" could not be resolved` errors.
-
 Running `install` from an unreleased clone without `--from-checkout`? It prints a note that the pinned PyPI build does not include your local changes, and points here. The post-write check then exercises the published build, not your tree.
 
-To migrate a previous checkout install, rerun the installer and select the same agents:
+To migrate an older installer-owned entry, rerun the installer and select the same agents:
 
 ```sh
-uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install
+uvx --from jev-judge-mcp jev-judge-mcp install
 ```
 
-It updates each installer-owned entry to `jev-judge-mcp[typesafe]==<installed version>` and preserves foreign entries. One post-write check covers the shared launch command across all selected agents and may download the pinned version from PyPI. If the check fails, the command exits non-zero and `install --remove` can still remove the entry.
+It updates each installer-owned entry to `jev-judge-mcp==<installed version>` and preserves foreign entries. One post-write check covers the shared launch command across all selected agents and may download the pinned version from PyPI. If the check fails, the command exits non-zero and `install --remove` can still remove the entry.
 
 Restart your agent. The tools show up as `jev_verify`, `jev_gate`, and so on (`mcp__jev__*` in Claude Code).
 
@@ -65,9 +61,9 @@ Restart your agent. The tools show up as `jev_verify`, `jev_gate`, and so on (`m
 `install` finds the agents on your machine, shows what it will change, and asks before writing. It supports Claude Code, Claude Desktop, Codex (CLI and the ChatGPT app), Cursor, OpenCode, Pi, omp, and Pythinker.
 
 ```sh
-uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install --dry-run    # show the plan, write nothing
-uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install -a claude-code    # one agent (repeatable)
-uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install --remove    # undo what install wrote
+uvx --from jev-judge-mcp jev-judge-mcp install --dry-run    # show the plan, write nothing
+uvx --from jev-judge-mcp jev-judge-mcp install -a claude-code    # one agent (repeatable)
+uvx --from jev-judge-mcp jev-judge-mcp install --remove    # undo what install wrote
 ```
 
 Terminal agents get a reference to `TYPESAFE_API_KEY`, never the key itself. Desktop apps don't see your shell's environment. Creating a Claude Desktop entry (macOS only) requires `--desktop-key`, which writes the key into that app's config file. Migrating an owned entry keeps its existing key. The same flag writes the key into the Codex and Pythinker files when the ChatGPT or Pythinker desktop app shares them; without it, `install` says that app has no key. The installer warns if a file holding the key ends up readable by other users. Pi also needs its MCP adapter first: `pi install npm:pi-mcp-adapter`.
@@ -77,7 +73,7 @@ Terminal agents get a reference to `TYPESAFE_API_KEY`, never the key itself. Des
 <details>
 <summary><b>Register the server by hand</b></summary>
 
-`<uvx>` is the absolute path of `uvx`. `<spec>` is `jev-judge-mcp[typesafe]==<version>` (the version-pinned PyPI package, what `install` writes by default) or your checkout's absolute path plus `[typesafe]`, for example `/home/me/jev-judge-mcp[typesafe]`. Keep the `[typesafe]` suffix: without it the package's TypeSafe SDK is missing, and a server started with a TypeSafe key present refuses to run with a one-line message instead of serving calls that all fail. `--python '>=3.12'` is what `install` derives from the package metadata; keep it when you register by hand. Keep the launch in the agent's project folder: `jev_gate_range` and the file tools read the server's working directory, so `uv run --directory <checkout>` points every project at the checkout. To run a checkout through `uv run`, use `uv run --project <checkout>`, which leaves the working directory alone.
+`<uvx>` is the absolute path of `uvx`. `<spec>` is `jev-judge-mcp==<version>` (the version-pinned PyPI package, what `install` writes by default) or your checkout's absolute path, for example `/home/me/jev-judge-mcp`. `--python '>=3.12'` is what `install` derives from the package metadata; keep it when you register by hand. Keep the launch in the agent's project folder: `jev_gate_range` and the file tools read the server's working directory, so `uv run --directory <checkout>` points every project at the checkout. To run a checkout through `uv run`, use `uv run --project <checkout>`, which leaves the working directory alone.
 
 Claude Code (`~/.claude.json`), omp (`~/.omp/agent/mcp.json`), Cursor (`~/.cursor/mcp.json`), and Pi (`~/.pi/agent/mcp.json`) use the same shape. Claude Code and omp also add `"type": "stdio"`. Cursor expands only `${env:NAME}`, so its `env` value is `"${env:TYPESAFE_API_KEY}"`. Pi also adds the three exposure keys below; without them `pi-mcp-adapter` keeps the server lazy and proxy-only and the tools stay out of the model's initial list (ADR-0036).
 
@@ -149,17 +145,17 @@ Paste this into Claude Code, Codex, Cursor, OpenCode, Pi, omp, or any agent, and
 Set up the jev-judge-mcp judgment tools for me, then add their usage rules
 to your instructions.
 
-1. Run `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp setup`.
+1. Run `uvx --from jev-judge-mcp jev-judge-mcp setup`.
    It verifies my TypeSafe key: it reads TYPESAFE_API_KEY from the
    environment or asks at a hidden prompt. Never ask me for the key, echo it,
    or write it into chat, a prompt, or any instruction file.
-2. Run `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install --dry-run`
+2. Run `uvx --from jev-judge-mcp jev-judge-mcp install --dry-run`
    and show me the plan. Wait for my confirmation in chat before anything is
    written. On Pi, run `pi install npm:pi-mcp-adapter` first. Once I confirm,
-   run `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install -a <your agent> -y`,
+   run `uvx --from jev-judge-mcp jev-judge-mcp install -a <your agent> -y`,
    naming your own agent (claude-code, codex, cursor, opencode, pi, omp, or
    pythinker); `-y` skips the CLI prompt because the confirmation happened in chat.
-3. Run `uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp doctor`
+3. Run `uvx --from jev-judge-mcp jev-judge-mcp doctor`
    and fix anything it reports.
 4. Tell me to restart you. After the restart, confirm the jev tools are in
    your tool list.
@@ -432,7 +428,7 @@ One diagram covers the whole server: the tool-call loop from `tools/call` to the
 The ten original tools keep a frozen wire format, pinned by recorded parity fixtures; `jev_score` is an addition. Vocabulary is in [`docs/CONTEXT.md`](docs/CONTEXT.md), decisions in [`docs/adr/`](docs/adr/), and security notes in [`SECURITY.md`](SECURITY.md). Windows is not supported; the server exits at startup on a non-POSIX platform.
 
 ```sh
-# development needs every extra; --extra typesafe alone only runs the server
+# include the telemetry extra for the development checks
 uv sync --locked --all-extras
 # lint, types, unit, property, policy coverage, contract, parity,
 # security, build, smoke, eval, load canary

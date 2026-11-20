@@ -374,7 +374,7 @@ batching and second rounds (`docs/guidance.md:56-62`) vs [fan-out]; retried stat
 | C2 | No drift. `evals/spend.py` and `docs/jev_docs/models.md` both state $0.042 / Mtok. |
 | C3 | Fixed in ADR-0057. 70–500 ms is this repo's recorded range (`docs/ROADMAP.md`), not the official "about 100 ms". The 30 s timeout is unchanged. |
 | classify card | Same as P1. The false "even at high top probability" claim is gone. |
-| redirect guard | Fixed in `docs/reference/divergences.json` `typesafe-sdk-redirect-policy` and an ADR-0023 amendment. The hook in `providers/typesafe.py` is the current rule; the entry is sanctioned, not a gap. |
+| redirect guard | Fixed in `docs/reference/divergences.json` `typesafe-sdk-redirect-policy` and an ADR-0023 amendment. ADR-0084 subsequently moved TypeSafe to the shared `HttpProvider` hook. The entry remains sanctioned. |
 | gate duplicate | Decided A (`gate-duplicate-evidence`): keep the second copy (ADR-0063). The `jev_gate` card states the cost, about 100k extra UTF-16 units at the caps. |
 
 F7–F17, against this note: F8, F10, F12, F13, F14, F15 and F17 were already in the note text at `2638ac3`. F7's tools.md edit is P1 above. F9's ADR-0023 copy is the redirect row. F11's docstring is H1. F16's remaining exclusive-link claim in § 8 is corrected; the other F16 slips were already gone from this note.

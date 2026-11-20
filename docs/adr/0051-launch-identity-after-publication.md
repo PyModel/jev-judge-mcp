@@ -60,3 +60,9 @@ configured agent.
   distribution metadata is missing, the installer cannot write a new ownership record.
   This also applies to checkout writes. Install the checkout in its environment before
   running `install --from-checkout`, as in the README.
+
+## Amendment (2026-11-19): Launch pins omit the provider extra
+
+ADR-0084 changes the launch forms to `jev-judge-mcp==<version>` and `<absolute checkout>`.
+The recorded entry hash still determines ownership, including for entries with the previous
+`[typesafe]` suffix. Reinstall rewrites those entries to the bare spec.

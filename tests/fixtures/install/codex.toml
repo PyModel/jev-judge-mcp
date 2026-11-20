@@ -6,5 +6,5 @@ command = "echo"
 
 [mcp_servers.jev]
 command = "/opt/uv/uvx"
-args = ["--from", "/work/jev-mcp[typesafe]", "jev-judge-mcp"]
+args = ["--from", "/work/jev-mcp", "jev-judge-mcp"]
 env_vars = ["TYPESAFE_API_KEY"]

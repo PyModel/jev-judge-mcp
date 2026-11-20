@@ -97,7 +97,7 @@ def main() -> int:
         if len(wheels) != 1:
             raise GuardError(f"expected exactly one wheel in {dist}, found {len(wheels)}")
         version, requires_python = wheel_facts(wheels[0])
-        spec = f"{DISTRIBUTION}[typesafe]=={version}"
+        spec = f"{DISTRIBUTION}=={version}"
         print(f"== wheel {wheels[0].name}: version {version}, requires-python {requires_python} ==")
 
         print("== the old class: the plain form must fail on this interpreter ==")

@@ -5,7 +5,7 @@ a missing TYPESAFE_API_KEY fails instead of skipping. The scripted adversary (ho
 synthetic reflection, 64-way isolation) stays offline in the rest of `tests/security/`: a live model
 cannot be made to produce it.
 
-- `JEV_PROVIDER=typesafe`, SDK retries off: a failed live call is never retried.
+- `JEV_PROVIDER=typesafe`, provider retries off (`NO_RETRIES`): a failed live call is never retried.
 - At most `SECURITY_REQUEST_CAP` provider requests per session, counted before each is sent.
 - Vendor down (transport error or no answer in time), missing key, and a policy violation fail with
   distinct messages; a transport error is never read as a policy result.
@@ -23,6 +23,7 @@ from typing import Any, cast, override
 import anyio
 import pytest
 
+from jev_judge_mcp import keyfile
 from jev_judge_mcp.domain import Question
 from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.limits import REVIEW
@@ -84,7 +85,9 @@ async def toolset(api_key: str, monkeypatch: pytest.MonkeyPatch) -> AsyncIterato
     settings = Settings()
 
     def typesafe(settings: Settings) -> JevProvider:
-        return TypeSafeProvider(Redactor(settings.secret_values()), api_key=api_key, base_url=None, retry=NO_RETRIES)
+        return TypeSafeProvider(
+            Redactor(keyfile.redaction_values(settings)), api_key=api_key, base_url=None, retry=NO_RETRIES
+        )
 
     tools = Toolset(CappedRuntime(settings, provider_factory=typesafe), TOOLS)
     try:

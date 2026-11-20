@@ -32,6 +32,8 @@ from jev_judge_mcp.install.launch import (
     PACKAGE,
     Launch,
     checkout_launch,
+    claude_code_entry,
+    claude_desktop_entry,
     find_package_root,
     local_install_warning,
     pi_direct_tools,
@@ -49,8 +51,8 @@ from jev_judge_mcp.tools import TOOLS
 from tests.support.secrets import secret_env
 
 UVX = "/opt/uv/uvx"
-SPEC = "/work/jev-mcp[typesafe]"
-PIN = f"{PACKAGE}[typesafe]=={version(PACKAGE)}"
+SPEC = "/work/jev-mcp"
+PIN = f"{PACKAGE}=={version(PACKAGE)}"
 LAUNCH = Launch(uvx=UVX, spec=SPEC)
 PYPI_LAUNCH = pypi_launch(UVX)
 MARKER = "synthetic-secret-value"
@@ -128,8 +130,7 @@ def test_launch_uses_the_local_path_and_the_distribution_name() -> None:
     args = launch.args()
     assert args[-1] == PACKAGE
     assert args[0] == "--python"  # the installed metadata declares Requires-Python (ADR-0053)
-    assert launch.spec.endswith("[typesafe]")
-    assert Path(launch.spec.removesuffix("[typesafe]")).is_absolute()
+    assert Path(launch.spec).is_absolute()
     assert not any(part == "jev-mcp" or part.startswith("jev-mcp==") or part.startswith("jev-mcp[") for part in args)
 
 
@@ -215,21 +216,20 @@ def test_find_package_root_without_a_checkout_names_the_flag() -> None:
 
 def test_specs_accept_exactly_the_two_supported_shapes() -> None:
     assert supported_spec(PIN)
-    assert supported_spec("jev-judge-mcp[typesafe]==0.1.1rc1")
-    assert supported_spec("jev-judge-mcp[typesafe]==1!2.3rc1.post2.dev3+local.4")
+    assert supported_spec("jev-judge-mcp==0.1.1rc1")
+    assert supported_spec("jev-judge-mcp==1!2.3rc1.post2.dev3+local.4")
     assert supported_spec(SPEC)
-    assert supported_spec("/home/me/jev-judge-mcp[typesafe]")
+    assert supported_spec("/home/me/jev-judge-mcp")
     for wrong in (
         PACKAGE,
-        f"{PACKAGE}[typesafe]",
-        "jev-mcp[typesafe]",
-        f"{PACKAGE}==0.1.1",
-        f"{PACKAGE}[typesafe]==",
-        f"{PACKAGE}[typesafe]==0.1.1 more",
-        f"{PACKAGE}[typesafe]==0.1.*",
-        f"{PACKAGE}[typesafe]==1,!=2",
-        f"{PACKAGE}[typesafe]==latest",
-        "work/jev-mcp[typesafe]",
+        "jev-mcp",
+        f"{PACKAGE}[typesafe]==0.1.1",
+        f"{PACKAGE}==",
+        f"{PACKAGE}==0.1.1 more",
+        f"{PACKAGE}==0.1.*",
+        f"{PACKAGE}==1,!=2",
+        f"{PACKAGE}==latest",
+        "work/jev-mcp",
         "",
     ):
         assert not supported_spec(wrong), wrong
@@ -237,7 +237,7 @@ def test_specs_accept_exactly_the_two_supported_shapes() -> None:
 
 def test_engine_refuses_an_unsupported_spec(tmp_path: Path) -> None:
     with pytest.raises(InstallError, match="unsupported launch spec"):
-        execute(tmp_path, agents=("claude-code",), launch=Launch(uvx=UVX, spec="jev-mcp[typesafe]"))
+        execute(tmp_path, agents=("claude-code",), launch=Launch(uvx=UVX, spec="jev-mcp"))
 
 
 # --- ADR-0051 launch identity, through the command line. Every test uses a throwaway HOME. ---
@@ -340,7 +340,7 @@ def test_checkout_flag_renders_the_checkout_spec(
     code = install_cli.main(["--dry-run", "-a", "claude-code", "--from-checkout"])
     assert code == 0
     out = capsys.readouterr().out
-    assert f"{checkout}[typesafe]" in out
+    assert f"{checkout}" in out
     assert f"=={version(PACKAGE)}" not in out
 
 
@@ -370,7 +370,7 @@ def test_install_from_a_local_checkout_warns_about_the_pypi_pin(
     assert code == 0, out
     assert "local checkout" in out
     assert "does not include your local changes" in out
-    assert f"{PACKAGE}[typesafe]=={version(PACKAGE)}" in out  # names the pinned version
+    assert f"{PACKAGE}=={version(PACKAGE)}" in out  # names the pinned version
     assert "--from-checkout" in out
     assert PIN in out  # the plan still shows the default pin
 
@@ -395,7 +395,7 @@ def test_from_checkout_prints_no_local_checkout_note(
     out = capsys.readouterr().out
     assert code == 0, out
     assert "local checkout" not in out
-    assert f"{find_package_root()}[typesafe]" in out
+    assert f"{find_package_root()}" in out
 
 
 def test_from_checkout_requires_uvx_that_honors_cache_keys(
@@ -418,7 +418,7 @@ def test_from_checkout_requires_uvx_that_honors_cache_keys(
     code = install_cli.main(["--from-checkout", "-y", "--dry-run", "-a", "claude-code"])
     out = capsys.readouterr().out
     assert code == 0, out
-    assert f"{find_package_root()}[typesafe]" in out
+    assert f"{find_package_root()}" in out
 
 
 @pytest.mark.usefixtures("wheel_layout")
@@ -1289,12 +1289,25 @@ def test_all_targets_share_one_verification(tmp_path: Path, fails: bool) -> None
 
 
 @pytest.mark.parametrize("target", ["claude-code", "claude-desktop"])
-def test_reinstall_migrates_a_checkout_entry_to_the_pinned_spec(tmp_path: Path, target: str) -> None:
-    """The ADR-0051 migration: one plain re-run rewrites entries this installer owns."""
-    code, _ = execute(tmp_path, agents=(target,), desktop_key=MARKER, launch=LAUNCH)
-    assert code == 0
+@pytest.mark.parametrize(
+    "old_spec",
+    [SPEC, f"{SPEC}[typesafe]", f"{PACKAGE}[typesafe]==0.1.0"],
+    ids=["checkout", "checkout-extra", "pinned-extra"],
+)
+def test_reinstall_migrates_a_checkout_entry_to_the_pinned_spec(tmp_path: Path, target: str, old_spec: str) -> None:
+    """Reinstall updates every previously owned launch shape and preserves the desktop key."""
     path = layout(tmp_path).target_path(target)
-    assert SPEC in path.read_text(encoding="utf-8")
+    if old_spec == SPEC:
+        code, report = execute(tmp_path, agents=(target,), desktop_key=MARKER, launch=LAUNCH)
+        assert code == 0, report
+    else:
+        previous = Launch(uvx=UVX, spec=old_spec)
+        old = claude_desktop_entry(previous, MARKER) if target == "claude-desktop" else claude_code_entry(previous)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"mcpServers": {"jev": old}}), encoding="utf-8")
+        _record_entry(tmp_path, target, path, old)
+    assert old_spec in path.read_text(encoding="utf-8")
+
     code, text = execute(tmp_path, agents=(target,), launch=PYPI_LAUNCH)
     assert code == 0, text
     entry = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["jev"]

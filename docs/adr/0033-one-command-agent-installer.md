@@ -62,3 +62,8 @@ Agents each keep their own MCP config, and several of those files are shared wit
 - Installer state and backups use the shared private-directory checks. After a successful
   config write, the installer retains the three newest backups for that target. Pi adapter
   detection uses the same 16 MiB regular-file limit and BOM-tolerant decoding as config reads.
+
+## Amendment (2026-11-19): Installer specs use the base package
+
+ADR-0084 removes the provider extra. The installer writes a bare pinned distribution or
+absolute checkout path and migrates owned entries written with the previous extra suffix.

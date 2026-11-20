@@ -70,8 +70,8 @@ def select_provider(
     settings: Settings, *, retry: RetryPolicy | None = None
 ) -> tuple[ProviderName, Callable[[], JevProvider]]:
     """The provider `settings` select — its name and a builder — or `ProviderConfigError` with the
-    reference's text. Selection builds no client, so a startup gate can ask which provider would
-    run without opening a connection pool it never closes.
+    reference's text. Selection builds no client, so doctor can report the provider without opening
+    a connection pool.
 
     A key stored by `jev-judge-mcp setup` stands in for `TYPESAFE_API_KEY` when the variable is
     unset (ADR-0046); the variable always wins. The stored value joins the redaction set for this

@@ -242,12 +242,11 @@
       "status": "sanctioned",
       "adr": "docs/adr/0023-same-origin-redirects-only.md",
       "tests": [
-        "tests/contract/test_providers.py",
-        "tests/unit/test_providers.py"
+        "tests/contract/test_providers.py"
       ],
       "fixtures": [],
       "reference_behavior": "Node fetch follows redirects, including cross-origin, with the request body.",
-      "python_behavior": "The typesafe-sdk transport uses an httpx2 client this server constructs; a request hook refuses a cross-origin hop before it is sent. httpx2 does not follow redirects by default, so the hook is the guard if that default or an injected client changes."
+      "python_behavior": "TypeSafe uses the shared HttpProvider request hook. It refuses a cross-origin redirect before the next request is sent, including with an injected client."
     },
     {
       "id": "initialize-capabilities-unverified",

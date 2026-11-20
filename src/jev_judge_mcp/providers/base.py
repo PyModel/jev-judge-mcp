@@ -14,9 +14,9 @@ import logging
 import math
 import re
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, cast, override
+from typing import ClassVar, Literal, cast, override
 from urllib.parse import urlsplit
 
 import anyio
@@ -34,9 +34,6 @@ from jev_judge_mcp.providers.retry import (
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.text import head
 
-if TYPE_CHECKING:
-    import httpx2
-
 type ProviderName = Literal["typesafe", "openrouter", "cloudflare", "compatible"]
 
 logger = logging.getLogger("jev_judge_mcp.providers")
@@ -50,10 +47,7 @@ _METADATA_MAX = 1024
 
 
 def origin_of(url: str | httpx.URL) -> tuple[str, str, int]:
-    """The scheme/host/effective-port triple an origin comparison needs (ADR-0023).
-
-    Shared by both HTTP transports: the raw providers' redirect hook and the typesafe-sdk wrapper's.
-    """
+    """The scheme/host/effective-port triple an origin comparison needs (ADR-0023)."""
     parsed = url if isinstance(url, httpx.URL) else httpx.URL(url)
     return (parsed.scheme, parsed.host or "", parsed.port or DEFAULT_PORTS.get(parsed.scheme, 0))
 
@@ -79,18 +73,6 @@ class ProviderError(Exception):
 
 class ProviderConfigError(ProviderError):
     """Provider resolution failed before any request (`provider.ts:35-77`). Code `auth`."""
-
-
-class ProviderConnectionError(ProviderError):
-    """A connection failure a transport had to wrap to keep today's text (a pre-send SDK connection failure, ADR-0057).
-
-    The retry loop classifies it as a transient connection failure even though it carries no HTTP
-    status and is not a `ConnectionError` instance.
-    """
-
-
-class ProviderDeliveryError(ProviderError):
-    """The request may already have been accepted."""
 
 
 class ProviderTimeoutError(ProviderError):
@@ -316,7 +298,7 @@ class JevProvider(ABC):
         except ProviderError as error:
             # Redact the text, but keep the status the raise site recorded. Dropping it made a 401
             # look like a generic provider error once the text was no longer parsed (ADR-0072).
-            ambiguous = isinstance(error, ProviderDeliveryError) or error.status == 408 or (error.status or 0) >= 500
+            ambiguous = error.status == 408 or (error.status or 0) >= 500
             raise _redacted(error, self._redact, uncertain if ambiguous else "") from None
         except (TimeoutError, httpx.TimeoutException) as error:
             ambiguous = not isinstance(error, (httpx.ConnectTimeout, httpx.PoolTimeout))
@@ -341,8 +323,6 @@ class JevProvider(ABC):
         """
         if isinstance(error, ProviderConfigError):
             return None
-        if isinstance(error, ProviderConnectionError):
-            return TransientFailure("connect", detail=str(error).removeprefix(f"{self.label} request failed: "))
         if isinstance(error, ProviderError):
             if error.status == 429:
                 return TransientFailure(
@@ -412,15 +392,10 @@ SUCCESS_BYTES_MAX = 8 * 1024 * 1024
 ERROR_BYTES_MAX = 64 * 1024
 
 
-class _ResponseStream(Protocol):
-    def __aiter__(self) -> AsyncIterator[bytes]: ...
-    async def aclose(self) -> None: ...
-
-
-class _BoundedStream:
+class _BoundedStream(httpx.AsyncByteStream):
     """Count before HTTPX buffers bytes. The client owns closure on success and exception."""
 
-    def __init__(self, source: _ResponseStream, limit: int, success: bool) -> None:
+    def __init__(self, source: httpx.AsyncByteStream, limit: int, success: bool) -> None:
         self.source = source
         self.limit = limit
         self.success = success
@@ -442,31 +417,18 @@ class _BoundedStream:
         await self.source.aclose()
 
 
-def bounded_response_hook[ResponseT: (httpx.Response, httpx2.Response)](
-    stream_type: type[httpx.AsyncByteStream] | type[httpx2.AsyncByteStream],
-) -> Callable[[ResponseT], Awaitable[None]]:
-    # Both transports require a stream that inherits their own AsyncByteStream class.
-    stream = type("BoundedStream", (_BoundedStream, stream_type), {})
-
-    async def bound(response: ResponseT) -> None:
-        encoding = response.headers.get("content-encoding")
-        if encoding and encoding.strip().lower() != "identity":
-            raise ProviderError("provider returned an unsupported content encoding; requested identity")
-        success = response.is_success
-        limit = SUCCESS_BYTES_MAX if success else ERROR_BYTES_MAX
-        if response.is_stream_consumed:
-            if success and len(response.content) > limit:
-                raise ProviderError(f"provider response exceeds the {limit}-byte limit")
-        else:
-            assert isinstance(response.stream, stream_type)
-            wrapped = stream(response.stream, limit, success)
-            assert isinstance(wrapped, stream_type)
-            response.stream = wrapped
-
-    return bound
-
-
-_bound_response: Callable[[httpx.Response], Awaitable[None]] = bounded_response_hook(httpx.AsyncByteStream)
+async def _bound_response(response: httpx.Response) -> None:
+    encoding = response.headers.get("content-encoding")
+    if encoding and encoding.strip().lower() != "identity":
+        raise ProviderError("provider returned an unsupported content encoding; requested identity")
+    success = response.is_success
+    limit = SUCCESS_BYTES_MAX if success else ERROR_BYTES_MAX
+    if response.is_stream_consumed:
+        if success and len(response.content) > limit:
+            raise ProviderError(f"provider response exceeds the {limit}-byte limit")
+    else:
+        assert isinstance(response.stream, httpx.AsyncByteStream)
+        response.stream = _BoundedStream(response.stream, limit, success)
 
 
 class HttpProvider(JevProvider):
@@ -516,6 +478,7 @@ class HttpProvider(JevProvider):
             raise ProviderError(f"{self.label} request failed: a redirect left the configured origin and was blocked")
 
     async def _post(self, url: str, headers: Mapping[str, str], body: object, timeout: float | None) -> httpx.Response:
+        refuse_credentials_in_url(url, self.label)
         before_send = pre_send_timeout(timeout)
         return await self._client.post(
             url,

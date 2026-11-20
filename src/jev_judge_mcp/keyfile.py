@@ -75,7 +75,13 @@ def redaction_values(settings: Settings) -> list[str]:
     """
     stored = stored_key(settings)
     values = settings.secret_values()
-    return [*values, stored] if stored else values
+    if settings.typesafe_api_key is not None:
+        key = settings.typesafe_api_key.get_secret_value()
+        if (bearer := key.strip()) and bearer != key:
+            values.append(bearer)
+    if stored:
+        values.append(stored)
+    return values
 
 
 def normalized_key(api_key: str) -> str:

@@ -135,9 +135,11 @@ def test_loopback_default_still_rejects_a_forged_host() -> None:
     assert "Traceback" not in stderr
 
 
-def test_a_short_configured_secret_refuses_startup_naming_the_variable() -> None:
-    env = {"TYPESAFE_API_KEY": "abc"}
+@pytest.mark.parametrize("key", ["abc", "   abc   "], ids=["short", "padded-short"])
+def test_a_short_configured_secret_refuses_startup_naming_the_variable(key: str) -> None:
+    env = {"TYPESAFE_API_KEY": key}
     with StdioServer(env=env) as server:
+        server.close_stdin()
         returncode, stderr = server.wait()
     assert returncode != 0
     assert "TYPESAFE_API_KEY" in stderr

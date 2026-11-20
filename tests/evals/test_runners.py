@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 from typing import cast
 
-import httpx2
+import httpx
 import pytest
+import respx
 
 from evals.runners import live
 from evals.runners.manifest import (
@@ -146,45 +147,29 @@ def anyio_backend() -> str:
 
 @pytest.mark.anyio
 async def test_eval_runtime_provider_disables_retries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The eval runtime's provider runs with retries off (ADR-0057), so one tool call is at most one
-    bounded request even when the provider responds with a retryable 429.
-
-    No network: the counting transport is injected at the provider's own constructor, the boundary
-    the factory builds through. The fixture key never leaves the redactor.
-    """
+    """A 429 would normally retry, but an eval call spends only one request (ADR-0057)."""
     from jev_judge_mcp.domain import NoulCriteria, NoulQuestion
-    from jev_judge_mcp.errors import Redactor
     from jev_judge_mcp.providers import ProviderError
-    from jev_judge_mcp.providers.retry import RetryPolicy
-    from jev_judge_mcp.providers.typesafe import TypeSafeProvider
     from jev_judge_mcp.settings import Settings
 
     monkeypatch.setenv("JEV_PROVIDER", "typesafe")
-    monkeypatch.setenv("TYPESAFE_API_KEY", "eval-fixture-key")
-    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(tmp_path / "absent-key"))
+    monkeypatch.setenv("TYPESAFE_BASE_URL", "https://typesafe.example")
+    path = tmp_path / "key"
+    path.write_text("eval-fixture-key", encoding="utf-8")
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(path))
 
-    sent: list[httpx2.Request] = []
+    with respx.mock(assert_all_mocked=True) as router:
+        route = router.post("https://typesafe.example/v1/systemone").mock(return_value=httpx.Response(429, text="no"))
+        provider = live.typesafe_without_retries(Settings())
+        try:
+            with pytest.raises(ProviderError, match="TypeSafe API 429: no"):
+                await provider.evaluate(
+                    "state", {"q": NoulQuestion("Is it?", NoulCriteria("yes", "no"))}, "jev-pinned", 5
+                )
+        finally:
+            await provider.aclose()
 
-    def retryable(request: httpx2.Request) -> httpx2.Response:
-        sent.append(request)
-        return httpx2.Response(429, headers={"Retry-After": "0"}, text="no")
-
-    class Counting(TypeSafeProvider):
-        def __init__(
-            self, redact: Redactor, *, api_key: str, base_url: str | None, retry: RetryPolicy | None = None
-        ) -> None:
-            super().__init__(
-                redact, api_key=api_key, base_url=base_url, retry=retry, transport=httpx2.MockTransport(retryable)
-            )
-
-    monkeypatch.setattr("jev_judge_mcp.providers.resolver.TypeSafeProvider", Counting)
-    provider = live.typesafe_without_retries(Settings())
-    try:
-        with pytest.raises(ProviderError):
-            await provider.evaluate("state", {"q": NoulQuestion("Is it?", NoulCriteria("yes", "no"))}, "jev-pinned", 5)
-    finally:
-        await provider.aclose()
-    assert len(sent) == 1
+    assert route.call_count == 1
 
 
 def test_eval_runtime_provider_refuses_without_a_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

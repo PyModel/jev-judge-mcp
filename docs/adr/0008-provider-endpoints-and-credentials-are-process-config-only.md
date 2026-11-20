@@ -24,3 +24,7 @@ TypeSafe SDK wire-body records reach stderr only when DEBUG logging and payload 
 both enabled. On a log formatting error, the filter redacts the original message and the
 argument representation before emitting them.
 
+## Amendment (2026-11-19): TypeSafe logging uses the shared client
+
+ADR-0084 removes the TypeSafe SDK and its wire-log filter. HTTPX and HTTPCore diagnostics
+omit request bodies at DEBUG. Opt-in payload telemetry still applies to tool spans.

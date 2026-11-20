@@ -31,8 +31,6 @@ from jev_judge_mcp.errors import RedactingFilter, Redactor
 from jev_judge_mcp.http_auth import BearerTokenMiddleware, ensure_http_access_control
 from jev_judge_mcp.identity import ServerVersion, reported_version
 from jev_judge_mcp.instructions import server_instructions
-from jev_judge_mcp.providers import ProviderConfigError, select_provider
-from jev_judge_mcp.providers.typesafe import sdk_importable
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import LogLevel, Settings, load_settings, unexpanded_references
 from jev_judge_mcp.skills import attach as attach_skills
@@ -126,16 +124,11 @@ def build_server(settings: Settings) -> JevMCPServer:
     return JevMCPServer(toolset=Toolset(Runtime(settings), TOOLS), log_level=settings.log_level)
 
 
-def configure_logging(level: LogLevel, secrets: Iterable[str] = (), *, telemetry_payloads: bool = False) -> None:
+def configure_logging(level: LogLevel, secrets: Iterable[str] = ()) -> None:
     """Log to stderr. Every record, from any logger, is redacted of `secrets` first (ADR-0008)."""
     handler = logging.StreamHandler(sys.stderr)
     handler.setLevel(level)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    if not telemetry_payloads:
-        # The SDK may set its own level on import, after this handler is installed.
-        handler.addFilter(
-            lambda record: record.levelno >= logging.INFO or record.name.partition(".")[0] != "typesafe_sdk"
-        )
     handler.addFilter(RedactingFilter(Redactor(secrets)))
     root = logging.getLogger()
     root.handlers[:] = [handler]
@@ -152,32 +145,6 @@ HTTP_BIND_BUDGET_S = 2.0
 def http_port_in_use_message(port: int) -> str:
     """The one line a taken Streamable HTTP port exits with (ADR-0055)."""
     return f"JEV_MCP_HTTP_PORT={port} is already in use; set JEV_MCP_HTTP_PORT to a free port"
-
-
-def provider_not_runnable_message() -> str:
-    """The one line a selected but uninstallable typesafe provider exits with."""
-    return (
-        "the typesafe provider is selected, but the typesafe-sdk package is missing: "
-        "install jev-judge-mcp[typesafe] (a uvx spec needs --from 'jev-judge-mcp[typesafe]' "
-        "or '<path>[typesafe]')"
-    )
-
-
-def ensure_provider_runnable(settings: Settings) -> None:
-    """Refuse to serve with a provider that cannot answer any call (ADR-0075, the ADR-0050 shape).
-
-    A bare `uvx --from <checkout> jev-judge-mcp` without the `typesafe` extra starts, lists
-    tools, serves skills, and then fails every judgment call typed `provider` — the
-    hand-registration trap. When settings select typesafe and the SDK is not importable,
-    one stderr line and exit 1 instead. Provider *configuration* errors stay per-call
-    (ADR-0008, `provider.ts:35-77`), and another provider selected imports nothing extra.
-    """
-    try:
-        name, _ = select_provider(settings)  # selection only: no client is built for a gate
-    except ProviderConfigError:
-        return
-    if name == "typesafe" and not sdk_importable():
-        raise SystemExit(provider_not_runnable_message()) from None
 
 
 def ensure_http_port_free(
@@ -272,6 +239,8 @@ def validate_secrets_redactable(settings: Settings) -> None:
     (ADR-0046) is held to `MIN_SECRET_LENGTH`; the error names the variable, never the value.
     """
     for variable, value in settings.named_secrets():
+        if variable == "TYPESAFE_API_KEY":
+            value = value.strip() or value
         if len(value) < MIN_SECRET_LENGTH:
             raise ValueError(
                 f"{variable} is shorter than {MIN_SECRET_LENGTH} characters; refusing to start: "
@@ -473,9 +442,7 @@ def print_version() -> None:
 
 
 def _configure_process_logging(settings: Settings) -> None:
-    configure_logging(
-        settings.log_level, keyfile.redaction_values(settings), telemetry_payloads=settings.telemetry_payloads
-    )
+    configure_logging(settings.log_level, keyfile.redaction_values(settings))
     warn_unexpanded_references()
 
 
@@ -550,7 +517,6 @@ def main() -> None:
     ensure_secrets_redactable(settings)
     ensure_http_access_control(settings)
     ensure_http_port_free(settings)
-    ensure_provider_runnable(settings)
     _configure_process_logging(settings)
     server = build_server(settings)
     # One line, the same identity `initialize` will report (ADR-0054). Not logged by `--version`.
