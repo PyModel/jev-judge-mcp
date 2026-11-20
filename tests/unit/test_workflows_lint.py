@@ -138,7 +138,9 @@ def workflow_jobs(filename: str) -> dict[str, str]:
     return dict(zip(pairs[1::2], pairs[2::2], strict=True))
 
 
-@pytest.mark.parametrize(("filename", "minutes"), [("ci.yml", 15), ("release.yml", 20), ("deps-latest.yml", 30)])
+@pytest.mark.parametrize(
+    ("filename", "minutes"), [("ci.yml", 15), ("release.yml", 20), ("deps-latest.yml", 30), ("pr-title.yml", 5)]
+)
 def test_each_job_has_the_workflow_timeout(filename: str, minutes: int) -> None:
     jobs = workflow_jobs(filename)
     assert jobs
@@ -154,7 +156,7 @@ def action_inputs(job: str, action: str) -> list[str]:
     ]
 
 
-@pytest.mark.parametrize("filename", ["ci.yml", "release.yml", "deps-latest.yml"])
+@pytest.mark.parametrize("filename", ["ci.yml", "release.yml", "deps-latest.yml", "pr-title.yml"])
 def test_checkout_never_persists_credentials(filename: str) -> None:
     jobs = workflow_jobs(filename)
     checkouts = [inputs for job in jobs.values() for inputs in action_inputs(job, "actions/checkout")]

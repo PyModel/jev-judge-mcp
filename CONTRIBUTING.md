@@ -99,9 +99,16 @@ live behavior.
 ## Offer a contribution
 
 1. Branch from the current `main`.
-2. Keep the change focused; one concern per commit, imperative subject line.
-3. Rebase onto `main` so the branch fast-forwards.
+2. Keep the change focused: one concern per pull request.
+3. Title the pull request as a Conventional Commit, `<type>[(scope)][!]: <imperative subject>`,
+   for example `fix: report oversized git ranges as input budget errors`. The `pr-title` check
+   enforces the format. Mark a breaking change with `!`.
 4. Hand the branch to the maintainer with the `make ci` result.
+
+The maintainer squash-merges every pull request; merge commits and rebase merges are off. The
+pull request title becomes the one commit on `main`, and release-please turns it into the
+changelog entry: `feat`, `fix` and `perf` titles are listed and start the next release, while
+`docs`, `ci`, `test`, `chore`, `refactor`, `build` and `style` titles are not listed.
 
 ## Releases
 
