@@ -16,7 +16,7 @@ import anyio
 from mcp.types import Tool
 
 from jev_judge_mcp import cache
-from jev_judge_mcp.domain import JsonValue, Question
+from jev_judge_mcp.domain import JsonValue, Question, Usage
 from jev_judge_mcp.extract.executor import RegexExecutor
 from jev_judge_mcp.extract.worker import ProcessRegexExecutor
 from jev_judge_mcp.policy import Action
@@ -171,19 +171,26 @@ def frame(
 
 
 class _Pending:
+    """One shared evaluation: it runs while a caller waits on it and is cancelled when the last
+    caller leaves (ADR-0011). Its provider usage is recorded once, on a waiting caller's span."""
+
     def __init__(self, evaluate: Callable[["_Pending"], Coroutine[Any, Any, Evaluation]]) -> None:
         self.subscribers = 0
-        self.dispatched = False
+        self.usage: Usage | None = None
         self.task = asyncio.create_task(evaluate(self))
 
-    async def replay(self) -> Evaluation:
+    async def replay(self, span: Span) -> Evaluation:
         self.subscribers += 1
         try:
             return await asyncio.shield(self.task)
         finally:
             self.subscribers -= 1
-            if not self.subscribers and not self.dispatched and not self.task.done():
+            if not self.subscribers and not self.task.done():
                 self.task.cancel()
+            if self.usage is not None:
+                span.attributes["input_tokens"] = self.usage.input_tokens
+                span.attributes["output_tokens"] = self.usage.output_tokens
+                self.usage = None
 
 
 class Runtime:
@@ -276,7 +283,7 @@ class Runtime:
         pending = self._pending.get(key)
         if pending is not None and not pending.task.cancelling():
             span.attributes["cache"] = "hit"
-            return await pending.replay()
+            return await pending.replay(span)
         await self._cache_slots.acquire()
         if generation != self._cache_generation:
             self._cache_slots.release()
@@ -285,16 +292,15 @@ class Runtime:
         if pending is not None and not pending.task.cancelling():
             self._cache_slots.release()
             span.attributes["cache"] = "hit"
-            return await pending.replay()
+            return await pending.replay(span)
 
         async def evaluate(work: _Pending) -> Evaluation:
             cached = await cache.alookup(self.settings, *identity, digest=key)
             if cached is not None:
                 span.attributes["cache"] = "hit"
                 return cached
-            evaluation = await self._evaluate_capped(provider, state, questions, work)
-            span.attributes["input_tokens"] = evaluation.usage.input_tokens
-            span.attributes["output_tokens"] = evaluation.usage.output_tokens
+            evaluation = await self._evaluate_capped(provider, state, questions)
+            work.usage = evaluation.usage
             await cache.astore(self.settings, *identity, evaluation, digest=key)
             return evaluation
 
@@ -308,10 +314,10 @@ class Runtime:
         work = _Pending(evaluate)
         self._pending[key] = work
         work.task.add_done_callback(completed)
-        return await work.replay()
+        return await work.replay(span)
 
     async def _evaluate_capped(
-        self, provider: JevProvider, state: JsonValue, questions: Mapping[str, Question], work: _Pending | None = None
+        self, provider: JevProvider, state: JsonValue, questions: Mapping[str, Question]
     ) -> Evaluation:
         """The provider call, behind the opt-in in-flight cap (ADR-0069); the default is no cap.
 
@@ -323,8 +329,6 @@ class Runtime:
             self._inflight = anyio.Semaphore(self._max_inflight)
         capacity = self._inflight if self._inflight is not None else nullcontext()
         async with capacity:
-            if work is not None:
-                work.dispatched = True
             return await provider.evaluate(state, questions, self.model, None)
 
     async def aclose(self) -> None:
