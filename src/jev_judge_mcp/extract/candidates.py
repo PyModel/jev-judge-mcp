@@ -12,7 +12,8 @@ from time import monotonic
 from typing import Final, Literal
 
 from jev_judge_mcp.extract.dialect import PatternRejected, from_units, translate
-from jev_judge_mcp.extract.executor import Invalid, Matches, RegexExecutor, Saturated, Timeout, Unavailable
+from jev_judge_mcp.extract.executor import Invalid, Matches, Saturated, Timeout, Unavailable
+from jev_judge_mcp.extract.worker import ProcessRegexExecutor
 from jev_judge_mcp.limits import EXTRACT
 
 REGEX_TIMEOUT_S: Final = EXTRACT.regex_timeout_ms / 1000
@@ -57,7 +58,7 @@ def normalize_flags(flags: str) -> str:
     return "".join(out)
 
 
-async def find_candidates(executor: RegexExecutor, pattern: str, flags: str, units: str) -> Found | Refused:
+async def find_candidates(executor: ProcessRegexExecutor, pattern: str, flags: str, units: str) -> Found | Refused:
     """Run caller `pattern` with caller `flags` over unit-space `units` (`dialect.to_units`)."""
     try:
         translated = translate(pattern, normalize_flags(flags))

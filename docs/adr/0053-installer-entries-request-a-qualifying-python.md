@@ -62,3 +62,11 @@ pin itself (ADR-0051) are unchanged.
   prompted values, and credential-literal detection to scrub stderr before truncation.
   The diagnostic keeps at most five lines of 200 bytes each. A line beyond the bounded
   capture limit is omitted altogether.
+
+## Amendment (2026-11-19): Strict JSON for launch metadata and replies
+
+The installer omits the optional local-checkout warning when `direct_url.json` has
+invalid UTF-8, excessive nesting, or invalid JSON. The verifier reads UTF-8 JSON-RPC
+lines, allowing a UTF-8 BOM. It skips malformed lines, including invalid UTF-8,
+excessive nesting, and nonstandard JSON constants, and still requires valid response
+envelopes to complete the check.

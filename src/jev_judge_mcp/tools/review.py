@@ -2,23 +2,18 @@
 
 The review half (questions, thresholds, documents, projection) lives in `review_half.py` and is
 shared with jev_gate; the per-file pass over a `[{path, patch}]` diff lives in `files.py` (ADR-0066).
-Both are re-exported here for their callers.
 """
 
 from typing import Any
 
 from jev_judge_mcp.gate_diagnostics import input_cuts
 from jev_judge_mcp.limits import REVIEW
+from jev_judge_mcp.policy import file_list_action
 from jev_judge_mcp.responses import SCORE_SCALE
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
-from jev_judge_mcp.tools.files import FileListReview, combined, file_list_refusal, file_patches, review_file_list
+from jev_judge_mcp.tools.files import combined, file_list_refusal, file_patches, review_file_list
 from jev_judge_mcp.tools.gate_evidence import add_citations, grounded_review
-from jev_judge_mcp.tools.observed import file_list_action
 from jev_judge_mcp.tools.review_half import (
-    ANTI_INJECTION,
-    RUBRICS,
-    ReviewDocs,
-    ReviewHalf,
     ReviewSettings,
     project_review,
     review_docs,
@@ -171,20 +166,3 @@ async def _handle_file_list(args: dict[str, Any], runtime: Runtime, settings: Re
 
 
 TOOL = JevTool(DEFINITION, handle)
-
-__all__ = [
-    "ANTI_INJECTION",
-    "DEFINITION",
-    "PURPOSE",
-    "RUBRICS",
-    "TOOL",
-    "FileListReview",
-    "ReviewDocs",
-    "ReviewHalf",
-    "ReviewSettings",
-    "handle",
-    "project_review",
-    "review_docs",
-    "review_questions",
-    "review_settings",
-]

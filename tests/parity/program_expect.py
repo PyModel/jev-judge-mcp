@@ -24,8 +24,8 @@ from jev_judge_mcp.responses import (
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.tools.gate import CLAIM_SUPPORT, REVIEW_FRAMING, claim_question, gate_source_question
 from jev_judge_mcp.tools.gate_evidence import add_citations
-from jev_judge_mcp.tools.review import ANTI_INJECTION, PURPOSE
-from jev_judge_mcp.tools.review_half import review_questions
+from jev_judge_mcp.tools.review import PURPOSE
+from jev_judge_mcp.tools.review_half import ANTI_INJECTION, review_questions
 from jev_judge_mcp.tools.verify import ROLE_RULE, VERIFY_SUFFIX
 
 _OLD_CLAIM = (

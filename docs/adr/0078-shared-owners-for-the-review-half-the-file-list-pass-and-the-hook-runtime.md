@@ -43,3 +43,8 @@ fixed three times.
   unchanged over the shared runtime.
 - `make policy-coverage` keeps 100% branches over the moved decisions; `tests/unit/test_policy.py`
   carries one test per branch.
+
+## Amendment (2026-11-19): callers import the review half directly
+
+`tools/review_half.py` is the import surface for the review half. `tools/review.py` uses it
+to implement jev_review.

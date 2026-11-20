@@ -6,7 +6,6 @@ package's `Requires-Python` (ADR-0053), so `uvx` cannot resolve the package agai
 interpreter it refuses.
 """
 
-import json
 import re
 import stat
 import subprocess
@@ -18,7 +17,7 @@ from pathlib import Path
 
 from packaging.version import VERSION_PATTERN
 
-from jev_judge_mcp.domain import is_json_object
+from jev_judge_mcp.domain import decode_json, is_json_object
 from jev_judge_mcp.install.errors import InstallError
 from jev_judge_mcp.install.redact import is_reference
 from jev_judge_mcp.tools import TOOLS
@@ -134,13 +133,8 @@ def local_install_warning() -> str | None:
     """
     try:
         raw = distribution(PACKAGE).read_text("direct_url.json")
-    except PackageNotFoundError:
-        return None
-    if not raw:
-        return None
-    try:
-        parsed: object = json.loads(raw)
-    except json.JSONDecodeError:
+        parsed = decode_json(raw) if raw else None
+    except (PackageNotFoundError, ValueError):
         return None
     url = parsed.get("url") if is_json_object(parsed) else None
     if not isinstance(url, str) or not url.startswith("file://"):

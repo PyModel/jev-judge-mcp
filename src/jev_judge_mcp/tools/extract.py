@@ -18,6 +18,9 @@ from jev_judge_mcp.policy import (
     DEFAULT_MINIMUM_MARGIN,
     ExtractFieldEvidence,
     ExtractJudgment,
+    decide_extract_field,
+    extract_call_action,
+    fail_closed,
 )
 from jev_judge_mcp.policy.actions import Action
 from jev_judge_mcp.serialize import quote
@@ -33,12 +36,7 @@ from jev_judge_mcp.tools.base import (
     frame,
     headline,
 )
-from jev_judge_mcp.tools.observed import (
-    decide_extract_field,
-    extract_call_action,
-    fail_closed,
-    validate_extract_choice,
-)
+from jev_judge_mcp.tools.observed import validate_extract_choice
 from jev_judge_mcp.validation import margin, top_probability
 from jev_judge_mcp.validation.caps import CapLedger, candidate_budget_error, exceeds
 

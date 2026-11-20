@@ -10,14 +10,13 @@ against U+00A0 and U+0085, empty matches, ASCII-only case folding) with seeded g
 import json
 import random
 import subprocess
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 
 from jev_judge_mcp.extract.candidates import Found, find_candidates, normalize_flags
 from jev_judge_mcp.extract.dialect import to_units
-from jev_judge_mcp.extract.executor import InProcessRegexExecutor, RegexExecutor
 from jev_judge_mcp.extract.worker import ProcessRegexExecutor
 from tests.support.node import REPO_ROOT, find_node
 
@@ -168,13 +167,6 @@ pytestmark = pytest.mark.anyio
 
 type Case = tuple[str, str, str]
 
-EXECUTORS: dict[str, Callable[[], RegexExecutor]] = {
-    "in-process": InProcessRegexExecutor,
-    "process": lambda: ProcessRegexExecutor(size=1),
-}
-"""The in-process adapter is the matcher alone; the process pool adds pickle transport, the worker's
-job decoding, and its caps as production runs them."""
-
 
 @pytest.fixture(scope="module")
 def anyio_backend() -> str:
@@ -183,7 +175,7 @@ def anyio_backend() -> str:
 
 @pytest.fixture(scope="module")
 def reference() -> list[tuple[Case, dict[str, Any]]]:
-    """Every corpus case beside V8's answer, from one Node run shared by both executors."""
+    """Every corpus case beside V8's answer, from one Node run."""
     node = find_node()
     cases = corpus()
     stdin = "".join(
@@ -197,18 +189,19 @@ def reference() -> list[tuple[Case, dict[str, Any]]]:
     return list(zip(cases, expected, strict=True))
 
 
-@pytest.fixture(params=list(EXECUTORS))
-async def executor(request: pytest.FixtureRequest) -> AsyncIterator[RegexExecutor]:
-    adapter = EXECUTORS[request.param]()
-    if isinstance(adapter, ProcessRegexExecutor):
-        await adapter.warm()  # a cold start would spend the first case's 1 s deadline
+@pytest.fixture(scope="module")
+async def executor() -> AsyncIterator[ProcessRegexExecutor]:
+    pool = ProcessRegexExecutor(size=1)
     try:
-        yield adapter
+        await pool.warm()
+        yield pool
     finally:
-        await adapter.aclose()
+        await pool.aclose()
 
 
-async def python_pipeline(executor: RegexExecutor, document: str, pattern: str, flags: str) -> dict[str, Any] | None:
+async def python_pipeline(
+    executor: ProcessRegexExecutor, document: str, pattern: str, flags: str
+) -> dict[str, Any] | None:
     """Production's candidate pipeline on `executor`; None where the subset rejects."""
     found = await find_candidates(executor, pattern, flags, to_units(document))
     if not isinstance(found, Found):
@@ -217,7 +210,9 @@ async def python_pipeline(executor: RegexExecutor, document: str, pattern: str, 
     return {"candidates": found.candidates, "truncated": found.truncated, "tooLong": found.too_long}
 
 
-async def test_candidates_match_v8(executor: RegexExecutor, reference: list[tuple[Case, dict[str, Any]]]) -> None:
+async def test_candidates_match_v8(
+    executor: ProcessRegexExecutor, reference: list[tuple[Case, dict[str, Any]]]
+) -> None:
     accepted = 0
     for (document, pattern, flags), expected in reference:
         ours = await python_pipeline(executor, document, pattern, flags)
@@ -235,5 +230,5 @@ async def test_candidates_match_v8(executor: RegexExecutor, reference: list[tupl
 @pytest.mark.parametrize(
     ("pattern", "flags"), [("k", "i"), ("[a-z]", "i"), ("\\w", "i"), ("ſ", ""), ("[^é]", "")], ids=str
 )
-async def test_named_cases_are_accepted(pattern: str, flags: str) -> None:
-    assert await python_pipeline(InProcessRegexExecutor(), "x", pattern, flags) is not None
+async def test_named_cases_are_accepted(executor: ProcessRegexExecutor, pattern: str, flags: str) -> None:
+    assert await python_pipeline(executor, "x", pattern, flags) is not None

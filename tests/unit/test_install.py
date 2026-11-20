@@ -1,5 +1,6 @@
 """Installer fixtures use a throwaway home. They never read or write the real user config."""
 
+import errno
 import json
 import os
 import signal
@@ -10,7 +11,7 @@ import tomllib
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import replace
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError, PathDistribution, version
 from pathlib import Path
 from shutil import which
 
@@ -57,6 +58,8 @@ LAUNCH = Launch(uvx=UVX, spec=SPEC)
 PYPI_LAUNCH = pypi_launch(UVX)
 MARKER = "synthetic-secret-value"
 TARGETS = ("claude-code", "claude-desktop", "codex", "cursor", "opencode", "pi", "omp", "pythinker")
+DEEP_JSON = b"[" * 10_000 + b"0" + b"]" * 10_000
+LATIN_1_JSON_STRING = b'"caf\xe9"'
 
 
 def layout(home: Path) -> Layout:
@@ -83,7 +86,6 @@ def execute(
     dry_run: bool = False,
     remove: bool = False,
     force: bool = False,
-    before_write: Callable[[Path], None] | None = None,
     launch: Launch = LAUNCH,
     verify: Callable[[list[str]], None] | None = None,
 ) -> tuple[int, str]:
@@ -100,7 +102,6 @@ def execute(
             dry_run=dry_run,
             remove=remove,
             force=force,
-            before_write=before_write,
             verify=verify,
         )
     )
@@ -385,6 +386,27 @@ def test_install_from_a_pypi_wheel_prints_no_local_checkout_note(
     assert "local checkout" not in out
 
 
+@pytest.mark.parametrize("invalid_value", [DEEP_JSON, LATIN_1_JSON_STRING, b"NaN"], ids=["depth", "latin-1", "nan"])
+def test_install_ignores_invalid_direct_url_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], invalid_value: bytes
+) -> None:
+    _fake_home(monkeypatch, tmp_path)
+    metadata = tmp_path / "jev_judge_mcp.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text("Requires-Python: >=3.12\n", encoding="utf-8")
+    (metadata / "direct_url.json").write_bytes(b'{"url":"file:///checkout","extra":' + invalid_value + b"}")
+
+    def distribution(_name: str) -> PathDistribution:
+        return PathDistribution(metadata)
+
+    monkeypatch.setattr(launch_module, "distribution", distribution)
+    code = install_cli.main(["--dry-run", "-a", "claude-code"])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert PIN in out
+    assert "local checkout" not in out
+
+
 def test_from_checkout_prints_no_local_checkout_note(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -633,23 +655,40 @@ def test_unknown_shapes_are_left_untouched(tmp_path: Path, package: str) -> None
         assert "left unchanged" in text
 
 
-def test_malformed_json_is_left_untouched(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("body", "diagnostic"),
+    [
+        (b"{", "left unchanged"),
+        (b'{"extra":' + DEEP_JSON + b"}", "JSON nesting is too deep"),
+        (b'{"extra":' + LATIN_1_JSON_STRING + b"}", "config is not valid UTF-8"),
+        (b'{"mcpServers":{"other":{"setting":NaN}}}', "NaN is not JSON"),
+        (b'{"mcpServers":{"other":{"setting":Infinity}}}', "Infinity is not JSON"),
+        (b'{"mcpServers":{"other":{"setting":-Infinity}}}', "-Infinity is not JSON"),
+    ],
+    ids=["syntax", "depth", "latin-1", "nan", "positive-infinity", "negative-infinity"],
+)
+def test_malformed_json_is_left_untouched(tmp_path: Path, body: bytes, diagnostic: str) -> None:
     path = tmp_path / ".claude.json"
-    path.write_text("{", encoding="utf-8")
+    path.write_bytes(body)
     before = path.read_bytes()
     code, text = execute(tmp_path, agents=("claude-code",))
     assert code == 1
     assert path.read_bytes() == before
     assert "left unchanged" in text
+    assert diagnostic in text
 
 
-def test_change_during_install_writes_nothing(tmp_path: Path) -> None:
+def test_change_during_install_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / ".claude.json"
+    link = os.link
 
-    def disturb(target: Path) -> None:
-        target.write_text("{}\n", encoding="utf-8")
+    def concurrent_creation(source: Path, destination: Path) -> None:
+        if destination == path:
+            path.write_text("{}\n", encoding="utf-8")
+        link(source, destination)
 
-    code, text = execute(tmp_path, agents=("claude-code",), before_write=disturb)
+    monkeypatch.setattr(os, "link", concurrent_creation)
+    code, text = execute(tmp_path, agents=("claude-code",))
     assert code == 1
     assert "changed during install, re-run" in text
     assert "jev" not in path.read_text(encoding="utf-8")
@@ -1084,15 +1123,24 @@ def test_verify_handshake(tmp_path: Path, descendant: bool) -> None:
         {"id": 1, "method": "server/request"},
         {"id": 1, "jsonrpc": "1.0"},
         {"id": 1, "error": None},
+        DEEP_JSON,
+        LATIN_1_JSON_STRING,
+        b"NaN",
     ],
-    ids=["bool-id", "float-id", "request", "version", "two-outcomes"],
+    ids=["bool-id", "float-id", "request", "version", "two-outcomes", "depth", "latin-1", "nan"],
 )
-def test_verify_ignores_frames_that_are_not_responses(bad_reply: dict[str, object]) -> None:
-    forged = {"jsonrpc": "2.0", "result": {"serverInfo": {"name": "forged"}}, **bad_reply}
+def test_verify_ignores_frames_that_are_not_responses(bad_reply: dict[str, object] | bytes) -> None:
+    forged: dict[str, object] = {"jsonrpc": "2.0", "result": {"serverInfo": {"name": "forged"}}}
+    if isinstance(bad_reply, bytes):
+        forged_line = json.dumps({**forged, "id": 1}).encode()[:-1] + b',"extra":' + bad_reply + b"}"
+    else:
+        forged_line = json.dumps({**forged, **bad_reply}).encode()
+    forged_line += b"\n"
     good = {"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "jev-mcp"}}}
     tools = {"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": name} for name in EXPECTED_TOOLS]}}
     child = (
-        f"import sys; sys.stdin.readline(); print({json.dumps(forged)!r}); "
+        f"import sys; sys.stdin.readline(); sys.stdout.buffer.write({forged_line!r}); "
+        "sys.stdout.buffer.flush(); "
         f"print({json.dumps(good)!r}); print({json.dumps(tools)!r}, flush=True); sys.stdin.read()"
     )
     verify_command([sys.executable, "-c", child], timeout=5)
@@ -1513,23 +1561,43 @@ def test_scout_003_interrupted_state_commit_recovers(
     assert _state_targets(tmp_path) == {}
 
 
-def test_scout_003_overlapping_writers(tmp_path: Path) -> None:
-    def overlapping(_: Path) -> None:
-        try:
-            code, _text = execute(tmp_path, agents=("cursor",))
-        except InstallError as error:
-            assert "busy" in str(error)
-            return
-        assert code == 0
+def test_scout_003_overlapping_writers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = layout(tmp_path).claude_code_file()
+    link = os.link
+    attempted = False
 
-    assert execute(tmp_path, agents=("claude-code",), before_write=overlapping)[0] == 0
+    def publish(source: Path, destination: Path) -> None:
+        nonlocal attempted
+        if destination == path:
+            attempted = True
+            try:
+                code, _text = execute(tmp_path, agents=("cursor",))
+            except InstallError as error:
+                assert "busy" in str(error)
+            else:
+                assert code == 0
+        link(source, destination)
+
+    monkeypatch.setattr(os, "link", publish)
+    assert execute(tmp_path, agents=("claude-code",))[0] == 0
+    assert attempted
     expected = {"claude-code"}
     if layout(tmp_path).cursor_file().exists():
         expected.add("cursor")
     assert _state_targets(tmp_path).keys() == expected
 
 
-@pytest.mark.parametrize("broken", [b"{", b"{}", b'{"targets":{"cursor":{}}}', bytes([255])])
+@pytest.mark.parametrize(
+    "broken",
+    [
+        b"{",
+        b"{}",
+        b'{"targets":{"cursor":{}}}',
+        b'{"targets":{},"extra":' + LATIN_1_JSON_STRING + b"}",
+        b'{"targets":{},"extra":NaN}',
+    ],
+    ids=["syntax", "root-shape", "record-shape", "latin-1", "nan"],
+)
 def test_scout_003_invalid_state_blocks_writes(tmp_path: Path, broken: bytes) -> None:
     state = layout(tmp_path).state_file()
     state.parent.mkdir(parents=True, mode=0o700)
@@ -1540,15 +1608,10 @@ def test_scout_003_invalid_state_blocks_writes(tmp_path: Path, broken: bytes) ->
     assert not layout(tmp_path).cursor_file().exists()
 
 
-def test_deeply_nested_state_fails_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_deeply_nested_state_fails_cleanly(tmp_path: Path) -> None:
     state = layout(tmp_path).state_file()
     state.parent.mkdir(parents=True, mode=0o700)
-    state.write_text('{"targets":{}}')
-
-    def reject_nesting(*_args: object, **_kwargs: object) -> object:
-        raise RecursionError("JSON nesting limit")
-
-    monkeypatch.setattr(json, "loads", reject_nesting)
+    state.write_bytes(b'{"targets":{},"extra":' + DEEP_JSON + b"}")
     with pytest.raises(InstallError, match="state"):
         execute(tmp_path, agents=("cursor",))
     assert not layout(tmp_path).cursor_file().exists()
@@ -1933,7 +1996,9 @@ def test_recovery_cleans_staging_without_touching_other_ownership(
     assert _state_targets(tmp_path) == {"cursor": records["cursor"]}
 
 
-def test_backup_retention_applies_only_after_a_successful_write(tmp_path: Path) -> None:
+def test_backup_retention_applies_only_after_a_successful_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     paths = layout(tmp_path)
     for target in ("cursor", "claude-code"):
         assert execute(tmp_path, agents=(target,))[0] == 0
@@ -1958,26 +2023,35 @@ def test_backup_retention_applies_only_after_a_successful_write(tmp_path: Path) 
     config = paths.claude_code_file()
     previous = config.read_bytes()
 
-    def fail(_path: Path) -> None:
-        raise OSError("interrupted before publishing")
+    def fail(_staged: Path, _destination: Path) -> None:
+        raise OSError(errno.EIO, "interrupted before publishing")
 
-    code, text = execute(tmp_path, agents=("claude-code",), launch=LAUNCH, before_write=fail)
+    monkeypatch.setattr(install_fs, "_exchange_files", fail)
+    code, text = execute(tmp_path, agents=("claude-code",), launch=LAUNCH)
     assert code == 1, text
     assert config.read_bytes() == previous
     assert all(path.is_file() for path in retained)
     assert len(list(backups.glob("*/claude-code.json"))) == len(retained) + 1
 
 
-@pytest.mark.parametrize("bom", [True, False], ids=["bom", "oversize"])
-def test_pi_adapter_settings_use_a_bounded_bom_tolerant_read(tmp_path: Path, bom: bool) -> None:
+@pytest.mark.parametrize("case", ["bom", "oversize", "depth", "latin-1", "nan"])
+def test_pi_adapter_settings_use_a_bounded_bom_tolerant_read(tmp_path: Path, case: str) -> None:
     paths = layout(tmp_path)
     _pi_adapter(tmp_path, "npm:pi-mcp-adapter")
     original = paths.pi_settings().read_bytes()
-    data = b"\xef\xbb\xbf" + original if bom else original + b" " * (16 * 1024 * 1024)
+    if case == "bom":
+        data = b"\xef\xbb\xbf" + original
+    elif case == "oversize":
+        data = original + b" " * (16 * 1024 * 1024)
+    else:
+        extra = {"depth": DEEP_JSON, "latin-1": LATIN_1_JSON_STRING, "nan": b"NaN"}[case]
+        data = original.rstrip()[:-1] + b',"extra":' + extra + b"}"
     paths.pi_settings().write_bytes(data)
     code, text = execute(tmp_path, agents=("pi",))
-    assert code == (0 if bom else 1), text
-    assert paths.pi_file().exists() is bom
+    assert code == (0 if case == "bom" else 1), text
+    assert paths.pi_file().exists() is (case == "bom")
+    if case != "bom":
+        assert "pi install npm:pi-mcp-adapter" in text
 
 
 def test_missing_package_metadata_does_not_write_a_fake_installer_version(

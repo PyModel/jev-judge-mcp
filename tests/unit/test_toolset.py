@@ -11,7 +11,6 @@ from typing import Any, cast
 import pytest
 from mcp.types import CallToolResult, TextContent
 
-from jev_judge_mcp.extract.executor import InProcessRegexExecutor
 from jev_judge_mcp.providers import ProviderConfigError, ProviderError
 from jev_judge_mcp.redaction.values import configure_logging
 from jev_judge_mcp.settings import Settings
@@ -37,7 +36,7 @@ def _toolset(handler: Handler) -> Toolset:
         "Raises on purpose.",
         {"type": "object", "properties": {"note": {"type": "string"}}, "additionalProperties": False},
     )
-    runtime = Runtime(Settings(), regex_executor=InProcessRegexExecutor())
+    runtime = Runtime(Settings())
     return Toolset(runtime, [JevTool(definition=definition, handler=handler)])
 
 

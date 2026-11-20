@@ -42,3 +42,9 @@ and match through `match_all`. The process executor performs both in the worker 
 deadline, and the IPC job carries the remaining budget in seconds for the worker's fallback timer.
 Compiler diagnostics travel back as ordinary invalid results so `find_candidates` preserves the
 pattern rejection reason and the worker can serve another job.
+
+## Amendment (2026-11-19): the process worker owns execution
+
+The conformance and V8 differential suites run through `ProcessRegexExecutor`. This covers
+the matcher, IPC, and caps together. The in-process test adapter and its executor protocol
+are removed.

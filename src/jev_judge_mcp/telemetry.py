@@ -20,7 +20,10 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from time import perf_counter
 from types import TracebackType
-from typing import Final, Literal, Protocol
+from typing import Final, Literal, Protocol, get_args
+
+from jev_judge_mcp.policy.actions import Action
+from jev_judge_mcp.validation.caps import CapScope
 
 type SpanName = Literal["mcp.tool", "jev.evaluate", "jev.validate", "regex.extract"]
 type Attribute = bool | int | float | str
@@ -64,8 +67,8 @@ def describe(span: Span) -> str:
 
 
 DURATION_BUCKETS_MS: Final = (0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 50.0, 100.0, 250.0, 1000.0, 5000.0, math.inf)
-ACTIONS: Final = ("auto", "review", "escalate")
-CAP_SCOPES: Final = ("context", "item")
+ACTIONS: Final[tuple[Action, ...]] = get_args(Action.__value__)
+CAP_SCOPES: Final[tuple[CapScope, ...]] = get_args(CapScope.__value__)
 METRICS_INTERVAL_SPANS: Final = 100
 """Finished `mcp.tool` spans between periodic INFO metrics snapshots (ROADMAP P9)."""
 

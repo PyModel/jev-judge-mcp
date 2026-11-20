@@ -51,3 +51,8 @@ call headline (`extract.py`). They are now `policy.verify_claim_action`, `policy
 `policy.file_list_action`, and `policy.extract_call_action`; the tools project them. The caller-note
 rule receives the raw source answer, so a caller item literally named `none` still blocks auto. No
 wire change; ADR-0078 records the module moves made alongside.
+
+## Amendment (2026-11-19): tools import policy directly
+
+`tools/observed.py` wraps Answer Validation in `jev.validate` spans. Tools import pure
+policy functions from `policy/`. The validation spans carry the fail-closed signal.

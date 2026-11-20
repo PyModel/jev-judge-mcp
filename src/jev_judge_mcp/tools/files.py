@@ -16,13 +16,12 @@ from jev_judge_mcp.domain import Question, Usage
 from jev_judge_mcp.gate_budget import fits_budget
 from jev_judge_mcp.gate_diagnostics import Blocker, size_blocker
 from jev_judge_mcp.limits import GATE, GateCaps
-from jev_judge_mcp.policy import Action
+from jev_judge_mcp.policy import Action, worst_action
 from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import Runtime, ToolError, code_of
 from jev_judge_mcp.tools.gate_evidence import Citations, add_citations, grounded_review
-from jev_judge_mcp.tools.observed import worst_action
 from jev_judge_mcp.tools.review_half import (
     ReviewDocs,
     ReviewHalf,

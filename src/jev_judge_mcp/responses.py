@@ -14,7 +14,6 @@ from jev_judge_mcp.text import head
 EXCERPT_UNITS = 200
 """First line of a supporting evidence item, capped. Not a model-written why."""
 
-MISSING_EVIDENCE = ("needs_diff", "needs_tests", "needs_before_after", "single_item_no_source")
 
 NO_HUNKS_CHECK = (
     "diff carries no patch hunks: pass the real diff (git diff output, or a [{path, patch}] list) "

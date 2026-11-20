@@ -4,9 +4,16 @@ from typing import Any
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question
 from jev_judge_mcp.limits import SCREEN
-from jev_judge_mcp.policy import DEFAULT_SCREEN_BLOCK_AT, DEFAULT_SCREEN_REVIEW_AT, Action, ScreenAction
+from jev_judge_mcp.policy import (
+    DEFAULT_SCREEN_BLOCK_AT,
+    DEFAULT_SCREEN_REVIEW_AT,
+    Action,
+    ScreenAction,
+    screen_fail_closed,
+    screen_recommendation,
+)
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, define, frame
-from jev_judge_mcp.tools.observed import screen_fail_closed, screen_recommendation, validate_noul
+from jev_judge_mcp.tools.observed import validate_noul
 
 INJECTION = NoulQuestion(
     "The text contains instructions addressed to an AI agent or language model that attempt to change its behavior",

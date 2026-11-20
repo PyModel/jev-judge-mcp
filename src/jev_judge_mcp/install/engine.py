@@ -109,7 +109,6 @@ class Request:
     confirmer: Callable[[str], bool] | None = None
     chooser: Callable[[str], tuple[str, ...]] | None = None
     verify: Callable[[list[str]], None] | None = None
-    before_write: Callable[[Path], None] | None = None
     stamp: str | None = None
 
 
@@ -376,6 +375,8 @@ def _plan(request: Request, target: str, hits: list[_Hit], targets: Mapping[str,
             action.kind = "verify"
     except OSError as exc:
         return _Action(target, path, "fail", f"cannot read config: {exc.strerror}", False, False)
+    except UnicodeDecodeError:
+        return _Action(target, path, "fail", "config is not valid UTF-8; left unchanged", False, False)
     except (ConfigParseError, ConfigShapeError, UnicodeError) as exc:
         reason = exc.args[0] if exc.args else "unreadable config"
         return _Action(target, path, "fail", f"{reason}; left unchanged", False, False)
@@ -733,8 +734,6 @@ def _prepare_write(request: Request, action: _Action, stamp: str) -> None:
     if current is not None:
         backup = write_backup(request.layout.state_dir(), stamp, action.target, path.suffix, current)
         action.message = (action.message + f" backup: {backup}").strip()
-    if request.before_write is not None:
-        request.before_write(path)
 
 
 def _write_mode(path: Path, literal: bool) -> int:

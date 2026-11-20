@@ -68,6 +68,8 @@ uvx --from jev-judge-mcp jev-judge-mcp install --remove    # undo what install w
 
 Terminal agents get a reference to `TYPESAFE_API_KEY`, never the key itself. Desktop apps don't see your shell's environment. Creating a Claude Desktop entry (macOS only) requires `--desktop-key`, which writes the key into that app's config file. Migrating an owned entry keeps its existing key. The same flag writes the key into the Codex and Pythinker files when the ChatGPT or Pythinker desktop app shares them; without it, `install` says that app has no key. The installer warns if a file holding the key ends up readable by other users. Pi also needs its MCP adapter first: `pi install npm:pi-mcp-adapter`.
 
+The installer leaves malformed JSON and JSONC config files untouched and reports the error in one line. Use UTF-8 and replace bare `NaN`, `Infinity`, or `-Infinity` with valid JSON values before retrying. JSONC comments and trailing commas are supported.
+
 </details>
 
 <details>

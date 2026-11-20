@@ -12,7 +12,7 @@ from jev_judge_mcp.policy import (
     resolve_policy_thresholds,
 )
 from jev_judge_mcp.tools.base import ToolError
-from jev_judge_mcp.tools.review import review_settings
+from jev_judge_mcp.tools.review_half import review_settings
 from tests.support.jev import call_tool
 
 pytestmark = pytest.mark.anyio

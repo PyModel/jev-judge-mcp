@@ -5,9 +5,9 @@ from typing import Any
 from jev_judge_mcp.domain import ChoiceQuestion, Question
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import DECIDE
-from jev_judge_mcp.policy import RequirementCheck
+from jev_judge_mcp.policy import RequirementCheck, contradicts_recommendation, fail_closed
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, define, frame
-from jev_judge_mcp.tools.observed import contradicts_recommendation, fail_closed, validate_choice
+from jev_judge_mcp.tools.observed import validate_choice
 
 ESCAPE_HATCHES = {
     "ask_user": "A consequential user preference or requirement is missing; ask instead of inventing it",

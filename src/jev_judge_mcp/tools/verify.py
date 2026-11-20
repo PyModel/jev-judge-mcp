@@ -5,16 +5,12 @@ from typing import Any
 from jev_judge_mcp.domain import ChoiceQuestion, Question
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import VERIFY
-from jev_judge_mcp.policy import DEFAULT_AUTO_ACCEPT
+from jev_judge_mcp.policy import DEFAULT_AUTO_ACCEPT, fail_closed, verify_claim_action
 from jev_judge_mcp.responses import claim_extras, summary_extras
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, caller_actions, define, frame, headline
 from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items, identify_evidence
-from jev_judge_mcp.tools.observed import (
-    fail_closed,
-    validate_choice,
-    verify_claim_action,
-)
-from jev_judge_mcp.tools.review import ANTI_INJECTION
+from jev_judge_mcp.tools.observed import validate_choice
+from jev_judge_mcp.tools.review_half import ANTI_INJECTION
 
 RELATION_TO_VERDICT = {"supports": "verified", "contradicts": "contradicted", "says_nothing": "unsupported"}
 """`RELATION_TO_VERDICT` (`lib.ts:53-57`)."""

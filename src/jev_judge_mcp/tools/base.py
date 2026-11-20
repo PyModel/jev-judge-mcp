@@ -17,9 +17,8 @@ from mcp.types import Tool
 
 from jev_judge_mcp import cache
 from jev_judge_mcp.domain import JsonValue, Question
-from jev_judge_mcp.extract.executor import RegexExecutor
 from jev_judge_mcp.extract.worker import ProcessRegexExecutor
-from jev_judge_mcp.policy import Action
+from jev_judge_mcp.policy import Action, worst_action
 from jev_judge_mcp.providers import (
     Evaluation,
     JevProvider,
@@ -34,7 +33,6 @@ from jev_judge_mcp.security import SecurityGuard, build_guard
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.telemetry import ACTIONS, Span, Telemetry
 from jev_judge_mcp.tools.arguments import ArgumentsError, Refinement
-from jev_judge_mcp.tools.observed import worst_action
 from jev_judge_mcp.validation.caps import CapScope
 
 type Payload = Mapping[str, object]
@@ -200,7 +198,7 @@ class Runtime:
         self,
         settings: Settings,
         provider_factory: Callable[[Settings], JevProvider] = resolve_provider,
-        regex_executor: RegexExecutor | None = None,
+        regex_executor: ProcessRegexExecutor | None = None,
         *,
         tests_read_from_file: bool = False,
     ) -> None:
@@ -225,8 +223,7 @@ class Runtime:
         return self._provider.name if self._provider is not None else "none"
 
     @property
-    def regex_executor(self) -> RegexExecutor:
-        """Where jev_extract's patterns run: worker processes unless the server was built with another."""
+    def regex_executor(self) -> ProcessRegexExecutor:
         return self._regex_executor
 
     async def awarm(self) -> None:
@@ -235,8 +232,6 @@ class Runtime:
         here overlaps no demand, so live workers never exceed the pool's size. Best effort: a pool
         that cannot start workers now tries again on demand, so the server still comes up for the
         tools that need no pool."""
-        if not isinstance(self._regex_executor, ProcessRegexExecutor):
-            return
         try:
             await self._regex_executor.warm()
         except Exception:

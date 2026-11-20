@@ -5,11 +5,12 @@ from typing import Any, cast
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import CANDIDATES, RERANK
+from jev_judge_mcp.policy import fail_closed, rerank_by_score
 from jev_judge_mcp.serialize import to_fixed
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
 from jev_judge_mcp.tools.common import candidates_schema
-from jev_judge_mcp.tools.observed import fail_closed, rerank_by_score, validate_noul
+from jev_judge_mcp.tools.observed import validate_noul
 from jev_judge_mcp.validation.caps import CapLedger, candidate_budget_error, exceeds
 
 RELEVANCE_CRITERIA = NoulCriteria(

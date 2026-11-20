@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from typing import IO, cast
 
-from jev_judge_mcp.domain import is_json_object
+from jev_judge_mcp.domain import decode_json, is_json_object
 from jev_judge_mcp.install.launch import SERVER_NAME
 from jev_judge_mcp.install.redact import redact_diagnostic
 from jev_judge_mcp.tools import TOOLS
@@ -218,8 +218,8 @@ def _read_response(reader: _Output, request_id: int, deadline: float) -> dict[st
         if line is None:
             raise _ClosedPipe("server closed stdout")
         try:
-            parsed: object = json.loads(line)
-        except (ValueError, RecursionError):
+            parsed = decode_json(line.decode("utf-8-sig"))
+        except ValueError:
             continue
         if (
             not is_json_object(parsed)

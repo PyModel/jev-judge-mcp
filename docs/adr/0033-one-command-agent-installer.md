@@ -67,3 +67,12 @@ Agents each keep their own MCP config, and several of those files are shared wit
 
 ADR-0084 removes the provider extra. The installer writes a bare pinned distribution or
 absolute checkout path and migrates owned entries written with the previous extra suffix.
+
+## Amendment (2026-11-19): Installer JSON uses the shared decoder
+
+Agent config, Pi settings, and installer state reject nonstandard constants (`NaN`,
+`Infinity`, and `-Infinity`) and excessive nesting through the shared decoder. Agent JSON
+and JSONC retain UTF-8 BOM support and JSONC retains comments and trailing commas. A bad
+agent config, including invalid UTF-8, stays untouched and gets a one-line parse diagnostic.
+Unreadable or malformed Pi settings are treated as adapter unavailable and keep the
+existing adapter hint. Unreadable or malformed installer state blocks writes.

@@ -1,6 +1,6 @@
 """Schema fragments and helpers shared by several tools (`index.ts:88-116`, `lib.ts:363-374`)."""
 
-from collections.abc import Collection, Mapping
+from collections.abc import Collection
 from typing import Any, cast
 
 from jev_judge_mcp.ids import ensure_unique_ids
@@ -108,7 +108,3 @@ def js_trim(text: str) -> str:
 def has_non_empty_evidence(items: list[dict[str, object]]) -> bool:
     """`hasNonEmptyEvidence` (`lib.ts:371-374`)."""
     return any(js_trim(str(item["text"])) for item in items)
-
-
-def text_of(item: Mapping[str, object]) -> str:
-    return str(item["text"])

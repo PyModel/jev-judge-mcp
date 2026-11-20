@@ -5,9 +5,14 @@ from typing import Any
 from jev_judge_mcp.domain import ChoiceQuestion, Question
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import CLASSIFY
-from jev_judge_mcp.policy import DEFAULT_CLASSIFY_AUTO_ACCEPT, DEFAULT_MINIMUM_MARGIN
+from jev_judge_mcp.policy import (
+    DEFAULT_CLASSIFY_AUTO_ACCEPT,
+    DEFAULT_MINIMUM_MARGIN,
+    classification_decision,
+    fail_closed,
+)
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, caller_actions, define, frame, headline
-from jev_judge_mcp.tools.observed import classification_decision, fail_closed, validate_choice
+from jev_judge_mcp.tools.observed import validate_choice
 from jev_judge_mcp.validation import margin, top_probability
 from jev_judge_mcp.validation.caps import CapLedger, classify_budget_error, exceeds
 
