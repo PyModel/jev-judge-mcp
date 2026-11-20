@@ -13,8 +13,8 @@ from typing import cast
 
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.domain.questions import NoulCriteria, NoulQuestion, Question
-from jev_judge_mcp.hook_render import render_annotation
-from jev_judge_mcp.hook_runtime import HookFailure, judge, prepare
+from jev_judge_mcp.hook.render import render_annotation
+from jev_judge_mcp.hook.runtime import HookFailure, judge, prepare
 from jev_judge_mcp.providers import (
     JevProvider,
     resolve_provider,

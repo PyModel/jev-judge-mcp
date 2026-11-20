@@ -77,7 +77,7 @@ def test_hook_gate_configures_redacting_logging_before_the_provider_leg(
         raise ProviderConfigError("no credentials in this test")
 
     event = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
-    monkeypatch.setattr("jev_judge_mcp.hook.resolve_provider", fake_resolve_provider)
+    monkeypatch.setattr("jev_judge_mcp.hook.gate.resolve_provider", fake_resolve_provider)
     monkeypatch.setenv("JEV_MCP_HTTP_TOKEN", _CONFIGURED)  # a configured secret for the filter to hold
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook", "gate"])
     monkeypatch.setattr(sys, "stdin", io.StringIO(event))

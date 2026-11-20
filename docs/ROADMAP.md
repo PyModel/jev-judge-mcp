@@ -18,11 +18,12 @@ MCP ─▶ tool input validation ─▶ state + questions ─▶ Provider (envel
 ```
 src/jev_judge_mcp/
   server.py settings.py limits.py errors.py text.py ids.py serialize.py telemetry.py
-  stdio.py hook.py doctor.py cache.py keyfile.py setup.py fsutil.py redaction/
+  stdio.py doctor.py cache.py keyfile.py setup.py fsutil.py redaction/
+  hook/       gate.py screen.py compact.py render.py runtime.py
   domain/     questions.py answers.py usage.py json.py
   providers/  base.py resolver.py typesafe.py compatible.py openrouter.py cloudflare.py
   validation/ choice.py noul.py score.py extract.py numbers.py caps.py
-  policy/     thresholds.py actions.py review.py claims.py ranking.py screen.py extract.py
+  policy/     thresholds.py actions.py review.py claims.py ranking.py screen.py extract.py guard.py
   extract/    dialect.py worker.py candidates.py executor.py   # ADR-0004
   install/    engine.py layout.py launch.py verify.py …        # ADR-0033
   tools/      observed.py verify.py screen.py find.py classify.py rerank.py compare.py

@@ -212,6 +212,16 @@ tools keep the 100,000-unit per-file read cap. The provider enforces the token w
 refusal maps to `input_too_large` with split advice. Ask uses the compact UTF-8 estimate only to
 suggest splits. See the [ADR-0086 amendment](0086-shared-provider-window-and-gate-packing.md#amendment-2026-11-19-the-byte-budget-packs-the-provider-refuses).
 
+## Amendment (2026-11-19): hook package and command refusal ownership
+
+The `hook/` package dispatches gate, screen and compact-cut. It owns event handling, provider
+wiring and harness output. Both the console script and `python -m jev_judge_mcp` accept the
+same hook subcommands. The shipped hook fragments call the console script directly.
+
+`jev_ask` and the hook import the final-block notice from `policy/guard.py`. The tool applies
+its read-only argv allowlist before execution and reserves its provider call for the caller's
+questions. Only the command hook asks the Bash effect and destructive-intent questions.
+
 ## Considered Options
 
 - **A raw `questions_json` string for `jev_ask`** — rejected: stringly typed, off-style, and the

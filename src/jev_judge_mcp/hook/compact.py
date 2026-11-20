@@ -20,9 +20,9 @@ import anyio
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.domain.questions import ChoiceQuestion, Question
 from jev_judge_mcp.fsutil import NotRegularFile, read_bounded
-from jev_judge_mcp.hook import ESTIMATED_CONFIDENCE_THRESHOLD, REPORTED_CONFIDENCE_THRESHOLD
-from jev_judge_mcp.hook_runtime import HookFailure, prepare
-from jev_judge_mcp.hook_runtime import judge as judge_once
+from jev_judge_mcp.hook.runtime import HookFailure, prepare
+from jev_judge_mcp.hook.runtime import judge as judge_once
+from jev_judge_mcp.policy.guard import confidence_floor
 from jev_judge_mcp.providers import (
     JevProvider,
     resolve_provider,
@@ -31,7 +31,7 @@ from jev_judge_mcp.redaction.action import redact_action
 from jev_judge_mcp.security import SecurityGuard
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.text import head
-from jev_judge_mcp.validation.choice import margin, validate_choice
+from jev_judge_mcp.validation.choice import validate_choice
 
 TURNS_MAX = 20
 """User turns offered to the judgment: the newest ones only (ADR-0077)."""
@@ -184,8 +184,7 @@ def pick(answer: object, turns: list[Turn]) -> Turn | None:
     parsed = validate_choice(answer, identifiers)
     if parsed is None:
         return None
-    confidence = parsed.confidence if parsed.confidence is not None else margin(parsed.probabilities)
-    threshold = REPORTED_CONFIDENCE_THRESHOLD if parsed.confidence is not None else ESTIMATED_CONFIDENCE_THRESHOLD
+    confidence, threshold = confidence_floor(parsed)
     if confidence < threshold:
         return None
     for turn in turns:

@@ -10,7 +10,7 @@ import pytest
 
 from jev_judge_mcp.domain import JsonValue, Question, Usage
 from jev_judge_mcp.domain.questions import ChoiceQuestion
-from jev_judge_mcp.hook_compact import (
+from jev_judge_mcp.hook.compact import (
     TRANSCRIPT_TAIL_BYTES,
     TURN_UNITS_MAX,
     TURNS_MAX,
@@ -355,7 +355,7 @@ def test_server_dispatches_hook_compact_cut(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook", "compact-cut"])
     monkeypatch.setattr("jev_judge_mcp.server.load_settings", _refuse_server)
     monkeypatch.setattr("jev_judge_mcp.server.build_server", _refuse_server)
-    monkeypatch.setattr("jev_judge_mcp.hook_compact.compact_cut_main", fake)
+    monkeypatch.setattr("jev_judge_mcp.hook.compact.compact_cut_main", fake)
     with pytest.raises(SystemExit) as caught:
         server_main()
     assert caught.value.code == 0

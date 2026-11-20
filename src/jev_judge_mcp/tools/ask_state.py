@@ -14,8 +14,8 @@ from typing import NoReturn
 from jev_judge_mcp import git
 from jev_judge_mcp.domain import NoulCriteria, Question
 from jev_judge_mcp.gate_budget import fits_budget
-from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.limits import ASK
+from jev_judge_mcp.policy.guard import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.process import OutputTooLarge, capture
 from jev_judge_mcp.redaction.action import redact_action
 from jev_judge_mcp.security import SecurityGuard

@@ -1,13 +1,11 @@
 """JSON rendering for the command hook. No policy. The bytes are the hook contract."""
 
-from jev_judge_mcp.domain.json import JsonValue
-from jev_judge_mcp.serialize import stringify_compact
+import sys
+from collections.abc import Mapping
 
-FINAL_BLOCK_NOTICE = (
-    "This block is final: do not retry the action, split it into smaller calls, or route it through another tool."
-)
-"""Every deny reason ends with this. The harness shows the reason to the agent; the notice tells
-it the decision is not a suggestion (ADR-0076). Pinned verbatim by the render-boundary test."""
+from jev_judge_mcp.domain.json import JsonValue
+from jev_judge_mcp.policy.guard import FINAL_BLOCK_NOTICE
+from jev_judge_mcp.serialize import stringify_compact
 
 
 def deny_reason(failure: str, measure: str = "") -> str:
@@ -42,3 +40,21 @@ def render_annotation(context: str) -> str:
         }
     }
     return stringify_compact(payload)
+
+
+def hook_required(env: Mapping[str, str]) -> bool:
+    """The opt-in enforcer flag. Both hooks read it here so the value cannot drift (ADR-0065)."""
+    return env.get("JEV_HOOK_REQUIRED") == "1"
+
+
+def fail_open_or_ask(required: bool, silent: str, reason: str) -> int:
+    """ADR-0035 default is silence. ``JEV_HOOK_REQUIRED=1`` asks instead (ADR-0065).
+
+    ``hook gate`` and ``completion-hook`` both call this. The ask text cannot drift.
+    """
+    if not required:
+        if silent:
+            sys.stderr.write(silent)
+        return 0
+    sys.stdout.write(render_decision("ask", f"Jev hook: not sure this is safe ({reason}).") + "\n")
+    return 0

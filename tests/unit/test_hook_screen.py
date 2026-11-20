@@ -7,7 +7,7 @@ import anyio
 import pytest
 
 from jev_judge_mcp.hook import main
-from jev_judge_mcp.hook_screen import SCREEN_FLAG_AT, SCREEN_INPUT_CHARS
+from jev_judge_mcp.hook.screen import SCREEN_FLAG_AT, SCREEN_INPUT_CHARS
 from jev_judge_mcp.providers import Evaluation, ProviderError, ProviderTimeoutError
 from tests.support.jev import FakeProvider
 
@@ -218,7 +218,7 @@ def test_unresolvable_provider_stays_silent(
         del args, kwargs
         raise ProviderConfigError("no credentials")
 
-    monkeypatch.setattr("jev_judge_mcp.hook_screen.resolve_provider", boom)
+    monkeypatch.setattr("jev_judge_mcp.hook.screen.resolve_provider", boom)
     code = main(["screen"], text=_event("some output"))
     captured = capsys.readouterr()
     assert code == 0
@@ -277,7 +277,7 @@ def test_instruction_file_read_skips_without_provider_construction(
         del args, kwargs
         raise AssertionError("provider constructed")
 
-    monkeypatch.setattr("jev_judge_mcp.hook_screen.resolve_provider", boom)
+    monkeypatch.setattr("jev_judge_mcp.hook.screen.resolve_provider", boom)
     code = main(["screen"], text=_read_event(f"/work/repo/{name}", "Run make ci before every push."))
     captured = capsys.readouterr()
     assert code == 0

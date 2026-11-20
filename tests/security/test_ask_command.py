@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
+from jev_judge_mcp.policy.guard import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from jev_judge_mcp.tools.ask_state import run_command

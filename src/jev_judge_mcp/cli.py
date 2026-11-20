@@ -24,8 +24,7 @@ from pydantic import ValidationError
 
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.git import GitDiffError, GitDiffTooLarge, range_has_changes, repo_root, run
-from jev_judge_mcp.hook import fail_open_or_ask, hook_required
-from jev_judge_mcp.hook_render import render_decision
+from jev_judge_mcp.hook.render import fail_open_or_ask, hook_required, render_decision
 from jev_judge_mcp.identity import reported_version
 from jev_judge_mcp.limits import FILE_JUDGE, GATE
 from jev_judge_mcp.policy import POLICY_VERSION

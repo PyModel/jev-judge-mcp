@@ -56,3 +56,15 @@ wire change; ADR-0078 records the module moves made alongside.
 
 `tools/observed.py` wraps Answer Validation in `jev.validate` spans. Tools import pure
 policy functions from `policy/`. The validation spans carry the fail-closed signal.
+
+## Amendment (2026-11-19): command-hook guard policy
+
+`policy/guard.py` owns the Bash, Write/Edit and fallback questions, validates their answers,
+and decides whether the hook allows, asks or denies. It also owns the confidence floors used
+by the compaction hook. The guard decision is pure and falls under the 100% branch gate in
+`make policy-coverage`. The hook computes path containment and credential-literal matches
+before calling the provider and renders the decision in the harness format. This supersedes
+the threshold locations in ADR-0035, ADR-0065 and ADR-0076.
+
+The package import graph must be acyclic, including function-local imports. Tools may
+depend on guard policy directly. Hook entry points and rendering belong to the CLI.

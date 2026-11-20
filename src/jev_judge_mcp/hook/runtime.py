@@ -1,10 +1,8 @@
 """What the three short-lived hooks share: settings, the redacting log handler, provider resolution,
 one bounded provider call, cancellation, and close (ADR-0076, ADR-0077).
 
-Each hook keeps its event parsing, its question text, its fail-open wording, and its rendering. This
-module writes nothing: it returns an `Evaluation` or a typed `HookFailure` the hook renders. A hook
-passes its own `resolve_provider` name in, so a test that patches the hook module's resolver still
-reaches the call.
+Each hook keeps its event parsing, its fail-open wording, and its rendering. This
+module writes nothing: it returns an `Evaluation` or a typed `HookFailure` the hook renders.
 """
 
 import asyncio
