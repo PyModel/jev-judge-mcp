@@ -106,5 +106,14 @@ The versioned `jev-records-v1/` directory is the sole replay source. Records fro
 layout in its parent miss even when expiry is disabled. Expired records miss on read and may
 be replaced by a writer or evicted by the entry cap.
 
-Provider token counters accumulate measured usage, including measured zeros. A replay, a
-shared subscriber, or a provider answer with no reported usage contributes no measurement.
+Provider token counters accumulate measured usage, including measured zeros. A replay or a
+provider answer with no reported usage contributes no measurement. A shared request's measured
+usage is counted once, as the next amendment states.
+
+## Amendment (2026-11-19) — the last caller leaving cancels shared work
+
+A shared request runs only while some call waits on it. When the last waiting call is cancelled, the
+shared request is cancelled too, before or after the provider request is sent, as ADR-0011 requires
+of every cancelled call. Its billed tokens are still reported once: by the originating call, or by a
+call still waiting on the shared request when the originating call has already left. This replaces
+the 2026-11-18 sentence that only the originating call reports billed tokens.

@@ -57,7 +57,11 @@ def is_secret_store(path: Path, guard: SecurityGuard) -> bool:
             return True
     except FileNotFoundError:
         pass
-    except (OSError, RuntimeError):
+    except OSError as error:
+        # A name too long to be a file cannot be the key; any other failure is a match.
+        if error.errno != errno.ENAMETOOLONG:
+            return True
+    except RuntimeError:
         return True
     name = path.name.lower()
     if name in _SECRET_EXACT:

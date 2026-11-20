@@ -5,6 +5,7 @@
 directory) is the production behavior.
 """
 
+import errno
 import os
 from collections.abc import Callable
 from dataclasses import replace
@@ -122,6 +123,20 @@ def test_the_secret_store_family_and_the_stand_ins(tmp_path: Path) -> None:
         make(tmp_path / name, "fine to read")
         assert not file_state.is_secret_store(tmp_path / name, TEST_GUARD), name
         assert file_state.read_state(tmp_path / name, TEST_GUARD) == "fine to read"
+
+
+def test_a_name_too_long_for_a_file_is_not_the_key_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    key = tmp_path / "key"
+    key.write_text("material")
+    guard = replace(TEST_GUARD, key_path=key)
+    assert not file_state.is_secret_store(Path("a" * 300), guard)
+    assert file_state.is_secret_store(key, guard)
+
+    def unreadable(self: Path, other: Path) -> bool:
+        raise PermissionError(errno.EACCES, "denied")
+
+    monkeypatch.setattr(Path, "samefile", unreadable)
+    assert file_state.is_secret_store(tmp_path / "other", guard)
 
 
 def test_a_credential_literal_is_redacted_before_it_becomes_state(tmp_path: Path) -> None:
