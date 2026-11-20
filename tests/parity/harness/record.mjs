@@ -4,8 +4,8 @@
 //   fixtures/classes/  one file per ROADMAP P0 fixture-class case (cases/*.mjs)
 //   fixtures/index.json
 //
-// Output is a pure function of the pinned reference, Node version, and the
-// case files: no ports, timestamps, durations, or absolute paths.
+// Output depends only on the pinned reference, Node version, case files and
+// divergence registry. The fixtures contain no ports, timestamps, durations, or absolute paths.
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";

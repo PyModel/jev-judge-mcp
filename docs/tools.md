@@ -17,8 +17,11 @@ rates. Certified operating points: none yet ([`docs/EVIDENCE.md`](EVIDENCE.md)).
 
 The `model` field is the requested model on the TypeSafe provider (`jev-latest` unless
 `JEV_MCP_MODEL` is set) and the slug sent on OpenRouter (`typesafe/jev-1.13` for `jev-latest`).
-The compatible and Cloudflare providers report the body's `model` when it has one. A `jev-latest`
-caller on TypeSafe cannot see which version answered (ADR-0001 parity). UTF-16 caps below are not Jev's context
+The compatible and Cloudflare providers report a valid body `model` when available and otherwise
+report the model sent. All providers prefer a valid body request ID, then check the response
+headers, and omit `request_id` if neither supplies one. Upstream metadata strings must be
+nonempty, at most 1,024 characters, and printable ASCII (ADR-0057). A `jev-latest` caller on
+TypeSafe cannot see which version answered (ADR-0001 parity). UTF-16 caps below are not Jev's context
 window (64k tokens per request, 32k for state plus the longest question). An input inside every cap
 can still exceed that window and come back as `input_too_large` (ADR-0079): split the call.
 
@@ -26,12 +29,22 @@ Every tool's schema advertises `additionalProperties: false`; the runtime keeps 
 zod strip: unknown keys are stripped, not refused — a missing or ill-typed declared key is refused
 typed `invalid_arguments` (ADR-0022).
 
+Errors include `invalid_arguments` for schema refusals, `input_too_large` for input or context
+limits, `auth` for authentication and configuration, `quota` for rate limiting, `timeout` for
+provider timeouts, `provider` for other provider failures, and `internal` for unexpected tool
+failures. Tools can also return codes for their own refusals. An `internal` error does not establish
+provider contact and makes a required completion hook ask.
+
 ---
 
 ## jev_verify — claims against evidence
 
 **Use when** you hold claims (a summary, a PR description, an agent's "done" list) and the evidence
-they cite, and want verified / contradicted / unsupported per claim.
+they cite, and want verified / contradicted / unsupported per claim. Act on an `auto` verdict.
+An `auto` contradiction is confidently false. `stands` is true only for a verified claim at
+`auto`. A sole caller note counts as the policy source without filling `supporting_evidence`.
+A caller note alone cannot earn `auto`. If a source was requested, a missing or malformed source
+answer holds the claim for review.
 
 **Measured.** L3 live run, 2026-09-23: n=5 claims, contradiction_recall 1.000, macro_f1 1.000,
 brier 0.00004, ece 0.002, selective_accuracy 1.000, auto_coverage 1.000, invalid 0. Five synthetic
@@ -171,9 +184,9 @@ exactly what your pattern matched.
 **Measured.** No recorded live eval. Scorer: P(defective | auto), safe_to_apply AUROC,
 severe-defect recall.
 
-**Weak spots.** Escalate here is uncertainty, not a finding: the lowest rubric confidence below
-`review_at` (default 0.5) escalates, including a low-confidence ancillary score like `test_gap` on
-a patch the other scores accept (README § Operator notes). The rubrics are fixed
+**Weak spots.** A confidence below `review_at` (default 0.5) requires review. Escalation requires a
+named defect or safety refusal grounded in a changed line, or an invalid required judgment. A
+malformed or missing answer to a requested defect-category question prevents `auto`. The rubrics are fixed
 (correctness, spec_match, test_gap, blast_radius); callers cannot add one. A string `diff` over
 the cap is truncated and judgment over cut context never stands `auto`; a file-list `diff` is
 reviewed per file instead — one oversized or unreviewable file lists in `unreviewed_files`, marks
@@ -181,6 +194,12 @@ the call `partial`, and keeps it off `auto` (ADR-0066).
 
 **Not for** producing a rewritten patch, style review, or replacing the test run — it reads what
 you pass (ADR-0063: diff and tests count as evidence when you do not pass them explicitly).
+
+A held review includes `blockers` with the triggering field, observed value, applicable threshold,
+and a next check. Rubric confidence blockers also show the score, nearest level and whether that
+level is favorable, intermediate or adverse. Where a changed line is available, the next check
+points to the patch. Caller-supplied test text is marked `tests_weight: self_reported`. The gate
+omits that mark when the CLI or range tool reads the log itself.
 
 ## jev_gate — did the work finish
 
@@ -192,14 +211,52 @@ Clopper-Pearson upper bound, not a point estimate (ROADMAP headline metrics); ce
 target needs roughly 600 error-free held-out rows per run, and that corpus is not recorded yet
 (`evals/README.md` § Open gaps).
 
-**Weak spots.** Same escalate-is-uncertainty rule as jev_review, plus the claim rules: a
-contradicted claim escalates, and cut context (diff, tests, docs, evidence over their caps) keeps
-the gate off `auto`. A file-list `diff` is reviewed per file with the claims verified once; a file
-over the cap lands in `unreviewed_files` with reason `incomplete_context` and the whole gate
-turns on the worst file (ADR-0066). Evidence is capped at 16 items and 200,000 aggregate UTF-16
-units; over either is an `input_too_large` error telling you to split the gate. Those UTF-16 caps
-are not the 64k token window: a gate state inside them can still come back as `input_too_large` (ADR-0079):
-split the call. The claim half also receives the diff and the tests again as implicit evidence (ADR-0063), so those bytes are in the state twice: about 100k extra UTF-16 units when both are at the 50,000 cap.
+A confident contradiction with a cited counterexample escalates. A file list gets one review per file and one verification
+for all claims. A range with withheld files names them and requires local review. Evidence is
+capped at 16 items and 200,000 aggregate UTF-16 units. Before sending, the gate checks primary
+documents and both byte budgets. The string gate sends the diff and tests again as implicit evidence
+(ADR-0063). At the document caps this would add about 100k extra UTF-16 units and the gate
+would refuse. Split by file or hunk and send each claim with the evidence it needs.
+
+**Reading a held gate.** Use `blockers` for file-by-file and claim-by-claim comparisons. For
+example, `spec_match_confidence_below_review_at` can report a favorable level, confidence 0.49
+and threshold 0.5. Check the requirement against its implementation. Summary reason codes use the
+frozen vocabulary. Read detailed blocker codes in `blockers` and `rollup.reason_counts`. The
+request, target patch and tests are the primary review inputs. The target path,
+caller evidence items and sibling patches share a supplemental UTF-16 budget. When any of these
+are omitted, `jev_review.context_omissions` or the gate’s `review.context_omissions` lists each
+target path and index, required and allowed units, and omitted entries. This field is informational
+on every action, including auto. Coverage flags and decisions still follow the primary inputs and
+judgments. Claims are verified once against the canonical evidence. See [ADR-0081](adr/0081-gate-diagnostics-and-file-context.md).
+
+Read `rollup.action` for the whole change. `rollup.reason_counts` counts each detailed blocker
+by code across files, withheld paths and claims. Accepted changes have an empty count map.
+`review.file_rows` is ordered by input position and preserves repeated paths. The existing
+`action`, `review.file_actions`, `score_file`, `reason_codes`, and numeric scores remain available.
+`next_checks` contains one prioritized action. Every other held comparison keeps its own check in
+`blockers`. When a rubric needs review and a changed line is available, the suggested check
+names a patch line to inspect. An omitted input on a held file is identified by path or evidence ID.
+The source and defect category questions hold otherwise-auto decisions for review when their answers
+are missing or malformed. Plain summaries require actual diff structure before they count as patches.
+
+A named defect or explicit safety rejection cites a changed line. A confirmed claim contradiction
+cites a counterexample and sets the claim excerpt to that line. The line number is one-based within
+the submitted patch or evidence item. The source uses the ID sent to the provider, including any
+renamed implicit diff. Changed code remains citable even when it resembles a diff header.
+`evidence_line` is always `{source, line, text}`. Invalid answers identify the provider question
+in `invalid_answer`. Only a cited safety refusal sets `safety_refusal`. Invalid required answers
+explicitly refuse a decision. Low confidence alone requires review. A provider
+contradiction without sufficient corroboration yields `unsupported` and `reported_verdict:
+contradicted`. Its probabilities still describe the provider's original judgment.
+`citation_coverage` reports the number of eligible and offered lines. A held change can be split
+by hunk to expose more lines. Aggregated token counts sum the reported usage across calls.
+In study provenance mode, `usage.reported` is false if any contributing call omitted its usage.
+See [ADR-0082](adr/0082-actionable-gate-escalation.md).
+
+From another git worktree run `jev-judge-mcp gate --diff BASE..HEAD --claims claims.txt
+--tests test.log --request "requirement"` in that worktree. A range over the aggregate input budget returns `input_too_large` before a judgment. The same admission caps apply.
+For changes exceeding the caps, separate concern-level decisions require an independent
+cross-file review.
 
 **Not for** a substitute for CI or tests — it judges the claims you pass against the evidence you
 pass, and never runs anything itself.
@@ -239,7 +296,7 @@ prefixed `.env` family, `*.pem`,
 reaches the provider. Paths must resolve inside the server's working directory,
 symlinks followed; there is no override, and an escaping path is refused `path_outside_scope` with no
 provider call. One question per call: several files are `jev_files_judge`, the batched form of this
-tool.
+tool. Choice option IDs must contain 1 to 64 UTF-16 units each.
 
 **Not for** exact lookups, counting, math, or anything grep answers — run the command and read the
 answer yourself.
@@ -263,7 +320,9 @@ among the answers is `jev_find` fed those answers as candidates.
 files from at most 32 path entries, each file at the `jev_file_judge` 100,000-unit cap — and the
 prune is deterministic: the same tree and the same paths always skip the same files. A per-file
 call failure is a skipped path, never a batch error, so a batch is only as good as its surviving
-files: read `skipped` before trusting `results`.
+files: read `skipped` before trusting `results`. File judgments and file-list reviews share a
+runtime cap of eight simultaneous file judgments. With zero calls, the batch reports the requested
+model and `provider: none`. If every call fails, the batch identifies the attempted provider.
 
 **Not for** exact lookups, counting, math, or anything grep answers — run the command and read the
 answer yourself.
@@ -274,29 +333,56 @@ answer yourself.
 test failure a real regression and how severe, does this diff carry a credential and which class of
 change is it. Write the questions — noul, choice, or score, keyed by your ids — and compose the
 state: your own framing in `state`, files the server reads in `paths` (the `jev_file_judge` rules),
-and an optional `command` (only when the operator has enabled command execution with
-`JEV_ASK_COMMANDS=1`; without it `command` refuses `command_disabled` with no run and no call)
-whose redacted output joins the state after a deterministic denylist and the command hook's gate
-judge it read-only with confidence and no destructive intent. The gate judges; the tool does not
-sandbox. Answers come back keyed by your ids, fail-closed per question, with a state summary and
-summed usage.
+and an optional `command` whose redacted output joins the state. An accepted command uses one
+provider call for your questions, just like an ask without a command. Answers come back keyed by
+your ids, fail-closed per question, with a state summary and usage. The provider receives generated
+question keys such as `q0` in place of caller ids.
+
+Command execution is off by default. Set `JEV_ASK_COMMANDS=1` in the server environment to enable it.
+The server parses POSIX shell-style quoting into arguments and invokes the executable directly.
+The fixed allowlist is `git status`, `git diff`, `git log`, `git show`, `ls`, `rg`, `grep`, `wc`,
+`head`, and `tail`. There is no shell, expansion, pipeline, or redirection. Malformed quoting,
+unquoted shell operators (including backticks and `$(`), executable paths, Git options before
+the subcommand, and executables found inside the working directory tree are refused.
+
+Each command has a **closed option allowlist**. Exact spellings are required. Any unlisted option
+refuses with `command_refused`, the command's allowed options, and the final-block notice. A
+disabled command returns `command_disabled` with the same notice. Both refusals happen before
+execution or a provider call.
+
+| Command | Flags | Options with required values | Options with optional attached values |
+| --- | --- | --- | --- |
+| `git status` | `-s`, `--short`, `--branch` | — | `--porcelain[=version]` |
+| `git diff` | `-p`, `--name-only`, `--name-status`, `--no-color`, `--cached`, `--staged` | `-U`, `--unified` | `--stat[=width[,name-width[,count]]]` |
+| `git log`, `git show` | `-p`, `--name-only`, `--name-status`, `--no-color`, `--oneline` | `-U`, `--unified`, `-n`, `--max-count`, `--since`, `--until`, `--author`, `--format`, `--pretty` | `--stat[=width[,name-width[,count]]]` |
+| Both `rg` and `grep` | `-i`/`--ignore-case`, `-w`/`--word-regexp`, `-F`/`--fixed-strings`, `-n`/`--line-number`, `-c`/`--count`, `-l`/`--files-with-matches`, `-v`/`--invert-match`, `-x`/`--line-regexp` | `-A`/`--after-context`, `-B`/`--before-context`, `-C`/`--context`, `-e`/`--regexp`, `-f`/`--file`, `-m`/`--max-count` | — |
+| `rg` only | `-s`/`--case-sensitive`, `-S`/`--smart-case`, `--hidden`, `--no-ignore` | `-g`/`--glob`, `--iglob`, `-t`/`--type`, `-T`/`--type-not` | — |
+| `grep` only | `-r`, `-R`, `--recursive` | `--include`, `--exclude`, `--exclude-dir` | — |
+| `ls` | `-l`, `-a`, `-A`, `-h`, `-R`, `-1`, `-t`, `-S` | — | — |
+| `wc` | `-l`, `-w`, `-c`, `-m` | — | — |
+| `head`, `tail` | — | `-n`, `-c` | — |
+
+Required values can be attached or separate, as in `--max-count=5`, `--max-count 5`, `-n5`,
+or `-n 5` where the option takes a value. Short flags can be bundled, as in `grep -in`.
+A bare `--` ends option parsing and can delimit Git paths. The secret-store and private-directory
+rules apply to every positional argument and option value.
+
+Git runs with paging, fsmonitor, hooks, external diffs, and text conversion disabled, and ignores
+system and global Git configuration. Configured worktree filters cause `git status` and `git diff`
+to refuse.
 
 **Measured.** No recorded live eval, and no bench corpus yet (extension tool, ADR-0077).
 
-**Weak spots.** Nothing truncates: state plus questions is capped at 120,000 UTF-16 units, and an
-over-budget call refuses with every part's size and a first-fit split suggestion naming which parts
-go to which call — re-ask the same questions on each. Own `state` is framing, capped at 20,000
+**Weak spots.** Nothing truncates. The total state plus questions is capped at 120,000 UTF-16 units,
+including choice option keys. An over-budget call refuses with every part's size and a first-fit
+split suggestion naming which parts go to which call. Re-ask the same questions on each.
+Own `state` is framing, capped at 20,000
 units; command output is capped at 30,000 units and an over-cap run is killed and refused; the
-command runs under a 30-second timeout, in the working directory, with no stdin and no sandbox, in
-an environment scrubbed of the server's configured secrets. Command execution is off unless the
-operator enables it; when enabled, a denylist (network clients, secret stores, private config
-directories, environment readers) refuses before the gate, and a refused command makes no
-execution and no ask call — but the gate judgment itself is one provider call. The denylist is
-not a sandbox: an interpreter one-liner such as `python -c` or `node -e` names no network client,
-so it passes the denylist and can still reach the network once commands are enabled. Enabling
-`command` trusts the gate's judgment and the operator's own isolation, not a containment
-boundary. 1 to 20 questions
-per call, at most 20 paths; questions in one request cannot see each other's answers. Every
+command runs under a 30-second timeout, in the working directory, with closed stdin and a scrubbed
+environment. Both output streams are redacted. Commands read with the server account's filesystem
+permissions, including when traversing directories. 1 to 20 questions
+per call, at most 20 paths. Choice option IDs use the same 1 to 64 UTF-16 unit limit as
+`jev_file_judge`. Questions in one request cannot see each other's answers. Every
 answer is typed: a probability, one option, or a scale position — never an explanation.
 
 **Not for** exact lookups, counting, math, or anything grep answers — run that in your own shell

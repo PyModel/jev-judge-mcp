@@ -17,18 +17,26 @@ import subprocess
 import sys
 from typing import IO, Any, cast
 
+if __package__:
+    from .rpc_replies import ReplyStream
+else:  # Invoked by absolute script path inside the dry-run agent's isolated environment.
+    from rpc_replies import ReplyStream
+
 
 def _send(pipe: IO[bytes], message: dict[str, Any]) -> None:
     pipe.write((json.dumps(message) + "\n").encode())
     pipe.flush()
 
 
-def _reply(pipe: IO[bytes], wanted: int) -> dict[str, Any]:
-    for line in iter(pipe.readline, b""):
-        message = json.loads(line)
-        if message.get("id") == wanted:
-            return message
-    raise RuntimeError(f"server closed before replying to {wanted}")
+def _exchange(pipe: IO[bytes], stream: ReplyStream, requests: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for request in requests:
+        _send(pipe, request)
+    replies = stream.collect([request["id"] for request in requests])
+    for reply in replies:
+        if "error" in reply:
+            raise RuntimeError(f"JSON-RPC error for request {reply['id']}")
+    print(f"bench-stub received {len(replies)}/{len(requests)} expected replies", file=sys.stderr)
+    return replies
 
 
 def _emit(event: dict[str, Any]) -> None:
@@ -44,44 +52,45 @@ def main(argv: list[str]) -> int:
     replies: list[dict[str, Any]] = []
     servers: list[dict[str, str]] = []
     if server:
-        child = subprocess.Popen(
+        with subprocess.Popen(
             [server["command"], *server["args"]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=server["env"]
-        )
-        assert child.stdin is not None and child.stdout is not None
-        init = {
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": {"name": "bench-stub", "version": "0"},
-        }
-        _send(child.stdin, {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": init})
-        _reply(child.stdout, 0)
-        _send(child.stdin, {"jsonrpc": "2.0", "method": "notifications/initialized"})
-        servers.append({"name": "jev", "status": "connected"})
-        requests: list[dict[str, Any]] = [
-            {
-                "jsonrpc": "2.0",
-                "id": n + 1,
-                "method": "tools/call",
-                "params": {"name": c["tool"], "arguments": c["arguments"]},
-            }
-            for n, c in enumerate(calls)
-        ]
-        if plan.get("parallel"):
-            for request in requests:
-                _send(child.stdin, request)
-            by_id: dict[object, dict[str, Any]] = {}
-            for line in iter(child.stdout.readline, b""):
-                message = cast(dict[str, Any], json.loads(line))
-                by_id[message.get("id")] = message
-                if len(by_id) == len(requests):
-                    break
-            replies = [by_id[q["id"]] for q in requests]
-        else:
-            for request in requests:
-                _send(child.stdin, request)
-                replies.append(_reply(child.stdout, request["id"]))
-        child.stdin.close()
-        child.wait(timeout=30)
+        ) as child:
+            assert child.stdin is not None and child.stdout is not None
+            stream = ReplyStream(child.stdout)
+            try:
+                init = {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "bench-stub", "version": "0"},
+                }
+                _exchange(child.stdin, stream, [{"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": init}])
+                _send(child.stdin, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+                servers.append({"name": "jev", "status": "connected"})
+                requests: list[dict[str, Any]] = [
+                    {
+                        "jsonrpc": "2.0",
+                        "id": n + 1,
+                        "method": "tools/call",
+                        "params": {"name": c["tool"], "arguments": c["arguments"]},
+                    }
+                    for n, c in enumerate(calls)
+                ]
+                batches = [requests] if plan.get("parallel") else ([request] for request in requests)
+                for batch in batches:
+                    replies.extend(_exchange(child.stdin, stream, batch))
+                child.stdin.close()
+                stream.expect_eof()
+                if code := child.wait(timeout=30):
+                    raise RuntimeError(f"server exit status {code}")
+            finally:
+                stream.close()
+                if not child.stdin.closed:
+                    child.stdin.close()
+                if child.poll() is None:
+                    try:
+                        child.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        child.kill()
     _emit({"type": "system", "subtype": "init", "model": "claude-sonnet-5", "tools": [], "mcp_servers": servers})
     hidden = set(plan.get("hide", []))
     for n, (call, reply) in enumerate(zip(calls, replies, strict=True)):

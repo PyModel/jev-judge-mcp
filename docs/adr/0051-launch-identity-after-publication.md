@@ -26,17 +26,22 @@ configured agent.
   0.10.10: that uvx caches the first build of a checkout and keeps launching it after edits
   (astral-sh/uv#18396). The `tool.uv.cache-keys` floor closes the path on 0.10.10 and newer.
 - **Spec shapes.** Validation accepts exactly the two shapes this installer writes — the
-  version-pinned PyPI spec and the checkout spec — and refuses anything else (the bare package
-  name, another project's name, a relative path) before any config is touched.
+  version-pinned PyPI spec and the checkout spec. The PyPI pin must contain one exact PEP 440
+  version. The installer uses the PyPA `packaging` version grammar to reject wildcards and ranges
+  before writing any config.
 - **Migration.** No new command: re-running `install` already rewrites entries this installer owns
   (the state hash covers the written entry, not the spec form), so one plain re-run moves an
   existing fleet from checkout pins to the version-pinned PyPI spec. Entries the installer does
   not own stay untouched, as before; the same re-run upgrades a pinned entry when a new version is
-  installed.
+  installed. An owned Claude Desktop entry retains the key already stored with consent.
 - **Verification network.** The post-write handshake runs the written command. For a
   PyPI-spec entry whose version is not cached, `uvx` may download the package from PyPI once —
   a deliberate network touch during a real install. Tests never do this: they mock or stub the
   launch, and the handshake itself is tested against a local script.
+- **Verification failure.** A failed post-write handshake leaves the ownership hash and
+  `verified: false` in installer state and exits non-zero. A later `install --remove` can
+  remove that entry by its hash. Re-running install retries an outstanding handshake on a matching
+  owned entry without rewriting its config. Removal requires no desktop key.
 
 ## Consequences
 
@@ -46,3 +51,12 @@ configured agent.
   published package, and `--remove` still removes entries of either shape.
 - ADR-0033's remaining decisions (one named entry per agent, key handling, GUI file modes, Codex
   TOML, OpenCode JSONC, Pi adapter, Pythinker desktop) are unchanged.
+
+## Amendment (2026-11-19): share the launch check and require a version for ownership records
+
+- Each run performs one handshake for its shared launch command and records the result
+  for every newly written entry and outstanding verification using that command.
+- The PyPI pin and ownership records use the same installed version lookup. If the
+  distribution metadata is missing, the installer cannot write a new ownership record.
+  This also applies to checkout writes. Install the checkout in its environment before
+  running `install --from-checkout`, as in the README.

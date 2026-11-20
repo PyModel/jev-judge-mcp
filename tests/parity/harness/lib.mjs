@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { fixtureTags } from "./fixture-tags.mjs";
 
 export const NODE_VERSION = "v24.19.0";
 export const PARITY_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -111,7 +112,7 @@ export function serialize(value) {
 
 // Write one fixture, refusing anything that leaked a live port.
 export function writeFixture(relative, fixture, ports) {
-  const text = serialize(fixture);
+  const text = serialize({ ...fixture, divergences: fixtureTags(fixture) });
   for (const port of ports) {
     if (text.includes(`127.0.0.1:${port}`)) throw new Error(`${relative}: fixture leaks fake port ${port}`);
   }

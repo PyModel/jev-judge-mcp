@@ -12,7 +12,6 @@ from jev_judge_mcp.providers.base import (
     ProviderName,
     decode_body,
     parse_envelope,
-    request_id_of,
 )
 from jev_judge_mcp.providers.retry import RetryPolicy
 
@@ -54,16 +53,15 @@ class OpenRouterProvider(HttpProvider):
             "X-Title": _TITLE,
             "X-OpenRouter-Title": _TITLE,
         }
-        response = await self._post(URL, headers, {"model": slug, "state": state, "questions": questions})
+        response = await self._post(URL, headers, {"model": slug, "state": state, "questions": questions}, timeout)
         if not response.is_success:
             raise self._error(response)
-        envelope = parse_envelope(decode_body(response.content), self.label)
+        envelope = parse_envelope(decode_body(response.content), self.label, response.headers)
         # The reference reports the slug it sent, never a model from the body (`provider.ts:154`).
-        # A header-only id is kept, as the compatible provider keeps it (ADR-0068).
         return Evaluation(
             envelope.answers,
             envelope.usage,
             self.name,
             slug,
-            request_id=envelope.request_id or request_id_of({}, response.headers),
+            request_id=envelope.request_id,
         )

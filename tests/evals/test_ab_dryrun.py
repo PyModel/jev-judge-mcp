@@ -3,7 +3,7 @@
 Each run spawns the stub (`tests/support/bench_agent.py`) in place of `claude`. In arm B the stub goes
 through the recording proxy to the real `python -m jev_judge_mcp`, pointed at `tests/support/bench_provider.py`
 on 127.0.0.1, so the proxy log, not the stub's text, decides whether Jev was used. The stub writes the
-task's reference solution (or a wrong one) and runs the tests, so the real grader scores it. No model,
+task's solution (or a wrong one) and emits a test-run event. The real grader runs the tests. No model,
 no provider, no paid call. The records are stub data: nothing here is a study result.
 """
 
@@ -18,6 +18,7 @@ import pytest
 
 from evals.ab import arms, report, tasks
 from evals.ab import run as ab_run
+from tests.evals.booking_cases import write_result
 from tests.support.bench_provider import API_KEY, Loopback
 
 REPO = Path(__file__).resolve().parents[2]
@@ -88,8 +89,13 @@ def loopback() -> Iterator[Loopback]:
         yield endpoint
 
 
-def _records(out: Path) -> dict[str, dict[str, Any]]:
-    return {r["run_id"]: r for r in (json.loads(p.read_text(encoding="utf-8")) for p in out.glob("*/result.json"))}
+def _records(out: Path, *, complete: bool = True) -> dict[str, dict[str, Any]]:
+    got = {r["run_id"]: r for r in (json.loads(p.read_text(encoding="utf-8")) for p in out.glob("*/result.json"))}
+    if complete:
+        assert set(got) == {f"{TASK.id}.A.r1", f"{TASK.id}.B.r1"}
+    for run_id, record in got.items():
+        assert record["status"] == "ok", (run_id, record["status"])
+    return got
 
 
 def test_dry_run_measures_a_pair_where_the_agent_used_jev(tmp_path: Path, loopback: Loopback) -> None:
@@ -114,7 +120,9 @@ def test_dry_run_measures_a_pair_where_the_agent_used_jev(tmp_path: Path, loopba
 def test_dry_run_where_the_agent_skips_jev_is_not_measured(tmp_path: Path, loopback: Loopback) -> None:
     out = tmp_path / "out" / "claude"
     ab_run.study(setup(tmp_path, loopback, solve(call_jev=False)), out, repeats=1)
-    b = _records(out)["j1-refund-window.B.r1"]
+    got = _records(out)
+    a, b = got["j1-refund-window.A.r1"], got["j1-refund-window.B.r1"]
+    assert a["success"] and a["measurement"] is None
     assert b["success"] and b["measurement"] == "Jev not used: no Jev call" and loopback.requests == 0
     text = report.render(ab_run.load_records(tmp_path / "out"), {})
     assert "**Not measured.**" in text and "### Outcomes" not in text
@@ -140,13 +148,13 @@ def test_an_escape_fails_the_run_and_stops_the_study(tmp_path: Path, loopback: L
             **plan,
             "uses": [
                 *plan["uses"],
-                {"name": "Bash", "input": {"command": "cat /Users/panda/.pi/agent/auth.json"}},
+                {"name": "Bash", "input": {"command": "cat /Users/example/.pi/agent/auth.json"}},
             ],
         }
 
     stop = ab_run.study(setup(tmp_path, loopback, plan_with_escape), out, repeats=1)
     assert "escape" in stop and "r1" in stop
-    records = _records(out)
+    records = _records(out, complete=False)
     assert len(records) == 1, "the study must stop on the first escape"
     (escaped,) = records.values()
     assert escaped["failure_category"] == "escape" and escaped["success"] is False
@@ -167,21 +175,16 @@ def test_out_of_task_exploration_is_recorded_and_does_not_stop_the_study(
     ) -> dict[str, Any]:
         rid = f"j1-refund-window.{arm}.r{repeat}"
         explored = arm == "A"  # the recorded j6-docs-vs-code.A.r2 shape
-        record = {
-            "run_id": rid,
-            "task": "j1-refund-window",
-            "agent": "claude",
-            "arm": arm,
-            "repeat": repeat,
-            "status": "ok",
-            "success": True,
-            "failure_category": "out-of-task exploration" if explored else None,
-            "exploration": ["/run/capability.json", "/"] if explored else [],
-            "cost_usd": 0.01,
-        }
-        (out / rid).mkdir(parents=True, exist_ok=True)
-        (out / rid / "result.json").write_text(json.dumps(record) + "\n", encoding="utf-8")
-        return record
+        return write_result(
+            out,
+            rid,
+            0.01,
+            bench_keys=False,
+            success=True,
+            final_tests_passed=True,
+            failure_category="out-of-task exploration" if explored else None,
+            exploration=["/run/capability.json", "/"] if explored else [],
+        )
 
     monkeypatch.setattr(ab_run, "run_one", run_one_with_exploration)
     stop = ab_run.study(setup(tmp_path, loopback, solve()), out, repeats=1)
@@ -191,4 +194,5 @@ def test_out_of_task_exploration_is_recorded_and_does_not_stop_the_study(
     assert records["j1-refund-window.A.r1"]["failure_category"] == "out-of-task exploration"
     assert records["j1-refund-window.A.r1"]["exploration"] == ["/run/capability.json", "/"]
     assert records["j1-refund-window.A.r1"]["success"] is True
+    assert records["j1-refund-window.B.r1"]["success"] is True
     assert records["j1-refund-window.B.r1"]["failure_category"] is None

@@ -81,17 +81,20 @@ def test_a_rejected_key_stores_nothing(monkeypatch: pytest.MonkeyPatch, isolated
     assert not isolated.exists()
 
 
-def test_a_verified_prompted_key_is_stored_privately(monkeypatch: pytest.MonkeyPatch, isolated: Path) -> None:
+@pytest.mark.parametrize("env_key", [None, ""], ids=["unset", "empty"])
+def test_a_verified_prompted_key_is_stored_privately(
+    monkeypatch: pytest.MonkeyPatch, isolated: Path, env_key: str | None
+) -> None:
     seen: list[str] = []
 
     def accept(_: Settings, key: str) -> object:
         seen.append(key)
         return None
 
-    code, text = run(monkeypatch, isolated, prompt_input=KEY, verify=accept)
+    code, text = run(monkeypatch, isolated, prompt_input=KEY, verify=accept, env_key=env_key)
     assert code == 0
     assert seen == [KEY]
-    assert "stored at" in text
+    assert "verified (prompt) and stored at" in text
     assert KEY not in text
     assert isolated.read_text(encoding="utf-8") == KEY + "\n"
     assert stat.S_IMODE(os.stat(isolated).st_mode) == 0o600
@@ -166,3 +169,27 @@ def test_setup_is_a_subcommand_and_nothing_else_is() -> None:
     assert setup_requested(["jev-judge-mcp"]) is False
     assert setup_requested(["jev-judge-mcp", "install"]) is False
     assert setup_requested(["jev-judge-mcp", "--help"]) is False
+
+
+def test_oversize_input_preserves_the_store_and_skips_verification(
+    monkeypatch: pytest.MonkeyPatch, isolated: Path
+) -> None:
+    isolated.parent.mkdir(parents=True)
+    isolated.write_text("previous\n")
+
+    def reject(_settings: Settings, _key: str) -> None:
+        pytest.fail("oversize input accepted")
+
+    code, text = run(monkeypatch, isolated, prompt_input="x" * 4096, verify=reject)
+    assert code == 1
+    assert "4096" in text and "xxxx" not in text
+    assert isolated.read_text() == "previous\n"
+
+
+def test_setup_reports_a_non_private_store_without_a_traceback(monkeypatch: pytest.MonkeyPatch, isolated: Path) -> None:
+    isolated.parent.mkdir(mode=0o755)
+    code, text = run(monkeypatch, isolated, prompt_input=KEY, verify=lambda _settings, _key: None)
+    assert code == 1
+    assert "private directory" in text and "key NOT stored" in text
+    assert KEY not in text
+    assert not isolated.exists()

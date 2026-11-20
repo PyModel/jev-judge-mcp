@@ -3,7 +3,7 @@
 The coding-agent-helper centerpiece of the ask surface: one call carries every question the agent
 wants about one state, and the state composes from three parts — the caller's own framing text,
 files the server reads (the file tools' rules, `file_state.py`), and an optional command whose
-output becomes state only after the command hook's gate judges it in-process. The questions are a
+output becomes state after deterministic command validation. The questions are a
 typed Noul/Choice/Score union keyed by caller ids, validated by the same builder the file tool
 uses; the answers come back keyed by those ids, fail-closed per question. Overflow never
 truncates: an over-budget composition refuses with each part's size and a Split suggestion.
@@ -13,27 +13,27 @@ Published after the frozen prefix (divergence `ask-tool-extension`); its caps li
 
 from typing import Any, cast
 
+import anyio
+
 from jev_judge_mcp.domain import ChoiceQuestion, Question, ScoreQuestion
-from jev_judge_mcp.keyfile import redaction_values
+from jev_judge_mcp.errors import Redactor
+from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import ASK, FILE_JUDGE, SANITIZE_ID_UNITS
-from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.ask_state import (
     Part,
-    command_denylist_refusal,
     command_disabled_refusal,
-    command_refusal,
     file_parts,
-    gate_questions,
-    gate_state,
+    git_command,
     own_part,
+    prepare_command,
     question_units,
-    run_gated_command,
+    run_command,
+    scrubbed_environment,
     split_refusal,
 )
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
 from jev_judge_mcp.tools.file_judge import INVALID, build_question, project_answer
-from jev_judge_mcp.tools.files import combined
 
 KINDS = ("noul", "choice", "score")
 """The typed question union (ADR-0077 decision H2): typed objects, never a raw JSON string."""
@@ -56,17 +56,16 @@ DEFINITION = define(
     "every question about one state into this one call; questions in one request cannot see each other's "
     "answers. The state composes from up to three parts: `state`, your own short framing text; `paths`, "
     "files the server reads as state — the file tools' rules apply (inside the working directory, known "
-    "secret stores are never read, every read is credential-redacted); and `command`, a shell command the "
-    "server runs only when the operator has enabled command execution with JEV_ASK_COMMANDS=1 in the "
-    "server environment — without it, sending `command` is the typed `command_disabled` refusal, with no "
-    "run and no call. When enabled, the command runs only after a deterministic denylist (network "
-    "clients, secret stores, private config directories, environment readers) and the command hook's "
-    "gate both pass: a read-only effect with confidence at the floor and no destructive intent. Anything "
-    "else is the typed `command_refused` refusal carrying the reason and the final-block notice, with "
-    "no execution and no ask call. The gate judges; this tool does not sandbox. An allowed command runs "
-    "with no stdin, a 30-second timeout, a secret-scrubbed environment, and its redacted "
-    "output becomes state. Nothing is ever truncated: an over-budget composition refuses with each "
-    "part's size and a first-fit split suggestion naming which parts go to which call. Answers come "
+    "secret stores are never read, every read is credential-redacted); and `command`, a read-only argv "
+    "enabled by JEV_ASK_COMMANDS=1. Without it, `command` refuses with `command_disabled` before any "
+    "run or call. The server executes git status, diff, log or show, ls, rg, grep, wc, head or tail "
+    "directly without a shell. Each command has a closed option allowlist. Unquoted shell operators, "
+    "unlisted options, known secret stores, and private configuration directories refuse with "
+    "`command_refused` and the final-block notice before execution or a provider call. "
+    "Commands run with no stdin, a 30-second timeout, "
+    "and a scrubbed environment. This tool does not sandbox filesystem access. Redacted output joins "
+    "the State and the caller's questions use one provider call. Nothing is ever truncated: an "
+    "over-budget composition refuses with each part's size and a first-fit split suggestion. Answers come "
     "back keyed by your ids, fail-closed per question. Not for exact lookups, counting, math, or "
     f"questions grep answers — run those and read the result; ask only when a judgment remains. "
     f"{_ON_DEMAND_RULE}",
@@ -105,13 +104,12 @@ DEFINITION = define(
             "command": {
                 "type": "string",
                 "minLength": 1,
-                "description": "A shell command whose redacted output becomes one state part. Requires the "
-                "operator's JEV_ASK_COMMANDS=1; without it the call refuses `command_disabled` with no run "
-                "and no provider call. When enabled: a deterministic denylist (network clients, secret "
-                "stores, private config directories, environment readers) and the command hook's gate both "
-                "judge first — read-only effect, confidence at the floor, no destructive intent — or "
-                "`command_refused`. The gate judges; this tool does not sandbox. 30-second timeout; "
-                "over-cap output is killed and refuses `output_too_large`.",
+                "description": "Read-only argv as a string. Requires JEV_ASK_COMMANDS=1 or refuses "
+                "`command_disabled` before any run or provider call. Allowed commands are git status, "
+                "diff, log and show, ls, rg, grep, wc, head and tail. No shell. Unquoted shell operators "
+                "and options outside the command's closed list refuse `command_refused`. "
+                "Commands time out after 30 seconds. Over-cap output is killed and refuses "
+                "`output_too_large`. Redacted output joins the single judgment.",
             },
         },
         "required": ["questions"],
@@ -187,49 +185,48 @@ def _expected(question: Question) -> tuple[str, ...]:
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     questions = _build_questions(args["questions"])
     command = args.get("command")
+    prepared: tuple[str, list[str]] | None = None
+    env = scrubbed_environment(runtime.settings)
+    key_path = stored_key_path(runtime.settings)
     if command is not None:
-        # Two deterministic checks precede any file read, any run, and any provider call: the
-        # operator's execution flag (off by default, ADR-0077 amendment), then the denylist.
         if not runtime.settings.ask_commands:
             raise ToolError(command_disabled_refusal(), code="command_disabled")
-        denylist = command_denylist_refusal(command)
-        if denylist is not None:
-            raise ToolError(denylist, code="command_refused")
-    own = own_part(args.get("state", ""))
+        prepared = await anyio.to_thread.run_sync(prepare_command, command, env, key_path)
+    secrets = await anyio.to_thread.run_sync(redaction_values, runtime.settings)
+    redact = Redactor(secrets)
+    own = own_part(args.get("state", ""), redact)
     parts: list[Part] = [own] if own is not None else []
-    file_result, skipped = file_parts(args.get("paths", []))
+    file_result, skipped = await anyio.to_thread.run_sync(file_parts, args.get("paths", []), key_path, redact)
     parts.extend(file_result)
     units = question_units(questions)
-    if command is not None and units + sum(part.units for part in parts) > ASK.request_units_max:
-        # Hopeless before the gate: even an empty output cannot fit, so the command is not run
-        # and no provider is built (deterministic evidence takes precedence).
+    if units + sum(part.units for part in parts) > ASK.request_units_max:
         split_refusal(parts, units)
     if not parts and command is None:
         raise ToolError(
             "no state: give `state`, at least one readable `paths` entry, or a `command`.",
             code="invalid_arguments",
         )
-    evaluations: list[Evaluation] = []
     output: Part | None = None
-    if command is not None:
-        gate = await runtime.ask(
-            {"proposed_action": gate_state(command, redaction_values(runtime.settings))}, gate_questions()
+    if prepared is not None:
+        program, argv = prepared
+        if program == "git":
+            argv = await anyio.to_thread.run_sync(git_command, argv, env)
+        output = await anyio.to_thread.run_sync(
+            run_command, argv, ASK.command_timeout_seconds, ASK.command_output_units_max, env, secrets
         )
-        evaluations.append(gate)
-        reason = command_refusal(gate.answers)
-        if reason is not None:
-            raise ToolError(reason, code="command_refused")
-        output = await run_gated_command(command, runtime.settings)
         parts.append(output)
-    if units + sum(part.units for part in parts) > ASK.request_units_max:
-        split_refusal(parts, units)
-    state = _named_state(parts)
-    evaluation = await runtime.ask(state, questions)
-    evaluations.append(evaluation)
+        if units + sum(part.units for part in parts) > ASK.request_units_max:
+            split_refusal(parts, units)
+    wire_keys = {identifier: f"q{index}" for index, identifier in enumerate(questions)}
+    evaluation = await runtime.ask(
+        _named_state(parts), {wire_keys[name]: question for name, question in questions.items()}
+    )
     answers: dict[str, Any] = {}
     statuses: list[str] = []
     for identifier, question in questions.items():
-        answer, status = project_answer(question.type, evaluation.answers.get(identifier), _expected(question))
+        answer, status = project_answer(
+            question.type, evaluation.answers.get(wire_keys[identifier]), _expected(question)
+        )
         answers[identifier] = {**answer, "status": status}
         statuses.append(status)
     body: dict[str, object] = {
@@ -243,7 +240,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             "units": units + sum(part.units for part in parts),
         },
     }
-    return ToolResult(frame("jev_ask", evaluations[0] if len(evaluations) == 1 else combined(evaluations), body))
+    return ToolResult(frame("jev_ask", evaluation, body))
 
 
 def _named_state(parts: list[Part]) -> dict[str, str]:

@@ -37,10 +37,11 @@ RUN npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}" "@anthropic-a
 	&& node -e "require('fs').accessSync('/usr/local/lib/node_modules/pi-mcp-adapter/index.ts')"
 ENV PI_MCP_ADAPTER=/usr/local/lib/node_modules/pi-mcp-adapter/index.ts
 
-# The wheel is copied in by the build (make confinement-image builds it first), never fetched
-# from an index: the server inside the container is exactly this checkout's revision.
-COPY dist/jev_judge_mcp-*.whl /tmp/
-RUN wheel=$(ls /tmp/jev_judge_mcp-*.whl) \
-	&& pip install --no-cache-dir "$wheel[typesafe]" \
-	&& rm /tmp/jev_judge_mcp-*.whl \
+# The build context contains this checkout's wheel and its locked TypeSafe runtime dependencies.
+COPY *.whl requirements.txt /tmp/confinement/
+RUN set -- /tmp/confinement/*.whl; \
+	test "$#" -eq 1 && test -f "$1" \
+	&& pip install --no-cache-dir --require-hashes -r /tmp/confinement/requirements.txt \
+	&& pip install --no-cache-dir --no-deps "$1" \
+	&& rm "$1" /tmp/confinement/requirements.txt \
 	&& python3 -c "import jev_judge_mcp; print(jev_judge_mcp.__file__)"

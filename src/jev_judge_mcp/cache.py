@@ -12,13 +12,18 @@ state cannot stall the event loop (ADR-0047 amendment).
 
 The key is the SHA-256 of the exact request body (`JSON.stringify` semantics, key order included),
 so any difference — model slug, one character of state, a reordered question map — is a different
-entry. Entries are mode 0600 inside a 0700 directory (`fsutil`): they hold the judged State. Writes
+entry. Entries are mode 0600 inside a 0700 directory (`fsutil`): they hold provider answers and usage. Writes
 are atomic; a cache that cannot be read or written is a miss, never an error.
 """
 
+import contextlib
 import hashlib
+import heapq
 import json
 import logging
+import os
+import re
+import stat
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -29,7 +34,7 @@ import anyio
 from jev_judge_mcp import fsutil
 from jev_judge_mcp.domain import JsonValue, Question, Usage, questions_to_wire
 from jev_judge_mcp.domain.json import decode_json
-from jev_judge_mcp.providers.base import Evaluation, ProviderName, usage_counts
+from jev_judge_mcp.providers.base import Evaluation, ProviderName, metadata_text, usage_counts
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.settings import Settings
 
@@ -47,7 +52,9 @@ def cache_dir(settings: Settings) -> Path:
     return fsutil.xdg_home("cache") / "jev-mcp"
 
 
-def _key(provider: ProviderName, scope: str, model: str, state: JsonValue, questions: Mapping[str, Question]) -> str:
+def request_key(
+    provider: ProviderName, scope: str, model: str, state: JsonValue, questions: Mapping[str, Question]
+) -> str:
     body = stringify_compact(
         {
             "provider": provider,
@@ -60,57 +67,46 @@ def _key(provider: ProviderName, scope: str, model: str, state: JsonValue, quest
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def _stale(path: Path, ttl_seconds: float, *, now: float) -> bool:
-    """True when the entry is older than the TTL (ADR-0047 amendment). `0` never expires."""
-    if ttl_seconds <= 0:
-        return False
-    try:
-        return now - path.stat().st_mtime > ttl_seconds
-    except OSError:
-        return False
+_ENTRY = re.compile(r"[0-9a-f]{64}\.json")
+_STAGE = re.compile(r"\.[0-9a-f]{64}\.json\.[a-z0-9_]{8}")
+_STAGE_GRACE = 86_400
+_RECORD_BYTES_MAX = 32 * 1024 * 1024
+_RECORDS = "jev-records-v1"
 
 
 def _evict(directory: Path, cap: int) -> None:
-    """Keep at most `cap` entries, oldest mtime first (ADR-0047 amendment). `0` never evicts.
-
-    A crashed atomic write leaves its mkstemp staging file (`.<name>.<random>`) behind; those are
-    dead on arrival and are unlinked first, before the cap counts live entries — in every mode,
-    because the sweep is not eviction and a no-evict cache must not keep dead files forever. A
-    staging file of a concurrent store can be caught by the same sweep: that store's
-    `os.replace` then fails, which means "not cached", the same silence as an unwritable
-    directory. Only this cache's `.json` entries and its staging files are touched; a directory
-    that cannot be listed or an entry that cannot be deleted is ignored, never an error.
-    """
+    """Count only regular digest records. Recover abandoned staging files after a grace period."""
     try:
-        entries = list(directory.iterdir())
+        live: list[os.DirEntry[str]] = []
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if entry.name.startswith("."):
+                    if _STAGE.fullmatch(entry.name) and entry.is_file(follow_symlinks=False):
+                        with contextlib.suppress(OSError):
+                            if entry.stat(follow_symlinks=False).st_mtime < time.time() - _STAGE_GRACE:
+                                os.unlink(entry.path)
+                elif cap > 0 and _ENTRY.fullmatch(entry.name) and entry.is_file(follow_symlinks=False):
+                    live.append(entry)
+        excess = len(live) - cap
+        if excess <= 0:
+            return
+
+        def stamp(entry: os.DirEntry[str]) -> tuple[int, str]:
+            try:
+                return entry.stat(follow_symlinks=False).st_mtime_ns, entry.name
+            except FileNotFoundError:
+                return -1, entry.name
+
+        removed = 0
+        for victim in heapq.nsmallest(excess, live, key=stamp):
+            try:
+                os.unlink(victim.path)
+            except OSError:
+                continue
+            removed += 1
+        logger.debug("cache sweep evicted=%d failed=%d", removed, excess - removed)
     except OSError:
         return
-    live: list[Path] = []
-    for entry in entries:
-        if entry.suffix == ".json":
-            live.append(entry)
-        elif entry.name.startswith(".") and ".json." in entry.name:
-            try:
-                entry.unlink()
-            except OSError:
-                pass
-    if cap <= 0:
-        return
-    excess = len(live) - cap
-    if excess <= 0:
-        return
-
-    def stamp(entry: Path) -> tuple[float, str]:
-        try:
-            return (entry.stat().st_mtime, entry.name)
-        except OSError:
-            return (0.0, entry.name)
-
-    for entry in sorted(live, key=stamp)[:excess]:
-        try:
-            entry.unlink()
-        except OSError:
-            pass
 
 
 def lookup(
@@ -120,20 +116,41 @@ def lookup(
     model: str,
     state: JsonValue,
     questions: Mapping[str, Question],
+    *,
+    digest: bytes | None = None,
 ) -> Evaluation | None:
     """The recorded evaluation for this exact request, or `None` (also when the cache is off)."""
     if not _enabled(settings):
         return None
-    path = cache_dir(settings) / f"{_key(provider, scope, model, state, questions)}.json"
-    if _stale(path, settings.cache_ttl_seconds, now=time.time()):
-        try:
-            path.unlink()
-        except OSError:
-            pass
-        return None
+    directory = cache_dir(settings)
+    key = digest.hex() if digest is not None else request_key(provider, scope, model, state, questions)
+    filename = f"{key}.json"
     try:
-        # `JSON.parse` rules: a record carrying `NaN` or `Infinity` is corrupt, so it is a miss.
-        parsed: object = decode_json(path.read_text(encoding="utf-8"))
+        fsutil.require_private_dir(directory)
+        for parent in (directory / _RECORDS, directory):
+            try:
+                fsutil.require_private_dir(parent)
+                handle = open(
+                    parent / filename,
+                    "rb",
+                    opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK | os.O_NOFOLLOW),
+                )
+            except FileNotFoundError:
+                continue
+            with handle:
+                info = os.fstat(handle.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size > _RECORD_BYTES_MAX:
+                    return None
+                ttl = settings.cache_ttl_seconds
+                if ttl > 0 and time.time() - info.st_mtime > ttl:
+                    return None
+                data = handle.read(info.st_size + 1)
+                if len(data) != info.st_size:
+                    return None
+                parsed: object = decode_json(data.decode("utf-8"))
+                break
+        else:
+            return None
     except (OSError, ValueError):
         return None
     if not isinstance(parsed, dict):
@@ -142,7 +159,6 @@ def lookup(
     answers = record.get("answers")
     usage = record.get("usage")
     name = record.get("provider")
-    recorded_model = record.get("model")
     if not isinstance(answers, dict) or name != provider:
         return None
     # The envelope's own rule (finite, non-negative, bool is not a number): a record that the
@@ -150,12 +166,25 @@ def lookup(
     counts = usage_counts(usage)
     if counts is None:
         return None
-    logger.info("cache hit for %s model %s", provider, recorded_model)
+    # Old all-zero records cannot distinguish missing metering from an explicitly measured zero.
+    reported = cast(dict[str, object], usage).get("reported", any(counts))
+    if not isinstance(reported, bool):
+        return None
+    raw_id = record.get("request_id")
+    request_id = metadata_text(raw_id)
+    if raw_id is not None and request_id is None:
+        return None
+    raw_model = record.get("model")
+    recorded_model = metadata_text(raw_model)
+    if raw_model is not None and recorded_model is None:
+        return None
+    logger.debug("cache hit")
     return Evaluation(
         answers=cast(dict[str, object], answers),
-        usage=Usage(*counts),
+        usage=Usage(*counts, reported=reported),
         provider=provider,
-        model=recorded_model if isinstance(recorded_model, str) else model,
+        model=model if recorded_model is None else recorded_model,
+        request_id=request_id,
     )
 
 
@@ -167,28 +196,51 @@ def store(
     state: JsonValue,
     questions: Mapping[str, Question],
     evaluation: Evaluation,
+    *,
+    digest: bytes | None = None,
 ) -> None:
     """Record `evaluation` for this request. Off, or unwritable, means simply: not cached.
 
-    Entries are mode 0600 inside a 0700 directory (`fsutil`): a cache file holds the judged State,
-    so it is at least as protected as the stored API key.
+    Entries hold provider answers, usage, model and request provenance. Answers can contain sensitive text.
     """
     if not _enabled(settings):
         return
+    # Keep the server's unsupported-platform diagnostic reachable before the first cache write.
+    import fcntl
+
     directory = cache_dir(settings)
-    digest = _key(provider, scope, model, state, questions)
+    key = digest.hex() if digest is not None else request_key(provider, scope, model, state, questions)
     record = {
         "answers": evaluation.answers,
-        "usage": {"input_tokens": evaluation.usage.input_tokens, "output_tokens": evaluation.usage.output_tokens},
+        "usage": {
+            "input_tokens": evaluation.usage.input_tokens,
+            "output_tokens": evaluation.usage.output_tokens,
+            "reported": evaluation.usage.reported,
+        },
         "provider": evaluation.provider,
         "model": evaluation.model,
+        "request_id": evaluation.request_id,
     }
     try:
         text = json.dumps(record, ensure_ascii=False)
-        fsutil.write_private_atomic(directory / f"{digest}.json", text)
+        if len(text.encode("utf-8")) > _RECORD_BYTES_MAX:
+            return
+        fsutil.private_dir(directory)
+        directory = fsutil.private_dir(directory / _RECORDS)
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            # Serialize publication and sweeping across cooperating writers, including active staging files.
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                logger.debug("cache publication busy; store skipped")
+                return
+            fsutil.write_private_atomic(directory / f"{key}.json", text)
+            _evict(directory, settings.cache_max_entries)
+        finally:
+            os.close(fd)
     except (OSError, TypeError, ValueError):
-        return
-    _evict(directory, settings.cache_max_entries)
+        logger.debug("cache store skipped")
 
 
 async def alookup(
@@ -198,6 +250,8 @@ async def alookup(
     model: str,
     state: JsonValue,
     questions: Mapping[str, Question],
+    *,
+    digest: bytes | None = None,
 ) -> Evaluation | None:
     """`lookup` off the event loop: the key serializes the whole state, so neither the hash nor
     the file read stalls concurrent calls while the cache is on (ADR-0047 amendment).
@@ -207,7 +261,9 @@ async def alookup(
     """
     if not _enabled(settings):
         return None
-    return await anyio.to_thread.run_sync(lambda: lookup(settings, provider, scope, model, state, questions))
+    return await anyio.to_thread.run_sync(
+        lambda: lookup(settings, provider, scope, model, state, questions, digest=digest)
+    )
 
 
 async def astore(
@@ -218,8 +274,12 @@ async def astore(
     state: JsonValue,
     questions: Mapping[str, Question],
     evaluation: Evaluation,
+    *,
+    digest: bytes | None = None,
 ) -> None:
     """`store` off the event loop, for the same reason as `alookup` (ADR-0047 amendment)."""
     if not _enabled(settings):
         return
-    await anyio.to_thread.run_sync(lambda: store(settings, provider, scope, model, state, questions, evaluation))
+    await anyio.to_thread.run_sync(
+        lambda: store(settings, provider, scope, model, state, questions, evaluation, digest=digest)
+    )

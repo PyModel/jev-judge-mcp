@@ -1,1 +1,1 @@
-"""jev_extract regex dialect gate and killable worker pool (ADR-0004). Populated in P5."""
+"""Regex dialect translation and bounded candidate extraction for jev_extract."""

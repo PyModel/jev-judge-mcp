@@ -9,24 +9,28 @@ The relay owns what both recorders need to agree on (ADR-0026):
   request whose id collides with a pending call is relayed, never logged as that call's answer;
 - at the server's EOF the recorder is closed, so every call still pending is logged as unanswered,
   and then the client's stdout is closed;
-- when a recorder call raises, the traceback is logged, then `Recorder.close()` logs every call
+- when a recorder call raises, `Recorder.close()` logs every call
   still pending in that recorder's own row shape; only if `close` itself raises does the relay write
   a fallback row (no arguments, no result text, `seq` above any seq already in the log). The client's
-  stdout is closed, and only then is the child terminated;
-- one locked writer serves the client's stdout, shared by relayed lines and the recorder's own replies.
+  stdout is closed, the child is terminated and reaped, then stderr gets a best-effort traceback;
+- one nonblocking writer serves the client's stdout, shared by relayed lines and the recorder's own replies.
 
 What a row holds is the recorder's business: `evals.ab.proxy` logs no arguments or text,
 `evals.bench.proxy` logs both and caps the calls it forwards.
 """
 
 import json
+import os
+import re
+import select
+import stat
 import subprocess
 import sys
-import threading
 import time
 import traceback
 from collections import Counter
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import IO, Any, Protocol, cast
 
@@ -49,7 +53,7 @@ class Recorder(Protocol):
 def decode(line: bytes) -> object:
     try:
         return json.loads(line)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (ValueError, RecursionError):
         return None
 
 
@@ -62,6 +66,7 @@ ACTIONS = ("auto", "review", "escalate")
 HEADLINE_TOOLS: dict[str, tuple[str, ...]] = {
     "jev_review": ("action",),
     "jev_gate": ("action",),
+    "jev_gate_range": ("action",),
     "jev_screen": ("recommendation", "action"),
     "jev_compare": ("overall", "decision"),
     "jev_verify": ("results", "action"),
@@ -74,7 +79,8 @@ object, or a key of each item in a list. Screen counts only its `review`; compar
 
 def headline_action(body: dict[str, Any]) -> str | None:
     """The tool's one headline Action: the most severe Action it returned, or None when it returned none."""
-    path = HEADLINE_TOOLS.get(str(body.get("tool")))
+    tool = body.get("tool")
+    path = HEADLINE_TOOLS.get(tool) if isinstance(tool, str) else None
     if path is None:
         return None
     values: list[object] = [body.get(path[0])]
@@ -88,76 +94,88 @@ def headline_action(body: dict[str, Any]) -> str | None:
 
 def result_fields(message: dict[str, Any]) -> dict[str, Any]:
     """isError and the result body's `usage.input_tokens`, `action`, headline Action and `model`; never text."""
-    result = cast(dict[str, Any], message.get("result") or {})
-    row: dict[str, Any] = {"is_error": bool(result.get("isError")) or "error" in message}
-    text = result_text(message)
+    text, is_error = _result_content(message)
+    row: dict[str, Any] = {"is_error": is_error}
     try:
-        payload = json.loads(text) if isinstance(text, str) else None
-    except json.JSONDecodeError:
+        payload = json.loads(text) if text is not None else None
+    except (ValueError, RecursionError):
         payload = None
     if isinstance(payload, dict):
         body = cast(dict[str, Any], payload)
         usage = body.get("usage")
-        row["input_tokens"] = cast(dict[str, Any], usage).get("input_tokens") if isinstance(usage, dict) else None
-        row["action"] = body.get("action")
+        metering = cast(dict[str, Any], usage) if isinstance(usage, dict) else {}
+        count = metering.get("input_tokens")
+        row["input_tokens"] = count if type(count) is int and 0 <= count < 2**63 else None
+        if "reported" in metering:
+            row["usage_reported"] = metering["reported"] is True
+        elif usage is None and body.get("provider") == "none":
+            row["input_tokens"] = 0
+            row["usage_reported"] = True
+        elif count == 0:
+            # Older children cannot distinguish an unmetered response from a measured zero.
+            row["usage_reported"] = False
+        action = body.get("action")
+        row["action"] = action if action in ACTIONS else None
         row["headline_action"] = headline_action(body)
-        row["model"] = body.get("model")
+        model = body.get("model")
+        row["model"] = (
+            model
+            if isinstance(model, str)
+            and re.fullmatch(r"(?:typesafe/)?jev(?:-latest|-\d{1,3}(?:\.\d{1,3}){1,2})?", model, re.ASCII)
+            else None
+        )
     return row
 
 
-def result_text(message: dict[str, Any]) -> object:
-    content = cast(list[dict[str, Any]], cast(dict[str, Any], message.get("result") or {}).get("content") or [])
-    return content[0].get("text") if content and content[0].get("type") == "text" else None
+def _result_content(message: dict[str, Any]) -> tuple[str | None, bool]:
+    result = message.get("result")
+    if not isinstance(result, dict):
+        return None, True
+    envelope = cast(dict[str, Any], result)
+    content = envelope.get("content")
+    if not isinstance(content, list):
+        return None, True
+    is_error = bool(envelope.get("isError")) or "error" in message
+    if not content:
+        return None, is_error
+    if not isinstance(content[0], dict):
+        return None, True
+    first = cast(dict[str, Any], content[0])
+    if first.get("type") != "text":
+        return None, is_error
+    text = first.get("text")
+    return (text, is_error) if isinstance(text, str) else (None, True)
+
+
+def result_text(message: dict[str, Any]) -> str | None:
+    return _result_content(message)[0]
 
 
 def pending_key(message_id: object) -> str:
     return json.dumps(message_id)
 
 
-def _tool_name(message: dict[str, Any]) -> str | None:
+def tool_name(message: dict[str, Any]) -> str | None:
     params = message.get("params")
     name: object = None
     if isinstance(params, dict):
         name = cast(dict[str, Any], params).get("name")
     elif isinstance(params, list) and params:
         name = cast(list[object], params)[0]
-    return None if name is None else str(name)
+    return name if isinstance(name, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,63}", name) else None
 
 
 class _Pending:
     """Calls forwarded to the child and not yet logged. Used only when `Recorder.close` itself raises."""
 
     def __init__(self) -> None:
-        self.lock = threading.Lock()
-        self.aborted = False
         self.calls: dict[str, tuple[str | None, float, float]] = {}
 
-    def begin(self) -> bool:
-        """True for the first caller to abort."""
-        with self.lock:
-            first = not self.aborted
-            self.aborted = True
-            return first
-
     def note(self, message: object) -> None:
-        if not isinstance(message, dict):
-            return
-        call = cast(dict[str, Any], message)
-        if not is_tools_call(call) or "id" not in call:
-            return
-        key = pending_key(call["id"])
-        with self.lock:
-            if self.aborted or key in self.calls:
-                return
-            self.calls[key] = (_tool_name(call), time.time(), time.perf_counter())
-
-    def drop(self, message_id: object) -> None:
-        with self.lock:
-            self.calls.pop(pending_key(message_id), None)
-
-    def snapshot(self) -> list[tuple[str | None, float, float]]:
-        with self.lock:
-            return list(self.calls.values())
+        if isinstance(message, dict):
+            call = cast(dict[str, Any], message)
+            if is_tools_call(call) and "id" in call:
+                self.calls[pending_key(call["id"])] = (tool_name(call), time.time(), time.perf_counter())
 
 
 def _rows_in(text: str) -> list[dict[str, Any]]:
@@ -215,139 +233,182 @@ def _fallback_rows(calls: list[tuple[str | None, float, float]], before: str, af
     return rows
 
 
-class _Client:
-    """The client's stdout: one writer for relayed lines and recorder replies, silent once closed."""
-
-    def __init__(self, sink: IO[bytes]) -> None:
-        self.sink = sink
-        self.lock = threading.Lock()
-        self.closed = False
-
-    def write(self, line: bytes) -> None:
-        with self.lock:
-            if not self.closed:
-                self.sink.write(line)
-                self.sink.flush()
-
-    def close(self) -> None:
-        with self.lock:
-            self.closed = True
-            self.sink.close()
-
-
-def _upstream(
-    source: IO[bytes],
-    server: IO[bytes],
-    client: _Client,
-    recorder: Recorder,
-    pending: _Pending,
-    abort: Callable[..., int],
-) -> None:
+def private_opener(path: str, flags: int) -> int:
+    """Open an operator-owned regular file, private from creation, validating before truncation."""
+    fd = os.open(path, (flags & ~os.O_TRUNC) | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:
-        for line in iter(source.readline, b""):
-            message = decode(line)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid() or info.st_nlink != 1:
+            raise PermissionError("study trace must be a private, singly linked regular file")
+        if flags & os.O_TRUNC:
+            os.ftruncate(fd, 0)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+class _Stream:
+    """A line-oriented reader. Queue at most one large frame plus one read at a time."""
+
+    def __init__(self, fd: int) -> None:
+        self.fd = fd
+        self.partial = bytearray()
+        self.eof = False
+
+    def lines(self) -> list[bytes]:
+        chunk = os.read(self.fd, 8192)
+        self.eof = not chunk
+        parts = chunk.split(b"\n")
+        self.partial.extend(parts[0])
+        if len(self.partial) > 64 * 1024 * 1024:
+            raise ValueError("relay frame exceeds 64 MiB")
+        if len(parts) == 1:
+            if self.eof and self.partial:
+                line = bytes(self.partial)
+                self.partial.clear()
+                return [line]
+            return []
+        lines = [bytes(self.partial) + b"\n", *(part + b"\n" for part in parts[1:-1])]
+        self.partial = bytearray(parts[-1])
+        return lines
+
+
+def _pump(child: subprocess.Popen[bytes], recorder: Recorder, pending: _Pending, idle_timeout: float) -> None:
+    assert child.stdin is not None and child.stdout is not None
+    source = _Stream(sys.stdin.fileno())
+    replies = _Stream(child.stdout.fileno())
+    server_fd = child.stdin.fileno()
+    client_fd = sys.stdout.fileno()
+    queued = {server_fd: bytearray(), client_fd: bytearray()}
+    for fd in queued:
+        os.set_blocking(fd, False)
+    waiting: set[str] = set()
+    while not replies.eof or queued[client_fd]:
+        reads: list[int] = []
+        if not replies.eof and len(queued[client_fd]) < 65536:
+            reads.append(replies.fd)
+            if not source.eof and len(queued[server_fd]) < 65536:
+                reads.append(source.fd)
+        writes = [fd for fd, data in queued.items() if data]
+        active = writes or waiting or source.eof or source.partial or replies.partial
+        readable, writable, _ = select.select(reads, writes, [], idle_timeout if active else None)
+        if not readable and not writable:
+            raise TimeoutError("no progress on active relay")
+        for fd in writable:
             try:
-                reply = recorder.request(message)
-            except Exception:
-                pending.note(message)
-                abort(close_recorder=True)
-                return
-            if reply is not None:
-                client.write(reply)
+                written = os.write(fd, queued[fd][:8192])
+            except BlockingIOError:
                 continue
-            pending.note(message)
-            server.write(line)
-            server.flush()
-        server.close()
-    except BrokenPipeError:
-        return
-    except Exception:
-        abort(close_recorder=True)
+            del queued[fd][:written]
+        if source.fd in readable:
+            for line in source.lines():
+                message = decode(line)
+                pending.note(message)
+                reply = recorder.request(message)
+                envelope = cast(dict[str, Any], message) if isinstance(message, dict) else {}
+                if reply is None:
+                    queued[server_fd].extend(line)
+                    if "method" in envelope and "id" in envelope:
+                        waiting.add(pending_key(envelope["id"]))
+                else:
+                    if "id" in envelope and pending_key(envelope["id"]) not in waiting:
+                        pending.calls.pop(pending_key(envelope["id"]), None)
+                    queued[client_fd].extend(reply)
+        if source.eof and not queued[server_fd] and not child.stdin.closed:
+            child.stdin.close()
+        if replies.fd in readable:
+            for line in replies.lines():
+                message = decode(line)
+                if isinstance(message, dict) and "id" in message and "method" not in message:
+                    response = cast(dict[str, Any], message)
+                    recorder.response(response)
+                    key = pending_key(response["id"])
+                    waiting.discard(key)
+                    pending.calls.pop(key, None)
+                queued[client_fd].extend(line)
+            if replies.eof:
+                queued[server_fd].clear()
 
 
-def serve(argv: Sequence[str] | None, prog: str, recorder_factory: Callable[[IO[str]], Recorder]) -> int:
-    """Run `python -m PROG LOG -- CMD [ARGS...]`; returns the server's exit code."""
+def _emit_diagnostics(diagnostics: list[str]) -> None:
+    # Bypass buffering so interpreter shutdown cannot retry a write to an unread pipe.
+    data = memoryview("".join(diagnostics).encode(sys.stderr.encoding or "utf-8", "backslashreplace"))
+    with suppress(OSError, ValueError):
+        fd = sys.stderr.fileno()
+        blocking = os.get_blocking(fd)
+        os.set_blocking(fd, False)
+        try:
+            deadline = time.monotonic() + 0.1
+            while data:
+                try:
+                    data = data[os.write(fd, data) :]
+                except BlockingIOError:
+                    pass
+                if data and not select.select([], [fd], [], max(0.0, deadline - time.monotonic()))[1]:
+                    break
+                if time.monotonic() >= deadline:
+                    break
+        finally:
+            os.set_blocking(fd, blocking)
+
+
+def serve(
+    argv: Sequence[str] | None, prog: str, recorder_factory: Callable[[IO[str]], Recorder], *, idle_timeout: float = 180
+) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) < 3 or args[1] != "--":
         sys.stderr.write(f"usage: python -m {prog} LOG -- CMD [ARGS...]\n")
         return 2
     log_path = Path(args[0])
-    # A private reader on fd 0: the upstream thread may still block in it at exit, and a daemon thread
-    # holding `sys.stdin.buffer`'s lock aborts interpreter shutdown.
-    source = open(sys.stdin.fileno(), "rb", closefd=False)
-    with log_path.open("a", encoding="utf-8") as log, log_path.with_suffix(".stderr").open("ab") as err:
+    with (
+        open(log_path, "a+", encoding="utf-8", opener=private_opener) as log,
+        open(log_path.with_suffix(".stderr"), "ab", opener=private_opener) as err,
+    ):
         recorder = recorder_factory(log)
-        client = _Client(sys.stdout.buffer)
         pending = _Pending()
-        child = subprocess.Popen(args[2:], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err)
-        assert child.stdin is not None and child.stdout is not None
-
-        def read_log() -> str:
-            log.flush()
-            return log_path.read_text(encoding="utf-8") if log_path.exists() else ""
-
-        def write_fallback(before: str) -> None:
-            try:
-                after = read_log()
-            except OSError:
-                after = before
-            for row in _fallback_rows(pending.snapshot(), before, after):
-                log.write(json.dumps(row) + "\n")
-            log.flush()
-
-        def abort(*, close_recorder: bool, before: str | None = None) -> int:
-            if pending.begin():
-                try:
-                    traceback.print_exc()
-                    sys.stderr.flush()
-                    if before is None:
-                        try:
-                            before = read_log()
-                        except OSError:
-                            before = ""
-                    if close_recorder:
-                        try:
-                            recorder.close()
-                        except Exception:
-                            traceback.print_exc()
-                            sys.stderr.flush()
-                            write_fallback(before)
-                    else:
-                        write_fallback(before)
-                    client.close()
-                finally:
-                    child.terminate()
-            try:
-                return child.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                child.kill()
-                return child.wait()
-
-        threading.Thread(
-            target=_upstream, args=(source, child.stdin, client, recorder, pending, abort), daemon=True
-        ).start()
+        child = subprocess.Popen(
+            args[2:],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=err,
+            env={**os.environ, "JEV_STUDY_USAGE_PROVENANCE": "1"},
+        )
+        diagnostics: list[str] = []
         try:
-            for line in iter(child.stdout.readline, b""):
-                message = decode(line)
-                if isinstance(message, dict) and "id" in message and "method" not in message:
-                    body = cast(dict[str, Any], message)
-                    try:
-                        recorder.response(body)
-                    except Exception:
-                        return abort(close_recorder=True)
-                    pending.drop(body["id"])
-                client.write(line)
-            if pending.aborted:
-                return abort(close_recorder=False)
             try:
-                before_close = read_log()
-            except OSError:
-                before_close = ""
+                _pump(child, recorder, pending, idle_timeout)
+            except Exception:
+                diagnostics.append(traceback.format_exc())
+            log.flush()
+            before = log.tell()
             try:
                 recorder.close()
             except Exception:
-                return abort(close_recorder=False, before=before_close)
-        except Exception:
-            return abort(close_recorder=True)
-        client.close()
-        return child.wait()
+                diagnostics.append(traceback.format_exc())
+                log.seek(0)
+                old = bytes(log.buffer.read(before)).decode("utf-8")
+                log.seek(0)
+                for row in _fallback_rows(list(pending.calls.values()), old, log.read()):
+                    log.write(json.dumps(row) + "\n")
+                log.flush()
+            sys.stdout.close()
+            if diagnostics:
+                child.terminate()
+            try:
+                code = child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+                return 1
+            return 1 if diagnostics else code
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+            if child.stdin:
+                child.stdin.close()
+            if child.stdout:
+                child.stdout.close()
+            if diagnostics:
+                _emit_diagnostics(diagnostics)

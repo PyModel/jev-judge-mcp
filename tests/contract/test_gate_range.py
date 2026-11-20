@@ -19,7 +19,7 @@ import pytest
 
 from jev_judge_mcp.limits import GATE
 from tests.support.git_repo import commit_files, repo_with_diff, set_config
-from tests.support.jev import call_tool
+from tests.support.jev import NO_DEFECT, call_tool, choice
 
 pytestmark = pytest.mark.anyio
 
@@ -130,11 +130,42 @@ async def test_secret_stores_never_leave_and_literals_are_redacted(repo: Path) -
     assert "KEY_ID" in sent
 
 
+@pytest.mark.parametrize(("probability", "action"), [(0.95, "review"), (0.1, "review"), (None, "escalate")])
+async def test_withheld_files_never_stand_on_a_siblings_judgment(
+    repo: Path, probability: float | None, action: str
+) -> None:
+    commit_files(repo, {".env": "placeholder", "prod.env": "placeholder", "x.py": "x = 2"})
+    answers = {
+        "correctness": {"score": 2, "confidence": 0.95},
+        "spec_match": {"score": 2, "confidence": 0.95},
+        "test_gap": {"score": 0, "confidence": 0.95},
+        "blast_radius": {"score": 0, "confidence": 0.95},
+        "safe_to_apply": {"noul": probability},
+        "defect_kind": NO_DEFECT,
+        "source_0": choice("ci", "ci", "diff_x.py", "none"),
+        "claim_0": {
+            "choice": "verified",
+            "confidence": 0.95,
+            "probabilities": {"verified": 0.95, "contradicted": 0.03, "unsupported": 0.02},
+        },
+    }
+    outcome = await call_tool("jev_gate_range", gate_args(), answers)
+    body = outcome.payload
+    assert body["action"] == action
+    assert body["verification"]["action"] == "auto"
+    assert body["partial"] and set(body["unreviewed_files"]) == {".env", "prod.env"}
+    assert "accepted" not in body["reason_codes"] and "incomplete_context" in body["reason_codes"]
+    assert not any("Proceed" in check for check in body["next_checks"])
+    assert {b["path"] for b in body["blockers"] if b["code"] == "file_withheld"} == {".env", "prod.env"}
+    assert all(item["reason"] == "secret_file" for item in body["skipped"])
+    assert "placeholder" not in _sent_text(outcome)
+
+
 async def test_a_range_of_only_secret_stores_is_refused_without_a_provider_call(repo: Path) -> None:
     commit_files(repo, {"prod.env": "TOKEN=abc\n"})
     outcome = await call_tool("jev_gate_range", gate_args(), {})
     assert outcome.is_error
-    assert outcome.code == "secret_file"
+    assert outcome.code == "secret_file" and "prod.env" in outcome.text
     assert outcome.requests == []
 
 
@@ -158,12 +189,11 @@ async def test_the_operators_git_settings_do_not_reshape_the_diff(repo: Path, ke
     assert "\x1b" not in diff
 
 
-async def test_a_diff_whose_headers_do_not_split_is_refused(repo: Path) -> None:
-    commit_files(repo, {'say "hi".py': "x = 3\n"})  # git quotes this header, so no path can be read
+async def test_a_quoted_header_preserves_the_filename(repo: Path) -> None:
+    commit_files(repo, {'say "hi".py': "x = 3\n"})
     outcome = await call_tool("jev_gate_range", gate_args(), {})
-    assert outcome.is_error
-    assert outcome.code == "invalid_arguments"
-    assert outcome.requests == []
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["review"]["reviewed_files"] == ['say "hi".py']
 
 
 def _git_out(repo: Path, *args: str) -> str:
@@ -240,3 +270,120 @@ async def test_a_flooding_git_is_killed_at_the_budget_not_read_to_its_end(
     assert time.monotonic() - started < 10
     assert outcome.code == "input_too_large"
     assert outcome.requests == []
+
+
+async def test_scout_016_git_quoted_paths_are_reviewed(repo: Path) -> None:
+    names = ["café.txt", 'quoted"name.txt', "two words.txt"]
+    commit_files(repo, {name: "plain\n" for name in names})
+    result = await call_tool("jev_gate_range", gate_args(), {})
+    assert not result.is_error, result.text
+    assert sorted(result.payload["review"]["reviewed_files"]) == sorted(names)
+    (repo / names[0]).unlink()
+    deleted = await call_tool("jev_gate_range", gate_args("HEAD"), {})
+    assert not deleted.is_error and deleted.payload["review"]["reviewed_files"] == [names[0]]
+
+
+async def test_scout_004_configured_key_path_refused(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = repo / "custom-store"
+    commit_files(repo, {path.name: ""})
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(path))
+    for args in [gate_args(), gate_args(tests_path=path.name)]:
+        result = await call_tool("jev_gate_range", args, {})
+        assert result.code == "secret_file" and not result.requests
+
+
+async def test_scout_016_incomplete_quoted_header_is_refused(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from jev_judge_mcp.git_diff import split_unified
+    from jev_judge_mcp.tools import gate_range
+
+    header = 'diff --git "a/ordinary" "b/ordinary'
+    assert split_unified(header) is None
+
+    def malformed(*args: object, **kwargs: object) -> str:
+        return header
+
+    monkeypatch.setattr(gate_range, "diff_argument", malformed)
+    outcome = await call_tool("jev_gate_range", gate_args(), {})
+    assert outcome.code == "invalid_arguments" and not outcome.requests
+
+
+@pytest.mark.parametrize("context_override", [False, True])
+async def test_range_withholds_partial_pem_and_masks_exact_values(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, context_override: bool
+) -> None:
+    if context_override:
+        monkeypatch.setenv("GIT_DIFF_OPTS", "--unified=1")
+    lines = ["-----BEGIN PRIVATE KEY-----", *["unchanged fixture line"] * 15, "-----END PRIVATE KEY-----"]
+    commit_files(repo, {"notes.txt": "\n".join(lines)})
+    lines[7] = "changed fixture line"
+    commit_files(
+        repo, {"notes.txt": "\n".join(lines), "ok.txt": "safe context configured-fixture-marker stored-fixture-marker"}
+    )
+    monkeypatch.setenv("JEV_API_KEY", "configured-fixture-marker")
+    store = repo / "fixture-store"
+    store.write_text("stored-fixture-marker")
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(store))
+    result = await call_tool("jev_gate_range", gate_args(), {})
+    assert not result.is_error, result.text
+    assert result.payload.get("skipped") == [{"path": "notes.txt", "reason": "secret_file"}]
+    sent = _sent_text(result)
+    assert "safe context" in sent
+    assert all(marker not in sent for marker in ("fixture line", "configured-fixture-marker", "stored-fixture-marker"))
+
+
+@pytest.mark.parametrize("revision", ["HEAD~1..HEAD", "HEAD~1...HEAD", "HEAD~1", "HEAD~1.."])
+async def test_subdirectory_range_headers_keep_the_repository_origin(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, revision: str
+) -> None:
+    commit_files(repo, {"sub/notes.txt": "ordinary fixture", "outside.txt": "outside scope"})
+    set_config(repo, "diff.relative", "true")
+    monkeypatch.chdir(repo / "sub")
+    result = await call_tool("jev_gate_range", gate_args(revision), {})
+    assert not result.is_error, result.text
+    assert result.payload["review"]["reviewed_files"] == ["sub/notes.txt"]
+    assert "outside scope" not in _sent_text(result)
+
+
+async def test_subtree_range_uses_physical_origin_for_store_check(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    commit_files(repo, {"sub/ordinary": "benign fixture"})
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(repo / "sub/ordinary"))
+    result = await call_tool("jev_gate_range", gate_args("4b825dc642cb6eb9a060e54bf8d69288fbee4904..HEAD:sub"), {})
+    assert result.code == "secret_file" and not result.requests
+
+
+async def test_sensitive_range_path_is_masked_in_skips_and_withheld_from_provider(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = "configured-fixture-marker"
+    monkeypatch.setenv("JEV_API_KEY", marker)
+    name = f"notes-{marker}.txt"
+    commit_files(repo, {name: "private fixture", "ordinary.txt": "public fixture"})
+    result = await call_tool("jev_gate_range", gate_args(), {})
+    assert not result.is_error
+    assert result.payload.get("skipped") == [{"path": "notes-[redacted].txt", "reason": "secret_file"}]
+    assert "public fixture" in _sent_text(result)
+    assert marker not in _sent_text(result)
+
+
+async def test_an_unattributed_subtree_object_is_refused(repo: Path) -> None:
+    commit_files(repo, {"nested/ordinary.txt": "fixture"})
+    tree = _git_out(repo, "rev-parse", "HEAD:nested")
+    result = await call_tool("jev_gate_range", gate_args(f"HEAD~1..{tree}"), {})
+    assert result.code == "invalid_arguments" and not result.requests
+
+
+async def test_working_tree_change_between_inspections_refuses(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from jev_judge_mcp import git_diff
+
+    original = git_diff.split_unified
+    target = repo / "x.py"
+    target.write_text("first working version\n")
+
+    def read(diff: str) -> list[dict[str, str]] | None:
+        patch = original(diff)
+        target.write_text("second working version\n")
+        return patch
+
+    monkeypatch.setattr(git_diff, "split_unified", read)
+    result = await call_tool("jev_gate_range", gate_args("HEAD"), {})
+    assert result.code == "invalid_arguments" and not result.requests

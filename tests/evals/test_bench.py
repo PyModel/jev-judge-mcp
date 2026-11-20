@@ -5,15 +5,21 @@ Nothing here calls a model or a provider; the end-to-end dry run is `test_bench_
 
 import io
 import json
+import os
+import signal
 import subprocess
 import sys
+import threading
 from collections import Counter
+from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
+from evals import study_runner
 from evals.ab import ledger as pilot_ledger
 from evals.ab import stream
 from evals.ab.ledger import RUN_BOUND_USD
@@ -25,7 +31,8 @@ from evals.runners.manifest import load_cases
 from evals.scorers.tools import SCORERS, Example
 from evals.spend import SpendLedger
 from jev_judge_mcp.tools import TOOLS
-from jev_judge_mcp.tools.arguments import parse_arguments
+from jev_judge_mcp.tools.arguments import compile_argument_schema
+from tests.evals import booking_cases
 from tests.support.agent_stubs import dead_login, reaches_model
 
 REPO = Path(__file__).resolve().parents[2]
@@ -74,7 +81,7 @@ def test_every_input_is_a_valid_call_of_its_tool() -> None:
     tools = {tool.name: tool for tool in TOOLS}
     for item in ITEMS:
         tool = tools[item.tool]
-        parse_arguments(tool.name, tool.definition.input_schema, item.input, tool.refinements)
+        compile_argument_schema(tool.name, tool.definition.input_schema, tool.refinements)(item.input)
 
 
 def test_load_cases_reads_the_bench_file() -> None:
@@ -182,7 +189,6 @@ def test_the_arms_differ_only_in_the_jev_sentence() -> None:
     assert prompt.addendum("A") == prompt.BENCH_ADDENDUM
     assert prompt.addendum("B") == prompt.BENCH_ADDENDUM
     assert prompt.addendum("C") == f"{prompt.BENCH_ADDENDUM} {prompt.JEV_SENTENCE}"
-    assert prompt.addendum("C", agent="pi") == f"{prompt.BENCH_ADDENDUM} {prompt.JEV_SENTENCE_PI}"
     assert "mcp__jev__" in prompt.JEV_SENTENCE
     assert "mcp__jev__" not in prompt.addendum("A") and "mcp__jev__" not in prompt.addendum("B")
     # The shared addendum never names Jev and never forbids looking at tools: that sentence is what
@@ -190,9 +196,6 @@ def test_the_arms_differ_only_in_the_jev_sentence() -> None:
     for arm in ("A", "B"):
         assert "jev" not in prompt.addendum(arm).lower()
         assert "do not look" not in prompt.addendum(arm)
-    # C's Pi sentence names the now-visible tools, not the adapter's gateway dance.
-    assert "gateway" not in prompt.JEV_SENTENCE_PI.lower()
-    assert "jev_" in prompt.JEV_SENTENCE_PI
 
 
 def test_the_bench_exposes_the_jev_tools_directly(tmp_path: Path) -> None:
@@ -202,7 +205,6 @@ def test_the_bench_exposes_the_jev_tools_directly(tmp_path: Path) -> None:
     """
     setup = run.Setup(
         agent=lambda _item, _arm: ["agent"],
-        server=["server"],
         server_env={},
         base_env={},
         secret="synthetic-secret",  # noqa: S106 - a fixture value, never a real key
@@ -307,21 +309,12 @@ def test_wrapped_answers_run_through_the_existing_scorers_unchanged() -> None:
 # --- stats ------------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("split", "weaker"),
-    [((9, 1), (8, 2)), ((15, 5), (14, 6)), ((21, 9), (20, 10)), ((27, 13), (26, 14)), ((33, 17), (32, 18))],
-)
-def test_mcnemar_matches_the_plan_minimum_detectable_table(split: tuple[int, int], weaker: tuple[int, int]) -> None:
-    assert stats.mcnemar_exact(*split) < 0.05
-    assert stats.mcnemar_exact(*weaker) >= 0.05
-    assert stats.mcnemar_exact(*split) == stats.mcnemar_exact(*split[::-1])
-
-
 def test_exact_binomial_edges() -> None:
-    assert stats.mcnemar_exact(0, 0) == 1.0
-    assert stats.mcnemar_exact(5, 5) == 1.0
-    assert stats.mcnemar_exact(10, 0) == pytest.approx(2 / 1024)
-    assert stats.sign_test([1.0, 2.0, -0.5, 0.0]) == stats.two_sided_binomial_p(2, 1)
+    assert stats.sign_test([]) == 1.0
+    assert stats.sign_test([0.0, 0.0]) == 1.0
+    assert stats.sign_test([1.0] * 5 + [-1.0] * 5) == 1.0
+    assert stats.sign_test([1.0] * 10 + [0.0]) == pytest.approx(2 / 1024)
+    assert stats.sign_test([1.0, 2.0, -0.5, 0.0]) == 1.0
     with pytest.raises(ValueError):
         stats.two_sided_binomial_p(-1, 2)
 
@@ -453,20 +446,50 @@ def test_recorder_refuses_the_call_after_the_cap_and_logs_it() -> None:
 FAKE_SERVER = str(REPO / "tests" / "support" / "fake_mcp_server.py")
 
 
-def test_proxy_relays_25_calls_and_answers_the_26th_itself(tmp_path: Path) -> None:
+@pytest.mark.parametrize("padding", [0, 128 * 1024], ids=["ordinary", "larger-than-pipe"])
+def test_proxy_relays_25_calls_and_answers_the_26th_itself(tmp_path: Path, padding: int) -> None:
     log = tmp_path / "calls.jsonl"
-    stdin = b"".join(_request(n) for n in range(1, BENCH_REQUEST_CAP + 2))
-    done = subprocess.run(
-        [sys.executable, "-m", "evals.bench.proxy", str(log), "--", sys.executable, FAKE_SERVER],
-        input=stdin,
-        capture_output=True,
-        cwd=REPO,
-        timeout=60,
-        check=True,
-    )
-    replies = {json.loads(line)["id"]: json.loads(line) for line in done.stdout.splitlines()}
-    assert sorted(replies) == list(range(1, BENCH_REQUEST_CAP + 2))
-    assert replies[BENCH_REQUEST_CAP + 1]["result"]["isError"] is True
+    # The fake server echoes the tool name, so the large case pressures both pipes.
+    tool = "jev_verify" + "x" * padding
+    stdin = b"".join(_request(n, tool) for n in range(1, BENCH_REQUEST_CAP + 2))
+    # A dedicated producer feeds stdin while communicate drains both output pipes.
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "rb") as source, os.fdopen(write_fd, "wb") as feed:
+        process = subprocess.Popen(
+            [sys.executable, "-m", "evals.bench.proxy", str(log), "--", sys.executable, FAKE_SERVER],
+            stdin=source,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=REPO,
+            start_new_session=True,
+        )
+        source.close()
+
+        def send() -> None:
+            with feed:
+                try:
+                    feed.write(stdin)
+                except BrokenPipeError:
+                    return  # The caller checks the exit code and every reply ID.
+
+        writer = threading.Thread(target=send)
+        writer.start()
+        try:
+            stdout, stderr = process.communicate(timeout=10)
+        except BaseException:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate(timeout=5)
+            raise
+        finally:
+            writer.join(timeout=5)
+        assert process.returncode == 0, stderr
+        assert not writer.is_alive()
+    replies = sorted((json.loads(line) for line in stdout.splitlines()), key=lambda reply: reply["id"])
+    assert [reply["id"] for reply in replies] == list(range(1, BENCH_REQUEST_CAP + 2))
+    assert replies[-1]["result"]["isError"] is True
     rows = sorted((json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()), key=lambda r: r["seq"])
     assert [row["refused"] for row in rows] == [False] * BENCH_REQUEST_CAP + [True]
     first = rows[0]
@@ -480,7 +503,7 @@ def test_proxy_relays_25_calls_and_answers_the_26th_itself(tmp_path: Path) -> No
 def test_bench_ledger_checks_a_whole_triplet(tmp_path: Path) -> None:
     book = SpendLedger.load(tmp_path / "ledger.json", POLICY)
     for i in range(POLICY.max_runs - 4):
-        book.runs[f"r{i}"] = 0.0
+        book.record(f"r{i}", 0.0)
     assert book.can_start(TRIPLET)
     book.record("x", 0.0)
     assert book.can_start(TRIPLET)
@@ -528,7 +551,7 @@ def _record(item: str, arm: str, *, correct: bool, wall: float, gate_reason: str
 def test_headline_uses_complete_triplets_only() -> None:
     records = [
         _record("i1", "A", correct=False, wall=10.0),
-        {**_record("i1", "B", correct=True, wall=12.0), "jev_calls": [{"tool": "jev_verify"}]},
+        {**_record("i1", "B", correct=True, wall=12.0), "jev_calls": [{"tool": "jev_verify", "model": "jev-1.13.0"}]},
         _record("i1", "C", correct=True, wall=14.0),
         _record("i2", "A", correct=True, wall=10.0),
         _record("i2", "B", correct=False, wall=11.0, gate_reason="did not call Jev"),
@@ -590,9 +613,7 @@ def test_per_tool_breakdown_scores_wrapped_answers_of_labeled_items() -> None:
     ]
     items = {item.id: item for item in (verify, rerank, screen, draft, compare)}
     breakdown = analysis.per_tool(analysis.complete_triplets(records), items)
-    assert set(breakdown) == {"jev_verify", "jev_rerank", "jev_screen", "jev_compare"}, "draft items have no gold"
-    compare_metric = {arm: breakdown["jev_compare"][arm]["metrics"]["perturbed_contradiction_recall"] for arm in "ABC"}
-    assert compare_metric == {"A": 1.0, "B": 0.0, "C": 1.0}, "a wrong Jev model voids the answer"
+    assert set(breakdown) == {"jev_verify", "jev_rerank", "jev_screen"}, "only valid triplets with gold"
     assert breakdown["jev_verify"]["A"]["metrics"]["contradiction_recall"] == 1.0
     assert breakdown["jev_verify"]["B"]["metrics"]["contradiction_recall"] == 1.0, "automatic non-use keeps the answer"
     forced = breakdown["jev_verify"]["C"]["metrics"]["contradiction_recall"]
@@ -760,8 +781,34 @@ def test_a_finished_bench_does_not_preflight_again(tmp_path: Path) -> None:
     runs = {f"{_FROZEN.id}.{arm}": 0.0 for arm in "ABC"}
     (out / "ledger.json").write_text(json.dumps({"runs": runs}) + "\n", encoding="utf-8")
     stop = run.live(_bench_env(tmp_path / "bin", tmp_path), out, items=(_FROZEN,))
-    assert stop == "all 1 triplets recorded"
+    assert "incomplete" in stop and _FROZEN.id in stop
     assert not log.exists()
+
+
+def test_a_live_bench_refuses_if_a_saved_attempt_disappears_after_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A changed ledger cannot turn inspection of a finished bench into an unconfined launch."""
+    _agent_bin(tmp_path / "bin", "claude", "raise SystemExit(0)")
+    out = tmp_path / "out"
+    out.mkdir()
+    path = out / "ledger.json"
+    path.write_text(json.dumps({"runs": {f"{_FROZEN.id}.{arm}": 0.0 for arm in "ABC"}}), encoding="utf-8")
+    runs_remain = run.runs_remain
+
+    def after_admission(items: Sequence[Item], out: Path, *, seed: int) -> bool:
+        remaining = runs_remain(items, out, seed=seed)
+        assert not remaining
+        path.unlink()
+        return remaining
+
+    def no_sandbox(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("live bench reached the unconfined agent")
+
+    monkeypatch.setattr(run, "runs_remain", after_admission)
+    monkeypatch.setattr(run, "run_agent", no_sandbox)
+    with pytest.raises(run.BenchRefusedError, match="not yet confined"):
+        run.live(_bench_env(tmp_path / "bin", tmp_path), out, items=(_FROZEN,))
 
 
 @pytest.mark.parametrize("agent", ["claude", "pi"])
@@ -790,7 +837,7 @@ def test_a_live_bench_refuses_before_any_host_sandbox_prep(
 
 def test_setup_needs_a_secret_to_scrub() -> None:
     with pytest.raises(ValueError, match="non-empty key"):
-        run.Setup(agent=lambda _i, _a: [], server=[], server_env={}, base_env={}, secret="")
+        run.Setup(agent=lambda _i, _a: [], server_env={}, base_env={}, secret="")
 
 
 # --- the recorded stream-json sample ----------------------------------------------------------------
@@ -846,7 +893,6 @@ def test_a_connection_error_is_booked_and_is_not_a_triplet(tmp_path: Path) -> No
     scrub = "bench-offline-scrub"
     setup = run.Setup(
         agent=agent,
-        server=[sys.executable, "-c", "raise SystemExit(0)"],
         server_env={},
         base_env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
         secret=scrub,
@@ -871,3 +917,249 @@ def test_recorded_stream_json_sample_parses_tool_results_by_tool_use_id() -> Non
     assert trace.tool_results == dict.fromkeys((use.id for use in trace.tool_uses), False)
     assert trace.result_field("subtype") == "success" and isinstance(trace.result_field("result"), str)
     gate.cross_check([], trace)
+
+
+def test_scout_009_resume_books_only_jev(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    for rid in loop.ids:
+        loop.seed(rid, 0.9)
+        path = loop.out / rid / "result.json"
+        row = json.loads(path.read_text())
+        path.write_text(json.dumps({**row, "jev_cost_usd": 0.03}))
+    assert loop.go() == loop.done
+    assert loop.load().runs == dict.fromkeys(loop.ids, 0.03)
+
+
+def test_scout_014_one_slot_finishes_a_partial_triplet(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    monkeypatch.setattr(run, "POLICY", replace(POLICY, max_runs=3))
+    for rid in loop.ids[:2]:
+        loop.seed(rid, 0)
+    launched: list[str] = []
+
+    def finish(*args: Any) -> dict[str, float]:
+        rid = loop.rid_of(*args)
+        launched.append(rid)
+        loop.seed(rid, 0)
+        return {"jev_cost_usd": 0.0}
+
+    loop.install(finish)
+    assert loop.go() == loop.done
+    assert launched == loop.ids[2:]
+    (loop.out / loop.ids[-1] / "result.json").unlink()
+    assert "incomplete" in loop.go()
+    assert launched == loop.ids[2:]
+
+
+def test_scout_013_corrupt_record_blocks_launch_and_remains_reportable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    loop.seed(loop.ids[0], 0.0)
+    loop.seed(loop.ids[1], 0.0)
+    (loop.out / loop.ids[1] / "result.json").write_text('{"cost')
+    loop.install(lambda *_args: pytest.fail("launched past an incomplete record"))
+    stop = loop.go()
+    assert loop.ids[1] in stop and "incomplete" in stop
+    assert len(run.load_records(loop.out)) == 1
+    assert loop.load().runs[loop.ids[1]] == loop.bound
+    assert loop.ids[1] in run.write_report(loop.out, stop="report only", sample=True).read_text()
+
+
+def test_scout_014_exhausted_budget_does_not_schedule_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    monkeypatch.setattr(run, "POLICY", replace(POLICY, max_runs=2))
+    for rid in loop.ids[:2]:
+        loop.seed(rid, 0)
+    items = load_items(DRYRUN)[:1]
+    assert not run.runs_remain(items, loop.out)
+    assert "run cap" in loop.go()
+
+
+def test_scout_009_report_reserves_the_bound_for_an_unpriced_run() -> None:
+    rows = [
+        {**_record("item", arm, correct=True, wall=1), "jev_cost_usd": cost}
+        for arm, cost in zip("ABC", [0.0, "unknown", 0.03], strict=True)
+    ]
+    summary = analysis.headline(analysis.complete_triplets(rows))
+    assert [summary[f"jev_usd_{arm}"] for arm in "ABC"] == [0, 0, 0.03]
+    assert [summary[f"jev_reserve_usd_{arm}"] for arm in "ABC"] == [0, POLICY.run_bound_usd, 0]
+
+
+def test_scout_009_report_names_booked_discrepancies_without_rewriting_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    run_id, missing = loop.ids[:2]
+    loop.seed(run_id, 0.03)
+    book = loop.load()
+    book.record(run_id, 0.90)
+    book.record(missing, loop.bound)
+    before = book.path.read_bytes()
+    html = run.write_report(loop.out, stop="operator stopped", sample=True).read_text()
+    assert f"booked without result: {missing}" in html
+    assert f"{run_id} ($0.9 booked, $0.03 in result)" in html
+    assert "operator stopped" in html
+    assert book.path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("field", "bad"),
+    [
+        ("wall_s", True),
+        ("wall_s", -1),
+        ("wall_s", float("nan")),
+        ("wall_s", float("inf")),
+        ("wall_s", 10**400),
+        ("duration_ms", False),
+        ("duration_ms", -1),
+        ("correct", "false"),
+        ("server_failure", 0),
+        ("agent_cost_reported", 1),
+        ("agent_model", 1),
+        ("gate", {}),
+        ("cross_check", []),
+        ("parse_error", False),
+        ("answer", [1]),
+        ("jev_cost_usd", "0"),
+        ("num_turns", 1.5),
+        ("usage", {"reported": True, "input": {}}),
+        ("timings", [{"round_trip_ms": True}]),
+        ("tool_counts", {"Bash": -1}),
+        ("mcp_servers", []),
+        ("jev_calls", [{"tool": ["not a name"], "is_error": 1}]),
+    ],
+)
+def test_invalid_saved_bench_row_is_named_and_excluded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, bad: object
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    for rid in loop.ids:
+        loop.seed(rid, 0)
+    path = loop.out / loop.ids[1] / "result.json"
+    row = json.loads(path.read_text())
+    path.write_text(json.dumps({**row, field: bad}))
+    stop = loop.go()
+    assert "incomplete result records" in stop and path.parent.name in stop
+    assert len(run.load_records(loop.out)) == 2
+    assert analysis.complete_triplets(run.load_records(loop.out)) == {}
+    assert path.parent.name in run.write_report(loop.out, stop="", sample=True).read_text()
+
+
+@pytest.mark.parametrize(
+    ("fields", "reason"),
+    [
+        ({"cross_check": "trace lost a call"}, "trace lost a call"),
+        ({"jev_calls": [{"tool": "jev_verify", "model": "wrong-model"}]}, "wrong-model"),
+        ({"status": "blocked: Jev rejected the API key"}, "rejected the API key"),
+    ],
+)
+def test_resume_honors_legacy_terminal_arm_and_keeps_its_cost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fields: dict[str, Any], reason: str
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    for rid in loop.ids:
+        booking_cases.write_result(loop.out, rid, 0.17, bench_keys=True, **(fields if rid.endswith(".B") else {}))
+    stop = loop.go()
+    assert reason in stop
+    assert not analysis.complete_triplets(run.load_records(loop.out))
+    assert loop.load().runs == dict.fromkeys(loop.ids, 0.17)
+    report = run.write_report(loop.out, stop="", sample=True).read_text()
+    assert reason in report and "0.17" in report
+    assert "Jev connection: 1 of 1" in report
+
+
+def test_legacy_unfinished_result_recovers_the_bound_across_restarts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    for rid in loop.ids:
+        fields = {"status": "failed: post-processing raised RuntimeError: grading failed"} if rid.endswith(".B") else {}
+        booking_cases.write_result(loop.out, rid, 0.0, bench_keys=True, **fields)
+    assert loop.go() == loop.done
+    failed = next(rid for rid in loop.ids if rid.endswith(".B"))
+    assert loop.load().runs[failed] == loop.bound
+    assert loop.go() == loop.done and loop.load().spent == loop.bound
+    report = run.write_report(loop.out, stop="", sample=True).read_text()
+    assert "reserve" in report and f"${loop.bound:g}" in report
+
+
+def test_resume_stops_on_a_previously_underbooked_unfinished_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    rid = loop.ids[0]
+    booking_cases.write_result(loop.out, rid, 0.0, bench_keys=True, status="failed: post-processing raised KeyError")
+    loop.load().record(rid, 0.0)
+    loop.install(lambda *_args: pytest.fail("launched with an underbooked unfinished run"))
+    stop = loop.go()
+    assert rid in stop and "reserve" in stop
+    assert loop.load().runs == {rid: 0.0}
+
+
+def test_invalid_grading_fields_keep_evidence_of_spend_above_the_reserve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    rid = loop.ids[0]
+    charge = loop.bound + 1.0
+    booking_cases.write_result(loop.out, rid, charge, bench_keys=True, wall_s=True)
+    assert "incomplete" in loop.go()
+    assert loop.load().runs == {rid: charge}
+
+
+def test_underbooked_measured_run_stops_before_more_paid_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    rid = loop.ids[0]
+    loop.seed(rid, 0.25)
+    loop.load().record(rid, 0.1)
+    loop.install(lambda *_args: pytest.fail("started a paid run despite a known undercharge"))
+    assert not run.runs_remain(load_items(DRYRUN)[:1], loop.out)
+    stop = loop.go()
+    assert rid in stop and "$0.25" in stop
+    assert loop.load().runs == {rid: 0.1}
+
+
+@pytest.mark.parametrize(("stored", "incomplete"), [(False, True), (3.25, False)])
+def test_legacy_failure_migration_only_replaces_placeholder_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stored: float | bool, incomplete: bool
+) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    for rid in loop.ids:
+        booking_cases.write_result(
+            loop.out,
+            rid,
+            0.0,
+            bench_keys=True,
+            **(
+                {"status": "failed: post-processing raised ValueError", "jev_cost_usd": stored}
+                if rid.endswith(".B")
+                else {}
+            ),
+        )
+    stop = loop.go()
+    assert ("incomplete" in stop) == incomplete
+    failed = next(rid for rid in loop.ids if rid.endswith(".B"))
+    assert loop.load().runs[failed] == (loop.bound if incomplete else stored)
+
+
+def test_concurrent_resume_checks_recover_one_charge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loop = booking_cases.bench_loop(tmp_path, monkeypatch)
+    items = load_items(DRYRUN)[:1]
+    run_id = loop.ids[0]
+    loop.seed(run_id, 0.17)
+    both_read = threading.Barrier(2)
+    started = study_runner.agent_started
+
+    def simultaneous_check(path: Path) -> bool:
+        if path.name == run_id:
+            both_read.wait(timeout=5)
+        return started(path)
+
+    monkeypatch.setattr(study_runner, "agent_started", simultaneous_check)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        checks = [pool.submit(run.runs_remain, items, loop.out) for _ in range(2)]
+        assert all(check.result(timeout=10) for check in checks)
+    assert loop.load().runs == {run_id: 0.17}

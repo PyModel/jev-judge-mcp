@@ -23,7 +23,8 @@ cost.
 - **Replay is verbatim.** The recorded answers, usage, provider, and model come back as one
   `Evaluation`, so every tool payload built from it is byte-identical to the first answer's. The
   cache never edits a response, never merges, and never synthesizes usage: a hit is the same
-  judgment the provider already gave. Tool outputs stay inside the parity contract.
+  judgment the provider already gave. A record with an invalid model or request ID is a cache
+  miss under ADR-0057's response bounds. Tool outputs stay inside the parity contract.
 - **Where it sits.** `Runtime.ask`, after provider resolution and before `evaluate`: the cache is
   provider access policy, not a provider (the resolved provider's name keys the entry, and its
   lifecycle is untouched). A hit records a `cache=hit` attribute on the `jev.evaluate` span — and
@@ -83,3 +84,18 @@ accounts — replayed each other's answers. The hashed body now carries `endpoin
 `cache_scope`, which is the base URL (compatible, typesafe), the account id (cloudflare), or empty
 (openrouter, one fixed endpoint). Never a credential. Every existing entry misses once and is
 re-recorded; nothing else changes.
+
+## Amendment (2026-11-18) — shared misses and cache ownership
+
+A single runtime shares concurrent requests with the same cache key, including their outcome.
+Only the originating call reports billed tokens. The cache record includes the provider request ID.
+Legacy records without an ID still replay. Each record contains answers and usage. The state and
+questions contribute to the digest. An unreadable record or a record exceeding 32 MiB is a cache miss.
+
+An expired record is a miss. A reader leaves removal or replacement to a writer so it cannot
+unlink a concurrent refresh. Writers serialize publication and sweeping. Only regular files named
+with a full lowercase SHA-256 digest and the JSON suffix count toward the cap. Only matching
+staging files older than one day are eligible for cleanup. Existing cache directories must be
+private and owned by the current user. New records use the dedicated `jev-records-v1/` child.
+Legacy records in its parent remain readable and are never swept. An unsuitable directory disables disk replay.
+For a custom cache or key location, select a new private directory owned by the service account.

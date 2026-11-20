@@ -39,7 +39,6 @@ export default [
   {
     id: "normal/find-ranked-top-k",
     class: "normal",
-    divergences: ["ADR-0062"],
     note: "Caller ids are sanitized for the wire; the third candidate has no id and gets candidate2.",
     tool: "jev_find",
     arguments: {

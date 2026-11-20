@@ -16,19 +16,6 @@ EXCERPT_UNITS = 200
 
 MISSING_EVIDENCE = ("needs_diff", "needs_tests", "needs_before_after", "single_item_no_source")
 
-NEXT_CHECKS: dict[str, str] = {
-    "incomplete_context": "Split the diff or pass a file list. A truncated diff is not a pass.",
-    "invalid_response": "The row is unjudged. Do not treat it as verified.",
-    "review_escalated": "Stop. Read action, not verdict.",
-    "review_required": "Confirm this before proceeding. Read action, not verdict.",
-    "claims_contradicted": "The evidence contradicts a claim. Do not ship that claim.",
-    "claims_unsupported": "Read missing_evidence on the claim row. Do not grep verdict.",
-    "claim_confidence_low": "Do not grep verified. Read action.",
-    "claim_confidence_below_auto_accept": "The claim is not confident enough to stand. Read action.",
-    "accepted": "The row stands. Proceed.",
-    "caller_note_only": "A caller note is not enough for auto. Add a diff or a tool log.",
-}
-
 NO_HUNKS_CHECK = (
     "diff carries no patch hunks: pass the real diff (git diff output, or a [{path, patch}] list) "
     "so claims can rest on it."
@@ -45,51 +32,18 @@ EXCERPT_CHECK = (
 """The deterministic hint a gate that did not stand appends when a patch's hunk headers disagree with
 the lines under them (ADR-0062 amendment, 2026-10-07): an excerpt or paraphrase shaped like a patch."""
 
-REVIEW_ONLY_CHECK = (
-    "Every claim stands; the patch review did not. Read the review scores: low correctness or "
-    "spec_match on a partial diff means send the full diff; low test_gap confidence means the review "
-    "saw no tests, so pass the log as tests or tests_path (a file list's per-file reviews never see "
-    "evidence); low blast_radius confidence means the diff cannot show callers, so confirm them by "
-    "reading the callers."
-)
-"""The deterministic hint a gate appends when its review half failed, no claim code fired, and no
-`tests` reached the review (ADR-0062 amendments, 2026-10-07 and 2026-10-15), so the caller re-packs
-instead of reading the call as mostly done."""
-
-REVIEW_SAW_TESTS_CHECK = (
-    "Every claim stands and the review read the tests, yet the patch review did not stand. Read the "
-    "review scores (and file_actions, for a file list), confirm the weak ones by reading the code, and "
-    "do not re-send the same tests."
-)
-"""The review-only hint when `tests` reached the review (ADR-0062 amendment, 2026-10-15): asking
-for the test output again would send the caller round the same loop."""
-
-_REVIEW_CODES = frozenset({"review_escalated", "review_required"})
-_CLAIM_CODES = frozenset(
-    {
-        "invalid_response",
-        "claims_contradicted",
-        "claims_unsupported",
-        "claim_confidence_low",
-        "claim_confidence_below_auto_accept",
-        "caller_note_only",
-    }
-)
-
 type DiffShape = Literal["patch", "file_list", "text", "excerpt"]
 
-_HUNK_HEADERS = ("diff --git ", "@@ ", "+++ ", "--- ", "Index: ")
-_HUNK_COUNTS = re.compile(r"@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+_FILE_HEADERS = re.compile(r"^--- [^\n]*\n\+\+\+ ", re.MULTILINE)
+_HUNK_COUNTS = re.compile(r"@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@", re.ASCII)
 
 SCORE_SCALE = [0, RUBRIC_SCORE_MAX]
-_LEVELS = tuple(range(RUBRIC_SCORE_MAX + 1))
 
 
 def diff_shape(diff: object) -> DiffShape:
     """What the caller sent as `diff`, computed in code, never judged.
 
-    A file list is a patch by construction. A string is a patch when any line carries a unified-diff
-    header or begins with `+` (an added line; `-` alone is also a bullet, so it does not count).
+    A file list is a patch by construction. A string needs a hunk header or paired file headers.
     Anything else — a change summary — is `text`: nothing a claim can rest on as a patch. A patch, or
     any file-list patch, whose hunk headers disagree with the lines under them is `excerpt`.
     """
@@ -102,9 +56,19 @@ def diff_shape(diff: object) -> DiffShape:
         return "excerpt" if any(isinstance(patch, str) and _trimmed(patch) for patch in patches) else "file_list"
     if not isinstance(diff, str):
         return "text"
-    if not any(line.startswith(_HUNK_HEADERS) or line.startswith("+") for line in diff.split("\n")):
+    if not _FILE_HEADERS.search(diff) and not any(_HUNK_COUNTS.match(line) for line in diff.split("\n")):
         return "text"
     return "excerpt" if _trimmed(diff) else "patch"
+
+
+def hunk_counts(line: str, patch_size: int) -> tuple[int, int] | None:
+    counts = _HUNK_COUNTS.match(line)
+    if counts is None:
+        return None
+    old, new = counts.groups()
+    if any(len(count) > len(str(patch_size)) for count in (old, new) if count):
+        return None
+    return (1 if old is None else int(old), 1 if new is None else int(new))
 
 
 def _trimmed(patch: str) -> bool:
@@ -123,11 +87,10 @@ def _trimmed(patch: str) -> bool:
         line = raw.removesuffix("\r")  # a diff pasted with CRLF endings is still the same patch
         if old == 0 and new == 0:
             if line.startswith("@@ "):
-                counts = _HUNK_COUNTS.match(line)
+                counts = hunk_counts(line, len(patch))
                 if counts is None:
                     return True
-                old = 1 if counts.group(1) is None else int(counts.group(1))
-                new = 1 if counts.group(2) is None else int(counts.group(2))
+                old, new = counts
                 seen = True
             elif seen and line.startswith("+") and not line.startswith("+++ "):
                 return True
@@ -164,10 +127,6 @@ def caller_renames(sent: Sequence[Mapping[str, object]], asked: Sequence[Mapping
         if isinstance(raw_id, str) and raw_id and raw_id != final["id"]:
             renamed[raw_id] = str(final["id"])
     return renamed
-
-
-def stands(action: object) -> bool:
-    return action == "auto"
 
 
 def partition(rows: Sequence[Mapping[str, object]], key: str) -> dict[str, int]:
@@ -224,7 +183,7 @@ def claim_extras(
     support = supporting if supporting is not None else row.get("supporting_evidence")
     item = next((entry for entry in evidence if str(entry.get("id")) == support), None)
     extras: dict[str, object] = {
-        "stands": stands(row.get("action")),
+        "stands": row.get("action") == "auto" and row.get("verdict") == "verified",
         "evidence_ids": [support] if isinstance(support, str) else [],
         "excerpt": excerpt_of(item.get("text")) if item is not None else None,
         "missing_evidence": missing_evidence_code(verdict=row.get("verdict"), evidence=evidence),
@@ -240,33 +199,7 @@ def summary_extras(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
     return {"by_verdict": partition(rows, "verdict"), "by_action": partition(rows, "action")}
 
 
-def review_saw_tests(args: Mapping[str, object]) -> bool:
-    """Whether `tests` was passed, from the arguments, never judged. It is the one test input every review
-    reads: a string diff's single request also carries `evidence`, but a file list's per-file reviews
-    read `request`, `diff`, and `tests` only."""
-    return bool(args.get("tests"))
-
-
-def next_checks_for(
-    codes: Sequence[object], *, diff_shape: DiffShape | None = None, review_saw_tests: bool = False
-) -> list[str]:
-    """The fixed next check per reason code, in code order; then, when the review half failed and no
-    claim code fired, `REVIEW_SAW_TESTS_CHECK` or `REVIEW_ONLY_CHECK` by whether `tests` reached the
-    review; then, when the call did not stand (`accepted` absent), `NO_HUNKS_CHECK` for a plain-text
-    `diff` or `EXCERPT_CHECK` for a trimmed one."""
-    names = {str(code) for code in codes}
-    checks = [NEXT_CHECKS[str(code)] for code in codes if str(code) in NEXT_CHECKS]
-    if names & _REVIEW_CODES and not names & _CLAIM_CODES:
-        checks.append(REVIEW_SAW_TESTS_CHECK if review_saw_tests else REVIEW_ONLY_CHECK)
-    if "accepted" not in names:
-        if diff_shape == "text":
-            checks.append(NO_HUNKS_CHECK)
-        elif diff_shape == "excerpt":
-            checks.append(EXCERPT_CHECK)
-    return checks
-
-
-def nearest_level(score: object) -> int | None:
+def nearest_level(score: object, count: int = RUBRIC_SCORE_MAX + 1) -> int | None:
     if isinstance(score, bool) or not isinstance(score, (int, float)):
         return None
-    return min(_LEVELS, key=lambda level: (abs(level - float(score)), level))
+    return min(range(count), key=lambda level: abs(level - float(score)))

@@ -20,29 +20,36 @@ run (`login_keychain`) gets a symlink to `login.keychain-db` only; the directory
 A set `CLAUDE_CONFIG_DIR` fails the login even when that file is reachable (5a902c3 set it to the
 sandbox), so it stays unset and Claude's project state lands in the sandbox. Pi never gets the link:
 it logs in through the copied `auth.json`. The link is the same kind of exposure as that copy: a
-Claude run can read the login keychain file through it. Nothing is read from this process's
-environment below that boundary.
+Claude run can read the login keychain file through it. The subprocess receives the explicitly constructed environment.
+Saving its transcript uses the host home, temporary directory and project roots to redact those paths.
 """
 
+import errno
 import json
 import os
 import posixpath
 import re
+import secrets as secure_random
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import threading
 import time
 from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 
 from evals.ab import stream
+from evals.ab.grade import hardened_git
+from evals.artifacts import read_artifact
+from evals.relay import private_opener
+from evals.spend import mark_agent_started
 
 REDACTED = b"[REDACTED]"
 
@@ -208,7 +215,7 @@ CONTAINER_TOPS = (
     "var",
 )
 """This host's root names plus the confined container's: a container transcript can name either,
-and the canary must parse both — `/Users/panda/...` is an escape attempt, `/task/...` is the work."""
+and the canary must parse both — `/Users/example/...` is an escape attempt, `/task/...` is the work."""
 
 CONTAINER_RUNTIME = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt", "/proc", "/sys", "/dev")
 """The container's own system prefixes. Nothing host-side lives under any of them (ADR-0074)."""
@@ -575,33 +582,129 @@ class AgentRunResult:
     out-of-task exploration, recorded per run, never a study stop by itself."""
 
 
-def secret_scrub(root: Path, secret: str) -> None:
+ARTIFACT_CHUNK_BYTES = 64 * 1024
+RELAY_CAP_BYTES = STDOUT_CAP_BYTES
+
+
+def read_relay_log(path: Path) -> list[dict[str, Any]]:
+    try:
+        lines = read_artifact(path, max_bytes=RELAY_CAP_BYTES).splitlines()
+    except FileNotFoundError:
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        row: object = json.loads(line)
+        if not isinstance(row, dict):
+            raise ValueError("relay log rows must be JSON objects")
+        rows.append(cast(dict[str, Any], row))
+    return rows
+
+
+def copy_regular_nofollow(
+    source: Path, target: Path, *, limit: int = RELAY_CAP_BYTES, private_source: bool = False
+) -> bool:
+    """Copy at most the remaining relay budget, including a source that grows after fstat."""
+    try:
+        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as error:
+        if error.errno == errno.ENOENT or (error.errno == errno.ELOOP and not private_source):
+            return False
+        raise
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            if private_source:
+                raise PermissionError("study relay must be a singly linked regular file")
+            return False
+        if private_source and (info.st_uid != os.getuid() or info.st_mode & 0o077):
+            raise PermissionError("study relay must be an owned private file")
+        if info.st_size > limit:
+            raise OSError("incomplete transcript: aggregate relay log limit exceeded")
+        with os.fdopen(fd, "rb", closefd=False) as reader, open(target, "wb", opener=private_opener) as writer:
+            while chunk := reader.read(min(ARTIFACT_CHUNK_BYTES, limit + 1)):
+                if len(chunk) > limit:
+                    raise OSError("incomplete transcript: aggregate relay log limit exceeded")
+                writer.write(chunk)
+                limit -= len(chunk)
+    finally:
+        os.close(fd)
+    return True
+
+
+def copy_relay_logs(source: Path, target: Path, *, private_source: bool = False) -> None:
+    remaining = RELAY_CAP_BYTES
+    for name in (RELAY_LOG, str(Path(RELAY_LOG).with_suffix(".stderr"))):
+        if copy_regular_nofollow(source / name, target / name, limit=remaining, private_source=private_source):
+            remaining -= (target / name).stat().st_size
+
+
+def _stream_secret(artifact: BinaryIO, needle: bytes, output: BinaryIO | None = None) -> bool:
+    """Keep only the unmatched suffix that could begin a match in the next block."""
+    tail = b""
+    hit = False
+    while chunk := artifact.read(ARTIFACT_CHUNK_BYTES):
+        parts = (tail + chunk).split(needle)
+        if len(parts) > 1:
+            if output is None:
+                return True
+            hit = True
+            output.write(REDACTED.join(parts[:-1]) + REDACTED)
+        suffix = parts[-1]
+        cut = max(0, len(suffix) - len(needle) + 1)
+        if output is not None:
+            output.write(suffix[:cut])
+        tail = suffix[cut:]
+    if output is not None:
+        output.write(tail)
+    return hit
+
+
+def _scrub_file(artifact: BinaryIO, needle: bytes, name: str, parent: int) -> None:
+    artifact.seek(0)
+    staging = ".jev-scrub-" + secure_random.token_hex(16)
+    fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=parent)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            _stream_secret(artifact, needle, output)
+        os.replace(staging, name, src_dir_fd=parent, dst_dir_fd=parent)
+    except BaseException:
+        os.unlink(staging, dir_fd=parent)
+        raise
+
+
+def _artifact_secrets(root: Path, secret: str, *, scrub: bool) -> tuple[str, ...]:
     if not secret:
-        raise ValueError("the secret to scrub must be non-empty")
+        raise ValueError("the secret to scan or scrub must be non-empty")
     needle = secret.encode()
-    for path in root.rglob("*"):
-        if path.is_file():
-            data = path.read_bytes()
-            if needle in data:
-                path.write_bytes(data.replace(needle, REDACTED))
+    hits: list[str] = []
+    errors: list[OSError] = []
+    flags = (os.O_RDWR if scrub else os.O_RDONLY) | os.O_NOFOLLOW | os.O_NONBLOCK
+    for directory, _, names, parent in os.fwalk(root, onerror=errors.append):
+        for name in names:
+            try:
+                fd = os.open(name, flags, dir_fd=parent)
+                with os.fdopen(fd, "r+b" if scrub else "rb") as artifact:
+                    info = os.fstat(fd)
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid():
+                        raise PermissionError("study artifact must be an owned, singly linked regular file")
+                    if _stream_secret(artifact, needle):
+                        hits.append(str((Path(directory) / name).relative_to(root)))
+                        if scrub:
+                            _scrub_file(artifact, needle, name, parent)
+            except OSError as error:
+                errors.append(error)
+    if errors:
+        raise errors[0]
+    return tuple(sorted(hits))
+
+
+def secret_scrub(root: Path, secret: str) -> None:
+    _artifact_secrets(root, secret, scrub=True)
 
 
 def secret_scan(root: Path, secret: str) -> tuple[str, ...]:
-    """Relative paths of every file under `root` whose bytes contain `secret`.
-
-    The after-run check (ADR-0074): a hit fails the run — the caller records it as an escape —
-    and the scrub that follows still removes the value from the kept records.
-    """
-    if not secret:
-        raise ValueError("the secret to scan for must be non-empty")
-    needle = secret.encode()
-    hits: list[str] = []
-    for path in sorted(root.rglob("*")):
-        if path.is_file():
-            data = path.read_bytes()
-            if needle in data:
-                hits.append(str(path.relative_to(root)))
-    return tuple(hits)
+    """Relative paths of run artifacts whose bytes contain the secret."""
+    return _artifact_secrets(root, secret, scrub=False)
 
 
 def _text(output: str | bytes | None) -> str:
@@ -618,18 +721,6 @@ def run_status(returncode: int | None, trace: stream.Trace, timeout_s: float) ->
 
 class AgentSetupError(RuntimeError):
     """The sandbox could not be prepared. Not a run: nothing is booked."""
-
-
-class AgentPreflightError(RuntimeError):
-    """The preflight never reached the model. The message is the agent's own error, capped, with no secret."""
-
-    cost_usd: float | None
-    model: str | None
-
-    def __init__(self, detail: str, *, cost_usd: float | None, model: str | None) -> None:
-        super().__init__(detail)
-        self.cost_usd = cost_usd
-        self.model = model
 
 
 class _StdoutCapExceeded(OSError):
@@ -682,9 +773,52 @@ def _kill_group(proc: subprocess.Popen[bytes]) -> None:
             time.sleep(0.01)
 
 
-def write_run_logs(run_dir: Path, stdout: str, stderr: str) -> None:
-    (run_dir / "stream.jsonl").write_text(stdout, encoding="utf-8")
-    (run_dir / "claude.stderr").write_text(stderr, encoding="utf-8")
+def ensure_private_run_dir(run_dir: Path) -> None:
+    run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = run_dir.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+        raise PermissionError("study run directory must be private and owned by the operator")
+
+
+def write_run_logs(
+    run_dir: Path, stdout: str, stderr: str, *, base_env: Mapping[str, str] | None = None, secrets: Sequence[str] = ()
+) -> set[str]:
+    """Neutralize host roots in saved captures. Return raw secret hits before any path is replaced."""
+    env = base_env or {}
+    roots = [
+        (tempfile.gettempdir(), "/home/example/temp"),
+        (env.get("TMPDIR", ""), "/home/example/temp"),
+        (str(Path.home()), "/home/example"),
+        (env.get("HOME", ""), "/home/example"),
+        (str(Path.cwd()), "/home/example/project"),
+        (str(Path(__file__).resolve().parents[1]), "/home/example/project"),
+    ]
+    replacements: dict[str, str] = {}
+    for root, neutral in roots:
+        root = root.rstrip("/")
+        if not root.startswith("/"):
+            continue
+        for spelling in _both(root):
+            if not spelling or spelling == "/private":
+                continue
+            replacements[spelling] = neutral
+            replacements[json.dumps(spelling)[1:-1]] = neutral
+            replacements[spelling.replace("/", "-")] = neutral.replace("/", "-")
+            replacements[re.sub(r"[^a-zA-Z0-9]", "-", spelling)] = neutral.replace("/", "-")
+            if re.fullmatch(r"(?:/private)?/var/folders/[^/]+/[^/]+/[TC]", spelling):
+                parent = spelling.rsplit("/", 1)[0]
+                replacements[parent] = "/home/example/temp-user"
+                replacements[parent.replace("/", "-")] = "-home-example-temp-user"
+                replacements[re.sub(r"[^a-zA-Z0-9]", "-", parent)] = "-home-example-temp-user"
+    # Longest first: a checkout and the temporary directory can both be inside the home.
+    pattern = re.compile("|".join(map(re.escape, sorted(replacements, key=len, reverse=True))) + r"(?![\w])")
+    hits: set[str] = set()
+    for name, content in (("stream.jsonl", stdout), ("claude.stderr", stderr)):
+        if any(value and value in content for value in secrets):
+            hits.add(name)
+        with open(run_dir / name, "w", encoding="utf-8", opener=private_opener) as sink:
+            sink.write(pattern.sub(lambda match: replacements[match.group()], content) if replacements else content)
+    return hits
 
 
 def _with_stderr_marker(stderr: str) -> str:
@@ -927,15 +1061,8 @@ def sandbox_diff(workdir: Path) -> str:
 
     Confined runs do not call this. Their diff is produced inside the container (ADR-0074).
     """
-    subprocess.run(["git", "add", "-A"], cwd=workdir, check=False, capture_output=True)  # noqa: S607
-    done = subprocess.run(
-        ["git", "diff", "--cached"],  # noqa: S607
-        cwd=workdir,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return done.stdout
+    hardened_git(workdir, "add", "-A")
+    return hardened_git(workdir, "diff", "--cached").stdout
 
 
 @contextmanager
@@ -965,10 +1092,12 @@ def run_agent(
     """
     if not secret:
         raise ValueError("run_agent needs the non-empty secret to scrub")
-    run_dir.mkdir(parents=True, exist_ok=True)
-    workdir = Path(tempfile.mkdtemp(prefix="jev-agent-work-")).resolve()
-    secret_dir = Path(tempfile.mkdtemp(prefix="jev-agent-cfg-"))
-    try:
+    ensure_private_run_dir(run_dir)
+    with ExitStack() as cleanup:
+        workdir = Path(cleanup.enter_context(tempfile.TemporaryDirectory(prefix="jev-agent-work-"))).resolve()
+        cfg = tempfile.TemporaryDirectory(prefix="jev-agent-cfg-")
+        secret_dir = Path(cleanup.enter_context(cfg))
+        cleanup.callback(secret_scrub, run_dir, secret)
         if prepare is not None:
             prepare(workdir)
         resolved_config = mcp_config(secret_dir) if callable(mcp_config) else mcp_config
@@ -989,6 +1118,7 @@ def run_agent(
             {**base_env, **command.env, **isolated},
             runtime or runtime_prefixes(base_env.get("PATH", "")),
         )
+        mark_agent_started(run_dir)
         started = time.perf_counter()
         try:
             stdout, stderr, returncode = capture_output(
@@ -1000,23 +1130,20 @@ def run_agent(
             )
         except _StdoutCapExceeded as exceeded:
             # Persist before the raise so the finally scrub still sees the secret on this path.
-            shutil.rmtree(secret_dir, ignore_errors=True)
-            write_run_logs(run_dir, exceeded.captured_stdout, exceeded.captured_stderr)
+            cfg.cleanup()
+            write_run_logs(run_dir, exceeded.captured_stdout, exceeded.captured_stderr, base_env=base_env)
             raise
         except _IncompleteTranscript as incomplete:
             # Same contract: persist what was read, then fail loudly. A silently partial
             # transcript would book an agent verdict on missing evidence.
-            shutil.rmtree(secret_dir, ignore_errors=True)
-            write_run_logs(run_dir, incomplete.captured_stdout, incomplete.captured_stderr)
+            cfg.cleanup()
+            write_run_logs(run_dir, incomplete.captured_stdout, incomplete.captured_stderr, base_env=base_env)
             raise
         wall = time.perf_counter() - started
-        for name in (RELAY_LOG, str(Path(RELAY_LOG).with_suffix(".stderr"))):
-            relay = secret_dir / name
-            if relay.is_file():
-                shutil.copyfile(relay, run_dir / name)
-        shutil.rmtree(secret_dir, ignore_errors=True)
-        write_run_logs(run_dir, stdout, stderr)
-        scan_hit = secret_scan(run_dir, secret)
+        copy_relay_logs(secret_dir, run_dir, private_source=True)
+        cfg.cleanup()
+        raw_hits = write_run_logs(run_dir, stdout, stderr, base_env=base_env, secrets=[secret])
+        scan_hit = sorted(raw_hits.union(secret_scan(run_dir, secret)))
         escape = escape_scan(stdout, box)
         if scan_hit:
             prefix = f"{escape}; " if escape else ""
@@ -1033,29 +1160,6 @@ def run_agent(
             status=run_status(returncode, trace, command.timeout_s),
             escape=escape or None,
         )
-    finally:
-        shutil.rmtree(secret_dir, ignore_errors=True)
-        shutil.rmtree(workdir, ignore_errors=True)
-        secret_scrub(run_dir, secret)
-
-
-def _usd(value: object) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    return float(value)
-
-
-def preflight_detail(run: AgentRunResult) -> str:
-    """The run's status, or the provider error the Pi parser records. Claude's stream never sets that field."""
-    failure = run.trace.result_field("server_error")
-    if isinstance(failure, str) and failure.strip():
-        return failure.splitlines()[0][:160]
-    line = next((stripped for raw in run.stderr.splitlines() if (stripped := raw.strip())), "")
-    return f"{run.status}; {line[:160]}" if line else run.status
-
-
-PREFLIGHT_TIMEOUT_S = 180.0
-"""One prompt to prove the agent can reach its model, before any paid run is booked."""
 
 
 def write_preflight(out: Path, *, cost_usd: float | None, model: str | None) -> None:
@@ -1065,47 +1169,3 @@ def write_preflight(out: Path, *, cost_usd: float | None, model: str | None) -> 
         json.dumps({"total_cost_usd": cost_usd, "model": model}) + "\n",
         encoding="utf-8",
     )
-
-
-def run_preflight(
-    argv: Callable[[Path], Sequence[str]],
-    *,
-    base_env: Mapping[str, str],
-    secret: str,
-    mcp_config: Mapping[str, Any],
-    login_keychain: bool,
-    parse: Callable[[Iterable[str]], stream.Trace] | None = None,
-    timeout_s: float = PREFLIGHT_TIMEOUT_S,
-    auth_provider: str | None = None,
-) -> AgentRunResult:
-    """One prompt through `run_agent`'s own env. Raises `AgentPreflightError` when the model was not reached.
-
-    The scratch dir is not the study's `out`, and this writes no ledger. `login_keychain` is true only
-    for Claude; a Pi or third-party-model preflight passes false and gets no keychain path. The yielded
-    workdir is gone by the time this returns: callers use the trace. `auth_provider` scopes the
-    preflight's auth.json exactly like a run's.
-    """
-    from evals.ab.outcomes import reached_model
-
-    scratch = Path(tempfile.mkdtemp(prefix="jev-agent-preflight-"))
-    try:
-        command = AgentCommand(argv=argv, timeout_s=timeout_s, login_keychain=login_keychain)
-        with run_agent(
-            command,
-            mcp_config=mcp_config,
-            base_env=base_env,
-            secret=secret,
-            run_dir=scratch,
-            parse=parse,
-            auth_provider=auth_provider,
-        ) as run:
-            cost = _usd(run.trace.result_field("total_cost_usd"))
-            model = run.trace.model
-            reached = reached_model(run.trace)
-            detail = preflight_detail(run)
-            result = run
-        if not reached:
-            raise AgentPreflightError(detail, cost_usd=cost, model=model)
-        return result
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)

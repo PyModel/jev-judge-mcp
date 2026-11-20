@@ -1,21 +1,21 @@
 """jev_gate: review a patch and verify completion claims in one call (`index.ts:1342-1495`)."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question
+from jev_judge_mcp.gate_budget import SPLIT_GUIDANCE, GateBudgetError, check_gate_budget
+from jev_judge_mcp.gate_diagnostics import explain_gate, input_cuts
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.policy import Action, ClaimJudgment, ClaimVerdict, PolicyThresholds
-from jev_judge_mcp.policy.claims import note_blocks_auto
-from jev_judge_mcp.providers import Evaluation
+from jev_judge_mcp.policy.claims import claim_action
+from jev_judge_mcp.providers import Evaluation, ProviderError
 from jev_judge_mcp.responses import (
     caller_renames,
     claim_extras,
-    diff_shape,
-    next_checks_for,
     renamed_ids_field,
-    review_saw_tests,
     summary_extras,
 )
 from jev_judge_mcp.serialize import js_number_to_locale_string_en_us
@@ -24,6 +24,7 @@ from jev_judge_mcp.tools.arguments import Refinement
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, define, frame
 from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items, has_non_empty_evidence, normalize_evidence
 from jev_judge_mcp.tools.files import combined, file_list_refusal, file_patches, review_file_list
+from jev_judge_mcp.tools.gate_evidence import Citations, add_citations, contradicting_line, grounded_review
 from jev_judge_mcp.tools.observed import (
     fail_closed,
     file_list_action,
@@ -34,16 +35,14 @@ from jev_judge_mcp.tools.observed import (
 )
 from jev_judge_mcp.tools.review_half import (
     ANTI_INJECTION,
+    ReviewDocs,
     ReviewSettings,
     project_review,
-    review_docs,
     review_questions,
     review_settings,
 )
 from jev_judge_mcp.tools.verify import NO_SOURCE, ROLE_RULE, VERIFY_SUFFIX
 from jev_judge_mcp.validation.caps import (
-    CapLedger,
-    CapScope,
     exceeds,
     gate_evidence_aggregate_error,
     gate_evidence_items_error,
@@ -68,12 +67,14 @@ DEFINITION = define(
     "Gate completion: review a patch and verify claims",
     "Review a proposed patch and verify completion claims against supplied evidence in one TypeSafe Jev call. Auto "
     "only when the patch review is accepted and every claim is verified at or above auto_accept. Unsupported claims "
-    "require review; confident contradictions, unknown confidence, or low confidence escalate. The request and "
+    "require review. Escalation identifies a cited defect, contradiction or safety refusal. "
+    "See rollup and next_checks. The request and "
     "claims are assertions to check, never proof. Pass the real git diff as diff, whole or as a {path, patch} file "
-    "list, and raw test output in tests (a file list's per-file reviews never see evidence); an excerpt, "
+    "list, and raw test output in tests. File reviews include bounded caller evidence and sibling patches. "
+    "review.context_omissions lists optional inputs left out. An excerpt, "
     "paraphrase, or path is judged as written and "
-    "scores low. The diff and tests are each sent twice, so a diff near its cap can overflow the model's window: "
-    "pass a file list or split the gate by concern. Evidence "
+    "scores low. The string diff and tests are sent twice. Oversized inputs are refused before review. "
+    "Split by file, hunk or claim. Evidence "
     f"is capped at {GATE.evidence_items} items and {js_number_to_locale_string_en_us(GATE.aggregate_evidence_units)} "
     "characters in aggregate. Does not run tests or apply changes. Use jev_review "
     "for a patch without claims, jev_verify for claims without a patch review.",
@@ -88,7 +89,7 @@ DEFINITION = define(
             "diff": {
                 "description": (
                     "The real unified diff (git diff output), or a file list of {path, patch} objects, one per "
-                    f"file. A string is truncated at {GATE.doc_units} chars. An excerpt or summary is reviewed as "
+                    f"file. The document limit is {GATE.doc_units} UTF-16 units. An excerpt or summary is reviewed as "
                     "written and scores low."
                 ),
                 "anyOf": [
@@ -113,18 +114,13 @@ DEFINITION = define(
                 "items": {"type": "string", "minLength": 1},
                 "minItems": GATE.claims_min,
                 "maxItems": GATE.claims_max,
-                "description": "Completion claims to check against evidence: each one a plain string, truncated at "
+                "description": "Completion claims to check against evidence: each one a plain string of at most "
                 f"{GATE.claim_units} chars. Up to {GATE.claims_max} per call.",
             },
             "evidence": EVIDENCE_SCHEMA,
             "tests": {
                 "type": "string",
-                "description": "Reported test output for the patch review. Truncated at the same cap.",
-            },
-            "tests_format": {"type": "string", "description": "text, junit, or tap. Omitted text is self-reported."},
-            "tests_sha256": {
-                "type": "string",
-                "description": "Hash of a tests log a reader hashed. The server does not hash caller text.",
+                "description": "Reported test output for the patch review. Subject to the document and request limits.",
             },
             "auto_accept": {
                 "type": "number",
@@ -136,7 +132,7 @@ DEFINITION = define(
                 "type": "number",
                 "minimum": 0,
                 "maximum": 1,
-                "description": "Score, safe_to_apply, or per-claim confidence below this escalates. Must be <= "
+                "description": "Low-score diagnostic threshold. An uncited concern requires review. Must be <= "
                 "auto_accept. Default min(0.5, auto_accept).",
             },
             "composite_floor": {
@@ -186,10 +182,10 @@ def _refused(error: str) -> ToolResult:
     return ToolResult({"tool": "jev_gate", "error": error}, is_error=True, error_code="input_too_large")
 
 
-def _sent_evidence_item(item: dict[str, object], ledger: CapLedger) -> dict[str, object]:
+def _sent_evidence_item(item: dict[str, object]) -> dict[str, object]:
     sent: dict[str, object] = {
         "id": item["id"],
-        "text": ledger.text(str(item["text"]), GATE.doc_units, "context"),
+        "text": item["text"],
     }
     if item.get("kind"):
         sent["kind"] = item["kind"]
@@ -214,7 +210,6 @@ class GateAsk:
     body: dict[str, object]
     action: Action
     evaluation: Evaluation
-    truncated: frozenset[CapScope]
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,10 +219,12 @@ class VerificationHalf:
     payload: dict[str, object]
     action: Action
     judgments: list[ClaimJudgment | None]
-    caller_note: bool
+    source_issues: dict[int, str]
 
 
-async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
+async def handle(
+    args: dict[str, Any], runtime: Runtime, *, withheld: Sequence[dict[str, str]] | None = None
+) -> ToolResult:
     settings = review_settings(args)
     # The evidence budgets are evidence-driven and identical for every per-file call, so they are
     # refused once here, before the split: a file list over budget is an isError like a string is.
@@ -237,10 +234,22 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         return _refused(gate_evidence_items_error(GATE.evidence_items))
     if exceeds(sum(length(str(item["text"])) for item in evidence), GATE.aggregate_evidence_units):
         return _refused(gate_evidence_aggregate_error(GATE.aggregate_evidence_units))
-    if isinstance(args.get("diff"), list):
-        return await _handle_file_list(args, runtime, settings, evidence, raw_evidence)
-    ask = await _ask_gate(args, runtime, settings, evidence, raw_evidence)
-    return ToolResult(frame("jev_gate", ask.evaluation, ask.body), action=ask.action, truncated=ask.truncated)
+    if cuts := input_cuts(args, evidence):
+        cut = cuts[0]
+        return _refused(f"{cut['field']} exceeds {cut['threshold']} UTF-16 units. {SPLIT_GUIDANCE}")
+    try:
+        if isinstance(args.get("diff"), list):
+            return await _handle_file_list(args, runtime, settings, evidence, raw_evidence, withheld)
+        ask = await _ask_gate(args, runtime, settings, evidence, raw_evidence)
+    except GateBudgetError as error:
+        return _refused(str(error))
+    except ProviderError as error:
+        if error.status == 400 and error.error_type == "max_tokens_exceeded":
+            return _refused(
+                f"Provider context limit reached (32k tokens per state and question, 64k total). {SPLIT_GUIDANCE}"
+            )
+        raise
+    return ToolResult(frame("jev_gate", ask.evaluation, ask.body), action=ask.action)
 
 
 async def _ask_gate(
@@ -252,15 +261,12 @@ async def _ask_gate(
 ) -> GateAsk:
     """One string-diff gate ask: the review rubric and every claim and source question together."""
     thresholds = settings.thresholds
-    ledger = CapLedger()
-    docs = review_docs(args, ledger, GATE.doc_units)
+    docs = ReviewDocs(args["request"], args["diff"], args.get("tests") or None)
     claims: list[str] = args["claims"]
-    sent_claims = [ledger.text(claim, GATE.claim_units, "context") for claim in claims]
-    sent_evidence = [_sent_evidence_item(item, ledger) for item in evidence]
+    sent_evidence = [_sent_evidence_item(item) for item in evidence]
     implicit = _implicit_evidence(docs.diff, docs.tests)
     asked_evidence = ensure_unique_ids([*sent_evidence, *implicit], "evidence").items
     renamed = caller_renames(raw_evidence, asked_evidence)
-    truncated = ledger.context_cut
 
     state = {
         "purpose": "Review the proposed diff against the request, then check each completion claim against the "
@@ -268,7 +274,7 @@ async def _ask_gate(
         "request": docs.request,
         "diff": docs.diff,
         "tests": docs.tests,
-        "claims": sent_claims,
+        "claims": claims,
         "evidence": asked_evidence,
     }
     # Review questions carry extra framing so claims cannot read as proof; claims use evidence only.
@@ -276,40 +282,41 @@ async def _ask_gate(
     evidence_ids = [str(item["id"]) for item in asked_evidence]
     for index in range(len(claims)):
         questions[f"claim_{index}"] = claim_question(index)
-        if len(asked_evidence) > 1:
-            questions[f"source_{index}"] = gate_source_question(index, evidence_ids)
+        questions[f"source_{index}"] = gate_source_question(index, evidence_ids)
+    check_gate_budget(state, questions)
+    patch_lines = add_citations(state, questions, [asked_evidence[len(sent_evidence)]])
+    counter_lines = add_citations(state, questions, asked_evidence, claim_count=len(claims))
     evaluation = await runtime.ask(state, questions)
     answers = evaluation.answers
 
-    review = project_review(answers, settings, truncated)
-    if docs.tests and not args.get("tests_sha256"):
+    review = project_review(answers, settings, False)
+    review, blockers = grounded_review(review, answers, patch_lines, thresholds.auto_accept)
+    if docs.tests and not runtime.tests_read_from_file:
         review.payload["tests_weight"] = "self_reported"
 
-    verification = _verify_claims(answers, claims, asked_evidence, evidence_ids, thresholds, truncated)
+    verification = _verify_claims(answers, claims, asked_evidence, evidence_ids, thresholds, counter_lines)
     verification_action = verification.action
     action = worst_action([review.action, verification_action])
     reason_codes = gate_reason_codes(
-        truncated=truncated,
+        truncated=False,
         review_action=review.action,
-        review_invalid=review.invalid,
+        review_invalid=review.invalid or any(b["code"] == "defect_kind_invalid" for b in blockers),
+        source_invalid="source_invalid" in verification.source_issues.values(),
         claims=verification.judgments,
         action=action,
         thresholds=thresholds,
-        caller_note=verification.caller_note,
+        caller_note="caller_note_only" in verification.source_issues.values(),
     )
     body: dict[str, object] = {
-        "truncated": truncated,
+        "truncated": False,
         "action": action,
         "reason_codes": reason_codes,
-        # A text or trimmed diff that did not stand gets its hint: computed from the argument, not judged.
-        "next_checks": next_checks_for(
-            reason_codes, diff_shape=diff_shape(args["diff"]), review_saw_tests=review_saw_tests(args)
-        ),
         "review": review.payload,
         "verification": verification.payload,
         **renamed_ids_field(renamed),
     }
-    return GateAsk(body, action, evaluation, ledger.scopes)
+    explain_gate(body, blockers, args["diff"], verification.source_issues)
+    return GateAsk(body, action, evaluation)
 
 
 def _verify_claims(
@@ -318,12 +325,13 @@ def _verify_claims(
     asked_evidence: list[dict[str, object]],
     evidence_ids: list[str],
     thresholds: PolicyThresholds,
-    truncated: bool,
+    counter_lines: Citations,
 ) -> VerificationHalf:
     """`claim` and `source` answers to one canonical verification block, for any ask shape."""
     results: list[dict[str, object]] = []
     judgments: list[ClaimJudgment | None] = []
     claim_actions: list[Action] = []
+    source_issues: dict[int, str] = {}
     for index, claim in enumerate(claims):
         answer = validate_choice(answers.get(f"claim_{index}"), CLAIM_CRITERIA)
         if answer is None:
@@ -343,23 +351,37 @@ def _verify_claims(
             results.append(closed_row)
             continue
         verdict = CLAIM_VERDICTS[answer.choice]
-        judgments.append(ClaimJudgment(verdict, answer.confidence))
-        # Asked only when more than one evidence item was sent (the same condition as the ask).
-        # Validating the missing answer would count a fail-closed that never happened.
-        source = (
-            validate_choice(answers.get(f"source_{index}"), [*evidence_ids, "none"])
-            if len(asked_evidence) > 1
+        reported = verdict
+        line = (
+            contradicting_line(
+                claim, counter_lines.select(answers.get(f"counterexample_{index}"), thresholds.auto_accept)
+            )
+            if reported == "contradicted"
             else None
         )
+        if verdict == "contradicted" and (
+            line is None or answer.confidence is None or answer.confidence < thresholds.auto_accept
+        ):
+            verdict = "unsupported"
+        judgments.append(ClaimJudgment(verdict, answer.confidence))
+        source = validate_choice(answers.get(f"source_{index}"), [*evidence_ids, "none"])
         support = source.choice if source is not None and source.choice != "none" else None
         action = gate_claim_action(
             verdict,
             answer.confidence,
             thresholds,
-            truncated=truncated,
+            truncated=False,
             source=None if source is None else source.choice,
             evidence=asked_evidence,
         )
+        if claim_action(verdict, answer.confidence, thresholds.auto_accept, thresholds.review_at) == "auto":
+            if source is None or source.confidence_kind == "malformed":
+                source_issues[index] = "source_invalid"
+                action = "review"
+            elif action == "review":
+                source_issues[index] = "caller_note_only"
+        if action == "escalate" and verdict != "contradicted":
+            action = "review"
         claim_actions.append(action)
         row: dict[str, object] = {
             "claim": claim,
@@ -368,7 +390,15 @@ def _verify_claims(
             "probabilities": answer.probabilities,
             "action": action,
         }
+        if reported == "contradicted":
+            row["reported_verdict"] = reported
+            row["citation_coverage"] = counter_lines.coverage()
+            if verdict == "contradicted" and line is not None:
+                row["evidence_line"] = line
+                support = line["source"]
         row.update(claim_extras(row, asked_evidence, claim_id=f"claim{index}", supporting=support))
+        if verdict == "contradicted" and line is not None:
+            row["excerpt"] = line["text"]
         results.append(row)
 
     verification_action = worst_action(claim_actions)
@@ -385,16 +415,13 @@ def _verify_claims(
         "thresholds": {"auto_accept": thresholds.auto_accept, "review_at": thresholds.review_at},
         "results": results,
     }
-    caller_note = any(
-        row.get("supporting_evidence") and note_blocks_auto("auto", row.get("supporting_evidence"), asked_evidence)
-        for row in results
-    )
-    return VerificationHalf(verification, verification_action, judgments, caller_note)
+    return VerificationHalf(verification, verification_action, judgments, source_issues)
 
 
 _FILE_REVIEW_PURPOSE = (
     "Review one file of the proposed multi-file patch against the request; tests is reported "
-    "test output. Completion claims are checked against the evidence in a separate step, "
+    "test output. Judge the target path and diff using related_files and evidence as context. "
+    "Completion claims are checked against the evidence in a separate step, "
     "and this review is not evidence for them."
 )
 """The per-file review state's framing: no claims ride with a file review (ADR-0066 amendment)."""
@@ -406,46 +433,26 @@ async def _handle_file_list(
     settings: ReviewSettings,
     evidence: list[dict[str, object]],
     raw_evidence: list[dict[str, object]],
+    withheld: Sequence[dict[str, str]] | None,
 ) -> ToolResult:
     """Per-file review plus one claims verification (ADR-0066 and its amendment).
 
-    A file over the cap is unreviewed. The call never returns auto while any file is unreviewed.
-    Each fitting file is asked the review rubric alone (`files.review_file_list`); the claims and
-    source questions are asked once, after the files, with the evidence sent once, so the
-    verification rows are canonical and the action is the worst of what the rows and the file
-    reviews actually say.
+    Preflight the complete verification envelope before paying for any file. Each file review
+    has its own budget check before fan-out. The claims are verified once over the full evidence.
     """
     files = file_patches(args["diff"])
     refusal = file_list_refusal(files)
     if refusal is not None:
-        return _refused(refusal)
-    reviewed = await review_file_list(
-        files, args, runtime, settings, purpose=_FILE_REVIEW_PURPOSE, doc_units=GATE.doc_units
-    )
-    if not reviewed.halves:
-        unasked: dict[str, object] = {
-            "action": "review",
-            "partial": True,
-            "unreviewed_files": reviewed.unreviewed,
-            "reason_codes": ["incomplete_context"],
-            "next_checks": next_checks_for(["incomplete_context"]),
-        }
-        return ToolResult(frame("jev_gate", None, unasked, model=runtime.model), action="review")
-    # One verification ask: every claim and source question once, the evidence sent once. The
-    # fitting files join the evidence as one implicit diff item per file, so a claim can rest on
-    # a file's patch the same way a claim rests on the string diff.
-    ledger = CapLedger()
-    request = ledger.text(args["request"], GATE.doc_units, "context")
-    tests_arg: str | None = args.get("tests")
-    tests = ledger.text(tests_arg, GATE.doc_units, "context") if tests_arg else None
+        return _refused(f"{refusal.rstrip('.')}. {SPLIT_GUIDANCE}")
+    for index, item in enumerate(files):
+        if length(item["patch"]) > GATE.doc_units:
+            return _refused(f"diff[{index}].patch exceeds {GATE.doc_units} UTF-16 units. {SPLIT_GUIDANCE}")
+    request: str = args["request"]
+    tests: str | None = args.get("tests") or None
     claims: list[str] = args["claims"]
-    sent_claims = [ledger.text(claim, GATE.claim_units, "context") for claim in claims]
-    sent_evidence = [_sent_evidence_item(item, ledger) for item in evidence]
+    sent_evidence = [_sent_evidence_item(item) for item in evidence]
     implicit = [
-        *(
-            {"id": f"diff:{item['path']}", "text": item["patch"], "kind": "diff", "role": "after"}
-            for item in reviewed.fitting
-        ),
+        *({"id": f"diff:{item['path']}", "text": item["patch"], "kind": "diff", "role": "after"} for item in files),
         *_implicit_evidence(None, tests),
     ]
     asked_evidence = ensure_unique_ids([*sent_evidence, *implicit], "evidence").items
@@ -454,58 +461,73 @@ async def _handle_file_list(
     questions: dict[str, Question] = {}
     for index in range(len(claims)):
         questions[f"claim_{index}"] = claim_question(index)
-        if len(asked_evidence) > 1:
-            questions[f"source_{index}"] = gate_source_question(index, evidence_ids)
-    evaluation = await runtime.ask(
-        {
-            "purpose": (
-                "Check each completion claim of the proposed multi-file patch against the evidence only. The "
-                "request and the claims are assertions to check, never evidence."
-            ),
-            "request": request,
-            "claims": sent_claims,
-            "evidence": asked_evidence,
-        },
-        questions,
+        questions[f"source_{index}"] = gate_source_question(index, evidence_ids)
+    state = {
+        "purpose": (
+            "Check each completion claim of the proposed multi-file patch against the evidence only. The "
+            "request and the claims are assertions to check, never evidence."
+        ),
+        "request": request,
+        "claims": claims,
+        "evidence": asked_evidence,
+    }
+    check_gate_budget(state, questions)
+    counter_lines = add_citations(state, questions, asked_evidence, claim_count=len(claims))
+    reviewed = await review_file_list(
+        files,
+        args,
+        runtime,
+        settings,
+        purpose=_FILE_REVIEW_PURPOSE,
+        doc_units=GATE.doc_units,
+        evidence=evidence,
+        gate_framing=(
+            " Judge the target file's contribution to the request in the context of the supplied changes. "
+            "Check cross-file contracts and supporting tests. Credit sibling behavior only where the evidence shows it."
+        ),
     )
+    evaluation = await runtime.ask(state, questions)
     verification = _verify_claims(
-        evaluation.answers, claims, asked_evidence, evidence_ids, settings.thresholds, ledger.context_cut
+        evaluation.answers, claims, asked_evidence, evidence_ids, settings.thresholds, counter_lines
     )
-    truncated = reviewed.truncated or ledger.context_cut
-    scopes = reviewed.scopes | ledger.scopes
 
     review_action = worst_action([half.action for half in reviewed.halves])
     review_payload = reviewed.review_half(review_action)
-    if reviewed.unhashed_tests:
+    if tests and withheld is None and not runtime.tests_read_from_file:
         review_payload["tests_weight"] = "self_reported"
-    action = file_list_action([review_action, verification.action], bool(reviewed.unreviewed))
-    # An unreviewed file is incomplete context even when nothing was cut: the clamp to review
-    # must name why. The payload's own `truncated` field below stays cut-honest (false).
+    action = file_list_action([review_action, verification.action], bool(withheld))
     reason_codes = gate_reason_codes(
-        truncated=truncated or bool(reviewed.unreviewed),
+        truncated=bool(withheld),
         review_action=review_action,
-        review_invalid=any(half.invalid for half in reviewed.halves),
+        review_invalid=any(half.invalid for half in reviewed.halves)
+        or any(b["code"] == "defect_kind_invalid" for b in reviewed.blockers),
+        source_invalid="source_invalid" in verification.source_issues.values(),
         claims=verification.judgments,
         action=action,
         thresholds=settings.thresholds,
-        caller_note=verification.caller_note,
+        caller_note="caller_note_only" in verification.source_issues.values(),
     )
     payload: dict[str, object] = {
-        "truncated": truncated,
+        "truncated": False,
         "action": action,
         "reason_codes": reason_codes,
-        "next_checks": next_checks_for(
-            reason_codes, diff_shape=diff_shape(args["diff"]), review_saw_tests=review_saw_tests(args)
-        ),
         "review": review_payload,
         "verification": verification.payload,
         **renamed_ids_field(renamed),
-        "partial": bool(reviewed.unreviewed),
-        "unreviewed_files": reviewed.unreviewed,
+        "partial": bool(withheld),
+        "unreviewed_files": [item["path"] for item in withheld or ()],
     }
-    return ToolResult(
-        frame("jev_gate", combined([*reviewed.evaluations, evaluation]), payload), action=action, truncated=scopes
-    )
+    withheld_blockers = [
+        {
+            **item,
+            "field": "diff",
+            "code": "file_withheld",
+            "next_check": f"Review {item['path']} locally. Its patch was withheld ({item['reason']}).",
+        }
+        for item in withheld or ()
+    ]
+    explain_gate(payload, [*reviewed.blockers, *withheld_blockers], args["diff"], verification.source_issues)
+    return ToolResult(frame("jev_gate", combined([*reviewed.evaluations, evaluation]), payload), action=action)
 
 
 TOOL = JevTool(DEFINITION, handle, {"evidence": EVIDENCE_NOT_EMPTY})

@@ -10,13 +10,6 @@ from jev_judge_mcp.keyfile import KEY_FILE_BYTES_MAX, redaction_values, store_ke
 from jev_judge_mcp.settings import Settings, load_settings
 
 
-@pytest.fixture(autouse=True)
-def isolated_key_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    path = tmp_path / "config" / "key"
-    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(path))
-    return path
-
-
 def settings() -> Settings:
     return load_settings()
 
@@ -102,3 +95,82 @@ def test_the_redaction_set_is_the_configured_secrets_plus_the_stored_key(
     values = redaction_values(load_settings())
     assert values[:-1] == load_settings().secret_values()
     assert values[-1] == "sk-live-stored-0001"
+
+
+@pytest.mark.parametrize("directory", [False, True], ids=["character-device", "directory"])
+def test_scout_010_descriptor_must_be_regular(
+    isolated_key_file: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, directory: bool
+) -> None:
+    if directory:
+        isolated_key_file.mkdir(parents=True)
+    else:
+        store_key(settings(), "fixture")
+        real = isolated_key_file.stat()
+        special = os.stat_result((stat.S_IFCHR | 0o600, *real[1:]))
+
+        def describe(fd: int) -> os.stat_result:
+            return special
+
+        monkeypatch.setattr(os, "fstat", describe)
+    assert stored_key(settings()) == ""
+    assert str(isolated_key_file) in caplog.text and "not a regular file" in caplog.text
+
+
+@pytest.mark.parametrize("accepted,extra", [("x" * 4095, "x"), ("é" * 2047 + "x", "é")], ids=["ascii", "utf8"])
+def test_key_rotation_enforces_the_stored_byte_limit(isolated_key_file: Path, accepted: str, extra: str) -> None:
+    store_key(settings(), "  " + accepted + "  ")
+    assert stored_key(settings()) == accepted
+    before = isolated_key_file.stat()
+    with pytest.raises(ValueError, match="4096"):
+        store_key(settings(), accepted + extra)
+    assert isolated_key_file.stat().st_ino == before.st_ino
+    assert stored_key(settings()) == accepted
+
+
+@pytest.mark.parametrize(
+    ("mode", "owner", "reason"),
+    [
+        pytest.param(0o460, "user", "group or other can write", id="group-writable"),
+        pytest.param(0o442, "user", "group or other can write", id="other-writable"),
+        pytest.param(0o444, "user", None, id="read-only"),
+        pytest.param(0o400, "other", "owned by neither", id="different-owner"),
+        pytest.param(0o444, "root", None, id="root-owned-read-only"),
+        pytest.param(0o464, "root", "group or other can write", id="root-owned-group-writable"),
+    ],
+)
+def test_key_read_requires_a_user_owned_descriptor_with_no_foreign_writers(
+    isolated_key_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    mode: int,
+    owner: str,
+    reason: str | None,
+) -> None:
+    key = "test-key-content-8b73"
+    loaded = settings()
+    store_key(loaded, key)
+    isolated_key_file.chmod(mode)
+    if owner != "user":
+        effective_uid = os.geteuid() or 1001
+        monkeypatch.setattr(os, "geteuid", lambda: effective_uid)
+        file_uid = 0 if owner == "root" else effective_uid + 1
+        fstat = os.fstat
+        expected_inode = isolated_key_file.stat().st_ino
+
+        def describe(fd: int) -> os.stat_result:
+            info = fstat(fd)
+            if info.st_ino != expected_inode:
+                return info
+            return os.stat_result((*info[:4], file_uid, *info[5:]))
+
+        monkeypatch.setattr(os, "fstat", describe)
+    caplog.clear()
+    assert stored_key(loaded) == (key if reason is None else "")
+    if reason is None:
+        assert not caplog.records
+    else:
+        assert stored_key(loaded) == ""
+        (warning,) = caplog.records
+        assert warning.levelname == "WARNING" and warning.name == "jev_judge_mcp.keyfile"
+        assert str(isolated_key_file) in warning.message and reason in warning.message
+        assert key not in warning.message

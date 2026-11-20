@@ -11,6 +11,9 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
+from tests.support.jev import NO_DEFECT
+from tests.support.jev import choice as certain_choice
+
 type Path = tuple[str | int, ...]
 
 COSTUME: dict[str, Any] = {
@@ -77,6 +80,7 @@ GOOD_REVIEW: dict[str, Any] = {
     "test_gap": {"score": 0, "confidence": 0.95},
     "blast_radius": {"score": 0, "confidence": 0.95},
     "safe_to_apply": {"noul": 0.95},
+    "defect_kind": NO_DEFECT,
 }
 WEAK_REVIEW: dict[str, Any] = {
     "correctness": dressed({"score": 0, "confidence": 0.95}),
@@ -235,7 +239,11 @@ CASES: tuple[ToolCase, ...] = (
             "tests": "PASS unknown user",
         },
         [("request",), ("diff",), ("claims", 0), ("evidence", 0, "text"), ("tests",)],
-        {**GOOD_REVIEW, "claim_0": choice("verified", {"verified": 0.97, "contradicted": 0.02, "unsupported": 0.01})},
+        {
+            **GOOD_REVIEW,
+            "claim_0": choice("verified", {"verified": 0.97, "contradicted": 0.02, "unsupported": 0.01}),
+            "source_0": certain_choice("ci", "ci", "diff", "tests", "none"),
+        },
         {
             **GOOD_REVIEW,
             "claim_0": dressed(choice("contradicted", {"verified": 0.02, "contradicted": 0.97, "unsupported": 0.01})),
@@ -272,11 +280,8 @@ CASES: tuple[ToolCase, ...] = (
             payload["status"] == "ok" and payload["answer"]["nearest_level"] == 0 and not auto_anywhere(payload)
         ),
     ),
-    # ADR-0077, registry order. The question id and `command` are deliberately absent from
-    # text_paths: an id is a map key the payload echoes, and a command is judged by the gate
-    # before anything runs — their hostile-input contracts live in tests/unit/test_ask.py and
-    # the injection suite, not in a same-decision replay here. The fields that reach the
-    # provider are listed.
+    # Caller IDs and command strings stay off the provider wire. Command output is exercised
+    # through the execution boundary in test_ask_command.py.
     ToolCase(
         "jev_ask",
         {
@@ -295,8 +300,8 @@ CASES: tuple[ToolCase, ...] = (
             ("questions", "q1", "criteria", 0),
             ("questions", "q1", "criteria", 1),
         ],
-        {"q1": {"score": 0.2, "probabilities": {"0": 0.8, "1": 0.2}, "confidence": 0.95}},
-        {"q1": dressed({"score": 0.9, "probabilities": {"0": 0.1, "1": 0.9}, "confidence": 0.3})},
+        {"q0": {"score": 0.2, "probabilities": {"0": 0.8, "1": 0.2}, "confidence": 0.95}},
+        {"q0": dressed({"score": 0.9, "probabilities": {"0": 0.1, "1": 0.9}, "confidence": 0.3})},
         lambda payload: (
             payload["status"] == "ok" and payload["answers"]["q1"]["nearest_level"] == 0 and not auto_anywhere(payload)
         ),
@@ -334,7 +339,11 @@ CASES: tuple[ToolCase, ...] = (
             "evidence": [{"id": "ci", "text": REVIEW_TEXT[2]}],
         },
         [("request",), ("claims", 0), ("evidence", 0, "text")],
-        {**GOOD_REVIEW, "claim_0": choice("verified", {"verified": 0.97, "contradicted": 0.02, "unsupported": 0.01})},
+        {
+            **GOOD_REVIEW,
+            "claim_0": choice("verified", {"verified": 0.97, "contradicted": 0.02, "unsupported": 0.01}),
+            "source_0": certain_choice("ci", "ci", "diff_notes.txt", "none"),
+        },
         {
             **GOOD_REVIEW,
             "claim_0": dressed(choice("contradicted", {"verified": 0.02, "contradicted": 0.97, "unsupported": 0.01})),

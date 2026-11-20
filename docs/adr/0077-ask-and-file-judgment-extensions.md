@@ -174,6 +174,35 @@ default flips and three deterministic defenses land ahead of the gate:
 The `jev_ask` tool stays on the harness allow lists with commands off: the tool is a judgment
 surface; execution is a separate, operator-gated surface inside it.
 
+## Amendment (2026-11-19): read-only argv commands and opaque question keys
+
+The command contract in this amendment supersedes the shell, denylist, and effect and intent
+judgments described above. Execution still requires `JEV_ASK_COMMANDS=1`. The server parses
+POSIX quoting and invokes argv directly without a shell. The fixed allowlist is `git status`,
+`git diff`, `git log`, `git show`, `ls`, `rg`, `grep`, `wc`, `head`, and `tail`.
+Malformed quoting, unquoted shell operators, explicit executable paths, and Git options before
+the subcommand are refused. The server resolves the executable on its scrubbed PATH and rejects
+executables inside its working directory tree. Known secret stores and private directory
+components remain refused in each argument and in attached option values.
+
+Each command and Git subcommand has a closed option allowlist with explicit value rules. An
+unlisted option refuses with `command_refused`, the allowed options for that command, and the
+final-block notice before execution. Required values can be attached or separate. A short bundle
+requires each flag to be listed, and a bare `--` ends option parsing. Values and positional
+arguments all go through the secret-store and private-directory checks. The supported spellings
+are listed in the [tool contract](../tools.md#jev_ask--your-questions-over-composed-state).
+
+Git strips inherited `GIT_*` variables,
+ignores global and system config, disables fsmonitor, hooks, and paging, and forces
+`--no-ext-diff --no-textconv` for diff, log, and show. Status and diff refuse configured
+worktree filters. Closed stdin, the timeout, capped output, process-group cleanup, and
+redaction of both streams remain in effect.
+
+Deterministic refusals keep their reason codes and final-block notice and use zero provider calls.
+An accepted command contributes redacted output to state and uses a single provider call for the
+caller's questions. The composed UTF-16 budget counts choice option keys. Server-generated wire
+keys keep caller question ids out of the provider request keys. Results use the original caller ids.
+
 ## Considered Options
 
 - **A raw `questions_json` string for `jev_ask`** — rejected: stringly typed, off-style, and the

@@ -52,3 +52,13 @@ pin itself (ADR-0051) are unchanged.
   what it exercised.
 - The smoke job downloads a managed Python and the wheel's dependencies on every run; it is
   the slow job's last step and stays there.
+
+## Amendment (2026-11-19): verify response envelopes and scrub launch diagnostics
+
+- The verifier accepts JSON-RPC 2.0 response envelopes with a matching integer ID and
+  exactly one of `result` or `error`. Requests and notifications do not complete a check.
+  Every exit cleans up the process group started for verification.
+- The verifier polls both pipes. It uses the settings and stored-key secret inventory,
+  prompted values, and credential-literal detection to scrub stderr before truncation.
+  The diagnostic keeps at most five lines of 200 bytes each. A line beyond the bounded
+  capture limit is omitted altogether.

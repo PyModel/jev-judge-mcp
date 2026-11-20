@@ -1,19 +1,20 @@
 """The optional provider-response cache (ADR-0047): off by default, replay verbatim when on."""
 
+import asyncio
 import json
 import os
 import stat
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TypeVar
 
 import pytest
 
 from jev_judge_mcp import cache
-from jev_judge_mcp.domain import Question, Usage
-from jev_judge_mcp.providers import Evaluation
+from jev_judge_mcp.domain import JsonValue, Question, Usage
+from jev_judge_mcp.providers import Evaluation, ProviderName
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import Runtime
 from tests.support.jev import FakeProvider
@@ -33,7 +34,7 @@ def cache_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     directory = tmp_path / "cache"
     monkeypatch.setenv("JEV_MCP_CACHE", "1")
     monkeypatch.setenv("JEV_MCP_CACHE_DIR", str(directory))
-    return directory
+    return directory / "jev-records-v1"
 
 
 def _question() -> dict[str, Question]:
@@ -194,7 +195,7 @@ async def test_an_entry_past_the_ttl_is_a_miss(cache_env: Path, monkeypatch: pyt
     os.utime(next(iter(cache_env.iterdir())), (stale, stale))
     settings = load_settings()
     assert cache.lookup(settings, "compatible", "", "jev-latest", {"subject": "x"}, _question()) is None
-    assert not list(cache_env.iterdir())  # the stale entry was removed, not just skipped
+    assert list(cache_env.iterdir())  # a reader never unlinks a concurrent refresh
     await runtime.ask({"subject": "x"}, _question())
     assert len(provider.requests) == 2
 
@@ -281,7 +282,9 @@ async def test_a_crashed_atomic_write_leftover_is_swept_on_the_next_store(
     runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
     await runtime.ask({"subject": "x"}, _question())
     entry = next(iter(cache_env.iterdir()))
-    (cache_env / f".{entry.name}.ab12").write_text("partial", encoding="utf-8")
+    staging = cache_env / f".{entry.name}.ab12cd34"
+    staging.write_text("partial", encoding="utf-8")
+    os.utime(staging, (1, 1))
     await runtime.ask({"subject": "y"}, _question())
     names = [path.name for path in cache_env.iterdir()]
     assert len(names) == 2  # two live entries; the staging file is gone
@@ -317,3 +320,385 @@ async def test_two_endpoints_under_one_provider_name_never_replay_each_other(cac
     same.cache_scope = "https://api.example/v1"
     await Runtime(load_settings(), provider_factory=lambda _: same).ask({"subject": "x"}, _question())
     assert same.requests == []  # the same endpoint replays
+
+
+@pytest.mark.parametrize("cap", [0, 1])
+def test_scout_001_preserves_unowned_files_and_fresh_staging(tmp_path: Path, cap: int) -> None:
+    sentinels = ["other.json", ".other.json.notes", "." + "a" * 64 + ".json.abc12345"]
+    for name in sentinels:
+        (tmp_path / name).touch()
+    for digit in "01":
+        (tmp_path / (digit * 64 + ".json")).touch()
+    cache._evict(tmp_path, cap)  # pyright: ignore[reportPrivateUsage]
+    assert all((tmp_path / name).exists() for name in sentinels)
+    assert (tmp_path / ("1" * 64 + ".json")).exists()
+
+
+async def test_scout_025_request_id_survives_replay(cache_env: Path) -> None:
+    from jev_judge_mcp.tools.base import frame
+
+    provider = FakeProvider(ANSWERS, request_id="trace-42")
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    first = await runtime.ask({}, _question())
+    assert frame("tool", first, {}) == frame("tool", await runtime.ask({}, _question()), {})
+    assert len(provider.requests) == 1
+
+
+def _observe_follower(monkeypatch: pytest.MonkeyPatch) -> asyncio.Event:
+    from jev_judge_mcp.tools.base import _Pending  # pyright: ignore[reportPrivateUsage]
+
+    joined = asyncio.Event()
+    original = _Pending.replay
+
+    async def wait(pending: _Pending) -> Evaluation:
+        if pending.subscribers:
+            joined.set()
+        return await original(pending)
+
+    monkeypatch.setattr(_Pending, "replay", wait)
+    return joined
+
+
+@pytest.mark.parametrize("cap", [0, 1])
+async def test_scout_035_simultaneous_cache_misses(cache_env: Path, monkeypatch: pytest.MonkeyPatch, cap: int) -> None:
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setenv("JEV_MCP_MAX_INFLIGHT", str(cap))
+    provider = FakeProvider(ANSWERS)
+    evaluate = provider.evaluate
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold(
+        state: JsonValue, questions: Mapping[str, Question], model: str, timeout: float | None
+    ) -> Evaluation:
+        entered.set()
+        await release.wait()
+        return await evaluate(state, questions, model, timeout)
+
+    monkeypatch.setattr(provider, "evaluate", AsyncMock(side_effect=hold))
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    joined = _observe_follower(monkeypatch)
+    first = asyncio.create_task(runtime.ask({}, _question()))
+    await entered.wait()
+    second = asyncio.create_task(runtime.ask({}, _question()))
+    await asyncio.wait_for(joined.wait(), 5)
+    release.set()
+    assert await first == await second
+    assert len(provider.requests) == 1
+
+
+def test_scout_036_no_cap_avoids_allocating_entry_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / ("0" * 64 + ".json")).touch()
+
+    def disallow(*args: object) -> None:
+        pytest.fail("enumerated Path objects for a disabled entry cap")
+
+    monkeypatch.setattr(Path, "iterdir", disallow)
+    cache._evict(tmp_path, 0)  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.parametrize("cap", [0, 1])
+async def test_scout_001_never_sweeps_legacy_directory(
+    cache_env: Path, monkeypatch: pytest.MonkeyPatch, cap: int
+) -> None:
+    monkeypatch.setenv("JEV_MCP_CACHE_MAX_ENTRIES", str(cap))
+    cache_env.parent.mkdir(mode=0o700)
+    legacy = cache_env.parent / ("0" * 64 + ".json")
+    legacy.write_text("independently owned")
+    os.utime(legacy, (1, 1))
+    runtime = Runtime(load_settings(), provider_factory=lambda _: FakeProvider(ANSWERS))
+    for name in ("first", "second"):
+        await runtime.ask({"name": name}, _question())
+    assert legacy.read_text() == "independently owned"
+    assert len(list(cache_env.iterdir())) == (1 if cap else 2)
+
+
+@pytest.mark.parametrize("identifier,expected_calls", [(None, 1), (42, 2), ("x" * 1025, 2), ("bad\ntrace", 2)])
+async def test_scout_025_validates_legacy_request_ids(cache_env: Path, identifier: object, expected_calls: int) -> None:
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    await runtime.ask({}, _question())
+    entry = next(cache_env.iterdir())
+    record = json.loads(entry.read_bytes())
+    record.pop("request_id")
+    entry.unlink()
+    legacy = cache_env.parent / entry.name
+    legacy.write_text(json.dumps(record))
+    assert (await runtime.ask({}, _question())).request_id is None
+    assert len(provider.requests) == 1
+    record["request_id"] = identifier
+    legacy.write_text(json.dumps(record))
+    assert (await runtime.ask({}, _question())).request_id is None
+    assert len(provider.requests) == expected_calls
+
+
+@pytest.mark.parametrize(
+    ("provider", "recorded_model", "expected"),
+    [
+        ("compatible", "x" * 1025, None),
+        ("cloudflare", "bad\nmodel", None),
+        ("openrouter", "bad\nmodel", None),
+        ("cloudflare", "provider-version", "provider-version"),
+    ],
+    ids=["oversized", "cloudflare-control", "openrouter-control", "valid"],
+)
+def test_legacy_upstream_model_is_bounded_on_replay(
+    cache_env: Path, provider: ProviderName, recorded_model: str, expected: str | None
+) -> None:
+    settings = load_settings()
+    questions = _question()
+    evaluation = Evaluation({}, Usage(1, 1), provider, recorded_model)
+    cache.store(settings, provider, "", "jev-latest", {}, questions, evaluation)
+
+    replayed = cache.lookup(settings, provider, "", "jev-latest", {}, questions)
+
+    if expected is None:
+        assert replayed is None
+    else:
+        assert replayed is not None
+        assert replayed.model == expected
+
+
+async def test_scout_035_each_call_serializes_its_identity_once(
+    cache_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import Mock
+
+    count = Mock(wraps=cache.request_key)
+    monkeypatch.setattr(cache, "request_key", count)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: FakeProvider(ANSWERS))
+    for expected in (1, 2):
+        await runtime.ask({}, _question())
+        assert count.call_count == expected
+
+
+async def test_oversized_cache_record_is_a_miss(cache_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    await runtime.ask({}, _question())
+    entry = next(cache_env.iterdir())
+    size = entry.stat().st_size
+    monkeypatch.setattr(cache, "_RECORD_BYTES_MAX", size, raising=False)
+    with entry.open("ab") as handle:
+        handle.write(b" ")
+    await runtime.ask({}, _question())
+    assert len(provider.requests) == 2
+
+
+@pytest.mark.parametrize("outcome", ["follower_cancel", "leader_failure", "leader_cancel"])
+@pytest.mark.parametrize("cap", [0, 1])
+async def test_scout_035_cancel_and_failure_release_waiters(
+    cache_env: Path, monkeypatch: pytest.MonkeyPatch, outcome: str, cap: int
+) -> None:
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setenv("JEV_MCP_MAX_INFLIGHT", str(cap))
+    provider = FakeProvider(ANSWERS)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    joined = _observe_follower(monkeypatch)
+    original = provider.evaluate
+
+    async def hold(
+        state: JsonValue, questions: Mapping[str, Question], model: str, timeout: float | None
+    ) -> Evaluation:
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
+            if outcome == "leader_failure":
+                raise RuntimeError("fixture")
+        return await original(state, questions, model, timeout)
+
+    evaluate = AsyncMock(side_effect=hold)
+    monkeypatch.setattr(provider, "evaluate", evaluate)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    async with asyncio.timeout(5):
+        leader = asyncio.create_task(runtime.ask({}, _question()))
+        await entered.wait()
+        follower = asyncio.create_task(runtime.ask({}, _question()))
+        await joined.wait()
+        if outcome == "follower_cancel":
+            follower.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await follower
+            release.set()
+            assert await leader == await runtime.ask({}, _question())
+            assert evaluate.await_count == 1
+        elif outcome == "leader_cancel":
+            leader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await leader
+            release.set()
+            assert await follower == await runtime.ask({}, _question())
+            assert evaluate.await_count == 1
+        else:
+            release.set()
+            for task in (leader, follower):
+                with pytest.raises(RuntimeError):
+                    await task
+            await runtime.ask({}, _question())
+            assert evaluate.await_count == 2
+
+
+def test_scout_036_retries_a_failed_eviction_on_next_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="jev_judge_mcp.cache")
+    from unittest.mock import Mock
+
+    for i in range(4):
+        entry = tmp_path / f"{i:064x}.json"
+        entry.touch()
+        os.utime(entry, (i + 1, i + 1))
+    import heapq
+
+    choose = Mock(wraps=heapq.nsmallest)
+    monkeypatch.setattr(heapq, "nsmallest", choose)
+    with monkeypatch.context() as local:
+        local.setattr(os, "unlink", Mock(side_effect=PermissionError))
+        cache._evict(tmp_path, 3)  # pyright: ignore[reportPrivateUsage]
+        assert len(list(tmp_path.iterdir())) == 4
+    cache._evict(tmp_path, 3)  # pyright: ignore[reportPrivateUsage]
+    assert "evicted=0 failed=1" in caplog.text and "evicted=1 failed=0" in caplog.text
+    assert [call.args[0] for call in choose.call_args_list] == [1, 1]
+    assert sorted(entry.name for entry in tmp_path.iterdir()) == [f"{i:064x}.json" for i in (1, 2, 3)]
+
+
+async def test_scout_001_expired_reader_leaves_replacement_intact(
+    cache_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = load_settings()
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(settings, provider_factory=lambda _: provider)
+    await runtime.ask({}, _question())
+    entry = next(cache_env.iterdir())
+    replacement = entry.with_suffix(".fresh")
+    replacement.write_bytes(entry.read_bytes())
+    os.utime(entry, (1, 1))
+    original = os.fstat
+
+    def after_open(fd: int) -> os.stat_result:
+        info = original(fd)
+        replacement.replace(entry)
+        return info
+
+    with monkeypatch.context() as local:
+        local.setattr(os, "fstat", after_open)
+        assert cache.lookup(settings, provider.name, provider.cache_scope, runtime.model, {}, _question()) is None
+    assert (await runtime.ask({}, _question())).answers == ANSWERS
+    assert len(provider.requests) == 1
+
+
+def test_cache_module_loads_before_the_posix_startup_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    import runpy
+    import sys
+
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    assert "store" in runpy.run_path(cache.__file__)
+
+
+async def test_busy_publication_delivers_answer_and_records_skip(
+    cache_env: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    import fcntl
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="jev_judge_mcp.cache")
+    cache_env.parent.mkdir(mode=0o700)
+    cache_env.mkdir(mode=0o700)
+    fd = os.open(cache_env, os.O_RDONLY)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: FakeProvider(ANSWERS))
+    try:
+        task = asyncio.create_task(runtime.ask({}, _question()))
+        done, _ = await asyncio.wait([task], timeout=1)
+    finally:
+        os.close(fd)
+    evaluation = await task
+    assert task in done and evaluation.answers == ANSWERS
+    assert not list(cache_env.iterdir())
+    assert "busy" in caplog.text
+
+
+@pytest.mark.parametrize("reported", [True, False])
+def test_cache_replays_usage_provenance(cache_env: Path, reported: bool) -> None:
+    from jev_judge_mcp.providers.base import parse_envelope
+
+    body: dict[str, object] = {"answers": ANSWERS}
+    if reported:
+        body["usage"] = {"input_tokens": 0, "output_tokens": 0}
+    envelope = parse_envelope(body, "fixture")
+    usage = envelope.usage
+    evaluation = Evaluation(answers=envelope.answers, usage=usage, provider="compatible", model="fixture")
+    settings = load_settings()
+    cache.store(settings, "compatible", "local", "fixture", {}, _question(), evaluation)
+    record = json.loads(next(cache_env.iterdir()).read_text())
+    assert record["usage"]["reported"] is reported
+    replay = cache.lookup(settings, "compatible", "local", "fixture", {}, _question())
+    assert replay is not None and replay.usage == usage
+
+
+async def test_cache_waiting_for_slot_cannot_start_after_shutdown(
+    cache_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import anyio
+
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    slots = anyio.Semaphore(1)
+    monkeypatch.setattr(runtime, "_cache_slots", slots)
+    await slots.acquire()
+    async with asyncio.timeout(5):
+        caller = asyncio.create_task(runtime.ask({}, _question()))
+        while not slots.statistics().tasks_waiting:
+            await asyncio.sleep(0)
+        await runtime.aclose()
+        slots.release()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+    assert not provider.requests
+
+
+@pytest.mark.parametrize("count,expected", [(0, False), (7, True)])
+def test_legacy_cache_metering_uses_available_evidence(cache_env: Path, count: int, expected: bool) -> None:
+    settings = load_settings()
+    evaluation = Evaluation(answers={}, usage=Usage(count, 0), provider="compatible", model="fixture")
+    cache.store(settings, "compatible", "local", "fixture", {}, _question(), evaluation)
+    entry = next(cache_env.iterdir())
+    record = json.loads(entry.read_text())
+    record["usage"].pop("reported", None)
+    entry.write_text(json.dumps(record))
+    replay = cache.lookup(settings, "compatible", "local", "fixture", {}, _question())
+    assert replay is not None and replay.usage.reported is expected
+    record["usage"]["reported"] = "unknown"
+    entry.write_text(json.dumps(record))
+    assert cache.lookup(settings, "compatible", "local", "fixture", {}, _question()) is None
+
+
+async def test_last_subscriber_leaving_before_dispatch_avoids_provider_call(
+    cache_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import anyio
+
+    monkeypatch.setenv("JEV_MCP_MAX_INFLIGHT", "1")
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    slots = anyio.Semaphore(1)
+    monkeypatch.setattr(runtime, "_inflight", slots)
+    await slots.acquire()
+    async with asyncio.timeout(5):
+        caller = asyncio.create_task(runtime.ask({}, _question()))
+        while not slots.statistics().tasks_waiting:
+            await asyncio.sleep(0)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        slots.release()
+        while runtime._pending:  # pyright: ignore[reportPrivateUsage]
+            await asyncio.sleep(0)
+        assert not provider.requests
+        await runtime.ask({}, _question())
+        assert len(provider.requests) == 1

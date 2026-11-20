@@ -15,7 +15,7 @@ from collections.abc import Callable, Sequence
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.keyfile import store_key
+from jev_judge_mcp.keyfile import normalized_key, store_key
 from jev_judge_mcp.providers import ProviderError
 from jev_judge_mcp.providers.resolver import resolve_model
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
@@ -57,7 +57,12 @@ def main(
     )
     parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     loaded = settings if settings is not None else load_settings()
-    api_key = _candidate_key(loaded, prompt)
+    env_key = loaded.typesafe_api_key.get_secret_value() if loaded.typesafe_api_key is not None else ""
+    try:
+        api_key = normalized_key(env_key or _prompt_key(prompt))
+    except ValueError as exc:
+        print(exc)
+        return 1
     if not api_key:
         print(f"No API key given. Get one at {KEY_URL}; export TYPESAFE_API_KEY or re-run in a terminal.")
         return 1
@@ -67,8 +72,15 @@ def main(
     except ProviderError as error:
         print(f"{error}; key NOT stored.")
         return 1
-    path = store_key(loaded, api_key)
-    source = "TYPESAFE_API_KEY (the variable keeps precedence)" if loaded.typesafe_api_key is not None else "prompt"
+    try:
+        path = store_key(loaded, api_key)
+    except PermissionError as error:
+        print(f"{error.strerror or error}; key NOT stored.")
+        return 1
+    except OSError as error:
+        print(f"Could not complete key storage: {error.strerror or error}.")
+        return 1
+    source = "TYPESAFE_API_KEY (the variable keeps precedence)" if env_key else "prompt"
     print(f"Key verified ({source}) and stored at {path}.")
     print("Agents started without TYPESAFE_API_KEY now resolve this key automatically.")
     return 0
@@ -78,10 +90,8 @@ def _run_verification(loaded: Settings, api_key: str) -> None:
     asyncio.run(verify_key(loaded, api_key))
 
 
-def _candidate_key(settings: Settings, prompt: Callable[[str], str]) -> str:
-    if settings.typesafe_api_key is not None:
-        return settings.typesafe_api_key.get_secret_value().strip()
+def _prompt_key(prompt: Callable[[str], str]) -> str:
     try:
-        return prompt(f"TypeSafe API key ({KEY_URL}): ").strip()
+        return prompt(f"TypeSafe API key ({KEY_URL}): ")
     except (EOFError, KeyboardInterrupt):
         return ""

@@ -2,8 +2,6 @@
 stays protocol-only while worker processes run, and shutdown leaves no worker behind."""
 
 import json
-import queue
-import subprocess
 import sys
 import time
 from typing import Any
@@ -12,15 +10,7 @@ import pytest
 
 from jev_judge_mcp.extract.candidates import REGEX_TIMEOUT_REASON
 from tests.support.stdio import StdioServer
-from tests.support.workers import (
-    WORKER_MODULE,
-    alive,
-    is_worker,
-    orphan_worker_pids,
-    process_snapshot,
-    ps_snapshot,
-    worker_pids,
-)
+from tests.support.workers import WORKER_MODULE, alive, worker_pids
 
 SLOW: dict[str, Any] = {
     "document": "a" * 40 + "!",
@@ -42,37 +32,40 @@ def call(request_id: int, name: str, arguments: dict[str, Any]) -> dict[str, Any
 
 
 def test_worker_census_ignores_a_decoy_command_line() -> None:
-    decoy = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)", WORKER_MODULE],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        deadline = time.monotonic() + 2
-        processes = process_snapshot()
-        while decoy.pid not in processes and time.monotonic() < deadline:
-            time.sleep(0.01)
-            processes = process_snapshot()
-        assert decoy.pid in processes
-        assert WORKER_MODULE in processes[decoy.pid][1]
-        assert is_worker([sys.executable, "-m", WORKER_MODULE])
-        assert not is_worker([sys.executable, "-c", WORKER_MODULE])
-        with StdioServer() as server:
-            server.initialize()
-            processes = process_snapshot()
-            assert decoy.pid not in worker_pids(server.process.pid, processes)
-            server.close_stdin()
-            returncode, _ = server.wait()
+    decoy_cmd = [sys.executable, "-c", "input()", "/decoy/python", "-P", "-m", WORKER_MODULE]
+    with StdioServer(decoy_cmd) as decoy, StdioServer() as server:
+        server.initialize()
+        assert worker_pids(server.process.pid)
+        assert decoy.process.poll() is None
+        assert worker_pids(decoy.process.pid) == set()
+        server.close_stdin()
+        returncode, _ = server.wait()
         assert returncode == 0
-    finally:
-        if decoy.poll() is None:
-            decoy.terminate()
-            decoy.wait(timeout=5)
+
+
+def test_worker_census_retains_a_worker_after_its_launcher_exits() -> None:
+    # Keep the worker's stdin open from the test while its immediate parent exits.
+    launcher = """
+import json, subprocess, sys
+worker = subprocess.Popen([sys.executable, "-P", "-m", sys.argv[1]], stdout=subprocess.DEVNULL)
+print(json.dumps({"pid": worker.pid}), flush=True)
+"""
+    with StdioServer([sys.executable, "-c", launcher, WORKER_MODULE]) as server:
+        _, frame = server.receive_until(time.monotonic() + 5)
+        assert server.process.wait(timeout=5) == 0
+        try:
+            assert worker_pids(server.process.pid) == {frame["pid"]}
+        finally:
+            server.close_stdin()
 
 
 def test_timeout_does_not_block_other_calls_and_shutdown_reaps_workers() -> None:
     with StdioServer() as server:
         server.initialize()
+        # Initialization waits for the warm pool (ADR-0058). Snapshot its PIDs before the
+        # timed requests, and check the group again after shutdown to cover replacements.
+        workers_seen = worker_pids(server.process.pid)
+        assert workers_seen, f"server {server.process.pid} has no warm {WORKER_MODULE} workers"
         started = time.monotonic()
         server.send(call(10, "jev_extract", SLOW))
         server.send(call(11, "jev_extract", NO_MATCH))
@@ -80,27 +73,15 @@ def test_timeout_does_not_block_other_calls_and_shutdown_reaps_workers() -> None
         # answers in milliseconds while the slow call cannot reply before its 1 s deadline.
         server.send({"jsonrpc": "2.0", "id": 12, "method": "ping"})
         replies: dict[int, tuple[float, dict[str, Any]]] = {}
-        workers_seen: set[int] = set()
-        window = time.monotonic() + 10
-        while len(replies) < 3 and time.monotonic() < window:
-            # The pattern must run in a real worker process (ADR-0004), but worker spawn latency
-            # is unbounded host load, so the census polls across the whole window instead of
-            # sampling one instant. The pool rests empty whenever it pleases between demands:
-            # a slot whose deadline ran out is killed and replaced only on the next demand
-            # (extract/worker.py), so "an idle worker exists right now" is not the contract.
-            workers_seen |= worker_pids(server.process.pid)
-            try:
-                reply = server.receive(timeout=0.1)
-            except queue.Empty:
-                continue
+        while not {10, 11, 12} <= replies.keys():
+            arrived, reply = server.receive_until(started + 10)
             if "id" in reply:
-                replies[reply["id"]] = (time.monotonic() - started, reply)
-        census = ps_snapshot()  # the table as of the census; after shutdown it shows nothing
+                replies[reply["id"]] = (arrived - started, reply)
         server.close_stdin()
         returncode, stderr = server.wait()
         lines = server.stdout_lines
 
-    assert len(replies) == 3, f"the calls never all replied inside the window; ps:\n{census}"
+    assert set(replies) == {10, 11, 12}
     quick_at, quick = replies[11]
     slow_at, slow = replies[10]
     ping_at = replies[12][0]
@@ -131,33 +112,23 @@ def test_timeout_does_not_block_other_calls_and_shutdown_reaps_workers() -> None
 
     assert returncode == 0
     assert "Traceback" not in stderr
-    assert workers_seen, f"no worker process ever served the calls; ps at census:\n{census}"
     deadline = time.monotonic() + 5
     while any(alive(pid) for pid in workers_seen) and time.monotonic() < deadline:
         time.sleep(0.05)
-    assert not any(alive(pid) for pid in workers_seen)
+    assert not {pid for pid in workers_seen if alive(pid)}
+    assert not worker_pids(server.process.pid)
     for line in lines:
         assert json.loads(line)["jsonrpc"] == "2.0"
 
 
 def test_cancelled_extract_reaps_worker_and_keeps_server_responsive() -> None:
-    orphans_before = orphan_worker_pids()
     with StdioServer() as server:
         server.initialize()
-        # The served pool starts warm (ADR-0058): initialize only replies after serve has filled
-        # it, and the slow call reuses a slot that already exists, so there is no spawn to wait
-        # for - the census below is the warm pool, the cancelled call's worker among them. The
-        # cancel frame follows the call frame on the same wire, so by the time it is read the
-        # slow call is inside find() holding that slot.
-        server.send(call(10, "jev_extract", SLOW))
-        deadline = time.monotonic() + 5
+        # A census after sending the slow call can consume its whole one-second budget
+        # before cancellation. Record the warm pool first, then send the two frames in order.
         workers = worker_pids(server.process.pid)
-        while not workers and time.monotonic() < deadline:
-            time.sleep(0.02)
-            workers = worker_pids(server.process.pid)
-        assert workers, f"extract did not start a worker; ps:\n{ps_snapshot()}"
-        time.sleep(0.05)
-
+        assert workers, f"server {server.process.pid} has no warm {WORKER_MODULE} workers"
+        server.send(call(10, "jev_extract", SLOW))
         server.send(
             {
                 "jsonrpc": "2.0",
@@ -170,7 +141,7 @@ def test_cancelled_extract_reaps_worker_and_keeps_server_responsive() -> None:
             time.sleep(0.01)
         survivors = {pid for pid in workers if alive(pid)}
         assert len(survivors) == len(workers) - 1, (
-            f"cancel did not reap exactly the cancelled call's worker; ps:\n{ps_snapshot()}"
+            f"server {server.process.pid} worker PIDs before cancel {workers}, surviving {survivors}"
         )
 
         quick = server.request(call(11, "jev_extract", NO_MATCH))
@@ -181,7 +152,7 @@ def test_cancelled_extract_reaps_worker_and_keeps_server_responsive() -> None:
 
     assert returncode == 0
     assert "Traceback" not in stderr
-    assert not (orphan_worker_pids() - orphans_before), f"cancel left an orphan worker; ps:\n{ps_snapshot()}"
+    assert not worker_pids(server.process.pid)
 
 
 @pytest.mark.parametrize("name", ["jev_verify", "jev_nope"])

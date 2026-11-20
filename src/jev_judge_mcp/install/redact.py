@@ -4,8 +4,14 @@ import json
 import re
 from collections.abc import Iterable, Mapping
 
+from pydantic import ValidationError
+
+from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain import is_json_object
+from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.install.values import is_json_array
+from jev_judge_mcp.keyfile import redaction_values
+from jev_judge_mcp.settings import load_settings
 
 REDACTED = "[redacted]"
 HASH_PLACEHOLDER = "<redacted>"
@@ -32,6 +38,15 @@ def redact_text(text: str, secrets: Iterable[str]) -> str:
     text = _JSON_LITERAL.sub(rf"\1{REDACTED}\3", text)
     text = _TOML_LITERAL.sub(rf"\1{REDACTED}\3", text)
     return _TOML_LITERAL_SINGLE.sub(rf"\1{REDACTED}\3", text)
+
+
+def redact_diagnostic(text: str, secrets: Iterable[str]) -> str:
+    try:
+        inventory = redaction_values(load_settings())
+    except ValidationError:
+        return "[diagnostic omitted: could not load secret inventory]"
+    known = Redactor([*inventory, *secrets])
+    return redact_credential_literals(redact_text(known(text), ()))
 
 
 def redact_tree(value: object) -> object:

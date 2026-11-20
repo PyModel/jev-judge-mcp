@@ -18,7 +18,7 @@ Call a tool when the step judges material you already have. Write the result you
 | Where the facts are | What you do |
 | --- | --- |
 | Already in your context | One call. Batch every question about that state into it. |
-| Composed from your framing, files, or a command's output | `jev_ask`: your own questions (noul, choice, score) in one call; the server reads the paths and runs only a gate-judged read-only command, redacted. |
+| Composed from your framing, files, or a command's output | `jev_ask`: your own questions (noul, choice, score) in one call; the server reads the paths and can add redacted output from a read-only command with allowlisted options if the operator enables execution. |
 | In a file you have not read | `jev_file_judge`: the server reads the file as state and returns the typed answer, so the bytes never enter your context. For many files at once, `jev_files_judge` takes globs and directories and prunes before asking. |
 | Already fetched into your context (tool output, a paste) | Pass excerpts the tool accepts. Leave the rest of the file out of the chat. |
 | Still to be written | You write it. |
@@ -51,7 +51,7 @@ through `jev_decide`, and traversing a catalog too big for one call.
 | Two passages | `jev_compare` | Same fact, a contradiction, or different facts. |
 | Where on an ordered scale | `jev_score` | Your rubric of 2-10 levels, low to high. A fractional level index plus the per-level probabilities. Threshold it; do not interpolate a magnitude. |
 | A judgment inside a file you have not read | `jev_file_judge` | Name the path and one question (noul, choice, or score). The server reads the file as state and returns the typed answer. Paths must stay inside the server's working directory; over-cap and binary files refuse typed. |
-| Several judgments over one composed state | `jev_ask` | Your questions keyed by your ids; state is your framing text, server-read paths, and a gate-judged command's redacted output. Typed answers per id; overflow refuses with a split suggestion, never truncates. The gate judges the command; the tool does not sandbox. |
+| Several judgments over one composed state | `jev_ask` | Your questions keyed by your ids; state is your framing text, server-read paths, and redacted output from an opt-in command. The server runs allowlisted commands and options directly without a shell. One provider call returns typed answers per id. Overflow refuses with a split suggestion. |
 | The same judgment over many files | `jev_files_judge` | Files, directories, and globs in; one provider call per surviving file; every skipped path comes back with a reason. Picking among the answers is `jev_find` fed those answers. |
 | A value sitting in a document | `jev_extract` | Your regex proposes the matches. Jev picks. The value is one of those matches, or null. |
 | Is this patch acceptable | `jev_review` | Pull-request triage. The diff against the request. |
@@ -71,16 +71,15 @@ These tools read no files. The review judges exactly the `diff` you send, and th
 
 - `diff` holds the real `git diff` output. Never send an excerpt, a paraphrase, an elided `...`, a hand-written "key structure", a path, or "see evidence item". A trimmed patch is reviewed as written and scores low while every claim verifies. New files and deletions are included: `git diff` already prints their lines.
 - Size: `jev_gate` sends the diff and the tests log twice, once to the review and once as claim evidence. The model's window is much smaller than the sum of the caps. Measure first (`git diff | wc -c`). A small change goes as one string. A larger one goes as a `[{path, patch}]` list, where each file is reviewed in its own request. If that is still too big, or a call returns `input_too_large`, split by concern into separate calls ("Part N of M" in `request`), each with only its own claims and evidence.
-- Evidence is raw output with `kind: tool_output`: a grep count, a hash, the test runner's pass/fail lines. Never your summary of it. Put the test log in `tests` (or `tests_path`): a file list's per-file reviews, and so `jev_gate_range`, read only `request`, `diff`, and `tests`, never `evidence`. Write one claim per invariant, each with the item that proves it. A "tests pass" claim comes from one clean full run on the final code.
-- The diff cannot show callers or tests. When `test_gap` is the weak score, pass the test log in `tests`. A caller grep in `evidence` supports claims about callers but never reaches a file list's per-file reviews, so confirm a weak `blast_radius` by reading the callers yourself.
-
-`next_checks` is computed from your arguments, not judged. If it says the diff has no hunks or looks trimmed, or that every claim stands and only the review failed, re-pack and send once more. Test output belongs in `tests` (or `tests_path`): in `evidence` it never reaches a file list's per-file reviews. When the hint says the review already read the tests, read the scores (and `file_actions`, for a file list) and confirm the weak spots by reading the code instead of re-sending. A re-sent call with the full diff is a new call, not a re-ask. An escalate on the full diff is a real finding: re-read the flagged code.
+- Put raw runner output in `tests` (or `tests_path`). Give each claim direct supporting evidence. Each fitting file receives the request, its own patch and tests, plus bounded caller evidence and sibling patches. Claims are judged once against the fitting change.
+- Read `blockers` on a held gate. Each entry identifies the comparison or missing input, the affected file or claim where applicable, and a specific next check. A favorable rubric level can carry low confidence. Check the named requirement, callers or test path before drawing a conclusion about the code.
+- Read `review.context_omissions` for supplemental inputs left out of a file review. This information can accompany any action, including auto. Separate gates over parts do not establish a whole-change pass. From another worktree run `jev-judge-mcp gate --diff BASE..HEAD --claims claims.txt --tests test.log --request "requirement"` there.
 
 ## Honor the action
 
 | Action | What you do |
 | --- | --- |
-| `auto` | The row stands (`stands` is true). Proceed. |
+| `auto` | The verdict stands. Act on it. A contradicted claim at `auto` is confidently false. |
 | `review` | You still own this. Confirm it with a stronger check. |
 | `escalate` | You still own this. Stop on this row. Do not grep `verified`. |
 | `invalid_response` | The row is unjudged. Leave it without a verdict. |

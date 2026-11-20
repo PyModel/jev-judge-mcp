@@ -35,7 +35,11 @@ env -u TYPESAFE_API_KEY make ci
 ```
 
 `make ci` must pass. The parity stage needs Node 24 and skips locally without it.
-Report the command you ran and its result with the change.
+Workflow lint requires both Actionlint and ShellCheck on PATH. On macOS with
+Actionlint 1.7.12, the checker uses Go 1.25+ to build the pinned upstream
+ShellCheck pipe fix before linting. Each workflow has a 30-second deadline.
+A timeout names the workflow and fails the gate. Report the command you ran and
+its result with the change.
 
 Load `.agents/skills/test-audit` before writing, changing, reviewing, or sweeping tests.
 
@@ -104,13 +108,17 @@ live behavior.
 
 ## Releases
 
-The Release workflow (`.github/workflows/release.yml`) cuts releases from
-Conventional Commits on `main`; there is no release trailer or manual tag. It
-keeps a release pull request open with the next version and changelog; merging
-it creates a draft GitHub Release and its `v<version>` tag. The workflow builds
-that tag, uploads the wheel, sdist, and `SHA256SUMS.txt`, installs the downloaded
-wheel into a fresh venv, and publishes the release only if the installed version
-matches the tag. A failed check leaves the release a draft.
+The Release workflow (`.github/workflows/release.yml`) opens a release pull
+request from Conventional Commits on `main`. Merging it creates the draft
+GitHub Release and its `v<version>` tag. The build job uses a hash-locked backend,
+attests the wheel and sdist in GitHub, and stages both distributions and their checksums
+in an immutable Actions artifact. A read-only verification job installs the base runtime
+from `uv.lock` with hashes in a fresh environment, installs the staged wheel with dependency
+resolution disabled, and checks its installed version. The publisher uploads missing files, records
+the verified checksums and compares every asset's name, upload state and SHA-256 digest
+before and after GitHub publication. A failed check on the public assets stops automatic
+PyPI upload. Inspect the public release against the saved receipt before distributing it.
+ADR-0060 records the timing window and the release-please trust decision.
 
 Before merging the release pull request, fill that release's entry in
 [`docs/EVIDENCE.md`](docs/EVIDENCE.md): the certified operating points and any
@@ -119,24 +127,24 @@ run was recorded since the previous entry. Recorded results only (`docs/evals/`,
 `evals/reports/`), dated, with the pinned model; the page defines the format and
 never requires a paid run.
 
-PyPI upload is held: the `pypi` job runs only when the repository variable
-`PYPI_PUBLISH` is `true`, so until then a merged release pull request publishes
-the GitHub Release only. Once the variable is set, the verified wheel and sdist
-are uploaded to PyPI through trusted publishing: no token is stored in the
-repository; the PyPI project (`jev-judge-mcp`) must have a pending or active
-publisher for `PyModel/jev-judge-mcp`, workflow `release.yml`, environment `pypi`.
-To upload a release that was cut while the hold was on, run the workflow by hand
-with `republish_tag` set to its tag.
+On a merged release, `PYPI_PUBLISH=true` enables automatic PyPI upload after
+GitHub publication. Leaving the repository variable unset or false holds that upload.
 
-- The first release is `v0.1.0`. `release-please-config.json` pins it with `release-as`,
-  which holds every later release pull request at `0.1.0`: delete that key in the first
-  commit after the `v0.1.0` release merges. `.release-please-manifest.json` tracks the
-  released version from then on. A release pull request needs a `feat` or `fix` commit in
-  the scanned history.
-- The release pull request is opened or updated with the workflow token, so its `pull_request`
-  event does not trigger `ci`. Release-PR CI is maintainer-approved instead (ADR-0060): a
-  maintainer approves the pending `ci` run on the release PR, and those checks report on the
-  pull request like any other branch's. If that run is unavailable, use
+A manual run on `main` with a nonempty `republish_tag` authorizes a PyPI upload
+**even when `PYPI_PUBLISH` is unset or false**. Use a published tag and an
+unexpired verification receipt for that tag and commit. Supply the original
+Release run ID in `verified_run`, or leave it blank for automatic lookup.
+The workflow checks that the run belongs to this repository's Release workflow
+on `main`, its verification and publication job succeeded, and the public
+distributions match its receipt. Both paths require the `pypi` environment
+and the PyPI project's trusted publisher for `PyModel/jev-judge-mcp`,
+workflow `release.yml`, environment `pypi`.
+
+- `.release-please-manifest.json` records the released version. A release pull
+  request needs a releasable change such as a `feat` or `fix` commit in the scanned history.
+- When release-please opens or updates the release pull request with the workflow token,
+  GitHub creates a pending `ci` run. A maintainer with write access selects **Approve workflows to run**
+  in the pull request's merge box (ADR-0060). If that run is unavailable, use
   `env -u TYPESAFE_API_KEY make ci` on the release branch as a fallback.
 - The version gate is `scripts/check_release_version.py`, tested offline in
   `tests/unit/test_release_version.py`.

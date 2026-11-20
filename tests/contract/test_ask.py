@@ -1,8 +1,8 @@
 """jev_ask, the ask extension tool (ADR-0077, divergence `ask-tool-extension`).
 
 The schema pinning, the typed union refusals before any I/O, the payload shape, and the teaching
-description are owned here (the `test_file_judge.py` shape); the assembler, gate ordering, command
-runner, and refusal matrix are `tests/unit/test_ask.py`, the malformed-answer matrix is
+description are owned here (the `test_file_judge.py` shape); the assembler and runner
+are in `tests/unit/test_ask.py`, the malformed-answer matrix is
 `test_fail_closed.py`'s Case, and the hostile-input replay is the security suite's tool case.
 """
 
@@ -39,7 +39,7 @@ async def test_the_payload_keys_answers_by_the_caller_ids_and_summarizes_the_sta
     outcome = await call_tool(
         "jev_ask",
         ask_args(),
-        {"severity": {"score": 0.5, "probabilities": {"0": 0.5, "1": 0.5}, "confidence": 0.9}},
+        {"q0": {"score": 0.5, "probabilities": {"0": 0.5, "1": 0.5}, "confidence": 0.9}},
     )
     assert not outcome.is_error, outcome.text
     payload = outcome.payload
@@ -76,9 +76,9 @@ async def test_three_kinds_in_one_call_each_answer_fail_closed_per_question() ->
         "state": "port 8080, config.yaml",
     }
     answers: dict[str, Any] = {
-        "gate": {"noul": 0.93},
-        "where": {"choice": "config", "probabilities": {"config": 0.9, "env": 0.05, "other": 0.05}, "confidence": 0.7},
-        "severity": {"score": 99},
+        "q0": {"noul": 0.93},
+        "q1": {"choice": "config", "probabilities": {"config": 0.9, "env": 0.05, "other": 0.05}, "confidence": 0.7},
+        "q2": {"score": 99},
     }
     outcome = await call_tool("jev_ask", args, answers)
     assert not outcome.is_error, outcome.text
@@ -98,21 +98,29 @@ async def test_three_kinds_in_one_call_each_answer_fail_closed_per_question() ->
 
 
 async def test_the_state_is_named_fields_and_the_questions_ride_the_wire() -> None:
+    args = ask_args() | {"questions": score_question("caller / id") | score_question("q0")}
     outcome = await call_tool(
-        "jev_ask", ask_args(), {"severity": {"score": 0.5, "probabilities": {"0": 0.5, "1": 0.5}}}
+        "jev_ask",
+        args,
+        {
+            "q0": {"score": 0.25, "probabilities": {"0": 0.75, "1": 0.25}},
+            "q1": {"score": 0.75, "probabilities": {"0": 0.25, "1": 0.75}},
+        },
     )
     assert not outcome.is_error
     state, questions = outcome.requests[0]
     request_state = cast(dict[str, object], state)
     assert "retries twice" in cast(str, request_state["state"])
-    assert list(questions) == ["severity"]
-    wire = cast(dict[str, object], questions["severity"])
+    assert list(questions) == ["q0", "q1"]
+    wire = cast(dict[str, object], questions["q0"])
     assert wire == {
         "type": "score",
         "instructions": "How severe is the state?",
         "criteria": ["minor", "major"],
     }
     assert list(wire) == ["type", "instructions", "criteria"]
+    assert outcome.payload["answers"]["caller / id"]["score"] == 0.25
+    assert outcome.payload["answers"]["q0"]["score"] == 0.75
 
 
 async def test_server_read_paths_become_state_and_refused_paths_are_skipped_typed(
@@ -121,7 +129,7 @@ async def test_server_read_paths_become_state_and_refused_paths_are_skipped_type
     monkeypatch.chdir(tmp_path)
     (tmp_path / "notes.txt").write_text("retries twice", encoding="utf-8")
     args: dict[str, Any] = ask_args() | {"paths": ["notes.txt", "missing.txt", ".env"]}
-    outcome = await call_tool("jev_ask", args, {"severity": {"score": 0.5, "probabilities": {"0": 0.5, "1": 0.5}}})
+    outcome = await call_tool("jev_ask", args, {"q0": {"score": 0.5, "probabilities": {"0": 0.5, "1": 0.5}}})
     assert not outcome.is_error, outcome.text
     payload = outcome.payload
     assert payload["state_summary"]["files"] == 1
@@ -174,7 +182,7 @@ def test_the_schema_carries_the_adr_owned_caps_and_keeps_questions_whole() -> No
     assert schema["additionalProperties"] is False
 
 
-def test_the_description_teaches_the_union_the_rules_and_the_gate() -> None:
+def test_the_description_teaches_the_union_the_rules_and_the_allowlist() -> None:
     description = DEFINITION.description
     assert description is not None
     assert "noul" in description and "choice" in description and "score" in description
@@ -185,6 +193,7 @@ def test_the_description_teaches_the_union_the_rules_and_the_gate() -> None:
         "Jev is invoked when an unresolved judgment earns a model decision. Deterministic evidence "
         "takes precedence; Jev is not a mandatory ceremony."
     ) in description
+    assert "without a shell" in description and "one provider call" in description
     assert "does not sandbox" in description
     assert "command_refused" in description and "split suggestion" in description
     assert "fail-closed per question" in description
@@ -216,3 +225,19 @@ def test_the_question_text_bounds_are_the_file_tool_convention() -> None:
     questions = DEFINITION.input_schema["properties"]["questions"]
     assert f"{FILE_JUDGE.instructions_units_max:,} units" in questions["description"]
     assert f"{FILE_JUDGE.choice_options_min}-{FILE_JUDGE.choice_options_max}" in questions["description"]
+
+
+def _wide_choice(key_units: int) -> dict[str, object]:
+    """250 options whose descriptions stay under the request cap; only the key width differs."""
+    keys = [f"{index:03d}".ljust(key_units, "k") for index in range(FILE_JUDGE.choice_options_max - 1)]
+    criteria = {key: "d" * 420 for key in [*keys, "other"]}
+    return {"state": "s", "questions": {"q0": {"type": "choice", "instructions": "Choose", "criteria": criteria}}}
+
+
+async def test_choice_option_keys_count_toward_the_composed_request_cap() -> None:
+    outcome = await call_tool("jev_ask", _wide_choice(64), {})
+    assert outcome.code == "input_too_large"
+    assert "questions alone exceed the cap" in outcome.text
+    assert not outcome.requests
+    narrow = await call_tool("jev_ask", _wide_choice(3), {})
+    assert narrow.code != "input_too_large"

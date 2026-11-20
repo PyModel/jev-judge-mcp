@@ -3,13 +3,16 @@
 import json
 import re
 import subprocess
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from jev_judge_mcp import cli
+from jev_judge_mcp import cli, git_diff
 from jev_judge_mcp.cli import completion_hook_main, completion_matches, gate_main, judge_main
 from jev_judge_mcp.git_diff import split_unified
+from jev_judge_mcp.limits import GATE
 from tests.support.git_repo import repo_with_diff
 from tests.support.jev import FakeProvider
 
@@ -87,6 +90,20 @@ def test_gate_refuses_a_path_outside_the_repo(tmp_path: Path, capsys: pytest.Cap
     envelope = json.loads(captured.out)
     assert envelope["error"]["code"] == "invalid_arguments"
     assert envelope["action"] is None
+
+
+def test_cli_names_the_budget_when_git_stops_reading_an_oversized_diff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = repo_with_diff(tmp_path)
+    (repo / "x.py").write_text("x" * (4 * GATE.aggregate_evidence_units), encoding="utf-8")
+    monkeypatch.chdir(repo)
+    provider = FakeProvider({})
+    code = gate_main(["--diff", "HEAD", "--claims", "claims.json", "--tests", "tests.log"], provider=provider)
+    error = json.loads(capsys.readouterr().out)["error"]
+    assert code == 2
+    assert error["code"] == "input_too_large"
+    assert not provider.requests
 
 
 def test_completion_hook_abstains_unless_the_command_is_push_or_pr(
@@ -253,7 +270,9 @@ def test_cli_gate_does_not_mark_a_file_it_read_self_reported(
     state carrying the file text, so an unread file cannot pass.
     """
     repo = repo_with_diff(tmp_path)
-    monkeypatch.chdir(repo)
+    subdir = repo / "nested"
+    subdir.mkdir()
+    monkeypatch.chdir(subdir)
     raw = (repo / "tests.log").read_bytes()
     provider = FakeProvider({})
     code = gate_main(
@@ -263,6 +282,7 @@ def test_cli_gate_does_not_mark_a_file_it_read_self_reported(
     captured = capsys.readouterr()
     assert code == 0
     review = json.loads(captured.out)["payload"]["review"]
+    assert review["reviewed_files"] == ["x.py"]
     assert "tests_weight" not in review
     assert provider.requests
     state = provider.requests[0][0]
@@ -326,3 +346,91 @@ def test_an_up_to_date_push_abstains(
     captured = capsys.readouterr()
     assert code == 0 and captured.out == ""
     assert "nothing to gate" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("store", "secret_file"),
+        ("sensitive_label", "secret_file"),
+        ("opened_store", "secret_file"),
+        ("patch", "invalid_arguments"),
+        ("claims_size", "input_too_large"),
+    ],
+)
+def test_gate_guards_local_inputs_before_judgment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str, expected: str
+) -> None:
+    from tests.support.git_repo import commit_files
+
+    repo = repo_with_diff(tmp_path)
+    monkeypatch.chdir(repo)
+    if case == "store":
+        commit_files(repo, {".env": "inert fixture", "x.py": "x = 3"})
+    elif case == "sensitive_label":
+        monkeypatch.setenv("JEV_API_KEY", "private-label-fixture")
+        commit_files(repo, {"private-label-fixture.txt": "inert fixture"})
+    elif case == "opened_store":
+        # Simulate an inconclusive preliminary path check on an ordinary test fixture.
+        monkeypatch.setenv("JEV_MCP_KEY_FILE", str(repo / "tests.log"))
+
+        def unrecognized_path(_path: Path, _key: Path) -> bool:
+            return False
+
+        monkeypatch.setattr(cli, "is_secret_store", unrecognized_path)
+    elif case == "patch":
+
+        def unsplittable(_text: str) -> None:
+            return None
+
+        monkeypatch.setattr(git_diff, "split_unified", unsplittable)
+    else:
+        path = repo / "claims.json"
+        path.write_text(" " * (GATE.aggregate_evidence_units + 1) + path.read_text())
+    provider = FakeProvider({})
+    result = cli.run_gate(["--diff", "HEAD~1", "--claims", "claims.json", "--tests", "tests.log"], provider=provider)
+    assert (result.exit_code, result.error_code) == (2, expected)
+    if case == "sensitive_label":
+        assert "private-label-fixture" not in result.rendered
+    assert not provider.requests
+
+
+def test_cli_filters_configured_values_from_local_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = repo_with_diff(tmp_path)
+    monkeypatch.chdir(repo)
+    marker = "inert-redaction-fixture"
+    monkeypatch.setenv("JEV_API_KEY", marker)
+    (repo / "tests.log").write_text(marker)
+    (repo / "claims.json").write_text(json.dumps({"request": "Review " + marker, "claims": [marker]}))
+    (repo / "x.py").write_text(marker)
+    provider = FakeProvider({})
+    outcome = cli.run_gate(["--diff", "HEAD", "--claims", "claims.json", "--tests", "tests.log"], provider=provider)
+    assert outcome.exit_code == 0 and provider.requests
+    assert marker not in str(provider.requests)
+
+
+def test_required_completion_hook_asks_when_the_gate_handler_crashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def broken(_args: dict[str, Any], _runtime: cli.Runtime) -> Any:
+        raise RuntimeError("gate handler crashed")
+
+    monkeypatch.setattr(
+        cli, "TOOLS", tuple(replace(tool, handler=broken) if tool.name == "jev_gate" else tool for tool in cli.TOOLS)
+    )
+    monkeypatch.chdir(repo_with_diff(tmp_path))
+    code = completion_hook_main(
+        [],
+        text=_PUSH,
+        environ={
+            "JEV_HOOK_REQUIRED": "1",
+            "JEV_COMPLETION_DIFF": "HEAD~1",
+            "JEV_COMPLETION_CLAIMS": "claims.json",
+            "JEV_COMPLETION_TESTS": "tests.log",
+        },
+        provider=FakeProvider({}),
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    assert captured.out and _ask(captured.out) == "ask"
+    assert "(internal)" in captured.out

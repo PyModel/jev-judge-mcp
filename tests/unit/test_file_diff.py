@@ -11,10 +11,11 @@ from mcp.types import CallToolResult, TextContent
 from jev_judge_mcp.domain import JsonValue, Usage
 from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.providers import Evaluation, ProviderError
+from jev_judge_mcp.providers.base import parse_envelope
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
-from jev_judge_mcp.tools.files import REVIEW_FANOUT
-from tests.support.jev import FakeProvider, Outcome, call_tool
+from jev_judge_mcp.tools.files import combined
+from tests.support.jev import NO_DEFECT, FakeProvider, Outcome, call_tool, choice
 
 pytestmark = pytest.mark.anyio
 
@@ -75,6 +76,7 @@ _REVIEW_ANSWERS = {
     "test_gap": {"score": 0, "confidence": 0.95},
     "blast_radius": {"score": 0, "confidence": 0.95},
     "safe_to_apply": {"noul": 0.95},
+    "defect_kind": NO_DEFECT,
 }
 
 _GATE_ANSWERS = {
@@ -85,6 +87,10 @@ _GATE_ANSWERS = {
         "probabilities": {"verified": 0.95, "contradicted": 0.03, "unsupported": 0.02},
     },
 }
+
+
+def _verified_with_source(*ids: str) -> dict[str, Any]:
+    return {**_GATE_ANSWERS, "source_0": choice("none", "none", *ids)}
 
 
 async def _call_gate_raw(diff: object, evidence: list[dict[str, str]]) -> tuple[CallToolResult, FakeProvider]:
@@ -141,6 +147,24 @@ async def test_a_file_list_over_the_evidence_budget_refuses_like_a_string_diff()
         list_code = json.loads(cast(TextContent, list_result.content[1]).text)
         assert list_code == string_code == {"code": expected_code}
         assert list_result.structured_content == string_result.structured_content == {"code": expected_code}
+
+
+def test_combined_usage_preserves_unknown_metering_in_either_position() -> None:
+    def reply(tokens: int | None) -> Evaluation:
+        body: dict[str, object] = {"answers": {}}
+        if tokens is not None:
+            body["usage"] = {"input_tokens": tokens, "output_tokens": 0}
+        envelope = parse_envelope(body, "compatible")
+        return Evaluation({}, envelope.usage, "compatible", "test")
+
+    measured, zero, unknown = reply(1_000_000), reply(0), reply(None)
+    total = combined([measured, zero]).usage
+    assert total.reported is True
+    for group in ([measured, unknown], [unknown, measured], [combined([unknown, zero]), measured]):
+        partial = combined(group).usage
+        assert partial.input_tokens == total.input_tokens == 1_000_000
+        assert partial.output_tokens == total.output_tokens == 0
+        assert partial.reported is False
 
 
 async def test_file_list_gate_sums_provider_usage_and_keeps_the_request_id() -> None:
@@ -200,7 +224,7 @@ async def test_file_list_review_keeps_provider_usage_and_unhashed_tests() -> Non
         },
         _REVIEW_ANSWERS,
     )
-    assert "tests_weight" not in hashed.payload
+    assert hashed.payload["tests_weight"] == "self_reported"
     assert hashed.payload["provider"] == "compatible"
 
 
@@ -236,7 +260,7 @@ async def test_gate_reviews_a_file_list_per_file() -> None:
 
 
 async def test_file_list_gate_asks_the_claims_once_not_per_file() -> None:
-    """J4: each fitting file is asked the review rubric alone; the claims and evidence are sent once.
+    """J4: each fitting file receives review context; claims and source questions are asked once.
 
     The split path once re-asked the full rubric plus every claim and source question per file,
     billing N requests that each carried the whole evidence and discarding N-1 claim verdicts.
@@ -267,7 +291,15 @@ async def test_file_list_gate_asks_the_claims_once_not_per_file() -> None:
     for request in file_reviews:
         state = state_of(request)
         assert "diff" in state
-        assert "evidence" not in state
+        assert state["request"] == "fix the parser"
+        assert state["evidence"] == [{"id": "log", "text": "2 passed"}]
+        peer = (
+            {"path": "limits.py", "patch": "+ cap"}
+            if state["diff"] == "+ add"
+            else {"path": "mathutil.py", "patch": "+ add"}
+        )
+        assert state["related_files"] == [peer]
+        assert state["path"] != peer["path"]
         assert not any(key.startswith(("claim_", "source_")) for key in request[1])
     verification_request = next(request for request in outcome.requests if "claims" in state_of(request))
     state = state_of(verification_request)
@@ -281,33 +313,55 @@ async def test_file_list_gate_asks_the_claims_once_not_per_file() -> None:
     assert diff_items == ["diff_mathutil.py", "diff_limits.py"]
 
 
-async def test_an_oversized_file_clamps_auto_to_review_and_names_incomplete_context() -> None:
-    """F1/G1: the unreviewed clamp carries incomplete_context and a next check; truncated stays honest."""
+async def test_gate_refuses_an_oversized_primary_patch_before_reviewing_other_files() -> None:
+    result, provider = await _call_gate_raw(
+        [{"path": "ok.py", "patch": "+ ok"}, {"path": "large.py", "patch": "x" * (GATE.doc_units + 1)}],
+        [{"id": "log", "text": "1 passed"}],
+    )
+    assert result.is_error and result.structured_content == {"code": "input_too_large"}
+    error = json.loads(cast(TextContent, result.content[0]).text)["error"]
+    assert "diff[1].patch" in error and str(GATE.doc_units) in error and "hunk" in error
+    assert provider.requests == []
+
+
+async def test_gate_checks_exact_utf8_budget_including_longest_question_and_duplicated_documents() -> None:
+    args = {"request": "r", "diff": "+ 😀", "claims": ["c"], "evidence": "x"}
+    answers = _verified_with_source("evidence", "diff")
+    sample = await call_tool("jev_gate", args, answers)
+    ((state, questions),) = sample.requests
+
+    assert isinstance(state, dict)
+    state = {k: v for k, v in state.items() if k not in ("patch_lines", "counterevidence_lines")}
+    questions = {k: v for k, v in questions.items() if not k.startswith(("defect_", "counterexample_"))}
+
+    def size(name: str) -> int:
+        envelope = {"state": state, "questions": {name: questions[name]}}
+        return len(json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode())
+
+    remaining = 30_000 - max(map(size, questions))
+    assert remaining > 0
+    at = await call_tool("jev_gate", {**args, "evidence": "x" * (remaining + 1)}, answers)
+    assert at.payload["action"] == "auto" and len(at.requests) == 1
+    over = await call_tool("jev_gate", {**args, "evidence": "x" * (remaining + 2)}, _GATE_ANSWERS)
+    assert over.is_error and over.code == "input_too_large" and not over.requests
+    assert "30001" in over.text and "30000" in over.text and "hunk" in over.text
+
+
+async def test_gate_preflights_canonical_verification_and_all_expanded_questions() -> None:
+    result, provider = await _call_gate_raw(_patches(10, 3500), [{"id": "proof", "text": "ok"}])
+    assert result.is_error and "30000" in str(result.content[0]) and not provider.requests
     outcome = await call_tool(
         "jev_gate",
         {
-            "request": "fix the parser",
-            "diff": [
-                {"path": "src/ok.py", "patch": "+ ok"},
-                {"path": "src/big.py", "patch": "x" * (GATE.doc_units + 1)},
-            ],
-            "claims": ["the small file changed"],
-            "evidence": [{"id": "log", "text": "1 passed"}],
+            "request": "r",
+            "diff": [{"path": f"{i:02}" + "p" * 57, "patch": "+r"} for i in range(48)],
+            "claims": ["c"] * 16,
+            "evidence": "proof",
         },
         _GATE_ANSWERS,
     )
-    assert not outcome.is_error, outcome.text
-    assert outcome.payload["action"] == "review"
-    assert outcome.payload["partial"] is True
-    assert outcome.payload["unreviewed_files"] == ["src/big.py"]
-    assert outcome.payload["reason_codes"] == ["incomplete_context"]
-    assert outcome.payload["next_checks"]
-    assert outcome.payload["truncated"] is False
-    assert len(outcome.requests) == 2
-    # The gate differs from jev_review here (G-A): its review half keeps the unclamped worst,
-    # so the mapping always agrees with the half's own action even under a clamped headline.
-    assert outcome.payload["review"]["action"] == "auto"
-    assert outcome.payload["review"]["file_actions"] == {"src/ok.py": "auto"}
+    assert outcome.is_error and outcome.code == "input_too_large" and not outcome.requests
+    assert "60000" in outcome.text and "claim" in outcome.text
 
 
 async def test_a_file_list_over_the_patch_budget_refuses_naming_the_diff() -> None:
@@ -321,13 +375,20 @@ async def test_a_file_list_over_the_patch_budget_refuses_naming_the_diff() -> No
     )
     assert result.is_error
     payload = json.loads(cast(TextContent, result.content[0]).text)
-    assert payload == {"tool": "jev_gate", "error": "diff exceeds the 200,000-character aggregate budget"}
+    assert payload["tool"] == "jev_gate" and "diff exceeds the 200,000-character aggregate budget" in payload["error"]
+    assert "hunk" in payload["error"]
     assert json.loads(cast(TextContent, result.content[1]).text) == {"code": "input_too_large"}
     assert result.structured_content == {"code": "input_too_large"}
     assert provider.requests == []
 
 
 _ESCALATE_REVIEW = {
+    "defect_kind": {
+        "choice": "wrong_result",
+        "confidence": 1,
+        "probabilities": {"none": 0, "wrong_result": 1, "error_handling": 0, "state_change": 0, "safety_refusal": 0},
+    },
+    "defect_line": {"choice": "L1", "confidence": 1, "probabilities": {"L1": 1, "none": 0}},
     "correctness": {"score": 0, "confidence": 0.95},
     "spec_match": {"score": 0, "confidence": 0.95},
     "test_gap": {"score": 2, "confidence": 0.95},
@@ -475,7 +536,7 @@ async def test_file_list_gate_names_each_files_action_under_drift() -> None:
             "claims": ["both files changed"],
             "evidence": [{"id": "log", "text": "2 passed"}],
         },
-        [_ESCALATE_REVIEW, _REVIEW_ANSWERS, _GATE_ANSWERS],
+        [_ESCALATE_REVIEW, _REVIEW_ANSWERS, _verified_with_source("log", "diff_src_a.py", "diff_src_b.py")],
     )
     assert not outcome.is_error, outcome.text
     assert outcome.payload["action"] == "escalate"
@@ -517,7 +578,7 @@ async def test_a_repeated_path_keeps_its_worst_action_in_the_gate() -> None:
             "claims": ["both files changed"],
             "evidence": [{"id": "log", "text": "2 passed"}],
         },
-        [_REVIEW_ANSWERS, _ESCALATE_REVIEW, _GATE_ANSWERS],
+        [_REVIEW_ANSWERS, _ESCALATE_REVIEW, _verified_with_source("log", "diff_src_a.py", "diff_src_a.py_1")],
     )
     assert not outcome.is_error, outcome.text
     assert outcome.payload["action"] == "escalate"
@@ -553,10 +614,10 @@ async def test_gate_summary_partitions_and_a_row_stands_only_when_auto() -> None
     row = outcome.payload["verification"]["results"][0]
     summary = outcome.payload["verification"]["summary"]
     assert row["verdict"] == "verified"
-    assert row["action"] == "escalate"
+    assert row["action"] == "review"
     assert row["stands"] is False
     assert summary["by_verdict"] == {"verified": 1}
-    assert summary["by_action"] == {"escalate": 1}
+    assert summary["by_action"] == {"review": 1}
     assert sum(summary["by_verdict"].values()) == 1
     assert sum(summary["by_action"].values()) == 1
 
@@ -621,7 +682,8 @@ class SlowReviewProvider(FakeProvider):
             await anyio.sleep(0.02 if "down" not in diff else 0.005)
             if "down" in diff:
                 raise ProviderError("the provider is down")
-            answers: dict[str, Any] = dict(_GATE_ANSWERS)
+            items = cast(dict[str, Any], state).get("evidence", [])
+            answers = _verified_with_source(*(item["id"] for item in items))
             if "low" in diff:
                 answers["correctness"] = {"score": 1, "confidence": 0.2}
             return Evaluation(answers, Usage(1, 1), self.name, model)
@@ -632,7 +694,7 @@ class SlowReviewProvider(FakeProvider):
             self.in_flight -= 1
 
 
-async def _call_slow(provider: SlowReviewProvider, files: list[str]) -> CallToolResult:
+async def _call_slow(provider: FakeProvider, files: list[str]) -> CallToolResult:
     arguments = {
         "request": "fix the parser",
         "diff": [{"path": f"src/{index}.py", "patch": patch} for index, patch in enumerate(files)],
@@ -654,17 +716,17 @@ async def test_file_reviews_overlap_and_keep_the_input_order() -> None:
     assert not result.is_error, payload
     assert provider.max_in_flight == 4
     assert payload["review"]["reviewed_files"] == ["src/0.py", "src/1.py", "src/2.py", "src/3.py"]
-    assert payload["review"]["file_actions"]["src/1.py"] == "escalate"
+    assert payload["review"]["file_actions"]["src/1.py"] == "review"
     assert {payload["review"]["file_actions"][path] for path in ("src/0.py", "src/2.py", "src/3.py")} == {"auto"}
     assert len(provider.requests) == 5  # four reviews, then the claims once
 
 
 async def test_one_call_never_holds_more_than_the_fan_out_bound() -> None:
-    """With the process cap off (the default), one file list still opens at most REVIEW_FANOUT reviews."""
+    """With the process cap off (the default), one file list still opens eight reviews."""
     provider = SlowReviewProvider()
-    result = await _call_slow(provider, [f"+ {index}" for index in range(REVIEW_FANOUT + 4)])
+    result = await _call_slow(provider, [f"+ {index}" for index in range(20)])
     assert not result.is_error
-    assert provider.max_in_flight == REVIEW_FANOUT
+    assert provider.max_in_flight == 8
 
 
 async def test_the_inflight_cap_bounds_the_file_reviews(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -684,3 +746,120 @@ async def test_one_failed_file_review_fails_the_call_and_cancels_the_rest() -> N
     assert provider.cancelled == 2
     assert provider.in_flight == 0
     assert len(provider.requests) == 3  # the claims are never asked
+
+
+async def test_gate_explains_the_second_files_confidence_at_the_requested_threshold() -> None:
+    outcome = await _call_gate_drift(
+        {
+            "request": "fix the parser",
+            "diff": [{"path": "a", "patch": "+ a"}, {"path": "b", "patch": "+ b"}],
+            "claims": ["parser fixed"],
+            "evidence": "output",
+            "review_at": 0.6,
+        },
+        [
+            _REVIEW_ANSWERS,
+            {**_REVIEW_ANSWERS, "spec_match": {"score": 1.9, "confidence": 0.59}},
+            _verified_with_source("evidence", "diff_a", "diff_b"),
+        ],
+    )
+    assert outcome.payload["action"] == "review"
+    assert outcome.payload["review"]["score_file"] == "b"
+    assert outcome.payload["review"]["scores"]["spec_match"]["confidence"] == 0.59
+    for _, questions in outcome.requests[:2]:
+        for name in ("correctness", "spec_match", "test_gap", "blast_radius", "safe_to_apply"):
+            question = questions[name]
+            assert isinstance(question, dict) and "target file" in str(question["instructions"])
+            assert "cross-file" in str(question["instructions"])
+    (blocker,) = outcome.payload["blockers"]
+    assert (blocker["path"], blocker["field"], blocker["value"], blocker["threshold"]) == (
+        "b",
+        "spec_match.confidence",
+        0.59,
+        0.6,
+    )
+    assert blocker["reviewed_file_index"] == 1
+    assert "b" in blocker["next_check"] and "reviewed_files[1]" in blocker["next_check"]
+    assert blocker["level_assessment"] == "favorable"
+    assert blocker["code"] not in outcome.payload["reason_codes"]
+    assert outcome.payload["rollup"]["reason_counts"] == {blocker["code"]: 1}
+    assert blocker["next_check"] in outcome.payload["next_checks"]
+
+
+def _patches(count: int, units: int) -> list[dict[str, str]]:
+    return [{"path": f"src/f{i}.py", "patch": "+" + "x" * (units - 1)} for i in range(count)]
+
+
+async def test_gate_keeps_the_accepted_decision_across_file_list_sizes() -> None:
+    # The gate must preserve accepted decisions inside its budget and refuse an oversized verification before fan-out.
+    for count, units in ((2, 2000), (4, 4000), (6, 6000), (10, 2400), (10, 3000), (10, 7000), (20, 2000), (30, 1000)):
+        args = {
+            "request": "fix the parser",
+            "diff": _patches(count, units),
+            "tests": "2 passed",
+            "claims": ["parser fixed"],
+            "evidence": [{"id": "log", "text": "2 passed"}],
+        }
+        answers = _verified_with_source("log", "tests", *(f"diff_src_f{i}.py" for i in range(count)))
+        outcome = await call_tool("jev_gate", args, answers)
+        body = outcome.payload
+        if count * units >= 30_000:
+            assert outcome.is_error and outcome.code == "input_too_large" and not outcome.requests, (count, units)
+            continue
+        assert (body["action"], body["reason_codes"]) == ("auto", ["accepted"]), (count, units)
+        assert body["next_checks"] == ["The row stands. Proceed."]
+        assert "blockers" not in body
+        assert body["truncated"] is False and body["partial"] is False
+        if count == 10 and units == 2400:
+            assert [row["path"] for row in body["review"]["context_omissions"]] == [f"src/f{i}.py" for i in range(10)]
+
+
+async def test_review_stands_when_only_supplemental_siblings_do_not_fit() -> None:
+    args = {"request": "fix the parser", "diff": _patches(10, 3000), "tests": "2 passed"}
+    outcome = await call_tool("jev_review", args, _REVIEW_ANSWERS)
+    body = outcome.payload
+    assert body["action"] == "auto"
+    assert body["truncated"] is False and body["partial"] is False
+    assert "blockers" not in body
+    first = body["context_omissions"][0]
+    assert first["path"] == "src/f0.py"
+    assert first["omitted"] == ["reviewed_files[7]", "reviewed_files[8]", "reviewed_files[9]"]
+
+
+async def test_omitted_supplemental_evidence_is_named_on_an_accepted_gate() -> None:
+    args = {
+        "request": "fix the parser",
+        "diff": _patches(16, 8),
+        "claims": ["parser fixed"],
+        "evidence": [{"id": "large", "text": "x" * 14_000}],
+    }
+    answers = _verified_with_source("large", *(f"diff_src_f{i}.py" for i in range(16)))
+    outcome = await call_tool("jev_gate", args, answers)
+    assert outcome.payload["action"] == "auto"
+    assert outcome.payload["reason_codes"] == ["accepted"]
+    assert outcome.payload["next_checks"] == ["The row stands. Proceed."]
+    assert "blockers" not in outcome.payload
+    omissions = outcome.payload["review"]["context_omissions"]
+    assert len(omissions) == 16
+    omission = omissions[0]
+    assert omission["path"] == "src/f0.py"
+    assert omission["omitted"] == ["evidence[0]"]
+    assert omission["required_units"] > omission["limit_units"] == GATE.aggregate_evidence_units // 16
+    file_state, claim_state = outcome.requests[0][0], outcome.requests[-1][0]
+    assert isinstance(file_state, dict) and file_state["evidence"] == []
+    assert isinstance(claim_state, dict) and isinstance(claim_state["evidence"], list)
+    assert {"id": "large", "text": "x" * 14_000} in claim_state["evidence"]
+
+
+async def test_gate_checks_every_file_before_dispatch_and_preserves_provider_window_guidance() -> None:
+    result, provider = await _call_gate_raw(
+        [{"path": "tiny", "patch": "+"}, {"path": "second", "patch": "+" * 31_000}],
+        [{"id": "log", "text": "ok"}],
+    )
+    assert result.is_error and "30000" in str(result.content[0]) and not provider.requests
+    error = ProviderError("opaque provider error")
+    error.status, error.error_type = 400, "max_tokens_exceeded"
+    provider = FakeProvider({}, error=error)
+    result = await _call_slow(provider, ["+a"])
+    assert result.structured_content == {"code": "input_too_large"}
+    assert "32k" in str(result.content[0]) and "hunk" in str(result.content[0])

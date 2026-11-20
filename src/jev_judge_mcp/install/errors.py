@@ -14,4 +14,4 @@ class InstallError(Exception):
 
 
 class ConfigChangedError(Exception):
-    """The config changed after it was read. Nothing was written over it."""
+    """The destination changed. Any displaced version is retained for reconciliation."""

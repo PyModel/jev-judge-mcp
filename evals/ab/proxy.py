@@ -16,13 +16,13 @@ import time
 from collections.abc import Sequence
 from typing import IO, Any, cast
 
-from evals.relay import is_tools_call, pending_key, result_fields, serve
+from evals.relay import is_tools_call, pending_key, result_fields, serve, tool_name
 
 
 class Recorder:
     def __init__(self, log: IO[str]) -> None:
         self.log = log
-        self.pending: dict[str, tuple[str, float]] = {}
+        self.pending: dict[str, tuple[str | None, float]] = {}
         self.lock = threading.Lock()
 
     def request(self, message: object) -> None:
@@ -33,7 +33,7 @@ class Recorder:
         if not isinstance(params, dict):
             # Positional params (JSON-RPC permits an array) carry no `name` to record; forward only.
             return
-        name = str(cast(dict[str, Any], params).get("name"))
+        name = tool_name(call)
         with self.lock:
             key = pending_key(call["id"])
             previous = self.pending.get(key)
@@ -65,7 +65,7 @@ class Recorder:
         for tool, t0 in unanswered:
             self._write(tool, t0, {"is_error": True, "unanswered": True})
 
-    def _write(self, tool: str, t0: float, fields: dict[str, Any]) -> None:
+    def _write(self, tool: str | None, t0: float, fields: dict[str, Any]) -> None:
         row = {"tool": tool, "ms": round((time.perf_counter() - t0) * 1000, 1), **fields}
         with self.lock:
             self.log.write(json.dumps(row) + "\n")

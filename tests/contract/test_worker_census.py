@@ -1,19 +1,12 @@
-"""No test may census extract workers machine-wide without a parent pid.
-
-The taken-port test used to collect every `jev_judge_mcp.extract.worker` on the host. Another
-server recycling its pool made that set change, and the equality check failed. The parent-scoped
-census lives in `tests/support/workers.py`. A test that runs `ps -ax` or `ps -A` and names the
-worker module, without asking `ps` for `ppid`, is the same failure class.
-"""
+"""Guard against host-wide command-line disclosure and unscoped extract-worker counts."""
 
 import ast
+import re
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-
-from tests.support.workers import WORKER_MODULE
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -37,73 +30,52 @@ def owned_test_py_files(root: Path = REPO) -> list[Path]:
     return files
 
 
-def _ps_args(node: ast.AST) -> list[str] | None:
-    if not isinstance(node, ast.Call) or not node.args:
-        return None
-    first = node.args[0]
-    if not isinstance(first, ast.List):
-        return None
-    values: list[str] = []
-    for elt in first.elts:
-        if not isinstance(elt, ast.Constant) or not isinstance(elt.value, str):
-            return None
-        values.append(elt.value)
-    if not values or values[0] != "ps":
-        return None
-    return values
-
-
-def unscoped_worker_census(source: str, module: str) -> bool:
-    """True when `source` runs a machine-wide `ps` and names `module`, without a parent-pid column."""
-    tree = ast.parse(source)
-    names_module = any(isinstance(node, ast.Constant) and node.value == module for node in ast.walk(tree))
-    if not names_module:
-        return False
-    for node in ast.walk(tree):
-        args = _ps_args(node)
-        if args is None:
+def unsafe_process_listing(source: str) -> bool:
+    """Test process probes must select their target rather than collect a default host listing."""
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call) or not node.args or not isinstance(node.args[0], (ast.List, ast.Tuple)):
             continue
-        if ("-ax" in args or "-A" in args) and not any("ppid" in arg for arg in args):
+        argv = node.args[0].elts
+        if not argv or not isinstance(argv[0], ast.Constant) or argv[0].value != "ps":
+            continue
+        flags = {arg.value for arg in argv[1:] if isinstance(arg, ast.Constant) and isinstance(arg.value, str)}
+        # BSD and UNIX ps combine short flags (auxww, -ef). Additional selectors
+        # may broaden a -p query, so a PID alone is insufficient in a mixed invocation.
+        unscoped = any(re.fullmatch(r"-[A-Za-z]*[AaegNUu][A-Za-z]*|a[uxwl]*|--deselect", arg) for arg in flags)
+        if unscoped or not flags.intersection({"-p", "--pid", "--ppid", "--pgroup"}):
             return True
     return False
 
 
-def machine_wide_worker_censuses(files: Sequence[Path], module: str) -> list[str]:
+def unsafe_process_listings(files: Sequence[Path]) -> list[str]:
     if not files:
         raise ValueError("no test files to scan")
-    return [str(path) for path in files if unscoped_worker_census(path.read_text(encoding="utf-8"), module)]
+    return [str(path) for path in files if unsafe_process_listing(path.read_text(encoding="utf-8"))]
 
 
-def test_no_test_takes_an_unscoped_machine_wide_worker_census() -> None:
-    assert machine_wide_worker_censuses(owned_test_py_files(), WORKER_MODULE) == []
+def test_process_listings_keep_host_arguments_private_and_worker_counts_scoped() -> None:
+    assert unsafe_process_listings(owned_test_py_files()) == []
 
 
-def test_the_guard_catches_an_unscoped_census_and_refuses_to_scan_nothing(tmp_path: Path) -> None:
-    bad = tmp_path / "test_bad.py"
-    bad.write_text(
-        "import subprocess\n"
-        "def census() -> set[str]:\n"
-        '    result = subprocess.run(["ps", "-ax", "-o", "pid=,command="], capture_output=True, text=True)\n'
-        "    found: set[str] = set()\n"
-        "    for line in result.stdout.splitlines():\n"
-        '        pid, _, command = line.strip().partition(" ")\n'
-        f'        if "{WORKER_MODULE}" in command:\n'
-        "            found.add(pid)\n"
-        "    return found\n"
-    )
+@pytest.mark.parametrize(
+    "argv",
+    [
+        '["ps", "-ax", "-o", "pid=,command="]',
+        '["ps", "-A", "-o", "pid=,ppid=,command="]',
+        '["ps", "-A"]',
+        '["ps", "-ef"]',
+        '["ps", "auxww"]',
+        '["ps", "-ax", "-o", fields]',
+        '["ps", "-ef", "-p", str(pid)]',
+    ],
+)
+def test_guard_detects_host_command_lines(argv: str) -> None:
+    assert unsafe_process_listing(f"subprocess.run({argv})")
+
+
+def test_guard_accepts_a_pid_scoped_probe_and_refuses_an_empty_scan(tmp_path: Path) -> None:
     scoped = tmp_path / "test_scoped.py"
-    scoped.write_text(
-        "import subprocess\n"
-        "def census() -> str:\n"
-        '    subprocess.run(["ps", "-A", "-o", "pid=,ppid=,command="], check=True)\n'
-        f'    return "{WORKER_MODULE}"\n'
-    )
-    unrelated = tmp_path / "test_unrelated.py"
-    unrelated.write_text(
-        "import subprocess\n"
-        "def census() -> None:\n"
-        '    subprocess.run(["ps", "-ax", "-o", "pid=,command="], check=False)\n'
-    )
-    assert machine_wide_worker_censuses([bad, scoped, unrelated], WORKER_MODULE) == [str(bad)]
+    scoped.write_text('subprocess.run(["ps", "-p", str(pid), "-o", "stat="])')
+    assert unsafe_process_listings([scoped]) == []
     with pytest.raises(ValueError, match="no test files"):
-        machine_wide_worker_censuses([], WORKER_MODULE)
+        unsafe_process_listings([])

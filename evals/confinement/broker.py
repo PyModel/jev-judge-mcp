@@ -20,9 +20,9 @@ Config::
       ]
     }
 
-`paths` entries match exactly, or end in `*` for a prefix match; the model-provider upstream pins
-its host and lets its paths through (`"*"`), which is the acceptance level the study names. A
-capability grant is one JSON file per run in `grants_dir` — `{"token": ..., "expires": <epoch>}` —
+`paths` entries match exactly or end in `*` for a prefix match. The harness pins each model
+provider's host and allowlists exact endpoints for its API family. A capability grant is one
+JSON file per run in `grants_dir` — `{"token": ..., "expires": <epoch>}` —
 written by the harness, removed at run end; the broker re-reads the grant per request, so removal
 is revocation, and `expires` bounds a grant the harness could not remove. Grant file names are
 `sha256(token).hex + ".json"`, so checking a presented token needs no grant listing.

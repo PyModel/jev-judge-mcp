@@ -15,7 +15,7 @@ $(error $(STALE_HOOKS))
 endif
 endif
 
-.PHONY: ci lint typecheck unit property policy-coverage contract parity security build smoke eval eval-live security-live ab load load_canary hooks ci-linux confinement-adversarial confinement-image
+.PHONY: ci sync lint typecheck unit property policy-coverage contract parity policy-replay security build smoke eval eval-live security-live ab load load_canary hooks ci-linux confinement-adversarial confinement-image
 
 ci: sync lint typecheck unit property policy-coverage contract parity policy-replay security build smoke eval load_canary
 
@@ -58,7 +58,7 @@ contract:
 	$(PYTEST) tests/contract
 
 parity:
-	$(PYTEST) tests/parity
+	$(PYTEST) tests/parity --ignore=tests/parity/test_policy_replay.py
 
 # Recorded fixture answers through policy/, diffed against the recorded actions (design slice 5).
 policy-replay:
@@ -111,14 +111,17 @@ confinement-adversarial:
 # The confined agent runtime image (ADR-0074): python + this checkout's wheel + node + the pinned
 # agent CLIs. Live studies refuse to run without it.
 confinement-image:
-	uv build --wheel
-	docker build -f docker/eval-agent.Dockerfile -t jev-eval-agent:latest .
+	set -eu; context=$$(mktemp -d "$${TMPDIR:-/tmp}/jev-confinement.XXXXXX"); \
+	trap 'rm -rf -- "$$context"' EXIT; \
+	uv build --wheel --out-dir "$$context"; \
+	uv export --frozen --no-dev --no-emit-project --extra typesafe > "$$context/requirements.txt"; \
+	docker build -f docker/eval-agent.Dockerfile -t jev-eval-agent:latest "$$context"
 
 # Live L3 smoke against TypeSafe (paid, bounded; evals/README.md). Fails without TYPESAFE_API_KEY.
 eval-live:
 	$(PYTEST) tests/evals -m live
 
-# L4 agent outcome study, one agent per call (paid, capped per agent at 18 runs and 25 USD; evals/README.md
+# L4 agent outcome study, one agent per call (paid, capped per agent at 66 runs (task manifest x arms x repeats) and 25 USD; evals/README.md
 # § L4). Refuses unless the caller passes JEV_AB_LIVE=1 on the command line; this target never sets it.
 # Refuses to resume a study recorded under another Jev revision, fixture, or agent setup.
 AGENT ?= claude

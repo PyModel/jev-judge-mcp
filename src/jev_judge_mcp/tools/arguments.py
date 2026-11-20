@@ -309,16 +309,6 @@ def compile_argument_schema(
     return ArgumentParser(tool, _Object(properties))
 
 
-def parse_arguments(
-    tool: str,
-    schema: Schema,
-    arguments: Mapping[str, object] | None,
-    refinements: Mapping[str, Refinement] | None = None,
-) -> dict[str, object]:
-    """Compile `schema` and parse `arguments` once; a served tool calls the parser its `Toolset` compiled."""
-    return compile_argument_schema(tool, schema, refinements)(arguments)
-
-
 def _js_pattern(pattern: str) -> re.Pattern[str]:
     """The schema's JS regex. Its `$` is the end of input: Python's would also match before a final newline."""
     if not pattern.startswith("^") or not pattern.endswith("$") or not pattern.isascii():

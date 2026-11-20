@@ -1,6 +1,7 @@
 """The hidden-character guard: every hiding technique fails, legitimate script and emoji text passes."""
 
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,8 @@ TAGS = "".join(chr(0xE0000 + ord(c)) for c in "hi")
         ("x\ufeff", "1:2: U+FEFF"),
         ("\u0645\u200c\u200c\u062e", "1:2: U+200C"),  # a run of joiners is never shaping
         ("a\x00", "1:2: U+0000"),
+        pytest.param("a\x1b", "1:2: U+001B", id="escape"),
+        pytest.param("a\x0c", "1:2: U+000C", id="form-feed"),
     ],
 )
 def test_hidden_text_fails(text: str, hit: str) -> None:
@@ -43,6 +46,7 @@ def test_hidden_text_fails(text: str, hit: str) -> None:
         "\u05e9\u05dc\u05d5\u05dd\u200f 123",  # Hebrew with RLM
         "\ufeffleading BOM",
         "\u4f60\u597d \u0645\u0631\u062d\u0628\u0627 \U0001f600",
+        "tab\t CRLF\r\n plain LF\n",
     ],
 )
 def test_legitimate_text_passes(text: str) -> None:
@@ -54,6 +58,46 @@ def test_undecodable_file_fails_instead_of_being_skipped(data: bytes) -> None:
     assert "not UTF-8" in check.scan([("f", data)])[0]
 
 
-def test_outside_a_repository_exits_2(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("filename", "target", "finding"),
+    [
+        pytest.param(b"bad-\xff", None, "tracked filename b'bad-\\xff': not UTF-8 at byte 4", id="filename"),
+        pytest.param(b"link", "missing\u202e", "link (symlink target):1:8: U+202E", id="symlink"),
+        pytest.param(b"link", "missing", None, id="clean-dangling-symlink"),
+    ],
+)
+def test_tracked_paths_and_symlink_targets(
+    tmp_path: Path, filename: bytes, target: str | None, finding: str | None
+) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, capture_output=True, check=True)
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=tmp_path,
+        input=(target or "clean").encode(),
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    mode = b"100644"
+    if target is not None:
+        (tmp_path / os.fsdecode(filename)).symlink_to(target)
+        mode = b"120000"
+    subprocess.run(
+        ["git", "update-index", "-z", "--index-info"],
+        cwd=tmp_path,
+        input=mode + b" " + blob + b"\t" + filename + b"\0",
+        capture_output=True,
+        check=True,
+    )
+    result = subprocess.run([sys.executable, str(SCRIPT)], cwd=tmp_path, capture_output=True, text=True, check=False)
+    assert "Traceback" not in result.stderr
+    assert result.returncode == (1 if finding else 0), result.stderr
+    if finding:
+        assert finding in result.stderr
+
+
+def test_outside_a_repository_exits_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
     result = subprocess.run([sys.executable, str(SCRIPT)], cwd=tmp_path, capture_output=True, text=True, check=False)
     assert result.returncode == 2, result.stderr

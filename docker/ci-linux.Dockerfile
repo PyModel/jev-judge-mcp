@@ -26,7 +26,7 @@ RUN case "$TARGETARCH" in \
 		*) NODEARCH="$TARGETARCH" ;; \
 	esac \
 	&& apt-get update \
-	&& apt-get install -y --no-install-recommends git make procps ca-certificates curl xz-utils \
+	&& apt-get install -y --no-install-recommends git make procps jq ripgrep ca-certificates curl xz-utils \
 	&& rm -rf /var/lib/apt/lists/* \
 	&& curl -fsSLO "https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-${NODEARCH}.tar.xz" \
 	&& curl -fsSLO "https://nodejs.org/dist/v24.19.0/SHASUMS256.txt" \

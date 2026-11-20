@@ -6,15 +6,18 @@ recording proxy, and one sentence to the system addendum telling the agent to us
 for the judgment the task hinges on. Nothing else differs (`tests/evals/test_ab_harness.py` checks).
 """
 
+import hashlib
 import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
 from evals.agent import RELAY_LOG
+from evals.relay import private_opener
 
 ARMS = ("A", "B")
 ARM_LABELS = {"A": "without Jev", "B": "with Jev MCP"}
@@ -70,56 +73,32 @@ def addendum(arm: str, agent: str, tool: str) -> str:
     return SYSTEM_ADDENDUM if arm == "A" else f"{SYSTEM_ADDENDUM} {jev_sentence(agent, tool)}"
 
 
-def jev_command() -> list[str]:
-    """This worktree's Python server."""
-    return [sys.executable, "-m", "jev_judge_mcp"]
+def digest(path: Path) -> str:
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
 
 
-def study_venv(root: Path, wheel: Path) -> Path:
-    """Build, once per study, a venv OUTSIDE the repo with this package installed from the wheel.
-
-    The sandbox launcher names this interpreter, so no agent-visible file and no `sys.prefix`
-    inside the sandbox can name the repo — the D3 contamination route ran through a launcher that
-    did. The repo checkout is an editable install whose `.pth` names `src/`, so copying the repo
-    venv would not meet that bar; only a wheel-built venv does. Dependencies come from the wheel's
-    metadata (network, at study launch: the operator's paid action).
-    """
-    venv = root / "jev-study-venv"
-    python = venv / "bin" / "python"
-    if not python.exists():
-        subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True)
-        subprocess.run([str(python), "-m", "pip", "install", str(wheel)], check=True)
-    return python
+def ensure_wheel(destination: Path | None = None) -> Path:
+    """Build this checkout in isolation from any wheels left by earlier builds."""
+    dist = destination if destination is not None else REPO_ROOT / "dist"
+    dist.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=dist) as staging:
+        subprocess.run(["uv", "build", "--wheel", "--out-dir", staging], cwd=REPO_ROOT, check=True, timeout=180)
+        wheels = list(Path(staging).glob("jev_judge_mcp-*.whl"))
+        if len(wheels) != 1:
+            raise RuntimeError("expected one freshly built study wheel")
+        target = dist / wheels[0].name
+        wheels[0].replace(target)
+        return target
 
 
-def ensure_wheel() -> Path:
-    """The built wheel for this checkout, building it if `make build` has not run yet."""
-    dist = REPO_ROOT / "dist"
-    wheels = sorted(dist.glob("jev_judge_mcp-*.whl"))
-    if wheels:
-        return wheels[-1]
-    subprocess.run(["uv", "build", "--wheel"], cwd=REPO_ROOT, check=True)
-    wheels = sorted(dist.glob("jev_judge_mcp-*.whl"))
-    if not wheels:
-        raise RuntimeError("uv build --wheel produced no wheel")
-    return wheels[-1]
-
-
-def sandbox_python(sandbox: Path, interpreter: str | None = None) -> Path:
-    """A sandbox-local interpreter for the servers: `sandbox/bin/python3`, a launcher for the study
-    venv's python.
-
-    The agent reads its own MCP config (recorded runs show it did), so the config text must name no
-    host path outside the run sandbox. `interpreter` is the per-study venv built from the wheel
-    (`study_venv`) — neutral, outside the repo. Empty falls back to this process's interpreter,
-    which names the repo and is the offline dry-run shape only.
-    """
+def sandbox_python(sandbox: Path) -> Path:
+    """Write a sandbox-local launcher for the offline dry run's Python interpreter."""
     bin_dir = sandbox / "bin"
     bin_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     launcher = bin_dir / "python3"
     if not launcher.exists():
-        target = interpreter or sys.executable
-        launcher.write_text(f'#!/bin/sh\nexec {target!r} "$@"\n', encoding="utf-8")
+        launcher.write_text(f'#!/bin/sh\nexec {sys.executable!r} "$@"\n', encoding="utf-8")
         launcher.chmod(0o755)
     return launcher
 
@@ -171,21 +150,19 @@ def keyfile_env(sandbox: Path, api_key: str) -> dict[str, str]:
     anywhere the agent can read.
     """
     path = sandbox / "typesafe.key"
-    path.write_text(api_key + "\n", encoding="utf-8")
-    path.chmod(0o600)
+    with open(path, "w", encoding="utf-8", opener=private_opener) as credential:
+        credential.write(api_key + "\n")
     return {"JEV_MCP_KEY_FILE": str(path)}
 
 
-def mcp_config(
-    arm: str, *, sandbox: Path, server_env: Mapping[str, str], api_key: str = "", interpreter: str | None = None
-) -> dict[str, Any]:
+def mcp_config(arm: str, *, sandbox: Path, server_env: Mapping[str, str], api_key: str = "") -> dict[str, Any]:
     """The `--mcp-config` document, built against the run's private sandbox.
 
     Every path in the document is inside `sandbox`: the servers run from copies placed there, the
-    interpreter is the sandbox symlink, and the relay log is written there and copied out to the
+    interpreter is the sandbox launcher, and the relay log is written there and copied out to the
     run's records after the run. Only B carries `server_env`.
     """
-    python = sandbox_python(sandbox, interpreter)
+    python = sandbox_python(sandbox)
     servers = copy_servers(sandbox, "ab")
     harness = {
         "type": "stdio",
@@ -330,7 +307,10 @@ def scoped_provider_key(source: Path, provider: str) -> str:
         return ""
     if not isinstance(entries, dict) or provider not in entries:
         return ""
-    key = cast(dict[str, Any], cast(dict[str, Any], entries)[provider]).get("key")
+    entry = cast(dict[str, Any], entries)[provider]
+    if not isinstance(entry, dict):
+        return ""
+    key = cast(dict[str, Any], entry).get("key")
     return key if isinstance(key, str) and key else ""
 
 

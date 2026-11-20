@@ -4,9 +4,9 @@
 Model robustness is L3, not this stage. What is checked here is that the server treats injected text
 as data, and that policy holds when the (mocked) model answers adversarially:
 
-- an injection string appended to any one text field changes no question id, type, or option, never
-  lands in a question key, reaches the provider verbatim, and leaves every decision equal to the
-  benign run under the same answers;
+- caller text never becomes a question id or option. Extra evidence lines can add numbered
+  citation choices. Each choice must resolve to an actual source line. Other options, question
+  types and decisions stay identical under the same answers, and text reaches the provider verbatim;
 - hostile answers (weak or damning probabilities dressed up with `action: auto` and an `override`
   key, plus spoofed top-level answers) never yield a permissive action.
 """
@@ -49,11 +49,26 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-def skeleton(question: Any) -> Any:
+def skeleton(key: str, question: Any, state: Any) -> Any:
     """A question without its free text: type, option keys, level count."""
     shape: dict[str, Any] = {"type": question.get("type")}
     criteria = question.get("criteria")
-    if isinstance(criteria, dict):
+    if key == "defect_line" or key.startswith("counterexample_"):
+        field = "patch_lines" if key == "defect_line" else "counterevidence_lines"
+        pointers = state[field]
+        assert 0 < len(pointers) <= 32
+        ids = [f"L{i + 1}" for i in range(len(pointers))]
+        assert list(pointers) == ids
+        assert criteria == {"none": "No listed line demonstrates the issue.", **dict.fromkeys(ids)}
+        sources = {item["id"]: item["text"] for item in state["evidence"]} if field == "counterevidence_lines" else {}
+        for pointer in pointers.values():
+            source = sources[pointer["source"]] if field == "counterevidence_lines" else state["diff"]
+            assert field == "counterevidence_lines" or pointer["source"] == "diff"
+            lines = source.split("\n")
+            assert 1 <= pointer["line"] <= len(lines)
+            assert pointer["text"] and lines[pointer["line"] - 1].startswith(pointer["text"])
+        shape["options"] = field
+    elif isinstance(criteria, dict):
         shape["options"] = sorted(criteria)  # pyright: ignore[reportUnknownArgumentType]
     elif isinstance(criteria, list):
         shape["levels"] = len(criteria)  # pyright: ignore[reportUnknownArgumentType]
@@ -61,7 +76,7 @@ def skeleton(question: Any) -> Any:
 
 
 def question_shapes(outcome: Outcome) -> list[dict[str, Any]]:
-    return [{key: skeleton(q) for key, q in questions.items()} for _, questions in outcome.requests]
+    return [{key: skeleton(key, q, state) for key, q in questions.items()} for state, questions in outcome.requests]
 
 
 def decisions(payload: Any) -> dict[str, list[object]]:

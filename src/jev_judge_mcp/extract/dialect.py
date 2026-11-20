@@ -10,7 +10,7 @@ spells every construct out explicitly, so no Python default leaks in:
 - `i` is ASCII-only case folding, and is refused when a literal or class endpoint is not ASCII.
 
 Anything else is refused with a named reason rather than guessed at: the flags `d m s u v y`, named
-groups, backreferences, legacy octal escapes, property escapes, `\\u{...}`, lookbehind that is not
+and modifier groups, backreferences, legacy octal escapes, property escapes, `\\u{...}`, lookbehind that is not
 fixed-length, quantified assertions, a variable repeat of a group that can match empty (V8 and `re`
 treat its empty iterations differently), and alphanumeric identity escapes. Flags V8 itself rejects keep
 V8's message, so that text matches the reference.
@@ -77,12 +77,7 @@ def translate(pattern: str, flags: str) -> Translated:
     ignore_case = "i" in flags
     if ignore_case and parser.non_ascii:
         _refuse("the 'i' flag with a non-ASCII character in the pattern")
-    python_flags = re.ASCII | (re.IGNORECASE if ignore_case else 0)
-    try:
-        re.compile(body.text, python_flags)
-    except (re.error, RecursionError, OverflowError) as error:
-        _refuse(f"the pattern cannot be matched here ({error})")
-    return Translated(body.text, python_flags)
+    return Translated(body.text, re.ASCII | (re.IGNORECASE if ignore_case else 0))
 
 
 def _refuse(what: str) -> NoReturn:
@@ -114,34 +109,17 @@ def _ranges(units: tuple[int, ...] | list[int]) -> str:
     return "".join(_unit(u) for u in units)
 
 
-def _complement(members: set[int]) -> str:
-    """Class content matching every unit (0-FFFF) outside `members`, as ranges."""
-    out: list[str] = []
-    start = 0
-    for member in [*sorted(members), 0x10000]:
-        if member > start:
-            out.append(_unit(start) if member - 1 == start else f"{_unit(start)}-{_unit(member - 1)}")
-        start = member + 1
-    return "".join(out)
-
-
-_DIGITS = set(range(0x30, 0x3A))
-_WORDS = _DIGITS | set(range(0x41, 0x5B)) | set(range(0x61, 0x7B)) | {0x5F}
-_CLASS_ESCAPES = {
-    "d": "0-9",
-    "w": _WORD,
-    "s": _ranges(_WHITESPACE_UNITS),
-    "D": _complement(_DIGITS),
-    "W": _complement(_WORDS),
-    "S": _complement(set(_WHITESPACE_UNITS)),
-}
-"""Class escapes as class content, so they can stand inside a bracketed class too."""
+_WHITESPACE = _ranges(_WHITESPACE_UNITS)
+_SPACE = f"[{_WHITESPACE}]"
+_NONSPACE = f"[^{_WHITESPACE}]"
+_CLASS_ESCAPES = {"d": r"\d", "D": r"\D", "w": r"\w", "W": r"\W", "s": _WHITESPACE, "S": r"\S"}
 _DOT = f"[^{_ranges(_LINE_TERMINATORS)}]"
-_NOTHING = "[^\\u0000-\\uffff]"
-_ANYTHING = "[\\u0000-\\uffff]"
+_NOTHING = r"[^\s\S]"
+_ANYTHING = r"[\s\S]"
 _BOUNDARY = f"(?:(?<=[{_WORD}])(?![{_WORD}])|(?<![{_WORD}])(?=[{_WORD}]))"
 _NOT_BOUNDARY = f"(?:(?<=[{_WORD}])(?=[{_WORD}])|(?<![{_WORD}])(?![{_WORD}]))"
 _QUANTIFIER = re.compile(r"\{([0-9]+)(,([0-9]*))?\}")
+_MODIFIER_GROUP = re.compile(r"([ims]*)(?:-([ims]*))?:")
 _ASCII_DIGITS = "0123456789"
 _CONTROL_ESCAPES = {"f": 0x0C, "n": 0x0A, "r": 0x0D, "t": 0x09, "v": 0x0B}
 _HEX = set("0123456789abcdefABCDEF")
@@ -297,6 +275,10 @@ class _Parser:
             return _Piece(f"(?<{sign}{body.text})", 0, 0, assertion=True, lookaround=True)
         if kind == "<":
             _refuse("a named group")
+        if modifier := _MODIFIER_GROUP.match(self.units, self.at):
+            options = modifier[1] + (modifier[2] or "")
+            if options and len(options) == len(set(options)):
+                _refuse("a modifier group")
         _invalid("invalid group")
 
     def _close_group(self) -> None:
@@ -316,7 +298,8 @@ class _Parser:
             return _Piece(_NOT_BOUNDARY, 0, 0, assertion=True)
         if char in _CLASS_ESCAPES:
             self.at += 1
-            return _Piece(f"[{_CLASS_ESCAPES[char]}]", 1, 1)
+            text = _SPACE if char == "s" else _NONSPACE if char == "S" else _CLASS_ESCAPES[char]
+            return _Piece(text, 1, 1)
         return self._literal(self._character_escape())
 
     def _character_escape(self) -> int:
@@ -373,6 +356,13 @@ class _Parser:
                 members.append(start if isinstance(start, str) else self._endpoint(start))
         if not members:
             return _Piece(_ANYTHING if negate else _NOTHING, 1, 1)
+        if r"\S" in members:
+            others = "".join(member for member in members if member != r"\S")
+            if not others:
+                return _Piece(_SPACE if negate else _NONSPACE, 1, 1)
+            # \S already covers non-whitespace units. Only whitespace needs the other members.
+            text = f"(?![{others}]){_SPACE}" if negate else f"{_NONSPACE}|(?={_SPACE})[{others}]"
+            return _Piece(f"(?:{text})", 1, 1)
         return _Piece(f"[{'^' if negate else ''}{''.join(members)}]", 1, 1)
 
     def _endpoint(self, value: int) -> str:

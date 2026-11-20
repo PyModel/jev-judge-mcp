@@ -13,6 +13,7 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+source "$SCRIPT_DIR/run_bounded.sh"
 
 # The hook inherits git's environment; a nested checkout must not see it.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
@@ -24,30 +25,6 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 # for slow machines, and it can only make the gate stricter, never looser.
 NATIVE_SYNC_TIMEOUT=${JEV_PREPUSH_TIMEOUT:-900}
 NATIVE_CI_TIMEOUT=${JEV_PREPUSH_TIMEOUT:-3600}
-
-# Portable watchdog: macOS has no timeout(1). The child's direct children are terminated
-# first, then the child, so a killed make or uv does not leave the tree running.
-run_bounded() {
-	local seconds=$1 pid watchdog status=0
-	shift
-	"$@" &
-	pid=$!
-	# The watchdog's own output goes nowhere and its children die with it: an orphaned
-	# sleep must not hold the caller's stdout pipe open after the stage ends.
-	(
-		sleep "$seconds"
-		pkill -TERM -P "$pid" 2>/dev/null || true
-		kill -TERM "$pid" 2>/dev/null
-	) >/dev/null 2>&1 &
-	watchdog=$!
-	wait "$pid" || status=$?
-	pkill -TERM -P "$watchdog" 2>/dev/null || true
-	# The subshell may have already torn itself down (its pkill woke it the moment this
-	# side's pkill killed its sleep); losing that race must not kill the gate (set -e).
-	kill "$watchdog" 2>/dev/null || true
-	wait "$watchdog" 2>/dev/null || true
-	return "$status"
-}
 
 TMP_DIR=""
 cleanup() {

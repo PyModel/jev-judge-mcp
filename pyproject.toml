@@ -17,6 +17,7 @@ classifiers = [
 dependencies = [
     "mcp>=2.2,<2.3",
     "httpx>=0.28,<0.29",
+    "packaging>=26,<27",
     "pydantic>=2,<3",
     "pydantic-settings>=2,<3",
     "tomlkit>=0.15.1,<0.16",
@@ -70,7 +71,7 @@ cache-keys = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]

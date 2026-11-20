@@ -4,13 +4,17 @@ the spec the Docker-marked adversarial suite then executes for real.
 """
 
 import json
+import signal
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
 from evals.ab import arms
-from evals.agent import container_boundary, escape_scan, exploration_paths, secret_scan
+from evals.agent import AgentCommand, container_boundary, escape_scan, exploration_paths, secret_scan
 from evals.confinement import launch
 
 KEY = "sk-launch-fake-typesafe-key-0123456789abcdefNOTREAL"
@@ -400,12 +404,11 @@ def test_the_confined_mcp_config_points_the_server_at_the_shim_with_the_placehol
 
 def test_the_provider_upstream_keeps_its_base_path_and_exact_endpoints() -> None:
     """F3: `Upstream.provider` keeps the base URL's path and swaps `*` for the API family's
-    endpoints; `full_path` is what the broker forwards."""
+    endpoints."""
     upstream = launch.Upstream.provider("opencode-go", "https://opencode.ai/zen/go/v1", "/tmp/key")
     assert (upstream.host, upstream.port, upstream.scheme) == ("opencode.ai", 443, "https")
     assert upstream.base_path == "/zen/go/v1"
     assert upstream.paths == ("/chat/completions", "/models")
-    assert upstream.full_path("/chat/completions") == "/zen/go/v1/chat/completions"
     anthropic = launch.Upstream.provider("anthropic", "https://api.anthropic.com", "/tmp/key", api="anthropic")
     assert anthropic.credential_header == "x-api-key" and anthropic.credential_scheme == ""
     assert anthropic.paths == launch.ANTHROPIC_ENDPOINTS and anthropic.base_path == ""
@@ -453,3 +456,358 @@ def test_a_secret_in_the_container_env_is_refused_before_anything_starts(tmp_pat
             run_dir=tmp_path / "records",
         ):
             pass
+
+
+@pytest.mark.parametrize("name", ["jev-calls.jsonl", "jev-calls.stderr"])
+def test_scout_033_confined_archives_start_private(tmp_path: Path, name: str) -> None:
+    import os
+    import stat
+
+    source = tmp_path / "source"
+    source.write_bytes(b"synthetic evidence")
+    target = tmp_path / name
+    mask = os.umask(0o022)
+    try:
+        assert launch.copy_regular_nofollow(source, target)
+    finally:
+        os.umask(mask)
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert target.read_bytes() == source.read_bytes()
+    target.chmod(0o644)
+    target.write_bytes(b"prior evidence")
+    with pytest.raises(PermissionError):
+        launch.copy_regular_nofollow(source, target)
+    assert target.read_bytes() == b"prior evidence"
+
+
+@pytest.mark.parametrize("failure", ["second_allocation", "layout", "teardown"])
+def test_scout_011_confined_partial_setup_releases_every_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, failure: str
+) -> None:
+    import shutil
+    import tempfile
+
+    from evals.agent import AgentCommand
+
+    owned = tmp_path / "scratch-parent"
+    owned.mkdir()
+    request.addfinalizer(lambda: shutil.rmtree(owned))
+    monkeypatch.setattr(tempfile, "tempdir", str(owned))
+    spec = _spec(tmp_path)
+    run_dir = tmp_path / "records"
+    run_dir.mkdir(mode=0o700)
+    record = run_dir / "synthetic.txt"
+    record.write_text(KEY)
+    original_mkdtemp = tempfile.mkdtemp
+    original_mkdir = Path.mkdir
+
+    def allocate(suffix: str | None = None, prefix: str | None = None, dir: str | None = None) -> str:
+        if failure == "second_allocation" and any(owned.iterdir()):
+            raise OSError(failure)
+        return original_mkdtemp(suffix, prefix, dir)
+
+    def mkdir(path: Path, *args: Any, **kwargs: Any) -> None:
+        if failure == "layout" and path.name == "agent-cfg":
+            raise OSError(failure)
+        original_mkdir(path, *args, **kwargs)
+
+    def docker(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("synthetic volume creation failure")
+
+    def teardown(**_kwargs: Any) -> None:
+        if failure == "teardown":
+            raise OSError("teardown")
+
+    monkeypatch.setattr(tempfile, "mkdtemp", allocate)
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    monkeypatch.setattr(launch, "docker_run", docker)
+    monkeypatch.setattr(launch, "teardown", teardown)
+    message = "synthetic volume creation failure" if failure == "teardown" else failure
+    with pytest.raises(OSError, match=message) as primary:
+        with launch.run_confined(
+            AgentCommand(argv=lambda _: ["true"], timeout_s=1), spec=spec, mcp_config={}, secret=KEY, run_dir=run_dir
+        ):
+            pytest.fail("setup was expected to stop")
+    if failure == "teardown":
+        assert primary.value.__notes__ == ["Confinement cleanup also failed: OSError"]
+        # Uncertain Docker cleanup keeps only its owner identity for the next reaper.
+        [retry] = owned.iterdir()
+        assert [p.name for p in retry.iterdir()] == [launch.LEASE_MARKER]
+        import subprocess
+
+        monkeypatch.setattr(launch, "docker_run", Mock(return_value=subprocess.CompletedProcess([], 0, "", "")))
+        assert launch.reap()["dirs"] == [retry.name]
+    assert list(owned.iterdir()) == []
+    assert KEY not in record.read_text()
+
+
+@pytest.mark.parametrize("budget", [8, 9])
+def test_relay_budget_is_shared_and_overflow_unwinds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, budget: int
+) -> None:
+    import subprocess
+
+    from evals import agent
+
+    records = tmp_path / "records"
+    cleanup = Mock()
+    docker = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
+    capture = Mock(return_value=("", "", 0))
+    monkeypatch.setattr(agent, "RELAY_CAP_BYTES", budget, raising=False)
+    monkeypatch.setattr(launch, "wait_for_broker", Mock())
+    monkeypatch.setattr(launch, "docker_run", docker)
+    monkeypatch.setattr(launch, "capture_output", capture)
+    monkeypatch.setattr(launch, "teardown", cleanup)
+
+    def relays(scratch: Path) -> None:
+        (scratch / "jev-calls.jsonl").write_bytes(b"12345")
+        (scratch / "jev-calls.stderr").write_bytes(b"6789")
+
+    def run() -> None:
+        with launch.run_confined(
+            agent.AgentCommand(argv=lambda _: ["true"], timeout_s=1),
+            spec=_spec(tmp_path),
+            mcp_config={},
+            secret=KEY,
+            run_dir=records,
+            scratch_files=relays,
+        ):
+            pass
+
+    if budget == 8:
+        with pytest.raises(OSError, match=r"incomplete.*relay"):
+            run()
+    else:
+        run()
+        assert (records / "jev-calls.stderr").read_bytes() == b"6789"
+    cleanup.assert_called_once()
+    volume = cleanup.call_args.kwargs["volume"]
+    label = f"{launch.LEASE_LABEL}={volume.removeprefix('jev-eval-sock-')}"
+    volume_call, broker_call, agent_removal = docker.call_args_list
+    assert all(label in call.args[0] for call in (volume_call, broker_call))
+    assert agent_removal.args[0] == ["docker", "rm", "-f", cleanup.call_args.kwargs["agent_name"]]
+    assert label in capture.call_args.args[0]
+    assert sum(p.stat().st_size for p in records.glob("jev-calls.*")) <= budget
+
+
+@pytest.mark.parametrize("returncode", [0, None], ids=["exit", "timeout"])
+def test_the_agent_is_removed_before_its_final_relay_log_is_copied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, returncode: int | None
+) -> None:
+    records = tmp_path / "records"
+    active: str | None = None
+    relay: Path | None = None
+
+    def capture(argv: list[str], **_kwargs: object) -> tuple[str, str, int | None]:
+        nonlocal active, relay
+        active = argv[argv.index("--name") + 1]
+        scratch = next(mount.removesuffix(":/scratch") for mount in _mounts(argv) if mount.endswith(":/scratch"))
+        relay = Path(scratch) / "jev-calls.jsonl"
+        return "", "", returncode
+
+    def docker(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal active
+        if active is not None and argv == ["docker", "rm", "-f", active]:
+            assert relay is not None
+            relay.write_text('{"input_tokens":1}\n')
+            active = None
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(launch, "capture_output", capture)
+    monkeypatch.setattr(launch, "docker_run", docker)
+    monkeypatch.setattr(launch, "wait_for_broker", Mock())
+    with launch.run_confined(
+        AgentCommand(argv=lambda _: ["true"], timeout_s=1),
+        spec=_spec(tmp_path),
+        mcp_config={},
+        secret=KEY,
+        run_dir=records,
+    ):
+        assert active is None, "grading can start while the agent container is still running"
+        assert (records / "jev-calls.jsonl").read_text() == '{"input_tokens":1}\n'
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP])
+def test_shutdown_signal_unwinds_cleanup(tmp_path: Path, signum: signal.Signals) -> None:
+    cleanup = tmp_path / "cleanup"
+    script = """
+import os, signal, sys
+from pathlib import Path
+from evals.confinement.launch import exit_on_sigterm
+
+exit_on_sigterm()
+try:
+    os.kill(os.getpid(), int(sys.argv[1]))
+finally:
+    Path(sys.argv[2]).touch()
+"""
+    result = subprocess.run([sys.executable, "-c", script, str(signum), str(cleanup)], check=False, timeout=10)
+    assert cleanup.is_file()
+    assert result.returncode == 128 + signum
+
+
+def test_secret_scan_and_scrub_read_bounded_chunks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from evals import agent
+
+    path = tmp_path / "artifact"
+    original = b"1234567secretsecret.xsecret.las"
+    path.write_bytes(original)
+    monkeypatch.setattr(agent, "ARTIFACT_CHUNK_BYTES", 8, raising=False)
+    fdopen = agent.os.fdopen
+
+    class BoundedReader:
+        def __init__(self, stream: Any) -> None:
+            self.stream = stream
+
+        def __enter__(self) -> Any:
+            self.stream.__enter__()
+            return self
+
+        def __exit__(self, *args: Any) -> Any:
+            return self.stream.__exit__(*args)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self.stream, name)
+
+        def read(self, size: int = -1) -> bytes:
+            assert 0 < size <= 8, "artifact read exceeds the scan budget"
+            return self.stream.read(size)
+
+    def bounded_fdopen(fd: int, mode: str) -> BoundedReader:
+        return BoundedReader(fdopen(fd, mode))
+
+    monkeypatch.setattr(agent.os, "fdopen", bounded_fdopen)
+    assert agent.secret_scan(tmp_path, "secret") == ("artifact",)
+    agent.secret_scrub(tmp_path, "secret")
+    assert path.read_bytes() == original.replace(b"secret", agent.REDACTED)
+    assert agent.secret_scan(tmp_path, "secret") == ()
+
+
+@pytest.mark.parametrize("slow", ["exec", "inspect", "logs", "sleep"])
+def test_broker_deadline_bounds_each_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slow: str) -> None:
+    import subprocess
+
+    now = 0.0
+    calls: list[str] = []
+
+    def docker(argv: list[str], *, check: bool, timeout: float = 120.0) -> subprocess.CompletedProcess[str]:
+        nonlocal now
+        calls.append(argv[1])
+        assert 0 < timeout <= 1 - now + 1e-9
+        if argv[1] == slow:
+            now += timeout
+            raise subprocess.TimeoutExpired(argv, timeout)
+        now += min(0.4, timeout)
+        return subprocess.CompletedProcess(argv, int(argv[1] == "exec"), "true" if slow == "sleep" else "false", "")
+
+    def sleep(delay: float) -> None:
+        nonlocal now
+        assert delay <= 1 - now + 1e-9
+        now += delay
+
+    monkeypatch.setattr(launch.time, "monotonic", lambda: now)
+    monkeypatch.setattr(launch.time, "sleep", sleep)
+    monkeypatch.setattr(launch, "docker_run", docker)
+    with pytest.raises(launch.ConfinementError, match="within"):
+        launch.wait_for_broker("fixture", 1.0)
+    assert now == pytest.approx(1)
+    assert (
+        calls
+        == {
+            "exec": ["exec"],
+            "inspect": ["exec", "inspect"],
+            "logs": ["exec", "inspect", "logs"],
+            "sleep": ["exec", "inspect"],
+        }[slow]
+    )
+
+
+@pytest.mark.parametrize("failed_removal", [False, True])
+def test_reaper_respects_live_leases_and_reports_only_deletions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_removal: bool
+) -> None:
+    import fcntl
+    import os
+    import subprocess
+    from contextlib import ExitStack
+
+    removed: list[str] = []
+    roots = [tmp_path / ("jev-confined-v1-" + tag) for tag in ("active1", "active2", "orphan")]
+    unknown = tmp_path / "jev-confined-legacy"
+    unknown.mkdir(mode=0o700)
+    os.utime(unknown, (0, 0))
+    for directory in roots:
+        directory.mkdir(mode=0o700)
+        (directory / ".jev-lease-v1").touch(mode=0o600)
+        os.utime(directory, (0, 0))
+    monkeypatch.setattr(launch.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(launch.shutil, "which", Mock(return_value="fixture-docker"))
+
+    def docker(argv: list[str], **_: Any) -> subprocess.CompletedProcess[str]:
+        if "--filter" in argv:
+            selection = argv[argv.index("--filter") + 1]
+            kind = "container" if argv[1] == "ps" else "volume"
+            names = [
+                kind + "-" + r.name for r in roots if selection in ("label=jev-eval", "label=jev-eval-lease=" + r.name)
+            ]
+            return subprocess.CompletedProcess(argv, 0, "\n".join(names), "")
+        if failed_removal and argv[-1].startswith("volume"):
+            return subprocess.CompletedProcess(argv, 1, "", "fixture failure")
+        removed.append(argv[-1])
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(launch, "docker_run", docker)
+    with ExitStack() as locks:
+        for directory in roots[:2]:
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            locks.callback(os.close, fd)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        if failed_removal:
+            with pytest.raises(launch.ConfinementError, match="reap"):
+                launch.reap()
+        else:
+            result = launch.reap()
+            assert result["dirs"] == [roots[-1].name]
+            assert result["volumes"] == ["volume-" + roots[-1].name]
+            assert result["containers"] == ["container-" + roots[-1].name]
+    assert unknown.is_dir() and all(r.is_dir() for r in roots[:2])
+    assert roots[-1].exists() == failed_removal
+    assert removed == ["container-" + roots[-1].name] + ([] if failed_removal else ["volume-" + roots[-1].name])
+
+
+def test_reaper_keeps_identity_after_directory_removal_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(launch.tempfile, "tempdir", str(tmp_path))
+    root = tmp_path / (launch.KEY_PREFIX + "fixture")
+    root.mkdir(mode=0o700)
+    with launch.directory_lease(root):
+        assert launch.reap()["dirs"] == []
+    payload = root / "payload"
+    payload.mkdir()
+    with monkeypatch.context() as patch:
+        patch.setattr(launch.shutil, "rmtree", Mock(side_effect=PermissionError("fixture cleanup failure")))
+        with pytest.raises(PermissionError, match="fixture cleanup failure"):
+            launch.reap()
+    assert (root / launch.LEASE_MARKER).is_file()
+    assert launch.reap()["dirs"] == [root.name]
+    assert not root.exists()
+
+
+def test_missing_docker_volume_is_already_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    argv = ["docker", "volume", "rm", "fixture"]
+    result = subprocess.CompletedProcess(argv, 1, "", "Error response from daemon: get fixture: no such volume")
+    success = subprocess.CompletedProcess(["docker", "rm"], 0, "", "")
+    monkeypatch.setattr(launch, "docker_run", Mock(side_effect=[success, success, result]))
+    launch.teardown(agent_name="agent", broker_name="broker", volume="fixture")
+
+
+def test_grading_interrupt_preserves_reaper_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(launch.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(launch, "docker_run", Mock(side_effect=KeyboardInterrupt))
+    with pytest.raises(KeyboardInterrupt):
+        launch.confined_reference("fixture", "fixture", timeout_s=1)
+    roots = list(tmp_path.glob(launch.RUN_PREFIX + "*"))
+    assert len(roots) == 1 and list(roots[0].iterdir()) == [roots[0] / launch.LEASE_MARKER]
+    monkeypatch.setattr(launch, "docker_run", Mock(return_value=Mock(returncode=0, stdout="")))
+    assert launch.reap()["dirs"] == [roots[0].name]

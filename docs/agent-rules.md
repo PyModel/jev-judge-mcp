@@ -40,7 +40,7 @@ enumerated into bounded options; or when the same unchanged decision was already
 | `jev_extract` | Your regex proposes candidates, Jev picks, the value comes back verbatim (versions, prices, dates, IDs) | 50,000 units per document, ≤32 fields |
 | `jev_score` | Grade severity or risk on your own ordered rubric; threshold the level, never interpolate a magnitude between levels | 2–10 levels |
 | `jev_file_judge` | Judge a file without reading it: the server reads the path as state, you get the typed answer, the bytes never enter your context | 100,000 units per file, refused over |
-| `jev_ask` | Your own questions (noul, choice, score) over one composed state: framing text, server-read files, a gate-judged command's output. Typed answers keyed by your ids; overflow refuses with a split suggestion | 1–20 questions, ≤20 paths, 120,000 units of state plus questions |
+| `jev_ask` | Your own questions (noul, choice, score) over one composed state: framing text, server-read files, or redacted output from an opt-in read-only command with allowlisted options. One provider call returns typed answers keyed by your ids; overflow refuses with a split suggestion | 1–20 questions, ≤20 paths, 120,000 units of state plus questions |
 | `jev_files_judge` | The same judgment over many files: glob patterns, directories, and paths in, one call per surviving file, skips reported with reasons | ≤64 files, ≤32 path entries |
 
 Caps are UTF-16 code units, frozen in the server's `limits.py`. "no length bound" is not a token budget: Jev's context is 64k tokens per request (32k for state), and an input inside the table can still overflow it. `jev_gate` sends the diff and the test log twice. An overflow comes back as `input_too_large` (ADR-0079): split the call.
@@ -56,10 +56,10 @@ Rules:
   read no files. Paste the real `git diff` output, never an excerpt, a paraphrase, an elided
   `...`, a path, or "see evidence item". A large change goes as a `[{path, patch}]` file list or
   as separate calls split by concern. Test logs go in `tests` (`tests_path` for
-  `jev_gate_range`) as the raw pass/fail lines; a file list's per-file reviews never see `evidence`.
-- **Act on `action`:** `auto` → proceed · `review` → confirm with tests, source reading, or a
-  stronger check · `escalate` → stop and surface it. `invalid_response` → the row is unjudged;
-  leave it without a verdict.
+  `jev_gate_range`) as the raw pass/fail lines. Per-file gates read caller evidence and sibling patches as space permits. The review lists optional omissions in `context_omissions`.
+- **Act on `action`:** `auto` → the verdict stands and you act on it. A contradicted claim at
+  `auto` is confidently false. `review` → confirm with tests, source reading, or a stronger check.
+  `escalate` → stop and surface it. An invalid required judgment leaves the row unjudged.
 - **Jev screens; it never proves.** A Jev check never replaces running the tests, lint, or types.
   A `jev_gate` `auto` is the recommended final judgment before "done", not
   sufficient, and it is skipped when tests, type checks, build, lint, or another

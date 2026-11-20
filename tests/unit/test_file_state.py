@@ -160,3 +160,34 @@ def test_a_byte_giant_is_refused(tmp_path: Path) -> None:
 def test_undecodable_bytes_decode_with_replacement_instead_of_crashing(tmp_path: Path) -> None:
     content = file_state.read_state(make(tmp_path / "broken.txt", b"ok \xff\xfe bad"))
     assert "\ufffd" in content
+
+
+def test_scout_004_configured_store_is_excluded_by_identity(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="jev_judge_mcp.tools.file_state")
+    store = make(tmp_path / "configured-store", "")
+    alias = tmp_path / "ordinary-name"
+    alias.hardlink_to(store)
+    refuses("secret_file")(lambda: file_state.read_state(alias, key_path=store))
+    assert "file refusal code=secret_file" in caplog.text and alias.name not in caplog.text
+
+
+def test_scout_004_reader_requests_only_the_bounded_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace
+    from io import BytesIO
+
+    received: list[int | None] = []
+
+    class Sample(BytesIO):
+        def read(self, size: int | None = -1) -> bytes:
+            received.append(size)
+            return super().read(size)
+
+    def opened(*args: object, **kwargs: object) -> Sample:
+        return Sample(b"0123456789")
+
+    path = make(tmp_path / "sample", "")
+    monkeypatch.setattr(os, "fdopen", opened)
+    refuses("file_too_large")(lambda: file_state.read_state(path, caps=replace(FILE_JUDGE, file_units_max=2)))
+    assert received == [9]

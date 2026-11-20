@@ -9,7 +9,7 @@ error text does.
 
 import math
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from decimal import ROUND_HALF_UP, Context, Decimal
 from typing import Final, final
 
@@ -37,7 +37,7 @@ def stringify(value: object) -> str:
     """
     if value is UNDEFINED:
         raise TypeError("JSON.stringify(undefined) produces no text.")
-    return _stringify(value, "")
+    return _stringify(value, 0)
 
 
 def stringify_compact(value: object) -> str:
@@ -47,40 +47,77 @@ def stringify_compact(value: object) -> str:
     return _stringify(value, None)
 
 
-def _stringify(value: object, indent: str | None) -> str:
+type _Token = str | tuple[object, int | None]
+
+
+def _stringify(value: object, depth: int | None) -> str:
+    parts: list[str] = []
+    stack = [(id(value), _tokens(value, depth))]
+    active = {id(value)}
+    while stack:
+        owner, tokens = stack[-1]
+        token = next(tokens, None)
+        if token is None:
+            stack.pop()
+            active.remove(owner)
+        elif isinstance(token, str):
+            parts.append(token)
+        else:
+            child, child_depth = token
+            child_id = id(child)
+            if child_id in active:
+                raise ValueError("Cannot serialize a circular reference as JSON.")
+            active.add(child_id)
+            stack.append((child_id, _tokens(child, child_depth)))
+    return "".join(parts)
+
+
+def _tokens(value: object, depth: int | None) -> Iterator[_Token]:
     if value is None or value is UNDEFINED:
-        return "null"
-    if value is True:
-        return "true"
-    if value is False:
-        return "false"
-    if isinstance(value, int | float):
+        yield "null"
+    elif value is True:
+        yield "true"
+    elif value is False:
+        yield "false"
+    elif isinstance(value, int | float):
         number = _to_double(value)
-        return number_to_string(number) if math.isfinite(number) else "null"
-    if isinstance(value, str):
-        return quote(value)
-    inner = None if indent is None else indent + "  "
+        yield number_to_string(number) if math.isfinite(number) else "null"
+    elif isinstance(value, str):
+        yield quote(value)
+    else:
+        yield from _container_tokens(value, depth)
+
+
+def _container_tokens(value: object, depth: int | None) -> Iterator[_Token]:
+    items: Iterable[tuple[str | None, object]]
     if isinstance(value, Mapping):
         mapping: Mapping[object, object] = value  # pyright: ignore[reportUnknownVariableType]
         keys = [key for key in mapping if isinstance(key, str)]
         if len(keys) != len(mapping):
             raise TypeError("Object keys must be strings.")
-        members = [
-            (quote(key), _stringify(mapping[key], inner)) for key in js_key_order(keys) if mapping[key] is not UNDEFINED
-        ]
-        if not members:
-            return "{}"
-        if indent is None or inner is None:
-            return "{" + ",".join(f"{key}:{item}" for key, item in members) + "}"
-        return "{\n" + ",\n".join(f"{inner}{key}: {item}" for key, item in members) + "\n" + indent + "}"
-    if isinstance(value, list | tuple):
-        items: list[object] | tuple[object, ...] = value  # pyright: ignore[reportUnknownVariableType]
-        if not items:
-            return "[]"
-        if indent is None or inner is None:
-            return "[" + ",".join(_stringify(item, None) for item in items) + "]"
-        return "[\n" + ",\n".join(inner + _stringify(item, inner) for item in items) + "\n" + indent + "]"
-    raise TypeError(f"Cannot serialize {type(value).__name__} as JSON.")
+        items = ((key, mapping[key]) for key in js_key_order(keys) if mapping[key] is not UNDEFINED)
+        opening, closing = "{", "}"
+    elif isinstance(value, list | tuple):
+        sequence: list[object] | tuple[object, ...] = value  # pyright: ignore[reportUnknownVariableType]
+        items = ((None, item) for item in sequence)
+        opening, closing = "[", "]"
+    else:
+        raise TypeError(f"Cannot serialize {type(value).__name__} as JSON.")
+    yield opening
+    inner = None if depth is None else depth + 1
+    nonempty = False
+    for key, item in items:
+        if nonempty:
+            yield ","
+        nonempty = True
+        if inner is not None:
+            yield "\n" + "  " * inner
+        if key is not None:
+            yield quote(key) + (":" if inner is None else ": ")
+        yield item, inner
+    if nonempty and depth is not None:
+        yield "\n" + "  " * depth
+    yield closing
 
 
 def _to_double(value: int | float) -> float:

@@ -1,55 +1,30 @@
-"""State composition for `jev_ask`: own text, server-read files, and a gated command (ADR-0077).
-
-Everything here is deterministic and precedes the ask's provider call, and most of it precedes any
-provider call at all: questions are validated by the caller (`ask.py`) before this module runs, a
-file read goes through `file_state.py` with all of its refusals, the command is first refused
-deterministically when it matches the denylist — network clients, known secret stores, private
-configuration directories, environment readers — and only then judged in-process with the command
-hook's Bash questions (imported, never a subprocess of the CLI) before it runs, and an over-budget
-composition refuses with a Split suggestion instead of truncating any part (`docs/CONTEXT.md`
-"Split suggestion"). Every text that reaches the provider through a part is credential-redacted on
-the way: the caller's own state with the ADR-0076 literal detector, command output with the hook's
-shell-command redactor, the literal detector, and every configured secret value. The command
-feature is off unless the operator enables it (`JEV_ASK_COMMANDS=1`); the child runs in an
-environment scrubbed of every configured secret variable.
-"""
+"""Build and redact `jev_ask` State from framing text, files and bounded read-only commands."""
 
 import contextlib
 import os
 import re
+import shlex
+import shutil
 import signal
 import subprocess
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from enum import Enum, auto
 from pathlib import Path
 from typing import BinaryIO, NoReturn
 
-import anyio
-
 from jev_judge_mcp.credential_literal import redact_credential_literals
-from jev_judge_mcp.domain import ChoiceQuestion, NoulCriteria, NoulQuestion, Question
-from jev_judge_mcp.hook import (
-    DESTRUCTIVE_CRITERIA,
-    DESTRUCTIVE_ID,
-    DESTRUCTIVE_INTENT_THRESHOLD,
-    DESTRUCTIVE_QUESTION,
-    EFFECT_CRITERIA,
-    EFFECT_ID,
-    EFFECT_QUESTION,
-    confidence_floor,
-    event_state,
-)
+from jev_judge_mcp.domain import NoulCriteria, Question
+from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
-from jev_judge_mcp.keyfile import redaction_values
 from jev_judge_mcp.limits import ASK
-from jev_judge_mcp.redact_action import REDACTED, redact_action
+from jev_judge_mcp.redact_action import redact_action
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import ToolError
 from jev_judge_mcp.tools.file_state import is_secret_store, read_state, resolve_scoped
-from jev_judge_mcp.tools.observed import validate_choice, validate_noul
 
 OWN_PART = "state"
 OUTPUT_PART = "command output"
@@ -73,7 +48,7 @@ class Skipped:
     reason: str
 
 
-def own_part(state_text: str) -> Part | None:
+def own_part(state_text: str, redact: Redactor | None = None) -> Part | None:
     """The caller's own framing text as one part, credential-redacted; `None` when it is empty.
 
     The text is sent verbatim but for redaction — whitespace included, so a judgment never sees
@@ -81,7 +56,7 @@ def own_part(state_text: str) -> Part | None:
     tool runs; this re-measures after redaction, which can grow a short secret into a
     `[redacted]` marker.
     """
-    text = redact_credential_literals(state_text)
+    text = redact_credential_literals(state_text, redact)
     if not text.strip():
         return None
     units = length(text)
@@ -93,7 +68,9 @@ def own_part(state_text: str) -> Part | None:
     return Part(OWN_PART, text, units)
 
 
-def file_parts(paths: Sequence[str]) -> tuple[list[Part], list[Skipped]]:
+def file_parts(
+    paths: Sequence[str], key_path: Path | None = None, redact: Redactor | None = None
+) -> tuple[list[Part], list[Skipped]]:
     """Each caller-named path as one part, or its typed skip; a read refusal never fails the call.
 
     Order is input order, exact duplicate paths are read once, and every refusal is
@@ -108,104 +85,269 @@ def file_parts(paths: Sequence[str]) -> tuple[list[Part], list[Skipped]]:
             continue
         seen.add(raw)
         try:
-            content = read_state(resolve_scoped(raw))
+            content = read_state(resolve_scoped(raw), key_path=key_path, redact=redact)
         except ToolError as error:
             skipped.append(Skipped(raw, error.code))
             continue
-        parts.append(Part(raw, content, length(content)))
+        parts.append(Part(redact_credential_literals(raw, redact), content, length(content)))
     return parts, skipped
 
 
-def gate_questions() -> dict[str, Question]:
-    """The command hook's two Bash questions: what the command would do, and whether that is the intent."""
-    return {
-        EFFECT_ID: ChoiceQuestion(EFFECT_QUESTION, EFFECT_CRITERIA),
-        DESTRUCTIVE_ID: NoulQuestion(DESTRUCTIVE_QUESTION, DESTRUCTIVE_CRITERIA),
-    }
+_PRIVATE_DIRECTORIES = frozenset({".ssh", ".aws", ".config", ".pi", ".claude", ".codex"})
+_SHELL_OPERATORS = re.compile(r"""\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"|(?P<operator>[|;&<>()`\n])""")
 
 
-def gate_state(command: str, redactions: Sequence[str] = ()) -> str:
-    """The command, in the hook's own Bash state shape over a synthetic event.
-
-    `redact_action` runs as in the hook, and every value in `redactions` (the server's configured
-    secrets) is redacted too, so a command that embeds one never carries it to the judge.
-    """
-
-    def scrub(text: str) -> str:
-        text = redact_action(text)
-        for secret in redactions:
-            if secret:
-                text = text.replace(secret, REDACTED)
-        return text
-
-    event: dict[str, object] = {"cwd": str(Path.cwd()), "tool_name": "Bash", "tool_input": command}
-    return event_state(event, None, "unknown", scrub)
+class _Value(Enum):
+    FLAG = auto()
+    REQUIRED = auto()
+    OPTIONAL_ATTACHED = auto()
 
 
-def command_refusal(answers: Mapping[str, object]) -> str | None:
-    """`None` when the gated command may run; the refusal reason otherwise.
+_GIT_DIFF_OPTIONS = {
+    **dict.fromkeys(("-p", "--name-only", "--name-status", "--no-color"), _Value.FLAG),
+    **dict.fromkeys(("-U", "--unified"), _Value.REQUIRED),
+    "--stat": _Value.OPTIONAL_ATTACHED,
+}
+_GIT_HISTORY_OPTIONS = {
+    **_GIT_DIFF_OPTIONS,
+    "--oneline": _Value.FLAG,
+    **dict.fromkeys(("-n", "--max-count", "--since", "--until", "--author", "--format", "--pretty"), _Value.REQUIRED),
+}
+_GIT_OPTIONS = {
+    "status": {
+        **dict.fromkeys(("-s", "--short", "--branch"), _Value.FLAG),
+        "--porcelain": _Value.OPTIONAL_ATTACHED,
+    },
+    "diff": {**_GIT_DIFF_OPTIONS, "--cached": _Value.FLAG, "--staged": _Value.FLAG},
+    "log": _GIT_HISTORY_OPTIONS,
+    "show": _GIT_HISTORY_OPTIONS,
+}
+_SEARCH_OPTIONS = {
+    **dict.fromkeys(
+        (
+            "-i",
+            "--ignore-case",
+            "-w",
+            "--word-regexp",
+            "-F",
+            "--fixed-strings",
+            "-n",
+            "--line-number",
+            "-c",
+            "--count",
+            "-l",
+            "--files-with-matches",
+            "-v",
+            "--invert-match",
+            "-x",
+            "--line-regexp",
+        ),
+        _Value.FLAG,
+    ),
+    **dict.fromkeys(
+        (
+            "-A",
+            "--after-context",
+            "-B",
+            "--before-context",
+            "-C",
+            "--context",
+            "-e",
+            "--regexp",
+            "-f",
+            "--file",
+            "-m",
+            "--max-count",
+        ),
+        _Value.REQUIRED,
+    ),
+}
+_COMMAND_OPTIONS: dict[str, dict[str, _Value]] = {
+    "rg": {
+        **_SEARCH_OPTIONS,
+        **dict.fromkeys(("-s", "--case-sensitive", "-S", "--smart-case", "--hidden", "--no-ignore"), _Value.FLAG),
+        **dict.fromkeys(("-g", "--glob", "--iglob", "-t", "--type", "-T", "--type-not"), _Value.REQUIRED),
+    },
+    "grep": {
+        **_SEARCH_OPTIONS,
+        **dict.fromkeys(("-r", "-R", "--recursive"), _Value.FLAG),
+        **dict.fromkeys(("--include", "--exclude", "--exclude-dir"), _Value.REQUIRED),
+    },
+    "ls": dict.fromkeys(("-l", "-a", "-A", "-h", "-R", "-1", "-t", "-S"), _Value.FLAG),
+    "wc": dict.fromkeys(("-l", "-w", "-c", "-m"), _Value.FLAG),
+    "head": dict.fromkeys(("-n", "-c"), _Value.REQUIRED),
+    "tail": dict.fromkeys(("-n", "-c"), _Value.REQUIRED),
+}
 
-    Strictly stricter than the hook, which also allows a reversible effect: an ask runs the command
-    only over a read-only one, judged with the hook's confidence floors and its destructive-intent
-    threshold. Every reason carries the final-block notice — the refusal is the answer (ADR-0077).
-    """
-    effect = validate_choice(answers.get(EFFECT_ID), tuple(EFFECT_CRITERIA))
-    destructive = validate_noul(answers.get(DESTRUCTIVE_ID))
-    if effect is None or destructive is None:
-        return _refused("the gate's answers were malformed or missing")
-    if destructive >= DESTRUCTIVE_INTENT_THRESHOLD:
-        return _refused("the command looks aimed at destroying work", f"probability {destructive:.2f}")
-    confidence, floor = confidence_floor(effect)
-    if confidence < floor:
-        return _refused("the gate could not tell what the command would do", f"confidence {confidence:.2f}")
-    if effect.choice != "read_only":
-        return _refused(f"the command looks {effect.choice}", f"confidence {confidence:.2f}")
-    return None
+
+def prepare_command(command: str, env: Mapping[str, str], key_path: Path | None) -> tuple[str, list[str]]:
+    """Validate and pin the executable before any state read or judgment."""
+    try:
+        argv = shlex.split(command, comments=False, posix=True)
+    except ValueError:
+        _refuse("the command contains an incomplete word")
+    if not argv or "\x00" in command:
+        _refuse("the command needs a program name and cannot contain NUL")
+    if any(match["operator"] for match in _SHELL_OPERATORS.finditer(command)):
+        _refuse("unquoted shell operators are not allowed")
+    program = argv[0]
+    if program == "git":
+        if len(argv) < 2 or argv[1] not in _GIT_OPTIONS:
+            _refuse("git requires status, diff, log or show immediately after the program name")
+        name = f"git {argv[1]}"
+        options = _GIT_OPTIONS[argv[1]]
+        prefix = argv[:2]
+    elif program in _COMMAND_OPTIONS:
+        name = program
+        options = _COMMAND_OPTIONS[program]
+        prefix = argv[:1]
+    else:
+        _refuse("the program is outside the read-only command allowlist")
+    args, attached_values = _checked_arguments(name, argv[len(prefix) :], options)
+    for word in (*argv, *attached_values):
+        _check_path(word, key_path)
+
+    executable = shutil.which(program, path=env.get("PATH", os.defpath))
+    if executable is None:
+        _refuse("the allowlisted executable was not found on PATH")
+    try:
+        found = Path(executable).absolute()
+        resolved = found.resolve(strict=True)
+        cwd = Path.cwd()
+    except (OSError, RuntimeError):
+        _refuse("the executable path could not be resolved")
+    if found.is_relative_to(cwd) or resolved.is_relative_to(cwd):
+        _refuse("the executable is inside the working directory")
+    # Keep the selected program's name in argv[0] for multicall executables.
+    return program, [str(resolved if resolved.name == program else found), *prefix[1:], *args]
 
 
-_NETWORK_CLIENTS = frozenset(
-    {"curl", "wget", "nc", "ncat", "netcat", "ssh", "scp", "sftp", "rsync", "ftp", "telnet", "socat"}
-)
-"""Network clients a refused command may not name: exfiltration does not need a destructive effect."""
+def _checked_arguments(name: str, words: list[str], options: Mapping[str, _Value]) -> tuple[list[str], list[str]]:
+    argv: list[str] = []
+    attached_values: list[str] = []
+    parse_options = True
+    remaining = iter(words)
+    for word in remaining:
+        if parse_options and name == "tail" and word.startswith("+") and word[1:2].isdigit():
+            _refuse_option(name, options)
+        if not parse_options or word == "-" or not word.startswith("-"):
+            argv.append(word)
+        elif word == "--":
+            parse_options = False
+            argv.append(word)
+        elif word.startswith("--"):
+            flag, equals, value = word.partition("=")
+            rule = options.get(flag)
+            if rule is None or (equals and rule is _Value.FLAG):
+                _refuse_option(name, options)
+            if equals:
+                attached_values.append(value)
+            elif rule is _Value.REQUIRED:
+                value = _take_option_value(remaining, name, options)
+                equals = "="
+            argv.append(f"{flag}{equals}{value}")
+        else:
+            for index, letter in enumerate(word[1:], start=2):
+                flag = f"-{letter}"
+                rule = options.get(flag)
+                if rule is None:
+                    _refuse_option(name, options)
+                if rule is _Value.FLAG:
+                    argv.append(flag)
+                    continue
+                attached = word[index:]
+                if attached:
+                    value = attached.removeprefix("=") if name == "rg" else attached
+                    attached_values.append(value)
+                else:
+                    value = _take_option_value(remaining, name, options)
+                # Bind values explicitly so an option-like value stays data in the child.
+                if name == "rg":
+                    argv.append(f"{flag}={value}")
+                elif name.startswith("git ") or attached:
+                    argv.append(f"{flag}{value}")
+                else:
+                    argv.extend((flag, value))
+                break
+    return argv, attached_values
 
-_ENVIRONMENT_READERS = frozenset({"env", "printenv", "set", "export"})
-"""Shell words that print or mutate the environment: the child env is scrubbed, and naming these
-is refused outright so a scrubbed run is never probed for what survived."""
 
-_PRIVATE_DIRECTORIES = ("~/.ssh", "~/.aws", "~/.config", "~/.pi", "~/.claude", "~/.codex")
-"""Private configuration trees a refused command may not reference: the tilde form, the expanded
-form, and any path that carries one of these names as a directory component (a `/Users/<other>/.aws`
-spelling names the same tree)."""
-
-_TOKEN_SPLIT = re.compile(r"[\s|;&()<>'\"]+")
-"""Deterministic command tokenization: whitespace and the shell metacharacters that end a word.
-Not a shell parser — a conservative splitter for a denylist, so a path inside quotes is still seen."""
+def _take_option_value(remaining: Iterator[str], name: str, options: Mapping[str, _Value]) -> str:
+    value = next(remaining, "--")
+    if value == "--":
+        _refuse_option(name, options)
+    return value
 
 
-def command_denylist_refusal(command: str) -> str | None:
-    """The deterministic refusal for a command the denylist names, before any gate or run.
+def _refuse_option(name: str, options: Mapping[str, _Value]) -> NoReturn:
+    _refuse(f"{name} requires a listed option with valid value syntax. Allowed options: {', '.join(options)}")
 
-        A read-only effect is not a safe command: a network client can exfiltrate, a secret-store path
-    can print a credential, and an environment reader can dump what the scrub missed. Every family
-    refuses with the final-block notice and costs no provider call (ADR-0077 amendment, 2026-10-01).
-    """
-    tokens = [token for token in _TOKEN_SPLIT.split(command) if token]
-    words = {os.path.basename(token).lower() for token in tokens}
-    if words & _NETWORK_CLIENTS:
-        return _refused("the command reaches the network")
-    if words & _ENVIRONMENT_READERS:
-        return _refused("the command reads or changes environment variables")
-    lowered = command.lower()
-    private_names = {name.lstrip("~/").lower() for name in _PRIVATE_DIRECTORIES}
-    for directory in _PRIVATE_DIRECTORIES:
-        if directory.lower() in lowered or os.path.expanduser(directory).lower() in lowered:
-            return _refused("the command reaches a private configuration directory")
-    if any(part.lower() in private_names for token in tokens for part in Path(token).parts):
-        return _refused("the command reaches a private configuration directory")
-    for token in tokens:
-        if is_secret_store(Path(token)):
-            return _refused("the command touches a known secret store")
-    return None
+
+def _check_path(word: str, key_path: Path | None) -> None:
+    path = Path(word).expanduser() if word.startswith("~/") else Path(word)
+    # Git revisions can name files as REV:path.
+    colon_path = word.rpartition(":")[2]
+    paths = (path, Path(colon_path)) if colon_path and colon_path != word else (path,)
+    for candidate in paths:
+        try:
+            resolved = candidate.resolve()
+        except (OSError, RuntimeError, ValueError):
+            _refuse("a command argument path could not be resolved")
+        for spelling in (candidate, resolved):
+            if any(part.lower() in _PRIVATE_DIRECTORIES for part in spelling.parts):
+                _refuse("the command reaches a private directory")
+            if is_secret_store(spelling, key_path):
+                _refuse("the command touches a known secret store")
+
+
+def git_command(argv: list[str], env: dict[str, str]) -> list[str]:
+    """Build Git's argv under fixed policy and refuse configured worktree filters."""
+    binary, subcommand, *args = argv
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull, GIT_NO_LAZY_FETCH="1", GIT_ALLOW_PROTOCOL="")
+    git = [
+        binary,
+        "--no-pager",
+        "--no-optional-locks",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        f"core.hooksPath={os.devnull}",
+        "-c",
+        "status.submoduleSummary=false",
+        "-c",
+        "submodule.recurse=false",
+        "-c",
+        "diff.submodule=short",
+        "-c",
+        "log.diffMerges=separate",
+        "-c",
+        "log.showSignature=false",
+        "-c",
+        f"gpg.openpgp.program={os.devnull}",
+        "-c",
+        f"gpg.x509.program={os.devnull}",
+        "-c",
+        f"gpg.ssh.program={os.devnull}",
+    ]
+    if subcommand in {"status", "diff"}:
+        try:
+            filters = subprocess.run(  # noqa: S603 - only the resolved Git and fixed options
+                [*git, "config", "--includes", "--name-only", "--get-regexp", r"^filter\..*\.(clean|smudge|process)$"],
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            _refuse("Git's worktree filter configuration could not be checked")
+        if filters.returncode != 1:
+            _refuse("Git worktree filters are configured or could not be checked")
+    flags = ["--ignore-submodules=all"]
+    if subcommand != "status":
+        flags += ["--no-ext-diff", "--no-textconv"]
+    return [*git, subcommand, *flags, *args]
 
 
 def command_disabled_refusal() -> str:
@@ -220,56 +362,53 @@ def command_disabled_refusal() -> str:
     )
 
 
-def scrubbed_environment(settings: Settings) -> dict[str, str]:
-    """The server's environment without every configured secret variable (ADR-0077 amendment).
-
-    The child never inherits a credential by simply being spawned here; `named_secrets` pairs each
-    value with its variable name, so only those variables are dropped.
-    """
-    secret_variables = {name for name, _ in settings.named_secrets()}
-    return {name: value for name, value in os.environ.items() if name not in secret_variables}
+def scrubbed_environment(settings: Settings | None = None) -> dict[str, str]:
+    """Only operating-system path, timezone, and locale settings reach the child."""
+    allowed = {
+        "PATH",
+        "TZ",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_MESSAGES",
+        "LC_NUMERIC",
+        "LC_TIME",
+        "LC_COLLATE",
+        "LC_MONETARY",
+    }
+    if settings is not None:
+        allowed.difference_update(name for name, _ in settings.named_secrets())
+    return {name: os.environ[name] for name in allowed if name in os.environ}
 
 
 def run_command(
-    command: str,
+    argv: Sequence[str],
     timeout_seconds: int,
     output_units_max: int,
     env: Mapping[str, str] | None = None,
     redactions: Sequence[str] = (),
 ) -> Part:
-    """The judged command's redacted output as one part.
-
-    Runs under the system shell with no stdin, in the working directory, in a scrubbed environment
-    when the caller passes one, and its process group is killed at the timeout, as soon as the
-    captured output passes the cap — the pipes are never allowed to buffer a flood (ADR-0077
-    amendment) — and in any case once the shell exits, so a background child it left behind
-    neither holds the output open nor outlives the call. The output block carries the exit status
-    and both streams, redacted with the hook's shell redactor, the ADR-0076 credential-literal
-    detector, and every value in `redactions` (the server's own configured secrets) before it
-    becomes state. The gate judged the command string; nothing here sandboxes the run.
-    """
+    """Capture the bounded, redacted output of a validated argv."""
     # Worst-case UTF-16 encoding is three UTF-8 bytes per unit, so crossing this byte bound
     # proves the decoded text is over the cap: the flood kill is never a false kill.
     byte_cap = 3 * output_units_max + 3
     collected: dict[str, bytes] = {"stdout": b"", "stderr": b""}
     state = {"overflow": False}
     try:
-        process = subprocess.Popen(  # noqa: S602 - the caller's shell command is the product (ADR-0077)
-            command,
-            shell=True,
+        process = subprocess.Popen(  # noqa: S603 - validated argv with an absolute executable
+            argv,
+            shell=False,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=str(Path.cwd()),
-            env=dict(env) if env is not None else None,
+            env=dict(env) if env is not None else scrubbed_environment(),
             start_new_session=True,
         )
     except (OSError, ValueError) as error:
         # ValueError: a command the OS refuses to spawn at all, such as an embedded NUL byte.
         raise ToolError(f"the command could not run ({error})", code="command_failed") from None
-
-    if process.stdout is None or process.stderr is None:  # both pipes were requested
-        raise AssertionError("unreachable: Popen(stdout=PIPE, stderr=PIPE)")
 
     def drain(name: str, stream: BinaryIO) -> None:
         chunks: list[bytes] = []
@@ -286,29 +425,29 @@ def run_command(
         collected[name] = b"".join(chunks)
         stream.close()
 
-    readers = [
-        threading.Thread(target=drain, args=(name, stream), daemon=True)
-        for name, stream in (("stdout", process.stdout), ("stderr", process.stderr))
-    ]
-    for reader in readers:
-        reader.start()
-    deadline = time.monotonic() + timeout_seconds
     timed_out = False
-    while True:
-        if state["overflow"]:
-            break
-        try:
-            process.wait(timeout=0.05)
-            break
-        except subprocess.TimeoutExpired:
-            pass
-        if time.monotonic() > deadline:
-            timed_out = True
-            break
-    # Whatever ended the wait, the whole group dies now. After a normal exit the shell is gone, so
-    # anything still in its group is a background child it left behind: killing it closes the
-    # pipes the readers are blocked on, and the run never outlives the call.
-    _kill_group(process)
+    try:
+        if process.stdout is None or process.stderr is None:  # both pipes were requested
+            raise AssertionError("unreachable: Popen(stdout=PIPE, stderr=PIPE)")
+        readers = [
+            threading.Thread(target=drain, args=(name, stream), daemon=True)
+            for name, stream in (("stdout", process.stdout), ("stderr", process.stderr))
+        ]
+        deadline = time.monotonic() + timeout_seconds
+        for reader in readers:
+            reader.start()
+        while not state["overflow"]:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            try:
+                process.wait(timeout=min(0.05, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                pass
+    finally:
+        _kill_group(process)
     for reader in readers:
         reader.join(timeout=5)
     if timed_out:
@@ -333,12 +472,12 @@ def run_command(
         )
     stdout = collected["stdout"].decode("utf-8", errors="replace")
     stderr = collected["stderr"].decode("utf-8", errors="replace")
-    block = redact_credential_literals(
-        redact_action(f"exit status: {process.returncode}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}")
+    block = redact_action(
+        redact_credential_literals(
+            f"exit status: {process.returncode}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+            Redactor(redactions),
+        )
     )
-    for secret in redactions:
-        if secret:
-            block = block.replace(secret, REDACTED)
     units = length(block)
     if units > output_units_max:
         raise ToolError(
@@ -350,11 +489,11 @@ def run_command(
 
 
 def _kill_group(process: subprocess.Popen[bytes]) -> None:
-    """Kill the whole process group: the shell dies with its children, so a piped grandchild
+    """Kill the whole process group: the command dies with its children, so a piped grandchild
     cannot hold the output pipes open past the kill (the repository is POSIX-only, ADR-0032).
 
-    `start_new_session=True` made the shell's pid the group id, and a group id stays valid while
-    any member lives — including after the shell itself was reaped — so the pid is used directly;
+    `start_new_session=True` made the command's pid the group id, and a group id stays valid while
+    any member lives — including after the command itself was reaped — so the pid is used directly;
     `os.getpgid` fails on a reaped leader and would turn the kill into a no-op.
     """
     with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -362,21 +501,8 @@ def _kill_group(process: subprocess.Popen[bytes]) -> None:
     process.wait()
 
 
-async def run_gated_command(command: str, settings: Settings) -> Part:
-    """`run_command` with the ADR-owned budget, the scrubbed environment, and the server's own
-    secrets added to the output redactions — off the event loop so a slow run blocks no other call."""
-    return await anyio.to_thread.run_sync(
-        run_command,
-        command,
-        ASK.command_timeout_seconds,
-        ASK.command_output_units_max,
-        scrubbed_environment(settings),
-        tuple(redaction_values(settings)),
-    )
-
-
 def question_units(questions: Mapping[str, Question]) -> int:
-    """UTF-16 units of every question on the wire: its id, its instructions, and its criteria text."""
+    """UTF-16 units of caller ids, instructions, and criteria labels and descriptions."""
     total = 0
     for identifier, question in questions.items():
         total += length(identifier) + length(str(question.instructions))
@@ -384,7 +510,7 @@ def question_units(questions: Mapping[str, Question]) -> int:
         if isinstance(criteria, NoulCriteria):
             values = (criteria.true, criteria.false)
         elif isinstance(criteria, Mapping):
-            values = tuple(criteria.values())
+            values = (*criteria, *criteria.values())
         else:
             values = tuple(criteria)
         total += sum(length(str(value)) for value in values)
@@ -433,6 +559,5 @@ def split_refusal(parts: Sequence[Part], questions_units: int) -> NoReturn:
     raise ToolError(" ".join(lines), code="input_too_large")
 
 
-def _refused(failure: str, measure: str = "") -> str:
-    tail = f" ({measure})" if measure else ""
-    return f"command refused: {failure}{tail}. {FINAL_BLOCK_NOTICE}"
+def _refuse(reason: str) -> NoReturn:
+    raise ToolError(f"command refused: {reason}. {FINAL_BLOCK_NOTICE}", code="command_refused")

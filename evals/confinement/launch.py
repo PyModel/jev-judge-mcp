@@ -16,6 +16,7 @@ agent's own config carries only the placeholder, and the capability token is bou
 timeout and revoked at run end by removing the grant file.
 """
 
+import fcntl
 import hashlib
 import json
 import os
@@ -28,7 +29,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable, Generator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -41,6 +42,8 @@ from evals.agent import (
     AgentRunResult,
     capture_output,
     container_boundary,
+    copy_relay_logs,
+    ensure_private_run_dir,
     escape_scan,
     exploration_paths,
     run_status,
@@ -48,6 +51,10 @@ from evals.agent import (
     secret_scrub,
     write_run_logs,
 )
+from evals.agent import (
+    copy_regular_nofollow as copy_regular_nofollow,
+)
+from evals.spend import mark_agent_started
 
 BROKER_IMAGE = "python@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f"
 """`python:3.12-slim` by digest. The broker and shim are stdlib-only and mounted in at run time,
@@ -169,10 +176,6 @@ class Upstream:
     def url(self) -> str:
         return f"{self.scheme}://{self.host}:{self.port}"
 
-    def full_path(self, path: str) -> str:
-        """The forwarded path: base path plus the origin-form endpoint path."""
-        return f"{self.base_path}{path}"
-
 
 @dataclass(frozen=True)
 class Capability:
@@ -206,8 +209,6 @@ class ConfinementSpec:
     timeout_s: float
     env: Mapping[str, str] = field(default_factory=dict[str, str])
     """The agent container's environment: placeholders and runtime settings, no secret values."""
-    adapter_source: str = ""
-    """Host path of the pi MCP adapter, copied into the scratch and used at /scratch/adapter."""
     uid: int = 0
     gid: int = 0
     broker_image: str = BROKER_IMAGE
@@ -248,11 +249,6 @@ def docker_run(argv: Sequence[str], *, check: bool = True, timeout: float = 120.
     if check and result.returncode != 0:
         raise ConfinementError(f"{' '.join(argv[:3])} failed: {result.stderr.strip()[:300]}")
     return result
-
-
-def image_present(image: str) -> bool:
-    probe = docker_run(["docker", "image", "inspect", image], check=False, timeout=60)
-    return probe.returncode == 0
 
 
 def broker_config(
@@ -305,6 +301,8 @@ def broker_argv(
         name,
         "--label",
         "jev-eval=broker",
+        "--label",
+        f"{LEASE_LABEL}={volume.removeprefix('jev-eval-sock-')}",
         "--read-only",
         "--cap-drop",
         "ALL",
@@ -334,15 +332,16 @@ def agent_argv(
     scratch: Path,
     grant_file: Path,
 ) -> list[str]:
-    """`docker run --rm` (attached) for the agent: no network, and only the run's own mounts."""
+    """An attached agent container with no network and only the run's own mounts."""
     argv = [
         "docker",
         "run",
-        "--rm",
         "--name",
         name,
         "--label",
         "jev-eval=agent",
+        "--label",
+        f"{LEASE_LABEL}={volume.removeprefix('jev-eval-sock-')}",
         "--network",
         "none",
         "--cap-drop",
@@ -404,8 +403,23 @@ def entrypoint_text(spec: ConfinementSpec, agent_argv_inside: Sequence[str]) -> 
 def wait_for_broker(name: str, timeout_s: float = BROKER_READY_TIMEOUT_S) -> None:
     """Block until the sidecar's socket exists; a container that dies startup fails loudly."""
     deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        probe = docker_run(
+
+    def remaining() -> float:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise ConfinementError(f"broker socket did not appear within {timeout_s:g}s")
+        return left
+
+    def probe(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        try:
+            result = docker_run(argv, check=False, timeout=remaining())
+        except subprocess.TimeoutExpired as error:
+            raise ConfinementError(f"broker socket did not appear within {timeout_s:g}s") from error
+        remaining()
+        return result
+
+    while True:
+        ready = probe(
             [
                 "docker",
                 "exec",
@@ -413,91 +427,180 @@ def wait_for_broker(name: str, timeout_s: float = BROKER_READY_TIMEOUT_S) -> Non
                 "python3",
                 "-c",
                 f"import sys; sys.exit(0 if __import__('os').path.exists({CONTAINER_SOCKET!r}) else 1)",
-            ],
-            check=False,
-            timeout=30,
+            ]
         )
-        if probe.returncode == 0:
+        if ready.returncode == 0:
             return
-        alive = docker_run(["docker", "inspect", "-f", "{{.State.Running}}", name], check=False)
+        alive = probe(["docker", "inspect", "-f", "{{.State.Running}}", name])
         if alive.returncode != 0 or alive.stdout.strip() != "true":
-            logs = docker_run(["docker", "logs", name], check=False)
+            logs = probe(["docker", "logs", "--tail", "1", name])
             raise ConfinementError(f"broker container exited at startup: {(logs.stdout or logs.stderr or '')[-300:]}")
-        time.sleep(0.25)
-    raise ConfinementError(f"broker socket did not appear within {timeout_s:.0f}s")
+        time.sleep(min(0.25, remaining()))
 
 
 def teardown(*, agent_name: str, broker_name: str, volume: str) -> None:
     """Both containers down, the volume gone. Idempotent: every step tolerates the prior one."""
-    for name in (agent_name, broker_name):
-        docker_run(["docker", "rm", "-f", name], check=False, timeout=90)
-    docker_run(["docker", "volume", "rm", volume], check=False)
+    failures: list[Exception] = []
+    for argv in (
+        ["docker", "rm", "-f", agent_name],
+        ["docker", "rm", "-f", broker_name],
+        ["docker", "volume", "rm", volume],
+    ):
+        try:
+            _remove_resource(argv)
+        except ConfinementError as error:
+            failures.append(error)
+    if failures:
+        raise ConfinementError("could not finish Docker teardown") from failures[0]
+
+
+def _remove_resource(argv: list[str]) -> None:
+    try:
+        result = docker_run(argv, check=False, timeout=90)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ConfinementError(f"could not remove {argv[-1]}") from error
+    detail = (result.stderr or "").lower().strip()
+    missing = "no such container:" in detail or "no such volume:" in detail or detail.endswith(": no such volume")
+    if result.returncode and not missing:
+        raise ConfinementError(f"could not remove {argv[-1]}")
 
 
 OWNER_LABEL = "jev-eval"
-"""Every container and volume the boundary creates carries this label; the reaper matches it."""
+LEASE_LABEL = "jev-eval-lease"
+RUN_PREFIX = "jev-confined-v1-"
+KEY_PREFIX = "jev-ab-secrets-v1-"
+LEASE_MARKER = ".jev-lease-v1"
 
-REAP_STALE_S = 2 * 3600.0
-"""A temp dir younger than this may belong to a live run, so the reaper leaves it alone. Runs are
-bounded by the study timeout; only orphans of a killed harness outlive this."""
+
+@contextmanager
+def directory_lease(path: Path) -> Generator[None]:
+    """Publish the marker only after taking the host lock. The kernel releases it on exit."""
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        (path / LEASE_MARKER).touch(mode=0o600, exist_ok=False)
+        yield
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def _cleanup(action: Callable[[], None]) -> Generator[None]:
+    primary: BaseException | None = None
+    try:
+        yield
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        try:
+            action()
+        except Exception as error:
+            if primary is None:
+                if isinstance(error, OSError):
+                    raise ConfinementError("could not finish confinement filesystem cleanup") from error
+                raise
+            primary.add_note(f"Confinement cleanup also failed: {type(error).__name__}")
+
+
+@contextmanager
+def _run_root() -> Generator[Path]:
+    root = Path(tempfile.mkdtemp(prefix=f"{RUN_PREFIX}{uuid.uuid4().hex}-"))
+    with ExitStack() as locks:
+        try:
+            locks.enter_context(directory_lease(root))
+        finally:
+            locks.enter_context(
+                _cleanup(lambda: clear_leased_directory(root, keep_lease=(root / ".retry-cleanup").exists()))
+            )
+        yield root
+
+
+def clear_leased_directory(root: Path, *, keep_lease: bool = False) -> None:
+    # Remove payloads before the marker so a failed cleanup remains discoverable.
+    marker = root / LEASE_MARKER
+    for child in root.iterdir():
+        if child == marker:
+            continue
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    if not keep_lease:
+        marker.unlink(missing_ok=True)
+        try:
+            root.rmdir()
+        except OSError:
+            marker.touch(mode=0o600, exist_ok=True)
+            raise
+
+
+def _finish_resources(root: Path, *, agent_name: str, broker_name: str, volume: str) -> None:
+    try:
+        teardown(agent_name=agent_name, broker_name=broker_name, volume=volume)
+    except BaseException:
+        (root / ".retry-cleanup").touch(mode=0o600)
+        raise
 
 
 def exit_on_sigterm() -> None:
-    """SIGTERM raises SystemExit, so `finally` blocks and context managers unwind (F5): teardown
-    runs instead of the default terminate-on-the-spot, which leaked every container and mount."""
+    """Raise SystemExit on shutdown signals so teardown and booking can unwind."""
     import signal
 
     def handler(signum: int, _frame: Any) -> None:
         raise SystemExit(128 + signum)
 
     signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGHUP, handler)
+
+
+def _reap_resources(run_id: str, removed: dict[str, list[str]]) -> None:
+    selector = ["--filter", f"label={LEASE_LABEL}={run_id}"]
+    for kind, listing, removal in (
+        ("containers", ["docker", "ps", "-aq"], ["docker", "rm", "-f"]),
+        ("volumes", ["docker", "volume", "ls", "-q"], ["docker", "volume", "rm"]),
+    ):
+        result = docker_run([*listing, *selector], check=False)
+        if result.returncode:
+            raise ConfinementError(f"could not reap {kind} for {run_id}: listing failed")
+        for name in result.stdout.split():
+            if docker_run([*removal, name], check=False).returncode:
+                raise ConfinementError(f"could not reap {kind} for {run_id}: removal failed")
+            removed[kind].append(name)
 
 
 def reap() -> dict[str, list[str]]:
-    """Remove a killed run's leftovers (F5): labeled containers and volumes, and stale run temp
-    dirs. Called before a confined study starts; returns what it removed."""
+    """Reclaim only published, private run roots whose controller has released its lock."""
     removed: dict[str, list[str]] = {"containers": [], "volumes": [], "dirs": []}
-    if not shutil.which("docker"):
-        return removed  # no docker CLI: no containers or volumes can exist to reap
-    for name in docker_run(["docker", "ps", "-aq", "--filter", f"label={OWNER_LABEL}"], check=False).stdout.split():
-        if docker_run(["docker", "rm", "-f", name], check=False).returncode == 0:
-            removed["containers"].append(name)
-    for name in docker_run(
-        ["docker", "volume", "ls", "-q", "--filter", f"label={OWNER_LABEL}"], check=False
-    ).stdout.split():
-        if docker_run(["docker", "volume", "rm", name], check=False).returncode == 0:
-            removed["volumes"].append(name)
-    now = time.time()
-    for prefix in ("jev-confined-", "jev-probe-", "jev-ab-secrets-", "jev-agent-work-", "jev-grade-"):
-        for directory in Path(tempfile.gettempdir()).glob(f"{prefix}*"):
+    for prefix in (RUN_PREFIX, KEY_PREFIX):
+        for directory in sorted(Path(tempfile.gettempdir()).glob(f"{prefix}*")):
             try:
-                if directory.is_dir() and now - directory.stat().st_mtime > REAP_STALE_S:
-                    shutil.rmtree(directory, ignore_errors=True)
-                    removed["dirs"].append(directory.name)
-            except OSError:
+                fd = os.open(directory, os.O_DIRECTORY | os.O_NOFOLLOW | os.O_RDONLY)
+            except (FileNotFoundError, NotADirectoryError, PermissionError):
                 continue
+            try:
+                info = os.fstat(fd)
+                if info.st_uid != os.getuid() or info.st_mode & 0o077:
+                    continue
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    continue
+                try:
+                    if not os.path.samestat(info, directory.lstat()):
+                        continue
+                    marker = os.stat(LEASE_MARKER, dir_fd=fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                if not stat.S_ISREG(marker.st_mode) or marker.st_uid != info.st_uid or marker.st_nlink != 1:
+                    continue
+                if prefix == RUN_PREFIX:
+                    _reap_resources(directory.name, removed)
+                clear_leased_directory(directory)
+                removed["dirs"].append(directory.name)
+            finally:
+                os.close(fd)
     return removed
-
-
-def copy_regular_nofollow(source: Path, target: Path) -> bool:
-    """Copy `source` to `target` only if it is a regular file reached without following a symlink
-    (F1): an agent-writable tree cannot make the host read anything but the file it named."""
-    try:
-        fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
-    except OSError:
-        return False
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return False
-        with os.fdopen(fd, "rb") as reader:
-            fd = -1
-            with open(target, "wb") as writer:
-                while chunk := reader.read(65_536):
-                    writer.write(chunk)
-        return True
-    finally:
-        if fd >= 0:
-            os.close(fd)
 
 
 def _copy_modules(target: Path) -> None:
@@ -542,22 +645,23 @@ def run_confined(
     if not secret:
         raise ValueError("run_confined needs the non-empty secret to scrub")
     secrets = [secret, *[value for value in extra_secrets if value]]
-    capability: Capability | None = None
     for key, value in spec.env.items():
         if any(one in value for one in secrets):
             raise ConfinementError(f"the secret value must not ride in the container env ({key})")
-    run_dir.mkdir(parents=True, exist_ok=True)
-    workdir = Path(tempfile.mkdtemp(prefix="jev-agent-work-"))
-    root = Path(tempfile.mkdtemp(prefix="jev-confined-"))
-    scratch = root / "scratch"
-    grants = root / "grants"
-    for directory in (scratch / "home", scratch / "agent", scratch / "tmp", scratch / "agent-cfg", grants):
-        directory.mkdir(parents=True, exist_ok=True)
-    tag = uuid.uuid4().hex[:12]
-    volume = f"jev-eval-sock-{tag}"
-    broker_name = f"jev-eval-broker-{tag}"
-    agent_name = f"jev-eval-agent-{tag}"
-    try:
+    ensure_private_run_dir(run_dir)
+    with ExitStack() as resources:
+        for value in secrets:
+            resources.enter_context(_cleanup(lambda value=value: secret_scrub(run_dir, value)))
+        root = resources.enter_context(_run_root())
+        workdir = Path(tempfile.mkdtemp(prefix="task-", dir=root))
+        scratch = root / "scratch"
+        grants = root / "grants"
+        for directory in (scratch / "home", scratch / "agent", scratch / "tmp", scratch / "agent-cfg", grants):
+            directory.mkdir(parents=True, exist_ok=True)
+        tag = root.name
+        volume = f"jev-eval-sock-{tag}"
+        broker_name = f"jev-eval-broker-{tag}"
+        agent_name = f"jev-eval-agent-{tag}"
         if prepare is not None:
             prepare(workdir)
         if scratch_files is not None:
@@ -567,18 +671,6 @@ def run_confined(
         config = scratch / "agent-cfg" / "mcp.json"
         config.write_text(json.dumps(document), encoding="utf-8")
         config.chmod(0o600)
-        if spec.adapter_source:
-            source = Path(spec.adapter_source)
-            adapter = scratch / "adapter"
-            if source.is_dir():
-                # F2: the adapter is a package (index.ts imports siblings); the whole directory
-                # crosses read-only-mounted at runtime, never a lone entry file.
-                shutil.copytree(
-                    source, adapter, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__", "node_modules")
-                )
-            else:
-                adapter.mkdir(exist_ok=True)
-                shutil.copyfile(source, adapter / "index.ts")
         _copy_modules(code := root / "code")
         _copy_modules(scratch / "code")
         credentials = credential_files(spec)
@@ -591,11 +683,17 @@ def run_confined(
             encoding="utf-8",
         )
         capability = mint_capability(grants, spec.timeout_s + CAPABILITY_MARGIN_S)
+        resources.enter_context(_cleanup(lambda: secret_scrub(run_dir, capability.token)))
         (scratch / "entrypoint.sh").write_text(
             entrypoint_text(spec, command.argv(Path(AGENT_CONFIG))), encoding="utf-8"
         )
         (scratch / "entrypoint.sh").chmod(0o755)
-        docker_run(["docker", "volume", "create", "--label", OWNER_LABEL, volume])
+        resources.enter_context(
+            _cleanup(lambda: _finish_resources(root, agent_name=agent_name, broker_name=broker_name, volume=volume))
+        )
+        docker_run(
+            ["docker", "volume", "create", "--label", OWNER_LABEL, "--label", f"{LEASE_LABEL}={root.name}", volume]
+        )
         docker_run(
             broker_argv(
                 spec,
@@ -612,17 +710,18 @@ def run_confined(
             spec, name=agent_name, volume=volume, workdir=workdir, scratch=scratch, grant_file=capability.grant_path
         )
         box = container_boundary(dict(spec.env))
+        mark_agent_started(run_dir)
         started = time.perf_counter()
         stdout, stderr, returncode = capture_output(
             argv, cwd=workdir, env=docker_env(), timeout_s=command.timeout_s, cap=STDOUT_CAP_BYTES
         )
         wall = time.perf_counter() - started
-        for name in ("jev-calls.jsonl", "jev-calls.stderr"):
-            copy_regular_nofollow(scratch / name, run_dir / name)
-        write_run_logs(run_dir, stdout, stderr)
+        _remove_resource(["docker", "rm", "-f", agent_name])
+        copy_relay_logs(scratch, run_dir)
+        raw_hits = write_run_logs(run_dir, stdout, stderr, secrets=secrets)
         trace = (parse or stream.parse)(stdout.splitlines())
         escape = escape_scan(stdout, box)
-        hits = sorted({name for value in secrets for name in secret_scan(run_dir, value)})
+        hits = sorted(raw_hits.union(name for value in secrets for name in secret_scan(run_dir, value)))
         if hits:
             prefix = f"{escape}; " if escape else ""
             escape = f"{prefix}secret scan: key value found in {', '.join(hits)}"
@@ -638,15 +737,6 @@ def run_confined(
             escape=escape or None,
             exploration=exploration_paths(stdout, box),
         )
-    finally:
-        teardown(agent_name=agent_name, broker_name=broker_name, volume=volume)
-        shutil.rmtree(root, ignore_errors=True)
-        shutil.rmtree(workdir, ignore_errors=True)
-        # The capability token is scrubbed, never scanned: an agent reading its own
-        # /run/capability.json is exploration, not a void, but the TTL-bounded token still does
-        # not belong in the kept records (F11). A run that died before minting one has none.
-        for value in (*secrets, capability.token) if capability is not None else secrets:
-            secret_scrub(run_dir, value)
 
 
 def probe_provider(spec: ConfinementSpec, *, timeout_s: float = 60.0) -> str | None:
@@ -660,8 +750,7 @@ def probe_provider(spec: ConfinementSpec, *, timeout_s: float = 60.0) -> str | N
     provider = next((upstream for upstream in spec.upstreams if upstream.name != "typesafe"), None)
     if provider is None:
         return "no model-provider upstream is configured"
-    root = Path(tempfile.mkdtemp(prefix="jev-probe-"))
-    try:
+    with _run_root() as root:
         grants = root / "grants"
         code = root / "code"
         _copy_modules(code)
@@ -675,7 +764,7 @@ def probe_provider(spec: ConfinementSpec, *, timeout_s: float = 60.0) -> str | N
             ),
             encoding="utf-8",
         )
-        tag = uuid.uuid4().hex[:12]
+        tag = root.name
         volume = f"jev-eval-sock-{tag}"
         broker_name = f"jev-eval-broker-{tag}"
         probe_name = f"jev-eval-probe-{tag}"
@@ -685,8 +774,10 @@ def probe_provider(spec: ConfinementSpec, *, timeout_s: float = 60.0) -> str | N
             _PROBE_SCRIPT.format(scheme=provider.scheme, host=provider.host, port=provider.port, path=models_path),
             encoding="utf-8",
         )
-        try:
-            docker_run(["docker", "volume", "create", "--label", OWNER_LABEL, volume])
+        with _cleanup(lambda: _finish_resources(root, agent_name=probe_name, broker_name=broker_name, volume=volume)):
+            docker_run(
+                ["docker", "volume", "create", "--label", OWNER_LABEL, "--label", f"{LEASE_LABEL}={root.name}", volume]
+            )
             docker_run(
                 broker_argv(
                     spec,
@@ -705,6 +796,8 @@ def probe_provider(spec: ConfinementSpec, *, timeout_s: float = 60.0) -> str | N
                 "--rm",
                 "--name",
                 probe_name,
+                "--label",
+                f"{LEASE_LABEL}={root.name}",
                 "--network",
                 "none",
                 "--cap-drop",
@@ -724,13 +817,9 @@ def probe_provider(spec: ConfinementSpec, *, timeout_s: float = 60.0) -> str | N
                 "/probe.py",
             ]
             result = docker_run(argv, check=False, timeout=timeout_s)
-        finally:
-            teardown(agent_name=probe_name, broker_name=broker_name, volume=volume)
         if result.returncode == 0:
             return None
         return ((result.stdout or "").strip() or (result.stderr or "").strip())[-200:]
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
 
 
 _PROBE_SCRIPT = """
@@ -793,7 +882,7 @@ def _copy_grade_code(target: Path) -> None:
 
 
 _GRADE_DRIVER = """
-import json, os, subprocess, sys
+import json, os, sys
 from dataclasses import asdict
 from pathlib import Path
 
@@ -806,27 +895,7 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
 sys.path.insert(0, "/code")
 from evals.ab import tasks
-from evals.ab.grade import grade, expected_ids
-
-# Hostile-tree-safe git (F1): a clean PATH, no inherited config, hooks and fsmonitor forced off.
-# Repo-local config is still read; command-line -c wins, so a planted hook or fsmonitor does not
-# run even inside the container. The workdir is not on PATH.
-GIT_ENV = {
-    "PATH": "/usr/local/bin:/usr/bin:/bin",
-    "HOME": "/tmp",
-    "GIT_CONFIG_GLOBAL": "/dev/null",
-    "GIT_CONFIG_SYSTEM": "/dev/null",
-    "GIT_CONFIG_NOSYSTEM": "1",
-    "GIT_TERMINAL_PROMPT": "0",
-}
-
-
-def git(*args):
-    return subprocess.run(
-        ["git", "-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "core.hooksPath=", *args],
-        cwd="/tree", env=GIT_ENV, capture_output=True, text=True, check=False,
-    )
-
+from evals.ab.grade import grade, expected_ids, hardened_git
 
 mode, argument = sys.argv[1], sys.argv[2]
 if mode == "reference":
@@ -837,12 +906,13 @@ if mode == "reference":
 
 task = tasks.load_task(argument)
 ids = tuple(json.loads(Path("/reference.json").read_text(encoding="utf-8"))["ids"])
-if (Path("/tree") / ".git").exists():
-    git("add", "-A")
-    Path("/out/diff.patch").write_text(git("diff", "--cached").stdout, encoding="utf-8")
+tree = Path("/tree")
+if (tree / ".git").exists():
+    hardened_git(tree, "add", "-A")
+    Path("/out/diff.patch").write_text(hardened_git(tree, "diff", "--cached").stdout, encoding="utf-8")
 else:
     Path("/out/diff.patch").write_text("", encoding="utf-8")
-result = grade(Path("/tree"), task, sys.executable, expected=ids)
+result = grade(tree, task, sys.executable, expected=ids)
 Path("/out/grade.json").write_text(json.dumps(asdict(result)))
 """
 
@@ -1007,58 +1077,64 @@ def _grade_container(
     are read back, as untrusted data. A container that does not start raises `ContainerStartError`;
     a driver that starts and fails raises `ValueError`.
     """
-    import tempfile
-    import uuid
-
-    root = Path(tempfile.mkdtemp(prefix="jev-grade-"))
-    out = root / "out"
-    out.mkdir()
-    _copy_modules(root / "code")
-    _copy_grade_code(root / "code")
-    (root / "code" / "grade_driver.py").write_text(_GRADE_DRIVER, encoding="utf-8")
-    argv = [
-        "docker",
-        "run",
-        "--rm",
-        "--pull",
-        "never",
-        "--name",
-        f"jev-eval-grade-{uuid.uuid4().hex[:12]}",
-        "--label",
-        OWNER_LABEL,
-        "--network",
-        "none",
-        "--cap-drop",
-        "ALL",
-        "--security-opt",
-        "no-new-privileges",
-        "-e",
-        "PATH=/usr/local/bin:/usr/bin:/bin",
-        "-e",
-        "HOME=/tmp",
-        "-e",
-        "PYTHONDONTWRITEBYTECODE=1",
-        "-v",
-        f"{root / 'code'}:/code:ro",
-        "-v",
-        f"{out}:/out",
-    ]
-    if reference_ids is not None:
-        (root / "reference.json").write_text(json.dumps({"ids": list(reference_ids)}), encoding="utf-8")
-        argv += ["-v", f"{root / 'reference.json'}:/reference.json:ro"]
-    if tree is not None:
-        # The workdir itself, not a host-side copy. The host passes the path and does not open it.
-        argv += ["-v", f"{tree}:/tree"]
-    argv += [image, "/usr/local/bin/python3", "/code/grade_driver.py", mode, argument]
-    try:
+    with _run_root() as root:
+        out = root / "out"
+        out.mkdir()
+        _copy_modules(root / "code")
+        _copy_grade_code(root / "code")
+        (root / "code" / "grade_driver.py").write_text(_GRADE_DRIVER, encoding="utf-8")
+        argv = [
+            "docker",
+            "run",
+            "--rm",
+            "--pull",
+            "never",
+            "--name",
+            f"jev-eval-grade-{root.name}",
+            "--label",
+            OWNER_LABEL,
+            "--label",
+            f"{LEASE_LABEL}={root.name}",
+            "--network",
+            "none",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "-e",
+            "PATH=/usr/local/bin:/usr/bin:/bin",
+            "-e",
+            "HOME=/tmp",
+            "-e",
+            "PYTHONDONTWRITEBYTECODE=1",
+            "-v",
+            f"{root / 'code'}:/code:ro",
+            "-v",
+            f"{out}:/out",
+        ]
+        if reference_ids is not None:
+            (root / "reference.json").write_text(json.dumps({"ids": list(reference_ids)}), encoding="utf-8")
+            argv += ["-v", f"{root / 'reference.json'}:/reference.json:ro"]
+        if tree is not None:
+            # The workdir itself, not a host-side copy. The host passes the path and does not open it.
+            argv += ["-v", f"{tree}:/tree"]
+        argv += [image, "/usr/local/bin/python3", "/code/grade_driver.py", mode, argument]
         try:
             done = docker_run(argv, check=False, timeout=timeout_s)
         except subprocess.TimeoutExpired as error:
+            try:
+                _remove_resource(["docker", "rm", "-f", f"jev-eval-grade-{root.name}"])
+            except (OSError, subprocess.TimeoutExpired, ConfinementError):
+                (root / ".retry-cleanup").touch(mode=0o600)
+                error.add_note("Docker cleanup will be retried using the run lease")
             if _regular_marker(out / "started"):
                 raise ValueError("grading container timed out") from error
             raise ContainerStartError("grading container did not start before the timeout") from error
         except OSError as error:
             raise ContainerStartError(f"docker is unavailable: {error}") from error
+        except (KeyboardInterrupt, SystemExit):
+            (root / ".retry-cleanup").touch(mode=0o600)
+            raise
         started = _regular_marker(out / "started")
         if done.returncode != 0:
             detail = (done.stderr or done.stdout or "")[-300:]
@@ -1067,8 +1143,6 @@ def _grade_container(
             raise ValueError(f"grading failed inside the container: {detail}")
         names = ("reference.json",) if mode == "reference" else ("diff.patch", "grade.json")
         return {name: read_untrusted_text(out / name) for name in names}
-    finally:
-        shutil.rmtree(root, ignore_errors=True)
 
 
 def confined_postprocess(

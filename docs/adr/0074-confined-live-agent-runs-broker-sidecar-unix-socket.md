@@ -10,6 +10,8 @@ checkout, and one run read the gold answers (`evals/reports/d3-paired`, diagnosi
 follow-up fixes — scoped `auth.json`/`models.json`, the study keyfile, the escape canary, config
 hygiene, the wheel-built venv — narrow the exposure but are not a boundary: a same-uid agent can
 still read any file the operator can, and the sandbox keyfile sits inside the run's reach.
+The harness refuses an exported `TYPESAFE_API_KEY` because macOS `ps eww` can expose a running
+process's environment to another process owned by the same user.
 
 This is an eval-harness decision. It changes no MCP tool, schema, threshold, or frozen reference
 behavior, so it is not a divergence and is not entered in `docs/reference/divergences.json`.
@@ -217,3 +219,32 @@ defect was `_record` diffing and grading the agent workdir in the harness proces
   plugin entry point, sitecustomize/usercustomize, `.git/hooks` and `core.hooksPath`,
   `core.fsmonitor`, a git alias, a symlink out of the workdir, and PATH/PYTHONPATH shadowing. A
   host marker from any of those fails the suite. No paid A/B run is started by that suite.
+
+## Amendment 2026-11-19: stop the agent before reading its work
+
+- The confined launcher persists the launch handoff from ADR-0045 before starting the agent
+  container. It force-removes the container as soon as capture returns, including on timeout,
+  before copying relay logs or passing the workdir to the grader.
+- SIGTERM and SIGHUP unwind the same cleanup path. A secondary cleanup failure preserves the
+  primary error, including an interrupt or an infrastructure stop with a measured cost.
+  Uncertain Docker cleanup retains the lease for the reaper.
+- The offline sandbox and the grading container share the same Git invocation. It uses a fixed
+  environment without inherited Git settings, disables global and system config, hooks and
+  fsmonitor, and sets a 15-second timeout per command.
+
+## Amendment 2026-11-19: remove the unconfined bench launcher
+
+The bench CLI can report finished or stopped studies. Pending runs still trigger the confinement
+refusal, including when saved state changes during inspection. The host agent launcher is reachable
+only through the offline bench dry run. A live bench will require `run_confined`.
+
+A/B startup uses the confined provider probe. The host agent-prompt preflight and wheel-installed
+host interpreter are removed. Confined Pi runs use the adapter packaged in the agent image.
+
+## Amendment 2026-11-19: build the image with the locked TypeSafe runtime
+
+`make confinement-image` creates a temporary Docker context with one wheel from the current
+checkout and a hashed export of the TypeSafe runtime from `uv.lock`. The image requires a
+single wheel, installs the exported runtime with hash enforcement, and installs the wheel
+with dependency resolution disabled. This ties the installed dependency versions to the lock
+used for the build.

@@ -21,6 +21,7 @@ from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from tests.parity.divergences import DIVERGENT, Expectation
+from tests.parity.program_expect import frozen_review_fields
 from tests.support.fixtures import FixtureCall, divergences
 
 FAKE_URL = "http://fake.invalid"
@@ -94,7 +95,12 @@ async def replay_call(call: FixtureCall, monkeypatch: pytest.MonkeyPatch) -> Non
     assert [ordered(body) for body in sent] == [ordered(body) for body in expected_bodies], call.id
     content = result.content[0]
     assert content.type == "text", call.id
-    assert content.text == expected_text, call.id
+    observed = (
+        frozen_review_fields(content.text, expected_text, call.payload["arguments"])
+        if divergences(call) and not expected_error
+        else content.text
+    )
+    assert observed == expected_text, call.id
     assert bool(result.is_error) == expected_error, call.id
     if expected_error:
         # ADR-0062: the first block stays the recorded error text. The second block is the code

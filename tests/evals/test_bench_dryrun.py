@@ -12,12 +12,14 @@ import sys
 import threading
 import urllib.parse
 from collections.abc import Callable, Iterator, Sequence
+from contextlib import closing
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from evals import agent
 from evals.ab import arms
 from evals.bench import gate, run, spans
 from evals.bench.items import Item, load_items
@@ -25,10 +27,10 @@ from evals.bench.ledger import POLICY
 from evals.bench.proxy import BENCH_REQUEST_CAP
 from evals.spend import SpendLedger
 from tests.evals.booking_cases import (
+    assert_no_nan,
     bench_loop,
     cancelled_error_does_not_book,
     operator_interrupt_books_the_bound,
-    seeded_nan_books_the_bound,
     seeded_result_books_the_file_cost,
 )
 from tests.support.bench_provider import API_KEY, Loopback
@@ -67,7 +69,6 @@ def setup(tmp: Path, loopback: Loopback, plan: Planner = default_plan) -> run.Se
     }
     return run.Setup(
         agent=agent,
-        server=[sys.executable, "-m", "jev_judge_mcp"],
         server_env=env,
         base_env=arms.agent_env(os.environ),
         secret=API_KEY,
@@ -81,8 +82,12 @@ def loopback() -> Iterator[Loopback]:
         yield endpoint
 
 
-def records(out: Path) -> dict[str, dict[str, Any]]:
-    return {r["run_id"]: r for r in run.load_records(out)}
+def records(out: Path, *, failed: str | None = None) -> dict[str, dict[str, Any]]:
+    got = {r["run_id"]: r for r in run.load_records(out)}
+    for run_id, record in got.items():
+        if run_id != failed:
+            assert record["status"] == "ok", (run_id, record["status"])
+    return got
 
 
 def test_dry_run_scores_both_pairs_and_writes_the_sample_report(tmp_path: Path, loopback: Loopback) -> None:
@@ -126,13 +131,20 @@ def test_dry_run_scores_both_pairs_and_writes_the_sample_report(tmp_path: Path, 
     assert "<script" not in report and "http" not in report.split("<body>")[1]
 
 
-def _gated(tmp_path: Path, loopback: Loopback, plan: Planner) -> dict[str, dict[str, Any]]:
-    run.run_bench(ITEMS[:1], setup(tmp_path, loopback, plan), tmp_path / "out")
-    return records(tmp_path / "out")
+def _gated(
+    tmp_path: Path, loopback: Loopback, plan: Planner, *, incorrect: tuple[str, ...] = ()
+) -> dict[str, dict[str, Any]]:
+    stop = run.run_bench(ITEMS[:1], setup(tmp_path, loopback, plan), tmp_path / "out")
+    assert stop == "all 1 triplets recorded"
+    got = records(tmp_path / "out")
+    assert {rid: row["correct"] for rid, row in got.items()} == {
+        f"{ITEMS[0].id}.{arm}": arm not in incorrect for arm in ("A", "B", "C")
+    }
+    return got
 
 
 def test_gate_fails_a_forced_run_that_never_called_jev(tmp_path: Path, loopback: Loopback) -> None:
-    got = _gated(tmp_path, loopback, no_calls)
+    got = _gated(tmp_path, loopback, no_calls, incorrect=("C",))
     forced = got["dry-screen-01.C"]
     assert forced["gate"] == "no Jev call" and forced["answer"] == "clean" and not forced["correct"]
     automatic = got["dry-screen-01.B"]
@@ -142,7 +154,7 @@ def test_gate_fails_a_forced_run_that_never_called_jev(tmp_path: Path, loopback:
 
 def test_gate_fails_a_forced_run_whose_only_jev_calls_errored(tmp_path: Path) -> None:
     with Loopback(status=500) as failing:
-        got = _gated(tmp_path, failing, default_plan)
+        got = _gated(tmp_path, failing, default_plan, incorrect=("C",))
     forced = got["dry-screen-01.C"]
     assert forced["gate"].startswith("no successful Jev call") and not forced["correct"]
     assert [c["is_error"] for c in forced["jev_calls"]] == [True] and forced["cross_check"] is None
@@ -151,13 +163,17 @@ def test_gate_fails_a_forced_run_whose_only_jev_calls_errored(tmp_path: Path) ->
 def test_wrong_model_fails_the_gate_and_stops_the_study(tmp_path: Path) -> None:
     with Loopback(model="jev-latest") as unpinned, pytest.raises(gate.WrongModelError, match="jev-latest"):
         run.run_bench(ITEMS, setup(tmp_path, unpinned), tmp_path / "out")
-    got = records(tmp_path / "out")
+    first_item, _ = run.schedule(ITEMS, run.SEED)[0]
+    got = records(tmp_path / "out", failed=f"{first_item.id}.C")
+    assert all(row["correct"] == (row["arm"] != "C") for row in got.values())
     callers = [record for record in got.values() if record["jev_calls"]]
     assert len(callers) == 1 and callers[0]["arm"] == "C"
     assert callers[0]["gate"] == "no Jev answer from jev-1.13.0" and not callers[0]["correct"]
     assert callers[0]["run_id"] in SpendLedger.load(tmp_path / "out" / "ledger.json", POLICY).runs, (
         "recorded, never retried"
     )
+    assert "jev-latest" in callers[0]["status"]
+    assert not run.runs_remain(ITEMS, tmp_path / "out")
     other = "dry-verify-01" if callers[0]["item"] == "dry-screen-01" else "dry-screen-01"
     assert not any(run_id.startswith(other) for run_id in got)
 
@@ -213,13 +229,26 @@ def test_a_run_whose_post_processing_raises_is_booked_at_the_run_bound(
     book = SpendLedger.load(out / "ledger.json", POLICY)
     assert book.runs["dry-screen-01.B"] == POLICY.run_bound_usd, "paid, so booked and never retried"
     assert API_KEY not in "".join(p.read_text(encoding="utf-8") for p in out.rglob("*") if p.is_file())
-    failed = records(out)["dry-screen-01.B"]
+    failed = records(out, failed="dry-screen-01.B")["dry-screen-01.B"]
     assert failed["status"].startswith("failed: post-processing raised RuntimeError: span parse broke")
-    assert failed["cost_usd"] == failed["agent_cost_usd"] == POLICY.run_bound_usd and not failed["correct"]
+    assert failed["jev_cost_usd"] is None and not failed["correct"]
+    assert failed["agent_cost_usd"] is None and failed["cost_usd"] is None
+    # Recovery after the row was committed and before the ledger was booked.
+    recovered = tmp_path / "crash-before-booking"
+    for path in out.glob("*/result.json"):
+        target = recovered / path.relative_to(out)
+        target.parent.mkdir(parents=True)
+        target.write_bytes(path.read_bytes())
+    run.runs_remain(ITEMS[:1], recovered)
+    assert SpendLedger.load(recovered / "ledger.json", POLICY).runs == book.runs
     assert failed["agent_cost_reported"] is False and failed["gate"] is None
     kept = (out / "dry-screen-01.B" / "result.json").read_text(encoding="utf-8")
     monkeypatch.setattr(spans, "parse_spans", original)
     assert run.run_bench(ITEMS[:1], setup(tmp_path, loopback, plan), out) == "all 1 triplets recorded"
+    resumed = records(out, failed="dry-screen-01.B")
+    assert {rid: row["correct"] for rid, row in resumed.items()} == {
+        f"dry-screen-01.{arm}": arm != "B" for arm in ("A", "B", "C")
+    }
     assert launched.count("dry-screen-01.B") == 1, "a resume never launches a booked run again"
     assert "dry-screen-01.A" in launched and "dry-screen-01.C" in launched
     assert (out / "dry-screen-01.B" / "result.json").read_text(encoding="utf-8") == kept
@@ -232,15 +261,19 @@ def test_a_stream_proxy_mismatch_stops_the_study(tmp_path: Path, loopback: Loopb
 
     with pytest.raises(gate.HarnessMismatchError):
         run.run_bench(ITEMS[:1], setup(tmp_path, loopback, plan), tmp_path / "out")
-    mismatched = [record for record in records(tmp_path / "out").values() if record["cross_check"]]
+    got = records(tmp_path / "out", failed=f"{ITEMS[0].id}.C")
+    assert all(row["correct"] == (row["arm"] != "C") for row in got.values())
+    mismatched = [record for record in got.values() if record["cross_check"]]
     assert len(mismatched) == 1 and mismatched[0]["arm"] == "C" and not mismatched[0]["correct"]
+    assert mismatched[0]["cross_check"] in mismatched[0]["status"]
+    assert not run.runs_remain(ITEMS, tmp_path / "out")
 
 
 def test_an_unparseable_final_answer_is_incorrect(tmp_path: Path, loopback: Loopback) -> None:
     def plan(item: Item, arm: str) -> Plan:
         return {**default_plan(item, arm), "answer": "It is clean, I think."}
 
-    got = _gated(tmp_path, loopback, plan)
+    got = _gated(tmp_path, loopback, plan, incorrect=("A", "B", "C"))
     assert all(not r["correct"] and r["parse_error"] == "final line is not JSON" for r in got.values())
 
 
@@ -252,6 +285,7 @@ def test_the_ledger_stops_between_triplets(tmp_path: Path, loopback: Loopback) -
     stop = run.run_bench(ITEMS, setup(tmp_path, loopback), out)
     assert stop.startswith("stopped before") and "run cap" in stop
     got = records(out)
+    assert all(row["correct"] for row in got.values())
     assert (
         len(got) == 3
         and {r["arm"] for r in got.values()} == {"A", "B", "C"}
@@ -271,7 +305,7 @@ def test_the_compliance_stop_holds_on_resume(
     stop = run.run_bench(ITEMS, setup(tmp_path, loopback, plan), out)
     assert stop.startswith("compliance stop: 1 of the first 1 C runs failed") and len(records(out)) == 3
     assert run.run_bench(ITEMS, setup(tmp_path, loopback, plan), out) == stop
-    assert len(records(out)) == 3
+    assert {row["arm"]: row["correct"] for row in records(out).values()} == {"A": True, "B": True, "C": False}
 
 
 class SpyLock:
@@ -296,10 +330,10 @@ def test_the_loopback_counts_requests_under_its_lock(loopback: Loopback) -> None
     url = urllib.parse.urlsplit(loopback.env()["JEV_API_BASE_URL"])
     body = json.dumps({"questions": {"q": {"type": "noul"}}})
     for _ in range(3):
-        connection = http.client.HTTPConnection(url.netloc)
-        connection.request("POST", url.path, body, {"Content-Type": "application/json"})
-        assert connection.getresponse().status == 200
-        connection.close()
+        with closing(http.client.HTTPConnection(url.netloc, timeout=5)) as connection:
+            connection.request("POST", url.path, body, {"Content-Type": "application/json"})
+            with connection.getresponse() as response:
+                assert response.status == 200 and response.read()
     assert (loopback.requests, spy.entered) == (3, 3)
 
 
@@ -314,9 +348,58 @@ def test_a_cancelled_study_does_not_book(tmp_path: Path, monkeypatch: pytest.Mon
     cancelled_error_does_not_book(bench_loop(tmp_path, monkeypatch))
 
 
+def test_resume_does_not_relaunch_an_agent_that_died_before_capture_finished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class AbruptExit(BaseException):
+        pass
+
+    loop = bench_loop(tmp_path, monkeypatch)
+    first, *rest = loop.ids
+
+    def capture(*_args: object, **_kwargs: object) -> tuple[str, str, int]:
+        raise AbruptExit
+
+    monkeypatch.setattr(agent, "capture_output", capture)
+    with pytest.raises(AbruptExit):
+        loop.go()
+    assert loop.load().runs == {}
+    assert not list(loop.out.glob("*/result.json"))
+    for rid in rest:
+        loop.seed(rid, 0.0)
+    loop.install(lambda *_: pytest.fail("resume relaunched the interrupted agent"))
+    assert loop.go() == f"0 of 1 triplets recorded; incomplete: {first.rsplit('.', 1)[0]}"
+    assert loop.load().runs == {first: loop.bound, **dict.fromkeys(rest, 0.0)}
+
+
 def test_resume_books_a_seeded_result_cost_not_the_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seeded_result_books_the_file_cost(bench_loop(tmp_path, monkeypatch))
 
 
 def test_resume_books_the_bound_when_the_seeded_cost_is_nan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    seeded_nan_books_the_bound(bench_loop(tmp_path, monkeypatch))
+    loop = bench_loop(tmp_path, monkeypatch)
+    for run_id in loop.ids:
+        loop.seed(run_id, float("nan"))
+    loop.install(lambda *_: pytest.fail("relaunched an incomplete run"))
+    stop = loop.go()
+    assert "incomplete result records" in stop and all(run_id in stop for run_id in loop.ids)
+    assert loop.load().runs == dict.fromkeys(loop.ids, loop.bound)
+    assert_no_nan(loop.out / "ledger.json")
+
+
+def test_grading_failure_preserves_a_terminal_wrong_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(calls: Sequence[object], _spans: object) -> list[object]:
+        if calls:
+            raise RuntimeError("timing attribution failed")
+        return []
+
+    monkeypatch.setattr(spans, "attribute", broken)
+    out = tmp_path / "out"
+    with Loopback(model="jev-latest") as unpinned, pytest.raises(RuntimeError, match="timing attribution"):
+        run.run_bench(ITEMS[:1], setup(tmp_path, unpinned), out)
+    failed_id = f"{ITEMS[0].id}.C"
+    failed = records(out, failed=failed_id)[failed_id]
+    assert "timing attribution" in failed["status"]
+    assert "jev-latest" in failed["status"]
+    assert not run.runs_remain(ITEMS, out)
+    assert SpendLedger.load(out / "ledger.json", POLICY).runs[failed["run_id"]] == POLICY.run_bound_usd

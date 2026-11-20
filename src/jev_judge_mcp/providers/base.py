@@ -8,13 +8,15 @@ MCP cancellation aborts the in-flight request (ADR-0011), and transient transpor
 retried under one bounded policy that `evaluate` owns for all four providers (ADR-0057).
 """
 
+from __future__ import annotations
+
 import logging
 import math
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Literal, cast, override
+from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, cast, override
 from urllib.parse import urlsplit
 
 import anyio
@@ -22,7 +24,7 @@ import httpx
 
 import jev_judge_mcp.providers.retry as retries
 from jev_judge_mcp.domain import JsonValue, Question, RawAnswer, Usage, as_number, decode_json, questions_to_wire
-from jev_judge_mcp.errors import Redactor
+from jev_judge_mcp.errors import DEFAULT_PORTS, Redactor
 from jev_judge_mcp.providers.retry import (
     DEFAULT_RETRY_POLICY,
     RetryPolicy,
@@ -31,6 +33,9 @@ from jev_judge_mcp.providers.retry import (
 )
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.text import head
+
+if TYPE_CHECKING:
+    import httpx2
 
 type ProviderName = Literal["typesafe", "openrouter", "cloudflare", "compatible"]
 
@@ -41,7 +46,7 @@ ERROR_BODY_UNITS = 200
 _ERROR_TYPE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 """An upstream `detail.error_type` kept on a status error: a bare identifier only (ADR-0079)."""
 
-_DEFAULT_PORTS = {"http": 80, "https": 443}
+_METADATA_MAX = 1024
 
 
 def origin_of(url: str | httpx.URL) -> tuple[str, str, int]:
@@ -50,7 +55,7 @@ def origin_of(url: str | httpx.URL) -> tuple[str, str, int]:
     Shared by both HTTP transports: the raw providers' redirect hook and the typesafe-sdk wrapper's.
     """
     parsed = url if isinstance(url, httpx.URL) else httpx.URL(url)
-    return (parsed.scheme, parsed.host or "", parsed.port or _DEFAULT_PORTS.get(parsed.scheme, 0))
+    return (parsed.scheme, parsed.host or "", parsed.port or DEFAULT_PORTS.get(parsed.scheme, 0))
 
 
 class ProviderError(Exception):
@@ -77,23 +82,27 @@ class ProviderConfigError(ProviderError):
 
 
 class ProviderConnectionError(ProviderError):
-    """A connection failure a transport had to wrap to keep today's text (an SDK reset, ADR-0057).
+    """A connection failure a transport had to wrap to keep today's text (a pre-send SDK connection failure, ADR-0057).
 
     The retry loop classifies it as a transient connection failure even though it carries no HTTP
     status and is not a `ConnectionError` instance.
     """
 
 
+class ProviderDeliveryError(ProviderError):
+    """The request may already have been accepted."""
+
+
 class ProviderTimeoutError(ProviderError):
     """An attempt missed its deadline, or the caller's whole-call deadline fired. Code `timeout`."""
 
 
-def _redacted(error: ProviderError, redact: Redactor) -> ProviderError:
+def _redacted(error: ProviderError, redact: Redactor, note: str = "") -> ProviderError:
     """The same failure, text redacted, status and retry hint kept.
 
     `type(error)(text)` alone drops `status`. A 401 would then code `provider` (ADR-0072).
     """
-    redacted = type(error)(redact(str(error)))
+    redacted = type(error)(redact(str(error)) + note)
     redacted.status = error.status
     redacted.retry_after = error.retry_after
     redacted.error_type = error.error_type
@@ -124,7 +133,7 @@ class Envelope:
         return default if self.model is None else self.model
 
 
-def parse_envelope(body: object, label: str) -> Envelope:
+def parse_envelope(body: object, label: str, headers: Mapping[str, str] | None = None) -> Envelope:
     """Validate the envelope only, with the reference's `compatible` rules and messages (`provider.ts:175-194`).
 
     `usage` absent or null reports zeros; otherwise both counts must be finite non-negative numbers.
@@ -140,7 +149,7 @@ def parse_envelope(body: object, label: str) -> Envelope:
     answers = envelope.get("answers")
     if not isinstance(answers, dict):
         raise invalid("expected an answers object.")
-    usage = Usage()
+    usage = Usage(reported=False)
     raw_usage = envelope.get("usage")
     if raw_usage is not None:
         counts = usage_counts(raw_usage)
@@ -150,7 +159,12 @@ def parse_envelope(body: object, label: str) -> Envelope:
     model = envelope.get("model")
     if model is not None and not isinstance(model, str):
         raise invalid("model must be absent or a string.")
-    return Envelope(answers=answers, usage=usage, model=model, request_id=request_id_of(envelope))  # pyright: ignore[reportUnknownArgumentType]
+    return Envelope(
+        answers=answers,  # pyright: ignore[reportUnknownArgumentType]
+        usage=usage,
+        model=metadata_text(model),
+        request_id=request_id_of(envelope, headers),
+    )
 
 
 def usage_counts(usage: object) -> tuple[int | float, int | float] | None:
@@ -171,17 +185,22 @@ def usage_counts(usage: object) -> tuple[int | float, int | float] | None:
     return counts[0], counts[1]
 
 
+def metadata_text(value: object) -> str | None:
+    """Bound provider metadata before it is emitted or replayed."""
+    if isinstance(value, str) and 0 < len(value) <= _METADATA_MAX and value.isascii() and value.isprintable():
+        return value
+    return None
+
+
 def request_id_of(body: Mapping[str, object], headers: Mapping[str, str] | None = None) -> str | None:
     """A provider request id, or none. Never invented (ADR-0068)."""
-    value = body.get("request_id")
-    if isinstance(value, str) and value:
-        return value
-    if headers is None:
-        return None
+    identifier = metadata_text(body.get("request_id"))
+    if identifier is not None or headers is None:
+        return identifier
     for name in ("x-request-id", "request-id", "x-typesafe-request-id"):
-        for key, header in headers.items():
-            if key.lower() == name and header:
-                return header
+        identifier = metadata_text(retries.header_value(headers, name))
+        if identifier is not None:
+            return identifier
     return None
 
 
@@ -230,6 +249,11 @@ def encode_json(value: object) -> bytes:
     return stringify_compact(value).encode("utf-8")
 
 
+def pre_send_timeout(attempt_cap: float | None) -> float | None:
+    """Leave room for pool acquisition, TCP and TLS to report their own timeouts."""
+    return None if attempt_cap is None else attempt_cap / 4
+
+
 class JevProvider(ABC):
     """A transport to Jev. `evaluate` is the only entry point; adapters implement `_send`."""
 
@@ -251,14 +275,14 @@ class JevProvider(ABC):
     ) -> Evaluation:
         """Ask Jev `questions` about `state`. `timeout` bounds the whole call, in seconds; `None` leaves
         the whole call to the client's cancellation while every attempt stays bounded by the retry
-        policy's per-attempt timeout (ADR-0057). Transient transport failures (a connection failure
-        before any response, a per-attempt timeout, the policy's status codes) are retried under the
-        policy, inside this call's `timeout` when there is one; retries exhausted raise the provider,
+        policy's per-attempt timeout (ADR-0057). Definitely unsent requests and rate-limit rejections are
+        retried under the policy, inside this call's `timeout` when there is one; retries exhausted raise the provider,
         the attempt count and the last failure. Raises `ProviderError` with redacted text.
         Cancellation of the calling task propagates and aborts the request (ADR-0011).
         """
         wire = questions_to_wire(questions)
         policy = self._retry
+        uncertain = " Completion is uncertain." if policy.max_attempts > 1 else ""
         start = retries.clock()
         # The hard bound on the whole call: the caller's deadline when there is one, else the policy
         # budget. Every attempt is capped at the time left, so `evaluate` never runs past it.
@@ -272,16 +296,10 @@ class JevProvider(ABC):
                     now = retries.clock() - start
                     left = horizon - now
                     cap = min(policy.per_attempt_timeout, left)
-                    # Only a cap the caller's own remaining time binds is the caller's timeout; when
-                    # the budget binds first (timeout above budget), the exhausted-retry text reports.
-                    caller_left = None if timeout is None else timeout - now
-                    caller_capped = caller_left is not None and cap >= caller_left
                     try:
                         with anyio.fail_after(cap):
                             return await self._send(state, wire, model, cap)
                     except Exception as error:
-                        if caller_capped and isinstance(error, (TimeoutError, httpx.TimeoutException)):
-                            raise  # the attempt ran out the caller's remaining budget: the caller timed out
                         if whole.cancel_called:
                             raise
                         failure = self._transient(error)
@@ -298,33 +316,35 @@ class JevProvider(ABC):
         except ProviderError as error:
             # Redact the text, but keep the status the raise site recorded. Dropping it made a 401
             # look like a generic provider error once the text was no longer parsed (ADR-0072).
-            raise _redacted(error, self._redact) from None
-        except (TimeoutError, httpx.TimeoutException):
+            ambiguous = isinstance(error, ProviderDeliveryError) or error.status == 408 or (error.status or 0) >= 500
+            raise _redacted(error, self._redact, uncertain if ambiguous else "") from None
+        except (TimeoutError, httpx.TimeoutException) as error:
+            ambiguous = not isinstance(error, (httpx.ConnectTimeout, httpx.PoolTimeout))
+            note = uncertain if ambiguous else ""
             after = "" if timeout is None else f" after {timeout:g} s"
-            raise ProviderTimeoutError(f"{self.label} request timed out{after}.") from None
+            raise ProviderTimeoutError(f"{self.label} request timed out{after}.{note}") from None
         except Exception as error:
             # The original may carry a secret-bearing URL or header; only the redacted text leaves.
             # Some carry no message at all (a reset is a bare `RemoteProtocolError`): name the type.
             cause = str(error) or type(error).__name__
-            raise ProviderError(self._redact(f"{self.label} request failed: {cause}")) from None
+            ambiguous = isinstance(
+                error,
+                (httpx.ReadError, httpx.WriteError, httpx.CloseError, httpx.RemoteProtocolError, ConnectionResetError),
+            )
+            note = uncertain if ambiguous else ""
+            raise ProviderError(self._redact(f"{self.label} request failed: {cause}") + note) from None
 
     def _transient(self, error: Exception) -> TransientFailure | None:
         """The retryable transport failure `error` describes, or `None` when it must not be retried.
 
-        Retried: a per-attempt timeout, a transient connection failure (connect, read, write, close,
-        remote-protocol, and proxy errors — a reset among them), and the policy's status codes (408,
-        429, 5xx). Never: a local protocol error or an unsupported URL scheme (a request that cannot
-        be made or sent is final), any other 4xx, an envelope or validation error,
-        `ProviderConfigError`, the credentials-in-URL refusal, the cross-origin redirect refusal,
-        cancellation. A request can already have reached the server when a read error or a reset
-        ends it, so a retry can bill the call twice (ADR-0057); the attempt cap bounds that cost.
+        Only definitely unsent attempts and explicitly replayable status rejections qualify.
         """
         if isinstance(error, ProviderConfigError):
             return None
         if isinstance(error, ProviderConnectionError):
             return TransientFailure("connect", detail=str(error).removeprefix(f"{self.label} request failed: "))
         if isinstance(error, ProviderError):
-            if error.status is not None and error.status in self._retry.statuses:
+            if error.status == 429:
                 return TransientFailure(
                     "status",
                     status=error.status,
@@ -332,9 +352,9 @@ class JevProvider(ABC):
                     retry_after=error.retry_after,
                 )
             return None
-        if isinstance(error, (TimeoutError, httpx.TimeoutException)):
+        if isinstance(error, (httpx.ConnectTimeout, httpx.PoolTimeout)):
             return TransientFailure("timeout", detail="the attempt timed out")
-        if isinstance(error, (ConnectionError, httpx.NetworkError, httpx.RemoteProtocolError, httpx.ProxyError)):
+        if isinstance(error, (ConnectionRefusedError, httpx.ConnectError)):
             return TransientFailure("connect", detail=str(error) or type(error).__name__)
         return None
 
@@ -388,6 +408,67 @@ def _log_retry(label: str, attempt: int, max_attempts: int, failure: TransientFa
     )
 
 
+SUCCESS_BYTES_MAX = 8 * 1024 * 1024
+ERROR_BYTES_MAX = 64 * 1024
+
+
+class _ResponseStream(Protocol):
+    def __aiter__(self) -> AsyncIterator[bytes]: ...
+    async def aclose(self) -> None: ...
+
+
+class _BoundedStream:
+    """Count before HTTPX buffers bytes. The client owns closure on success and exception."""
+
+    def __init__(self, source: _ResponseStream, limit: int, success: bool) -> None:
+        self.source = source
+        self.limit = limit
+        self.success = success
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        left = self.limit
+        async for data in self.source:
+            if len(data) > left:
+                if self.success:
+                    raise ProviderError(f"provider response exceeds the {self.limit}-byte limit")
+                yield data[:left]
+                return
+            left -= len(data)
+            yield data
+            if not self.success and left == 0:
+                return
+
+    async def aclose(self) -> None:
+        await self.source.aclose()
+
+
+def bounded_response_hook[ResponseT: (httpx.Response, httpx2.Response)](
+    stream_type: type[httpx.AsyncByteStream] | type[httpx2.AsyncByteStream],
+) -> Callable[[ResponseT], Awaitable[None]]:
+    # Both transports require a stream that inherits their own AsyncByteStream class.
+    stream = type("BoundedStream", (_BoundedStream, stream_type), {})
+
+    async def bound(response: ResponseT) -> None:
+        encoding = response.headers.get("content-encoding")
+        if encoding and encoding.strip().lower() != "identity":
+            raise ProviderError("provider returned an unsupported content encoding; requested identity")
+        success = response.is_success
+        limit = SUCCESS_BYTES_MAX if success else ERROR_BYTES_MAX
+        if response.is_stream_consumed:
+            if success and len(response.content) > limit:
+                raise ProviderError(f"provider response exceeds the {limit}-byte limit")
+        else:
+            assert isinstance(response.stream, stream_type)
+            wrapped = stream(response.stream, limit, success)
+            assert isinstance(wrapped, stream_type)
+            response.stream = wrapped
+
+    return bound
+
+
+_bound_response: Callable[[httpx.Response], Awaitable[None]] = bounded_response_hook(httpx.AsyncByteStream)
+
+
 class HttpProvider(JevProvider):
     """A provider that POSTs JSON with `httpx`, as the reference does with `fetch` — except that a
     redirect may never leave the origin the first request used (ADR-0023): the reference's `fetch`
@@ -409,17 +490,21 @@ class HttpProvider(JevProvider):
         # The allowed origin is fixed per instance: it comes from process config (ADR-0008), so the
         # lazy first-request assignment races only with itself, writing the same value.
         self._origin: tuple[str, str, int] | None = None
-        # Like `fetch`: no timeout of its own (`evaluate` owns the deadline), and redirects are followed.
+        # Redirects are followed within the attempt deadline set by `evaluate`.
         self._client = client or httpx.AsyncClient(
             timeout=None,  # noqa: S113 - `evaluate` owns the deadline
             follow_redirects=True,
-            event_hooks={"request": [self._reject_cross_origin]},
+            event_hooks={"request": [self._reject_cross_origin], "response": [_bound_response]},
         )
         if client is not None:
             # An injected client is gated like the default one (ADR-0023): the guard is the
             # provider's, so no transport choice can let a hop leave the origin.
             hooks = client.event_hooks
-            client.event_hooks = {**hooks, "request": [*hooks["request"], self._reject_cross_origin]}
+            client.event_hooks = {
+                **hooks,
+                "request": [*hooks["request"], self._reject_cross_origin],
+                "response": [_bound_response, *hooks["response"]],
+            }
 
     async def _reject_cross_origin(self, request: httpx.Request) -> None:
         """Async: the client awaits every request hook, redirects included."""
@@ -430,9 +515,13 @@ class HttpProvider(JevProvider):
             logger.warning("blocked a cross-origin redirect to %s://%s", request.url.scheme, request.url.host)
             raise ProviderError(f"{self.label} request failed: a redirect left the configured origin and was blocked")
 
-    async def _post(self, url: str, headers: Mapping[str, str], body: object) -> httpx.Response:
+    async def _post(self, url: str, headers: Mapping[str, str], body: object, timeout: float | None) -> httpx.Response:
+        before_send = pre_send_timeout(timeout)
         return await self._client.post(
-            url, content=encode_json(body), headers={**headers, "Content-Type": "application/json"}
+            url,
+            content=encode_json(body),
+            headers={**headers, "Content-Type": "application/json", "Accept-Encoding": "identity"},
+            timeout=httpx.Timeout(timeout, connect=before_send, pool=before_send),
         )
 
     def _error(self, response: httpx.Response) -> ProviderError:

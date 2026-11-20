@@ -227,7 +227,9 @@ def test_the_relay_log_is_written_in_the_sandbox_and_copied_to_the_records(tmp_p
     path — and run_agent copies it to the run's records when the run ends."""
 
     def config(sandbox: Path) -> dict[str, Any]:
-        (sandbox / "jev-calls.jsonl").write_text('{"tool": "jev_verify"}\n', encoding="utf-8")
+        trace = sandbox / "jev-calls.jsonl"
+        trace.touch(mode=0o600)
+        trace.write_text('{"tool": "jev_verify"}\n', encoding="utf-8")
         return {}
 
     with run_agent(
@@ -312,10 +314,7 @@ def _wait_gone(pid: int) -> None:
         if _gone(pid):
             return
         time.sleep(0.05)
-    listing = subprocess.run(
-        ["ps", "-A", "-ww", "-o", "pid=,ppid=,stat=,command="], capture_output=True, text=True, check=False
-    ).stdout
-    assert _gone(pid), f"pid {pid} still running\n{listing}"
+    assert _gone(pid), f"pid {pid} still running"
 
 
 def _group_gone(pgid: int) -> bool:
@@ -536,7 +535,6 @@ def test_study_and_bench_time_out_the_same_way(tmp_path: Path) -> None:
     item = load_items(Path(__file__).resolve().parent / "data" / "bench-dryrun.jsonl")[0]
     setup = run.Setup(
         agent=lambda _item, _arm: _sleeper(tmp_path),
-        server=[],
         server_env={},
         base_env={"PATH": "/usr/bin:/bin"},
         secret=KEY,
@@ -556,15 +554,24 @@ def test_the_study_launches_its_agent_with_that_agents_cli_tail(
 ) -> None:
     (tmp_path / "adapter.ts").touch()
     monkeypatch.setenv("PI_MCP_ADAPTER", str(tmp_path / "adapter.ts"))
-    setup = _setup(tmp_path, [sys.executable, "-c", STUB, "0"], agent=agent)
+    # Verify the actual argv inside the child, before host paths are scrubbed from its transcript.
+    probe = """
+import json, sys
+from pathlib import Path
+expected = json.loads(sys.argv[1])
+actual = sys.argv[2:]
+index = actual.index("--mcp-config") + 1
+assert Path(actual[index]).is_file()
+actual[index] = "<config>"
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": actual == expected}))
+"""
+    addendum = arms.addendum("B", agent, TASK.judgment.jev_tool)
+    expected = ab_run.argv_tail(agent, ab_run.user_prompt(TASK), Path("<config>"), addendum)
+    setup = _setup(tmp_path, [sys.executable, "-c", probe, json.dumps(expected)], agent=agent)
     book = SpendLedger(ledger.POLICIES[agent], tmp_path / "ledger.json")
     ab_run.run_one(TASK, "B", 1, setup, book, tmp_path / "out")
-    lines = (tmp_path / "out" / "j1-refund-window.B.r1" / "stream.jsonl").read_text(encoding="utf-8").splitlines()
-    events = [json.loads(line) for line in lines if line.startswith("{")]
-    tail = json.loads(events[-1]["result"])["argv"]
-    config = Path(tail[tail.index("--mcp-config") + 1])
-    addendum = arms.addendum("B", agent, TASK.judgment.jev_tool)
-    assert tail == ab_run.argv_tail(agent, ab_run.user_prompt(TASK), config, addendum)
+    recorded = tmp_path / "out" / "j1-refund-window.B.r1" / "stream.jsonl"
+    assert json.loads(recorded.read_text())["result"] is True
 
 
 def _reporting(servers: list[dict[str, str]]) -> list[str]:
@@ -607,7 +614,6 @@ def test_a_bench_forced_run_whose_server_is_not_connected_fails(
     item = load_items(Path(__file__).resolve().parent / "data" / "bench-dryrun.jsonl")[0]
     setup = run.Setup(
         agent=lambda _item, _arm: _reporting(servers),
-        server=[],
         server_env={},
         base_env={"PATH": "/usr/bin:/bin"},
         secret=KEY,
@@ -793,22 +799,30 @@ def test_a_stdlib_read_is_allowed_but_etc_is_not(box: Any) -> None:
     assert escape_scan(_stream("ls /opt/homebrew/etc"), box) is not None
 
 
-CORPUS = Path(
-    os.environ.get(
-        "JEV_D3_CORPUS",
-        "/Users/panda/Projects/active/firstmate/data/jev-eval-d2d3/raw/d3-paired/pi",
-    )
+_CFG = re.compile(
+    r"(/(?:private/)?var/folders/[^\s\"';]*?/T/jev-agent-cfg-[A-Za-z0-9_]+|/home/example/temp/jev-agent-cfg-[A-Za-z0-9_]+)"
 )
-_CFG = re.compile(r"(/(?:private/)?var/folders/[^\s\"';]*?/T/jev-agent-cfg-[A-Za-z0-9_]+)")
 
 
-@pytest.mark.skipif(not CORPUS.is_dir(), reason="the redacted D3 corpus is operator-local")
-def test_the_redacted_d3_corpus_replay_matches_the_diagnosis() -> None:
-    """A runs stay clean; the with-Jev runs flag, including the two `find /` runs the diagnosis lists."""
+def test_the_redacted_d3_corpus_replay_matches_the_diagnosis(tmp_path: Path) -> None:
+    """Exercise the replay on portable Pi events, or verify all historical runs when explicitly supplied."""
+    configured = os.environ.get("JEV_D3_CORPUS")
+    corpus = Path(configured) if configured else tmp_path
+    if not configured:
+        for name, command, result in (
+            ("j6-docs-vs-code.A.r3", "cat docs/readme.md", "contents"),
+            ("j6-docs-vs-code.B.r3", "find /", ""),
+            ("j7-find-line.B.r3", "find /", ""),
+            ("j5-screen-injection.B.r2", "pwd", _W),
+        ):
+            directory = corpus / name
+            directory.mkdir()
+            header = json.dumps({"type": "session", "cwd": _W})
+            (directory / "stream.jsonl").write_text(header + "\n" + _stream(command, result), encoding="utf-8")
     clean_a = 0
     flagged_b: list[str] = []
     clean_b: list[str] = []
-    for directory in sorted(CORPUS.iterdir()):
+    for directory in sorted(corpus.iterdir()):
         stream = directory / "stream.jsonl"
         if not stream.is_file():
             continue
@@ -831,7 +845,7 @@ def test_the_redacted_d3_corpus_replay_matches_the_diagnosis() -> None:
             clean_b.append(directory.name)
         else:
             flagged_b.append(directory.name)
-    assert clean_a == 33
+    assert clean_a == (33 if configured else 1)
     assert {"j6-docs-vs-code.B.r3", "j7-find-line.B.r3"} <= set(flagged_b)
     assert clean_b == ["j5-screen-injection.B.r2"]
 
@@ -873,3 +887,92 @@ def test_models_json_is_scoped_to_the_arms_provider(tmp_path: Path) -> None:
         seen = json.loads(agent.trace.result_field("result"))
     assert list(seen["models"]["providers"]) == ["opencode-go"]
     assert seen["models"]["providers"]["opencode-go"]["apiKey"] == "sk-test-models-one-not-real"
+
+
+def test_second_scratch_allocation_failure_removes_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import tempfile
+
+    path = tmp_path / "owned-work"
+
+    def allocate(suffix: str | None = None, prefix: str | None = None, dir: str | None = None) -> str:
+        if prefix == "jev-agent-work-":
+            path.mkdir()
+            return str(path)
+        raise OSError("synthetic allocation failure")
+
+    monkeypatch.setattr(tempfile, "mkdtemp", allocate)
+    with (
+        pytest.raises(OSError, match="allocation failure"),
+        run_agent(_stub(), mcp_config={}, base_env={}, secret=KEY, run_dir=tmp_path / "out"),
+    ):
+        pytest.fail("agent launched after allocation failed")
+    assert not path.exists()
+
+
+def test_scrub_refuses_a_dangling_artifact(tmp_path: Path) -> None:
+    (tmp_path / "receipt").symlink_to(tmp_path / "absent")
+    with pytest.raises(OSError):
+        secret_scrub(tmp_path, "synthetic")
+
+
+def test_scout_033_refuses_to_archive_a_nonprivate_relay_log(tmp_path: Path) -> None:
+    def config(sandbox: Path) -> dict[str, Any]:
+        trace = sandbox / "jev-calls.jsonl"
+        trace.write_text("fixture")
+        trace.chmod(0o644)
+        return {}
+
+    with (
+        pytest.raises(PermissionError),
+        run_agent(_stub(), mcp_config=config, base_env={}, secret=KEY, run_dir=tmp_path / "records"),
+    ):
+        pytest.fail("accepted an unsafe trace")
+    assert not (tmp_path / "records/jev-calls.jsonl").exists()
+
+
+def test_scout_033_existing_shared_run_directory_is_refused_before_launch(tmp_path: Path) -> None:
+    records = tmp_path / "records"
+    records.mkdir()
+    records.chmod(0o755)
+    with (
+        pytest.raises(PermissionError),
+        run_agent(_stub(), mcp_config={}, base_env={}, secret=KEY, run_dir=records),
+    ):
+        pytest.fail("accepted a shared run directory")
+    assert list(records.iterdir()) == []
+
+
+def test_persisted_transcripts_replace_host_paths(tmp_path: Path) -> None:
+    home = tmp_path / "outer-home"
+    outer_tmp = tmp_path / "outer-tmp"
+    paths = [str(home / "note"), str(outer_tmp / "socket"), str(REPO / "file"), str(REPO).replace("/", "-") + "-file"]
+    script = "import json,sys; print(json.dumps(sys.argv[1:])); print(json.dumps(sys.argv[1:]), file=sys.stderr)"
+    command = AgentCommand(argv=lambda _: [sys.executable, "-c", script, *paths], timeout_s=10)
+    with run_agent(
+        command, mcp_config={}, base_env={"HOME": str(home), "TMPDIR": str(outer_tmp)}, secret=KEY, run_dir=tmp_path
+    ) as run:
+        assert json.loads(run.stdout) == json.loads(run.stderr) == paths
+        for name in ("stream.jsonl", "claude.stderr"):
+            saved = json.loads((tmp_path / name).read_text())
+            assert saved == [
+                "/home/example/note",
+                "/home/example/temp/socket",
+                "/home/example/project/file",
+                "-home-example-project-file",
+            ]
+
+
+def test_capture_neutralizes_darwin_aliases_and_keeps_raw_secret_evidence(tmp_path: Path) -> None:
+    folder = "/var/" + "folders/" + "q1/" + "synthetic_id"
+    temp = folder + "/T"
+    socket = "/private" + folder + "/C/socket"
+    key = re.sub(r"[^a-zA-Z0-9]", "-", "/private" + temp) + "-session"
+    script = "import json,sys; print(json.dumps(sys.argv[1:])); print(sys.argv[1], file=sys.stderr)"
+    command = AgentCommand(argv=lambda _: [sys.executable, "-c", script, socket, key], timeout_s=10)
+    with run_agent(command, mcp_config={}, base_env={"TMPDIR": temp}, secret=socket, run_dir=tmp_path) as run:
+        assert run.escape and "claude.stderr, stream.jsonl" in run.escape
+        assert json.loads((tmp_path / "stream.jsonl").read_text()) == [
+            "/home/example/temp-user/C/socket",
+            "-home-example-temp-session",
+        ]
+        assert (tmp_path / "claude.stderr").read_text().strip() == "/home/example/temp-user/C/socket"

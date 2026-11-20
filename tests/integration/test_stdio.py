@@ -140,3 +140,36 @@ def test_a_server_may_log_more_stderr_than_the_pipe_buffer() -> None:
         returncode, stderr = server.wait(timeout=30)
     assert returncode == 0
     assert len(stderr) == 48 * 8192
+
+
+def test_buffered_frames_are_judged_at_arrival() -> None:
+    script = "print('{\"id\":1}'); print('{\"id\":2}')"
+    before_start = time.monotonic()
+    with StdioServer([sys.executable, "-c", script]) as server:
+        assert server.wait()[0] == 0  # both frames have reached the reader
+        after_arrival = time.monotonic()
+        arrived, frame = server.receive_until(after_arrival)
+        assert before_start <= arrived <= after_arrival
+        assert frame == {"id": 1}
+        with pytest.raises(TimeoutError):
+            server.receive_until(before_start)
+
+
+def test_deferred_replies_keep_their_arrival_time() -> None:
+    peer = """
+import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": {}}), flush=True)
+"""
+    before_start = time.monotonic()
+    with StdioServer([sys.executable, "-c", peer]) as server:
+        for ident in (2, 3):
+            server.send({"jsonrpc": "2.0", "id": ident, "method": "ping"})
+        assert server.request({"jsonrpc": "2.0", "id": 1, "method": "ping"})["id"] == 1
+        after_collection = time.monotonic()
+        arrived, reply = server.receive_until(after_collection)
+        assert before_start <= arrived <= after_collection
+        assert reply["id"] == 2
+        with pytest.raises(TimeoutError):
+            server.receive_until(before_start)

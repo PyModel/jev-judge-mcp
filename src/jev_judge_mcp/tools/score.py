@@ -12,6 +12,7 @@ from typing import Any
 
 from jev_judge_mcp.domain import Question, ScoreQuestion
 from jev_judge_mcp.limits import SCORE
+from jev_judge_mcp.responses import nearest_level
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, define, frame
 from jev_judge_mcp.tools.observed import validate_rubric_answer
 
@@ -85,12 +86,10 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             "status": INVALID,
         }
         return ToolResult(frame("jev_score", evaluation, body))
-    # Ties go to the lower level: min() keeps the first minimum, and the keys are in level order.
-    nearest = min(range(len(levels)), key=lambda index: abs(index - answer.score))
     body = {
         "levels": levels,
         "score": answer.score,
-        "nearest_level": nearest,
+        "nearest_level": nearest_level(answer.score, len(levels)),
         "probabilities": answer.probabilities,
         "confidence": answer.confidence,
         "status": "ok",

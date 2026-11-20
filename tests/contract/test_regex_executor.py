@@ -11,7 +11,7 @@ from time import monotonic
 import pytest
 
 from jev_judge_mcp.extract.dialect import Translated, to_units, translate
-from jev_judge_mcp.extract.executor import InProcessRegexExecutor, Invalid, Matches, RegexExecutor, Timeout, Unavailable
+from jev_judge_mcp.extract.executor import InProcessRegexExecutor, Invalid, Matches, RegexExecutor, Timeout
 from jev_judge_mcp.extract.worker import ProcessRegexExecutor
 from jev_judge_mcp.limits import EXTRACT, ExtractCaps
 
@@ -77,7 +77,7 @@ async def test_a_spent_deadline_is_a_timeout(executor: RegexExecutor) -> None:
 
 async def test_a_pattern_that_does_not_compile_is_invalid(executor: RegexExecutor) -> None:
     result = await executor.find(Translated("(", 0), "a", deadline=monotonic() + 5)
-    assert result == Invalid(Unavailable.NO_RESULT)
+    assert result == Invalid("missing ), unterminated subpattern at position 0")
 
 
 async def test_the_executor_serves_after_an_invalid_pattern(executor: RegexExecutor) -> None:

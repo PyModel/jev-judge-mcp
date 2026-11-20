@@ -23,6 +23,7 @@ value (ADR-0056).
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -44,21 +45,43 @@ DOCKERFILE = REPO / "docker" / "ci-linux.Dockerfile"
 
 # The `uses:` steps the gate emulates: checkout (the temporary clone), setup-uv (uv baked
 # into the image), setup-node (Node baked in, asserted per check), setup-python 3.10 (the
-# smoke job's old-Python entry guard), and upload-artifact (the build stage produces dist/
-# in the container; only the upload itself is CI-side plumbing).
+# smoke job's old-Python entry guard), and artifact transfer (the build and eval stages
+# share dist/ in the gate workspace).
 ALLOWED_USES = {
-    "actions/checkout@v4",
-    "astral-sh/setup-uv@v6",
-    "actions/setup-node@v4",
-    "actions/setup-python@v5",
-    "actions/upload-artifact@v4",
+    "actions/checkout",
+    "astral-sh/setup-uv",
+    "actions/setup-node",
+    "actions/setup-python",
+    "actions/upload-artifact",
+    "actions/download-artifact",
 }
+
+
+def _emulated_action(reference: str) -> bool:
+    action, _, revision = reference.partition("@")
+    return action in ALLOWED_USES and re.fullmatch(r"[0-9a-f]{40}", revision) is not None
+
+
+@pytest.mark.parametrize(
+    ("reference", "expected"),
+    [
+        ("actions/checkout@" + "a" * 40, True),
+        ("actions/checkout@v4", False),
+        ("actions/checkout@main", False),
+        ("unclassified/action@" + "a" * 40, False),
+    ],
+)
+def test_scout_034_emulation_requires_known_pinned_actions(reference: str, expected: bool) -> None:
+    assert _emulated_action(reference) is expected
+
+
 # Non-make ci.yml run commands, mapped to the substring that must appear in a Linux stage's
 # command. Anything else fails: an unclassified workflow command cannot be checked.
 ALLOWED_RUN = {
     "uv sync --locked --all-extras": "uv sync --locked --all-extras",
     "python scripts/ci_old_python_entry.py": "scripts/ci_old_python_entry.py",
     "bash scripts/ci/install_actionlint.sh": "scripts/ci/install_actionlint.sh",
+    "bash scripts/ci/install_ripgrep.sh": "scripts/ci/install_ripgrep.sh",
 }
 PAID_TARGETS = ("security-live", "eval-live", "ab", "load")
 PAID_FLAGS = ("JEV_EVAL_LIVE", "JEV_AB_LIVE")
@@ -139,13 +162,13 @@ def _parse_steps() -> list[Step]:
                 unknown(lineno, line, "job key")
             continue
         if indent == 4:
-            if content == "steps:" or content.startswith(("runs-on:", "needs:")):
+            if content == "steps:" or content.startswith(("runs-on:", "needs:", "timeout-minutes:")):
                 continue
             unknown(lineno, line, "job key")
         if indent == 6 and content.startswith("- "):
             item = content[2:]
             if item.startswith("uses:"):
-                steps.append(Step(action=item[len("uses:") :].strip()))
+                steps.append(Step(action=item[len("uses:") :].partition(" #")[0].strip()))
                 in_with = False
                 continue
             if item.startswith("name:"):
@@ -221,6 +244,25 @@ def _makefile_ci_targets() -> set[str]:
     return set(line[len("ci:") :].split())
 
 
+def test_make_ci_prerequisites_are_phony() -> None:
+    phony = set(" ".join(re.findall(r"^\.PHONY: *(.*)$", MAKEFILE.read_text(), re.M)).split())
+    assert _makefile_ci_targets() - phony == set()
+
+
+def test_parity_does_not_repeat_the_policy_replay_target(tmp_path: Path) -> None:
+    result = subprocess.run(
+        ["make", "--no-print-directory", "-n", "-f", str(MAKEFILE), "PYTEST=pytest", "parity", "policy-replay"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    parity, replay = map(shlex.split, result.stdout.strip().splitlines())
+    replay_file = next(arg for arg in replay[1:] if arg.endswith(".py"))
+    assert f"--ignore={replay_file}" in parity, "parity must exclude the file run by policy-replay"
+
+
 def _workflow_pins() -> tuple[str, str]:
     """The workflow's own Node and Python pins, read from ci.yml — never restated here."""
     node = python = None
@@ -241,7 +283,7 @@ def test_every_workflow_step_is_emulated() -> None:
     linux = LINUX_CHECK.read_text(encoding="utf-8")
     for step in steps:
         if step.action is not None:
-            assert step.action in ALLOWED_USES, f"ci.yml runs {step.action!r}, which the gate cannot emulate"
+            assert _emulated_action(step.action), f"ci.yml runs {step.action!r}, which the gate cannot emulate"
         if "node-version" in step.with_values:
             # The image downloads this exact release, and the runner asserts it per check:
             # a floating 24.x drifts ICU rendering, which is what parity grounds on.
@@ -305,6 +347,10 @@ def test_native_leg_runs_sync_and_make_ci() -> None:
     )
     assert "linux_check.sh" in text, "the native leg alone is not the gate: the Linux leg must also run"
     assert "checkout --quiet --detach" in text, "the check must run a detached clean clone of the pushed commit"
+    for script in (PRE_PUSH_CHECK, LINUX_CHECK):
+        body = script.read_text(encoding="utf-8")
+        assert 'source "$SCRIPT_DIR/run_bounded.sh"' in body, f"{script.name} must source the common watchdog"
+        assert "run_bounded()" not in body, f"{script.name} redefines the common watchdog"
 
 
 def test_every_linux_stage_is_time_bounded() -> None:
@@ -691,8 +737,12 @@ def test_the_linux_image_tag_follows_the_dockerfile_content(tmp_path: Path) -> N
     assert first != second, "a changed Dockerfile must produce a different image tag"
 
 
-@pytest.mark.parametrize("stages_status", [0, 3], ids=["stages-pass", "stages-fail"])
-def test_the_linux_leg_removes_its_temp_files_on_every_exit(tmp_path: Path, stages_status: int) -> None:
+@pytest.mark.parametrize(
+    ("stages_status", "onecpu_status"), [(0, 0), (3, 0), (0, 7)], ids=["stages-pass", "stages-fail", "onecpu-fail"]
+)
+def test_the_linux_leg_removes_its_temp_files_on_every_exit(
+    tmp_path: Path, stages_status: int, onecpu_status: int
+) -> None:
     """ADR-0056: the leg's temp files are removed on every exit path.
 
     The regression: the one-CPU stage script written next to the stage runner
@@ -716,6 +766,7 @@ def test_the_linux_leg_removes_its_temp_files_on_every_exit(tmp_path: Path, stag
         "  image) exit 1 ;;\n"
         "  create) echo fakecid; exit 0 ;;\n"
         f"  start) exit {stages_status} ;;\n"
+        f"  run) exit {onecpu_status} ;;\n"
         "  *) exit 0 ;;\n"
         "esac\n",
         encoding="utf-8",
@@ -727,7 +778,10 @@ def test_the_linux_leg_removes_its_temp_files_on_every_exit(tmp_path: Path, stag
         env_extra=env,
     )
     combined = proc.stdout + proc.stderr
-    if stages_status == 0:
+    if onecpu_status:
+        assert b"check 'linux:security-one-cpu' failed for leak-probe; rerun with: make ci-linux" in combined
+        assert proc.returncode == 1
+    elif stages_status == 0:
         assert proc.returncode == 0, combined.decode()[-800:]
         assert b"security-one-cpu ok" in combined, (
             "the leg must reach the one-CPU stage, whose script is the temp file that once leaked"

@@ -5,8 +5,10 @@ questions, asks Jev once at most, validates each answer, applies policy, and ret
 is serialized as `JSON.stringify(payload, null, 2)` (ADR-0006).
 """
 
+import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -18,16 +20,25 @@ from jev_judge_mcp.domain import JsonValue, Question
 from jev_judge_mcp.extract.executor import RegexExecutor
 from jev_judge_mcp.extract.worker import ProcessRegexExecutor
 from jev_judge_mcp.policy import Action
-from jev_judge_mcp.providers import Evaluation, JevProvider, resolve_model, resolve_provider
+from jev_judge_mcp.providers import (
+    Evaluation,
+    JevProvider,
+    ProviderConfigError,
+    ProviderError,
+    ProviderTimeoutError,
+    resolve_model,
+    resolve_provider,
+)
 from jev_judge_mcp.settings import Settings
-from jev_judge_mcp.telemetry import ACTIONS, Telemetry
-from jev_judge_mcp.tools.arguments import Refinement
+from jev_judge_mcp.telemetry import ACTIONS, Span, Telemetry
+from jev_judge_mcp.tools.arguments import ArgumentsError, Refinement
 from jev_judge_mcp.tools.observed import worst_action
 from jev_judge_mcp.validation.caps import CapScope
 
 type Payload = Mapping[str, object]
 
 logger = logging.getLogger("jev_judge_mcp.tools.base")
+_CLOSE_SECONDS = 10.0
 
 
 class ToolError(Exception):
@@ -40,6 +51,35 @@ class ToolError(Exception):
     def __init__(self, message: str, *, code: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def code_of(error: BaseException) -> str:
+    """The one error-code mapping. It reads the exception type and status, never the text.
+
+    ProviderConfigError is `auth` for every provider, including a malformed OpenRouter key.
+    A 401 is `auth` and a 429 is `quota` from `ProviderError.status` (ADR-0072). A 400 whose body
+    carried `error_type` `max_tokens_exceeded` is `input_too_large`: the model's context window, which
+    the caller fixes by splitting (ADR-0079). A timeout is
+    `timeout`. Argument errors are `invalid_arguments`. A ToolError carries the code its raise
+    site set. An unexpected handler error is `internal`.
+    """
+    if isinstance(error, ProviderConfigError):
+        return "auth"
+    if isinstance(error, ProviderTimeoutError):
+        return "timeout"
+    if isinstance(error, ProviderError):
+        if error.status == 401:
+            return "auth"
+        if error.status == 429:
+            return "quota"
+        if error.status == 400 and error.error_type == "max_tokens_exceeded":
+            return "input_too_large"
+        return "provider"
+    if isinstance(error, ArgumentsError):
+        return "invalid_arguments"
+    if isinstance(error, ToolError):
+        return error.code
+    return "internal"
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +114,23 @@ class ToolResult:
     truncated: frozenset[CapScope] = frozenset()
     error_code: str | None = None
     extract: ExtractHeadlines | None = None
+    call_action: str | None = None
+    unresolved: bool | None = None
+
+    @property
+    def decision_action(self) -> str | None:
+        if self.extract is not None:
+            return self.extract.call_action
+        return self.call_action if self.call_action is not None else self.action
+
+    @property
+    def decision_unresolved(self) -> bool:
+        if self.unresolved is not None:
+            return self.unresolved
+        action = self.decision_action
+        if action is not None:
+            return action != "auto"
+        return self.payload.get("status") != "ok"
 
 
 def caller_actions(values: Iterable[object]) -> tuple[Action, ...]:
@@ -87,16 +144,20 @@ def headline(item_actions: tuple[Action, ...]) -> Action | None:
 
 
 def frame(
-    tool: str, evaluation: Evaluation | None, body: Mapping[str, object], *, model: str | None = None
+    tool: str,
+    evaluation: Evaluation | None,
+    body: Mapping[str, object],
+    *,
+    model: str | None = None,
+    provider: str = "none",
 ) -> dict[str, object]:
     """A success payload: `tool, model, provider`, then `body` in its own order, then `usage`.
 
-    With no `evaluation` the call never asked Jev (jev_extract with no candidates): the caller names
-    the configured `model`, the provider is `"none"`, and usage is `null`. The gate's `isError`
-    refusal (`{tool, error}`) is not a success payload and is never framed.
+    Without an `evaluation`, the caller supplies the configured `model`. Usage is `null` and the
+    provider defaults to `"none"`.
     """
     if evaluation is None:
-        return {"tool": tool, "model": model, "provider": "none", **body, "usage": None}
+        return {"tool": tool, "model": model, "provider": provider, **body, "usage": None}
     framed: dict[str, object] = {
         "tool": tool,
         "model": evaluation.model,
@@ -107,6 +168,22 @@ def frame(
     if evaluation.request_id:
         framed["request_id"] = evaluation.request_id
     return framed
+
+
+class _Pending:
+    def __init__(self, evaluate: Callable[["_Pending"], Coroutine[Any, Any, Evaluation]]) -> None:
+        self.subscribers = 0
+        self.dispatched = False
+        self.task = asyncio.create_task(evaluate(self))
+
+    async def replay(self) -> Evaluation:
+        self.subscribers += 1
+        try:
+            return await asyncio.shield(self.task)
+        finally:
+            self.subscribers -= 1
+            if not self.subscribers and not self.dispatched and not self.task.done():
+                self.task.cancel()
 
 
 class Runtime:
@@ -122,15 +199,28 @@ class Runtime:
         settings: Settings,
         provider_factory: Callable[[Settings], JevProvider] = resolve_provider,
         regex_executor: RegexExecutor | None = None,
+        *,
+        tests_read_from_file: bool = False,
     ) -> None:
         self.settings = settings
         self.model = resolve_model(settings)
+        self.tests_read_from_file = tests_read_from_file
+        self.file_fanout = anyio.CapacityLimiter(8)
         self._provider_factory = provider_factory
         self._provider: JevProvider | None = None
         self._regex_executor = regex_executor or ProcessRegexExecutor()
         self.telemetry = Telemetry(payloads=settings.telemetry_payloads)
+        self._pending: dict[bytes, _Pending] = {}
+        self._cache_slots = anyio.Semaphore(256)
+        self._cache_generation = 0
+        self._close_lock = anyio.Lock()
+        self._regex_closed = False
         self._max_inflight = settings.max_inflight
         self._inflight: anyio.Semaphore | None = None
+
+    @property
+    def provider_name(self) -> str:
+        return self._provider.name if self._provider is not None else "none"
 
     @property
     def regex_executor(self) -> RegexExecutor:
@@ -161,29 +251,67 @@ class Runtime:
         the first answer's.
         """
         with self.telemetry.span("jev.evaluate", questions=len(questions)) as span:
+            if self._close_lock.locked():
+                raise asyncio.CancelledError
             if self._provider is None:
                 self._provider = self._provider_factory(self.settings)
             span.attributes["provider"] = self._provider.name
             wire_state = cast(JsonValue, state)
             provider = self._provider
-            cached = await cache.alookup(
-                self.settings, provider.name, provider.cache_scope, self.model, wire_state, questions
-            )
-            if cached is not None:
-                # A hit spent nothing, so it records no token attributes (the replayed payload's
-                # usage stays verbatim); `tokens{direction}` counts what the provider was billed.
-                span.attributes["cache"] = "hit"
-                return cached
-            evaluation = await self._evaluate_capped(self._provider, wire_state, questions)
-            await cache.astore(
-                self.settings, provider.name, provider.cache_scope, self.model, wire_state, questions, evaluation
-            )
+            if self.settings.jev_judge_mcp_cache:
+                return await self._cached(provider, wire_state, questions, span)
+            evaluation = await self._evaluate_capped(provider, wire_state, questions)
             span.attributes["input_tokens"] = evaluation.usage.input_tokens
             span.attributes["output_tokens"] = evaluation.usage.output_tokens
             return evaluation
 
+    async def _cached(
+        self, provider: JevProvider, state: JsonValue, questions: Mapping[str, Question], span: Span
+    ) -> Evaluation:
+        generation = self._cache_generation
+        identity = (provider.name, provider.cache_scope, self.model, state, questions)
+        key = bytes.fromhex(await anyio.to_thread.run_sync(cache.request_key, *identity))
+        if generation != self._cache_generation:
+            raise asyncio.CancelledError
+        pending = self._pending.get(key)
+        if pending is not None and not pending.task.cancelling():
+            span.attributes["cache"] = "hit"
+            return await pending.replay()
+        await self._cache_slots.acquire()
+        if generation != self._cache_generation:
+            self._cache_slots.release()
+            raise asyncio.CancelledError
+        pending = self._pending.get(key)
+        if pending is not None and not pending.task.cancelling():
+            self._cache_slots.release()
+            span.attributes["cache"] = "hit"
+            return await pending.replay()
+
+        async def evaluate(work: _Pending) -> Evaluation:
+            cached = await cache.alookup(self.settings, *identity, digest=key)
+            if cached is not None:
+                span.attributes["cache"] = "hit"
+                return cached
+            evaluation = await self._evaluate_capped(provider, state, questions, work)
+            span.attributes["input_tokens"] = evaluation.usage.input_tokens
+            span.attributes["output_tokens"] = evaluation.usage.output_tokens
+            await cache.astore(self.settings, *identity, evaluation, digest=key)
+            return evaluation
+
+        def completed(task: asyncio.Task[Evaluation]) -> None:
+            if self._pending.get(key) is work:
+                del self._pending[key]
+            self._cache_slots.release()
+            if not task.cancelled():
+                task.exception()  # Observe failure even if every subscriber has disconnected.
+
+        work = _Pending(evaluate)
+        self._pending[key] = work
+        work.task.add_done_callback(completed)
+        return await work.replay()
+
     async def _evaluate_capped(
-        self, provider: JevProvider, state: JsonValue, questions: Mapping[str, Question]
+        self, provider: JevProvider, state: JsonValue, questions: Mapping[str, Question], work: _Pending | None = None
     ) -> Evaluation:
         """The provider call, behind the opt-in in-flight cap (ADR-0069); the default is no cap.
 
@@ -191,18 +319,45 @@ class Runtime:
         constructible outside one. A waiting call holds no provider resource and stays
         cancellable, like any other wait.
         """
-        if self._max_inflight <= 0:
-            return await provider.evaluate(state, questions, self.model, None)
-        if self._inflight is None:
+        if self._max_inflight > 0 and self._inflight is None:
             self._inflight = anyio.Semaphore(self._max_inflight)
-        async with self._inflight:
+        capacity = self._inflight if self._inflight is not None else nullcontext()
+        async with capacity:
+            if work is not None:
+                work.dispatched = True
             return await provider.evaluate(state, questions, self.model, None)
 
     async def aclose(self) -> None:
-        await self._regex_executor.aclose()
-        if self._provider is not None:
-            await self._provider.aclose()
-            self._provider = None
+        errors: list[BaseException] = []
+        with anyio.CancelScope(shield=True):
+            async with self._close_lock:
+                self._cache_generation += 1
+                pending = [item.task for item in self._pending.values()]
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    _, unfinished = await asyncio.wait(pending, timeout=_CLOSE_SECONDS)
+                    if unfinished:
+                        errors.append(TimeoutError("cache evaluations did not stop"))
+                if not self._regex_closed:
+                    try:
+                        with anyio.fail_after(_CLOSE_SECONDS):
+                            await self._regex_executor.aclose()
+                        self._regex_closed = True
+                    except BaseException as error:
+                        errors.append(error)
+                if self._provider is not None:
+                    try:
+                        with anyio.fail_after(_CLOSE_SECONDS):
+                            await self._provider.aclose()
+                        self._provider = None
+                    except BaseException as error:
+                        errors.append(error)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise BaseExceptionGroup("runtime shutdown failed", errors)
+        await anyio.lowlevel.checkpoint_if_cancelled()
 
 
 type Handler = Callable[[dict[str, Any], Runtime], Awaitable[ToolResult]]

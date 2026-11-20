@@ -200,3 +200,61 @@ async def test_a_cancelled_inflight_waiter_leaks_no_slot(monkeypatch: pytest.Mon
 
     assert provider.max_in_flight == 1  # the cap held: one evaluate at a time
     assert done == ["a", "c"]  # the cancelled waiter leaked no slot; "c" completed
+
+
+async def test_scout_023_provider_closes_after_regex_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+
+    provider = _RecordingProvider()
+    executor = InProcessRegexExecutor()
+    closed = AsyncMock()
+    monkeypatch.setattr(provider, "aclose", closed)
+    monkeypatch.setattr(executor, "aclose", AsyncMock(side_effect=RuntimeError("regex failed")))
+    runtime = Runtime(Settings(), provider_factory=lambda _: provider, regex_executor=executor)
+    await runtime.ask({}, {})
+    with pytest.raises(RuntimeError, match="regex failed"):
+        await runtime.aclose()
+    closed.assert_awaited_once()
+
+
+@pytest.mark.parametrize("regex_failure", [False, True])
+async def test_scout_023_independent_errors_and_retry(monkeypatch: pytest.MonkeyPatch, regex_failure: bool) -> None:
+    from unittest.mock import AsyncMock
+
+    provider = _RecordingProvider()
+    executor = InProcessRegexExecutor()
+    regex = AsyncMock(side_effect=[ValueError("regex"), None] if regex_failure else [None])
+    network = AsyncMock(side_effect=[RuntimeError("provider"), None])
+    monkeypatch.setattr(executor, "aclose", regex)
+    monkeypatch.setattr(provider, "aclose", network)
+    runtime = Runtime(Settings(), provider_factory=lambda _: provider, regex_executor=executor)
+    await runtime.ask({}, {})
+    if regex_failure:
+        with pytest.raises(ExceptionGroup) as errors:
+            await runtime.aclose()
+        assert [str(error) for error in errors.value.exceptions] == ["regex", "provider"]
+    else:
+        with pytest.raises(RuntimeError, match="provider"):
+            await runtime.aclose()
+    await runtime.aclose()
+    await runtime.aclose()
+    assert network.await_count == 2
+    assert regex.await_count == (2 if regex_failure else 1)
+
+
+async def test_scout_023_cancelled_shutdown_closes_both_resources(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+
+    provider = _RecordingProvider()
+    executor = InProcessRegexExecutor()
+    regex, network = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(executor, "aclose", regex)
+    monkeypatch.setattr(provider, "aclose", network)
+    runtime = Runtime(Settings(), provider_factory=lambda _: provider, regex_executor=executor)
+    await runtime.ask({}, {})
+    with anyio.CancelScope() as scope:
+        scope.cancel()
+        await runtime.aclose()
+        pytest.fail("shutdown swallowed cancellation")
+    regex.assert_awaited_once()
+    network.assert_awaited_once()

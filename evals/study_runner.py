@@ -4,7 +4,8 @@ One module owns run → record → write → failed record → book. Each study 
 contents. A failed record is the success record's keys (`record_row`); it does not keep a second list.
 
 Booking happens once, in `run_recorded`:
-- `KeyboardInterrupt` and `SystemExit` call `book_outcome` (the result file's finite `cost_usd`, else the run bound).
+- `InfrastructureStop` books an explicit charge or recovers the outcome of a started agent.
+- `KeyboardInterrupt` and `SystemExit` call `book_outcome` (the result file's finite selected cost, else the run bound).
 - `stop` may turn an `Exception` into a returned reason after booking `cost_key` from the written file.
   The bench uses this for `AuthRejected` and `ServerUnreachable`.
 - Other `Exception` types named in `file_cost` book that same field and re-raise. The bench names
@@ -13,16 +14,64 @@ Booking happens once, in `run_recorded`:
 - `CancelledError` is not an `Exception`. It propagates unbooked.
 
 Success books `record[cost_key]`. The A/B study uses `cost_usd`. The bench uses `jev_cost_usd`, because its
-dollar cap does not include agent spend. `file_default` lets a missing file cost book 0, which is the bench's
-stopped-run rule; the default requires the key.
+dollar cap does not include agent spend. Unverifiable charges reserve the run bound.
 """
 
-import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from evals.spend import SpendLedger, book_outcome
+from evals.artifacts import read_result, write_json
+from evals.spend import SpendLedger, agent_started, amount, book_outcome, booked_amount
+
+
+class InfrastructureStop(BaseException):
+    """Stop the study without synthesizing an agent failure record."""
+
+    def __init__(self, reason: str, incurred_usd: float | None = None) -> None:
+        super().__init__(reason)
+        self.incurred_usd = incurred_usd
+
+
+def recover_attempts(
+    ledger: SpendLedger,
+    out: Path,
+    run_ids: Iterable[str],
+    records: Mapping[Path, Mapping[str, Any]],
+    *,
+    cost_key: str,
+) -> str | None:
+    """Book started attempts once and flag existing charges below the required amount."""
+    bound = ledger.policy.run_bound_usd
+    prior = None
+    for run_id in dict.fromkeys((*run_ids, *ledger.runs)):
+        run_dir = out / run_id
+        existing = ledger.runs.get(run_id)
+        if existing is None and not agent_started(run_dir):
+            continue
+        path = run_dir / "result.json"
+        row = records.get(path)
+        measured = None
+        if row is not None:
+            measured = amount(row.get(cost_key))
+            charge = bound if measured is None else measured
+        elif existing is None:
+            raw = read_result(path)
+            charge = (
+                max(bound, booked_amount(raw.get(cost_key), bound)) if raw and raw.get("run_id") == run_id else bound
+            )
+        else:
+            continue
+        if existing is None:
+            try:
+                ledger.record(run_id, charge)
+            except ValueError:
+                if ledger.runs.get(run_id) != charge:
+                    raise
+        elif existing < charge and prior is None:
+            kind = "unfinished reserve" if measured is None else "recorded cost"
+            prior = f"stopped: {run_id} booked below its {kind} of ${charge:g}"
+    return prior
 
 
 def record_row(keys: Sequence[str], values: Mapping[str, Any]) -> dict[str, Any]:
@@ -52,9 +101,9 @@ def write_record(
         record = build()
     except Exception as error:
         failed_row = failed(error)
-        _write(result_path, failed_row)
+        write_json(result_path, failed_row)
         raise
-    _write(result_path, record)
+    write_json(result_path, record)
     return record
 
 
@@ -66,46 +115,32 @@ def run_recorded(
     *,
     cost_key: str = "cost_usd",
     file_cost: tuple[type[BaseException], ...] = (),
-    file_default: float | None = None,
     stop: Callable[[BaseException], str | None] | None = None,
 ) -> Mapping[str, Any] | str:
     """Run one recorded attempt and book it. See the module docstring for which exception books what.
 
-    A string return is a stop reason (`stop`). The attempt is already booked. The caller returns it
-    instead of continuing the study.
+    A string return is a stop reason. The caller returns it instead of continuing the study.
     """
     try:
         record = execute()
+    except InfrastructureStop as error:
+        if run_id not in ledger.runs:
+            if (charge := amount(error.incurred_usd)) is not None:
+                ledger.record(run_id, charge)
+            elif agent_started(result_path.parent):
+                book_outcome(ledger, run_id, result_path, cost_key=cost_key)
+        return f"stopped: isolation infrastructure: {error}"
     except (KeyboardInterrupt, SystemExit):
-        book_outcome(ledger, run_id, result_path)
+        book_outcome(ledger, run_id, result_path, cost_key=cost_key)
         raise
     except Exception as error:
         reason = stop(error) if stop is not None else None
         if reason is not None or (file_cost and isinstance(error, file_cost)):
-            _book_file_cost(ledger, run_id, result_path, cost_key, file_default)
+            book_outcome(ledger, run_id, result_path, cost_key=cost_key)
             if reason is not None:
                 return reason
         else:
             ledger.record_unfinished(run_id)
         raise
-    ledger.record(run_id, record[cost_key])
+    ledger.record(run_id, booked_amount(record.get(cost_key), ledger.policy.run_bound_usd))
     return record
-
-
-def _book_file_cost(
-    ledger: SpendLedger, run_id: str, result_path: Path, cost_key: str, file_default: float | None
-) -> None:
-    """Book `cost_key` from the result file. A missing file raises and does not book the run bound.
-
-    `file_default` books that amount when the field is missing or zero, which is the bench's stopped
-    run. Without it the field is required.
-    """
-    recorded = json.loads(result_path.read_text(encoding="utf-8"))
-    if file_default is None:
-        ledger.record(run_id, recorded[cost_key])
-        return
-    ledger.record(run_id, float(recorded.get(cost_key) or file_default))
-
-
-def _write(path: Path, record: Mapping[str, Any]) -> None:
-    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")

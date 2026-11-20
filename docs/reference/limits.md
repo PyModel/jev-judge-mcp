@@ -14,7 +14,7 @@ Astral-plane characters (emoji, some CJK) count as two.
 
 These caps are not Jev's context window. The model accepts 64k tokens per request and 32k for
 `state` plus the longest question (https://docs.typesafe.ai/models.md). An input inside every cap
-on this page can still exceed that window: jev_gate sends the diff and the tests log twice, once in
+on this page can still exceed that window. Before sending, jev_gate limits compact UTF-8 to 30,000 bytes for state plus the longest question and 60,000 bytes total. Split by file, hunk or claim. A string gate sends the diff and test log once in
 the review state and once as evidence (ADR-0063), so budget about twice their size. The server does
 not count tokens. When the API refuses a request as over its window (a 400 with `error_type`
 `max_tokens_exceeded`), the code is `input_too_large` and the remedy is to split the call (ADR-0079).
@@ -50,7 +50,7 @@ block (ADR-0062). The code is set from the exception type or at the return site.
 | `quota` | HTTP 429 (`ProviderError.status`) |
 | `provider` | any other provider failure. 403, 404, and 422 stay here; a 401 that appears only in the body does too, and so does any other 400 |
 
-`529 Overloaded` is retried as a 5xx (`providers/retry.py`). A final failure is `provider` or `timeout`, not its own code.
+`529 Overloaded` ends the attempt because completion is uncertain. Jev reports a `provider` error. [ADR-0057](../adr/0057-one-retry-owner-bounded-provider-retries.md)
 
 ## Input caps, per tool
 
@@ -180,10 +180,10 @@ Candidate caps are the shared `CANDIDATES` table below.
 | --- | --- | --- |
 | `claims_min` | 1 | below → reject |
 | `claims_max` | 16 | above → reject |
-| `claim_units` | 2000 | truncate (context scope) |
+| `claim_units` | 2000 | over → `input_too_large` before sending. Split into narrower claims with their evidence. |
 | `evidence_items` | 16 | over → budget error (`input_too_large`) |
 | `aggregate_evidence_units` | 200000 | over → budget error (`input_too_large`), rendered `200,000` |
-| `doc_units` | 50000 | a string `request`/`diff`/`tests`/evidence item truncates (context scope). A file-list `diff` is reviewed per file under the same cap: a file over it is `unreviewed_files` with reason `incomplete_context`, and the call never stands `auto`; the joined list over the aggregate budget refuses with `input_too_large` (ADR-0066) |
+| `doc_units` | 50000 | over → `input_too_large` before sending for a request, string diff, test log, evidence item or individual file patch. Split by file or hunk and keep the supporting evidence with its claim. |
 | `files_max` | 64 | a file-list `diff` with more entries refuses `input_too_large` before any request, for `jev_gate` and `jev_review` alike: one review request runs per file (ADR-0066 amendment) |
 
 ### jev_score (`limits.SCORE`, ADR-0048)

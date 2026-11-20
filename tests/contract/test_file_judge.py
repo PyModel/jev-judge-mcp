@@ -9,7 +9,7 @@ from typing import Any, cast
 
 import pytest
 
-from jev_judge_mcp.limits import FILE_JUDGE
+from jev_judge_mcp.limits import FILE_JUDGE, SANITIZE_ID_UNITS
 from jev_judge_mcp.tools import TOOLS
 from jev_judge_mcp.tools.file_judge import DEFINITION
 from tests.support.jev import call_tool
@@ -153,6 +153,14 @@ async def test_an_env_example_is_read_and_a_literal_reaches_the_provider_redacte
     assert literal not in content and "[redacted]" in content
 
 
+async def test_choice_keys_obey_the_short_identifier_utf16_limit() -> None:
+    key = "🧪" * (SANITIZE_ID_UNITS // 2) + "a"
+    args = noul_args(criteria={key: "first option", "b": "second option"}) | {"kind": "choice"}
+    outcome = await call_tool("jev_file_judge", args, {})
+    assert outcome.is_error and outcome.code == "invalid_arguments", outcome.text
+    assert outcome.requests == []
+
+
 async def test_criteria_broken_for_the_kind_refuses_before_any_call(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "text.txt").write_text("plain text", encoding="utf-8")
@@ -206,3 +214,50 @@ def test_file_judge_sits_between_score_and_the_rest_of_the_extensions() -> None:
     (ADR-0080)."""
     names = tuple(tool.name for tool in TOOLS)
     assert names[10:] == ("jev_score", "jev_file_judge", "jev_ask", "jev_files_judge", "jev_gate_range")
+
+
+@pytest.mark.parametrize("tool", ["jev_file_judge", "jev_files_judge", "jev_ask"])
+async def test_reader_masks_pem_and_both_exact_secret_sources(tool: str, tmp_path: Any, monkeypatch: Any) -> None:
+    supplied, stored = "configured-fixture-marker", "stored-fixture-marker"
+    (tmp_path / "fixture-store").write_text(stored)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(tmp_path / "fixture-store"))
+    monkeypatch.setenv("JEV_API_KEY", supplied)
+    text = f"safe context {supplied} {stored}\n-----BEGIN PRIVATE KEY-----\nbody-fixture\n-----END PRIVATE KEY-----"
+    (tmp_path / "notes.txt").write_text(text)
+    args: dict[str, Any] = noul_args("notes.txt")
+    if tool == "jev_files_judge":
+        args.pop("path")
+        args["paths"] = ["notes.txt"]
+    if tool == "jev_ask":
+        args = {
+            "paths": ["notes.txt"],
+            "state": text,
+            "questions": {"q": {"type": "noul", "instructions": "OK?", "criteria": {}}},
+        }
+    outcome = await call_tool(tool, args, {"q0": {"noul": 1}, "file": {"noul": 1}})
+    assert not outcome.is_error, outcome.text
+    state = outcome.requests[0][0]
+    parts = cast(dict[str, str], state)
+    for name in ("state", "notes.txt") if tool == "jev_ask" else ("content",):
+        assert "safe context" in parts[name]
+        assert all(marker not in parts[name] for marker in (supplied, stored, "body-fixture"))
+
+
+@pytest.mark.parametrize("tool", ["jev_file_judge", "jev_files_judge", "jev_ask"])
+async def test_configured_value_in_path_label_stays_local(tool: str, tmp_path: Any, monkeypatch: Any) -> None:
+    monkeypatch.chdir(tmp_path)
+    marker = "configured-fixture-marker"
+    path = f"notes-{marker}.txt"
+    monkeypatch.setenv("JEV_API_KEY", marker)
+    (tmp_path / path).write_text("ordinary text")
+    args: dict[str, Any] = noul_args(path)
+    if tool == "jev_files_judge":
+        args.pop("path")
+        args["paths"] = [path]
+    elif tool == "jev_ask":
+        args = {"paths": [path], "questions": {"q": {"type": "noul", "instructions": "OK?", "criteria": {}}}}
+    result = await call_tool(tool, args, {"q0": {"noul": 1}, "file": {"noul": 1}})
+    assert not result.is_error
+    assert "ordinary text" in str(result.requests)
+    assert marker not in str(result.requests)

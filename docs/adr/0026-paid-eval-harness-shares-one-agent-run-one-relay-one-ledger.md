@@ -125,3 +125,9 @@ one, because neither can be paired or counted against `BENCH_REQUEST_CAP`.
 
 ADR-0045 names `evals.study_runner` as the owner of run → record → write → failed record → book.
 Grading, gates, and the fields inside a row stay in each caller, as decided above.
+
+## Amendment (2026-11-19): diagnostic backpressure
+
+The relay captures error text, writes pending or fallback rows, terminates and reaps the child,
+and closes the pipes before emitting diagnostics. Stderr writes are nonblocking and have a
+short total deadline, so an unread pipe can drop part or all of the diagnostic.

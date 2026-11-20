@@ -5,18 +5,20 @@ Raw frames, not an SDK client: the acceptance checks are about what goes over th
 
 import json
 import os
-import queue
 import shlex
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Self
 
+from tests.support.rpc_replies import REPLY_TIMEOUT, ReplyStream, TimedReply, pipe_chunks
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROTOCOL_VERSION = "2025-06-18"
-TIMEOUT = 15.0
+TIMEOUT = REPLY_TIMEOUT
 
 # Provider variables are scrubbed so the developer's shell cannot leak into a test run.
 _SCRUBBED_ENV = (
@@ -91,52 +93,43 @@ class StdioServer:
             stderr=subprocess.PIPE,
             env=server_env(env),
             cwd=cwd or REPO_ROOT,
+            start_new_session=True,  # its PID also identifies its workers after reparenting
         )
         self.stdout_lines: list[bytes] = []
-        self._lines: queue.Queue[bytes | None] = queue.Queue()
-        self._reader = threading.Thread(target=self._read_stdout, daemon=True)
-        self._reader.start()
+        assert self.process.stdout is not None
+        self._replies = ReplyStream(self.process.stdout, record=self.stdout_lines)
         # stderr is drained while the server runs: a DEBUG-level server can log more than the
         # pipe buffer (64 KiB), and an unread stderr pipe blocks the server's writes at shutdown
         # — the hang looks like a server that never exits, not like a full pipe.
+        self._stopping = threading.Event()
         self.stderr_chunks: list[bytes] = []
         self._stderr_reader = threading.Thread(target=self._drain_stderr, daemon=True)
         self._stderr_reader.start()
 
     def _drain_stderr(self) -> None:
         assert self.process.stderr is not None
-        while True:
-            chunk = self.process.stderr.read(4096)
-            if not chunk:
-                return
-            self.stderr_chunks.append(chunk)
-
-    def _read_stdout(self) -> None:
-        assert self.process.stdout is not None
-        for line in self.process.stdout:
-            self.stdout_lines.append(line)
-            self._lines.put(line)
-        self._lines.put(None)
+        self.stderr_chunks.extend(pipe_chunks(self.process.stderr, self._stopping))
 
     def send(self, message: Mapping[str, Any]) -> None:
         assert self.process.stdin is not None
         self.process.stdin.write(json.dumps(message).encode() + b"\n")
         self.process.stdin.flush()
+        ident = message.get("id")
+        if isinstance(ident, (int, str)) and "method" in message:
+            self._replies.track(ident)
 
     def receive(self, timeout: float = TIMEOUT) -> dict[str, Any]:
-        line = self._lines.get(timeout=timeout)
-        if line is None:
-            raise EOFError("server closed stdout")
-        message: dict[str, Any] = json.loads(line)
-        return message
+        return self._replies.receive(timeout)
+
+    def receive_until(self, deadline: float) -> TimedReply:
+        return self._replies.receive_until(deadline)
 
     def request(self, message: Mapping[str, Any], *, timeout: float = TIMEOUT) -> dict[str, Any]:
-        """Send a request and return the response with its id, skipping notifications."""
+        """Send a request and return its response within one deadline, skipping notifications."""
+        deadline = time.monotonic() + timeout
         self.send(message)
-        while True:
-            reply = self.receive(timeout=timeout)
-            if reply.get("id") == message["id"]:
-                return reply
+        (reply,) = self._replies.collect_until([message["id"]], deadline)
+        return reply
 
     def initialize(self, *, timeout: float = TIMEOUT) -> dict[str, Any]:
         reply = self.request(INITIALIZE, timeout=timeout)
@@ -155,7 +148,7 @@ class StdioServer:
             self.process.kill()
             self.process.wait()
             raise
-        self._reader.join(timeout=timeout)
+        self._replies.reader.join(timeout=timeout)
         self._stderr_reader.join(timeout=timeout)
         return returncode, b"".join(self.stderr_chunks).decode()
 
@@ -166,6 +159,9 @@ class StdioServer:
         if self.process.poll() is None:
             self.process.kill()
             self.process.wait()
+        self._stopping.set()
+        self._replies.close()
+        self._stderr_reader.join(timeout=1)
         for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
             if stream is not None:
                 stream.close()

@@ -2,9 +2,9 @@
 
 `RegexExecutor.find` runs one translated pattern over unit-space text under an absolute monotonic
 deadline and answers with a `MatchResult`: `Matches`, or one of three plain refusals — `Timeout`
-(the deadline passed), `Saturated` (admission refused at the queue bound, ADR-0025), `Invalid` (no
-result: the pattern did not compile or the executor could not produce one). Results carry no
-caller-facing text; `extract/candidates.py` owns what each one tells the caller.
+(the deadline passed), `Saturated` (admission refused at the queue bound, ADR-0025), `Invalid`
+(compilation failed or the executor could not produce a result). `extract/candidates.py` turns
+those outcomes into caller-facing reasons.
 
 Two adapters: `worker.ProcessRegexExecutor`, killable worker processes for production, and
 `InProcessRegexExecutor` here, which cannot stop a runaway match and exists for trusted corpora
@@ -42,14 +42,16 @@ class Saturated:
 
 class Unavailable(Enum):
     NO_RESULT = "no_result"
-    """The run ended without a result: the pattern did not compile, or its worker exited."""
+    """The worker exited without a result."""
     NOT_STARTED = "not_started"
     """The executor could not start somewhere to run the pattern."""
 
 
 @dataclass(frozen=True, slots=True)
 class Invalid:
-    cause: Unavailable
+    """A compiler diagnostic or an unavailable executor."""
+
+    cause: str | Unavailable
 
 
 type MatchResult = Matches | Timeout | Saturated | Invalid
@@ -63,15 +65,18 @@ class RegexExecutor(Protocol):
     async def aclose(self) -> None: ...
 
 
-def match_all(pattern: Translated, units: str, max_candidates: int, max_units: int) -> Matches:
+def match_all(pattern: Translated, units: str, max_candidates: int, max_units: int) -> Matches | Invalid:
     """`document.matchAll` with the reference's frozen pipeline (`index.ts:894-903`).
 
     Drop zero-length matches, dedup by value (first wins), skip and count matches over `max_units`,
     then stop at `max_candidates` kept, flagging truncation. After an empty match the scan moves one
     unit on, as `AdvanceStringIndex` does without `u`; `finditer` would retry the same position.
-    Raises `re.error` if the pattern does not compile.
+    Returns a compiler diagnostic if the pattern does not compile.
     """
-    compiled = re.compile(pattern.source, pattern.flags)
+    try:
+        compiled = re.compile(pattern.source, pattern.flags)
+    except (re.error, RecursionError, OverflowError) as error:
+        return Invalid(str(error))
     seen: set[str] = set()
     candidates: list[str] = []
     truncated = False
@@ -108,11 +113,8 @@ class InProcessRegexExecutor:
     async def find(self, pattern: Translated, text: str, *, deadline: float) -> MatchResult:
         if monotonic() >= deadline:
             return Timeout()
-        try:
-            matches = match_all(pattern, text, self._caps.candidates_per_field, self._caps.candidate_units)
-        except re.error:
-            return Invalid(Unavailable.NO_RESULT)
-        return Timeout() if monotonic() > deadline else matches
+        result = match_all(pattern, text, self._caps.candidates_per_field, self._caps.candidate_units)
+        return Timeout() if monotonic() > deadline else result
 
     async def aclose(self) -> None:
         return None

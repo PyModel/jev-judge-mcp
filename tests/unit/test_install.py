@@ -2,21 +2,32 @@
 
 import json
 import os
+import signal
 import stat
+import subprocess
 import sys
-from collections.abc import Callable
+import tomllib
+from collections.abc import Callable, Mapping
+from contextlib import suppress
+from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from shutil import which
 
 import pytest
+from pydantic import SecretStr
 
+from jev_judge_mcp.domain import is_json_object
 from jev_judge_mcp.install import cli as install_cli
+from jev_judge_mcp.install import engine as install_engine
+from jev_judge_mcp.install import fs as install_fs
 from jev_judge_mcp.install import jsonedit
 from jev_judge_mcp.install import launch as launch_module
+from jev_judge_mcp.install import redact as install_redact
+from jev_judge_mcp.install import verify as verify_module
 from jev_judge_mcp.install.engine import Request, run
 from jev_judge_mcp.install.errors import InstallError
-from jev_judge_mcp.install.fs import atomic_write, entry_hash, write_state
+from jev_judge_mcp.install.fs import atomic_write, entry_hash, write_backup, write_state
 from jev_judge_mcp.install.launch import (
     PACKAGE,
     Launch,
@@ -33,7 +44,9 @@ from jev_judge_mcp.install.layout import Layout
 from jev_judge_mcp.install.redact import redact_text
 from jev_judge_mcp.install.verify import EXPECTED_TOOLS, VerifyError, verify_command
 from jev_judge_mcp.server import installer_requested
+from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS
+from tests.support.secrets import secret_env
 
 UVX = "/opt/uv/uvx"
 SPEC = "/work/jev-mcp[typesafe]"
@@ -132,7 +145,7 @@ def test_default_launch_without_metadata_names_the_alternative(monkeypatch: pyte
         raise PackageNotFoundError(name)
 
     monkeypatch.setattr(launch_module, "version", missing)
-    with pytest.raises(InstallError, match="--from-checkout"):
+    with pytest.raises(InstallError, match="install the package in this environment"):
         pypi_launch(UVX)
 
 
@@ -175,14 +188,35 @@ def test_requires_python_without_an_install_is_none(monkeypatch: pytest.MonkeyPa
     assert local_install_warning() is None
 
 
-def test_find_package_root_without_a_checkout_names_the_flag(tmp_path: Path) -> None:
-    with pytest.raises(InstallError, match="source checkout"):
-        find_package_root(start=tmp_path)
+@pytest.fixture
+def wheel_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Model a wheel below an unrelated project, regardless of pytest's outer directory."""
+    origin = tmp_path / "site-packages" / "jev_judge_mcp" / "install" / "launch.py"
+    origin.parent.mkdir(parents=True)
+    origin.touch()
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "other-project"\n', encoding="utf-8")
+    monkeypatch.setattr(launch_module, "__file__", str(origin))
+    outer_manifests = {parent / "pyproject.toml" for parent in tmp_path.resolve().parents}
+    real_stat = Path.stat
+
+    def visible_stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if path in outer_manifests:
+            raise FileNotFoundError(path)
+        return real_stat(path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", visible_stat)
+
+
+@pytest.mark.usefixtures("wheel_layout")
+def test_find_package_root_without_a_checkout_names_the_flag() -> None:
+    with pytest.raises(InstallError, match=r"source checkout.*--from-checkout"):
+        find_package_root()
 
 
 def test_specs_accept_exactly_the_two_supported_shapes() -> None:
     assert supported_spec(PIN)
     assert supported_spec("jev-judge-mcp[typesafe]==0.1.1rc1")
+    assert supported_spec("jev-judge-mcp[typesafe]==1!2.3rc1.post2.dev3+local.4")
     assert supported_spec(SPEC)
     assert supported_spec("/home/me/jev-judge-mcp[typesafe]")
     for wrong in (
@@ -192,6 +226,9 @@ def test_specs_accept_exactly_the_two_supported_shapes() -> None:
         f"{PACKAGE}==0.1.1",
         f"{PACKAGE}[typesafe]==",
         f"{PACKAGE}[typesafe]==0.1.1 more",
+        f"{PACKAGE}[typesafe]==0.1.*",
+        f"{PACKAGE}[typesafe]==1,!=2",
+        f"{PACKAGE}[typesafe]==latest",
         "work/jev-mcp[typesafe]",
         "",
     ):
@@ -260,16 +297,13 @@ def _installed_like_local_checkout(monkeypatch: pytest.MonkeyPatch, requires_pyt
     monkeypatch.setattr(launch_module, "distribution", found)
 
 
+@pytest.mark.usefixtures("wheel_layout")
 def test_wheel_layout_dry_run_renders_the_pinned_pypi_spec(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The critique's wheel probe, inverted: no checkout anywhere, and `install` still works."""
 
-    def no_checkout(start: Path | None = None) -> Path:
-        return find_package_root(start=tmp_path / "nowhere")
-
     _fake_home(monkeypatch, tmp_path)
-    monkeypatch.setattr(launch_module, "find_package_root", no_checkout)
     code = install_cli.main(["--dry-run", "-a", "claude-code"])
     out = capsys.readouterr().out
     assert code == 0, out
@@ -314,11 +348,13 @@ def test_default_from_a_checkout_is_still_the_pypi_spec(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _fake_home(monkeypatch, tmp_path)
+    assert find_package_root() == Path(__file__).resolve().parents[2]
     code = install_cli.main(["--dry-run", "-a", "claude-code"])
     assert code == 0
     out = capsys.readouterr().out
-    assert PIN in out
-    assert str(find_package_root()) not in out
+    added = [line[1:] for line in out.splitlines() if line.startswith("+") and not line.startswith("+++ ")]
+    entry = json.loads("\n".join(added))["mcpServers"]["jev"]
+    assert entry["args"] == ["--python", ">=3.12", "--from", PIN, PACKAGE]
 
 
 # --- ADR-0053: an unreleased tree says so before pinning the published build. ---
@@ -385,17 +421,42 @@ def test_from_checkout_requires_uvx_that_honors_cache_keys(
     assert f"{find_package_root()}[typesafe]" in out
 
 
+@pytest.mark.usefixtures("wheel_layout")
 def test_checkout_flag_without_a_checkout_fails_accurately(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     _fake_home(monkeypatch, tmp_path)
     _qualifying_uvx(monkeypatch, tmp_path)
-    monkeypatch.setattr(launch_module, "find_package_root", lambda: find_package_root(start=tmp_path))
     code = install_cli.main(["--dry-run", "-a", "claude-code", "--from-checkout"])
     assert code == 1
     out = capsys.readouterr().out
     assert "source checkout" in out
     assert "before publication" not in out
+
+
+def test_checkout_flag_explains_an_unreadable_ancestor_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fake_home(monkeypatch, tmp_path)
+    _qualifying_uvx(monkeypatch, tmp_path)
+    origin = tmp_path / "site-packages" / "launch.py"
+    origin.parent.mkdir()
+    origin.touch()
+    monkeypatch.setattr(launch_module, "__file__", str(origin))
+    manifest = tmp_path / "pyproject.toml"
+    real_stat = Path.stat
+
+    def denied(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if path == manifest:
+            raise PermissionError("permission denied")
+        return real_stat(path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", denied)
+    assert install_cli.main(["--dry-run", "-a", "claude-code", "--from-checkout"]) == 1
+    message = capsys.readouterr().out
+    assert str(manifest) in message
+    assert "permission" in message.lower()
+    assert "--from-checkout" in message
 
 
 @pytest.mark.parametrize("package", ["npm:pi-mcp-adapter", "git:example.test/owner/pi-mcp-adapter"])
@@ -495,17 +556,31 @@ def test_dry_run_writes_nothing_and_prints_no_secret(tmp_path: Path) -> None:
         raise AssertionError("dry-run wrote a secret")
 
 
-def test_remove_drops_only_our_entry(tmp_path: Path) -> None:
-    execute(tmp_path, agents=("claude-code",))
-    path = tmp_path / ".claude.json"
-    document = json.loads(path.read_text(encoding="utf-8"))
-    document["mcpServers"]["evaluate"] = {"command": "/usr/bin/evaluate", "args": []}
-    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+@pytest.mark.parametrize(
+    ("template", "siblings"),
+    [
+        ('{ "mcpServers": { "jev": ENTRY }, "keep": 3 }', {}),
+        ('{\n  "mcpServers": {"jev": ENTRY},\n  "keep": 3\n}', {}),
+        ('{\n  "mcpServers": {"jev": ENTRY, "other": {}}, "keep": 3\n}', {"other": {}}),
+        ('{\n  "mcpServers": {\n    "a": {}, "jev": ENTRY, "b": {}\n  }, "keep": 3\n}', {"a": {}, "b": {}}),
+        ('{"mcpServers": {\n    "jev": ENTRY\n    , "other": {}\n  }, "keep": 3}', {"other": {}}),
+        (
+            '{\n  "mcpServers": {\n    "jev": ENTRY,\n'
+            '    "evaluate": {"command": "/usr/bin/evaluate", "args": []}\n  }, "keep": 3\n}',
+            {"evaluate": {"command": "/usr/bin/evaluate", "args": []}},
+        ),
+        ('{\n  "mcpServers": {\n    "other": {},\n    "jev": ENTRY\n  }, "keep": 3\n}', {"other": {}}),
+    ],
+    ids=["single-line", "inline-only", "inline-first", "inline-middle", "comma-first", "multiline-first", "last"],
+)
+def test_remove_drops_only_our_entry(tmp_path: Path, template: str, siblings: dict[str, object]) -> None:
+    assert execute(tmp_path, agents=("claude-code",))[0] == 0
+    path = layout(tmp_path).claude_code_file()
+    entry = json.loads(path.read_text())["mcpServers"]["jev"]
+    path.write_text(template.replace("ENTRY", json.dumps(entry)))
     code, text = execute(tmp_path, agents=("claude-code",), remove=True)
     assert code == 0, text
-    left = json.loads(path.read_text(encoding="utf-8"))
-    assert "jev" not in left["mcpServers"]
-    assert left["mcpServers"]["evaluate"]["command"] == "/usr/bin/evaluate"
+    assert json.loads(path.read_text()) == {"mcpServers": siblings, "keep": 3}
 
 
 def test_remove_leaves_a_foreign_entry(tmp_path: Path) -> None:
@@ -516,6 +591,21 @@ def test_remove_leaves_a_foreign_entry(tmp_path: Path) -> None:
     assert code == 0, text
     assert "foreign" in text
     assert path.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize("agents", [(), ("pi",)], ids=["autodetected", "explicit"])
+def test_remove_pi_after_its_adapter_is_uninstalled(tmp_path: Path, agents: tuple[str, ...]) -> None:
+    _pi_adapter(tmp_path, "npm:pi-mcp-adapter")
+    pi = layout(tmp_path)
+    other = {"command": "/usr/bin/other"}
+    pi.pi_file().write_text(json.dumps({"mcpServers": {"other": other}}), encoding="utf-8")
+    assert execute(tmp_path, agents=("pi",))[0] == 0
+    pi.pi_settings().write_text('{"packages": []}', encoding="utf-8")
+
+    code, message = execute(tmp_path, agents=agents, remove=True)
+    assert code == 0, message
+    assert json.loads(pi.pi_file().read_text(encoding="utf-8"))["mcpServers"] == {"other": other}
+    assert _state_targets(tmp_path) == {}
 
 
 @pytest.mark.parametrize("package", ["npm:pi-mcp-adapter", "git:example.test/owner/pi-mcp-adapter"])
@@ -593,19 +683,19 @@ def test_cursor_target_gains_the_entry_and_detection(tmp_path: Path) -> None:
     assert (tmp_path / ".cursor" / "mcp.json").read_text(encoding="utf-8") == _golden("cursor.json")
 
 
-def test_cursor_detected_from_the_binary(tmp_path: Path) -> None:
-    code, text = _run_raw(
-        Request(
-            layout=layout(tmp_path),
-            launch=LAUNCH,
-            agents=("cursor",),
-            assume_yes=True,
-            platform="darwin",
-            bins={"cursor": True},
-        )
-    )
-    assert code == 0, text
-    assert (tmp_path / ".cursor" / "mcp.json").exists()
+def test_cursor_detected_from_the_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _fake_home(monkeypatch, tmp_path)
+
+    def on_path(name: str) -> str | None:
+        return UVX if name in {"uvx", "cursor"} else None
+
+    monkeypatch.setattr(install_cli, "which", on_path)
+    assert install_cli.main(["--all", "--dry-run"]) == 0
+    report = capsys.readouterr().out
+    assert "detected cursor: cursor is on PATH" in report
+    assert str(layout(tmp_path).cursor_file()) in report
 
 
 def test_a_bom_in_a_json_config_keeps_every_other_server(tmp_path: Path) -> None:
@@ -644,16 +734,141 @@ def test_foreign_entry_is_skipped_until_forced(tmp_path: Path) -> None:
     assert written["mcpServers"]["jev"]["command"] == UVX
 
 
-def test_opencode_v2_servers_map(tmp_path: Path) -> None:
-    path = tmp_path / ".config" / "opencode" / "opencode.json"
+@pytest.mark.parametrize(
+    ("original", "parents", "existing", "comment"),
+    [
+        (
+            '{"mcp": {"servers": {"other": {"type": "local", "command": ["echo"]}}}}',
+            ["mcp", "servers"],
+            {"other": {"type": "local", "command": ["echo"]}},
+            "",
+        ),
+        (
+            '{"mcp": {"servers": {"type": "local", "command": ["echo"]}}}',
+            ["mcp"],
+            {"servers": {"type": "local", "command": ["echo"]}},
+            "",
+        ),
+        ('{"mcp": {"servers": {"enabled": false}}}', ["mcp"], {"servers": {"enabled": False}}, ""),
+        ('{"mcp": {"other": {"command": ["echo",],},},}', ["mcp"], {"other": {"command": ["echo"]}}, ""),
+        ('{"mcp": {/* add servers here */}}', ["mcp"], {}, "/* add servers here */"),
+        ('{\r\n  "mcp": {\r\n    "other": {} // keep me\r\n  }\r\n}', ["mcp"], {"other": {}}, "// keep me"),
+    ],
+    ids=["v2", "v1-server-named-servers", "v1-disabled-server", "trailing-commas", "inline-comment", "crlf"],
+)
+def test_opencode_server_map(
+    tmp_path: Path, original: str, parents: list[str], existing: dict[str, object], comment: str
+) -> None:
+    path = layout(tmp_path).opencode_dir() / "opencode.jsonc"
     path.parent.mkdir(parents=True)
-    path.write_text('{"mcp": {"servers": {"other": {"type": "local", "command": ["echo"]}}}}\n', encoding="utf-8")
+    path.write_bytes(original.encode())
     code, text = execute(tmp_path, agents=("opencode",))
     assert code == 0, text
-    document = json.loads(path.read_text(encoding="utf-8"))
-    assert "jev" not in document["mcp"]
-    assert document["mcp"]["servers"]["jev"]["type"] == "local"
-    assert document["mcp"]["servers"]["other"]["command"] == ["echo"]
+    updated = path.read_bytes().decode()
+    if "\r\n" in original:
+        assert "\n" not in updated.replace("\r\n", "")
+    if comment:
+        assert comment in updated and updated.index(comment) < updated.index('"jev"')
+    document = jsonedit.loads(updated)
+    for key in parents:
+        assert is_json_object(document)
+        document = document[key]
+    assert is_json_object(document)
+    entry = document.pop("jev")
+    assert is_json_object(entry) and entry["type"] == "local"
+    assert document == existing
+
+
+@pytest.mark.parametrize(
+    "original",
+    [
+        '{"mcp": {}, "mcp": {}}',
+        '{"mcp": {"servers": {}, "servers": {}}}',
+        '{"mcp": {"jev": {}, "j\\u0065v": {}}}',
+    ],
+    ids=["root-path", "nested-path", "entry"],
+)
+def test_opencode_refuses_duplicate_edited_keys(tmp_path: Path, original: str) -> None:
+    path = layout(tmp_path).opencode_dir() / "opencode.jsonc"
+    path.parent.mkdir(parents=True)
+    path.write_text(original)
+    code, text = execute(tmp_path, agents=("opencode",), force=True)
+    assert code == 1 and "duplicate key" in text
+    assert path.read_text() == original
+
+
+@pytest.mark.parametrize(
+    ("operation", "context"),
+    [
+        ("add", "sibling"),
+        ("update", "sibling"),
+        ("remove", "sibling"),
+        ("add", "empty-parent"),
+        ("remove", "own-heading"),
+    ],
+)
+def test_codex_preserves_the_next_table_heading(tmp_path: Path, operation: str, context: str) -> None:
+    path = layout(tmp_path).codex_file()
+    path.parent.mkdir()
+    prefix = "[mcp_servers]\n" if context == "empty-parent" else '[mcp_servers.other]\ncommand = "echo"\n'
+    if operation != "add":
+        prefix += "\n"
+        if context == "own-heading":
+            prefix += "# Heading for Jev\n"
+        prefix += '[mcp_servers.jev]\ncommand = "old-jev"\n'
+        _record_entry(tmp_path, "codex", path, {"command": "old-jev"})
+    heading = "# Heading for the following table\n[features]\nuse_feature = true\n"
+    path.write_text(prefix + "\n" + heading)
+    code, text = execute(tmp_path, agents=("codex",), remove=operation == "remove")
+    assert code == 0, text
+    updated = path.read_text()
+    assert heading in updated
+    if context == "own-heading":
+        assert "# Heading for Jev" in updated
+    assert ("jev" in tomllib.loads(updated)["mcp_servers"]) is (operation != "remove")
+
+
+@pytest.mark.parametrize("corruption", ["invalid", "wrong-entry", "lost-sibling", "lost-heading", "lost-comment"])
+def test_installer_refuses_a_corrupt_render_before_writing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, corruption: str
+) -> None:
+    target = "codex" if corruption == "lost-heading" else "claude-code"
+    paths = layout(tmp_path)
+    path = paths.codex_file() if target == "codex" else paths.claude_code_file()
+    original = '{"mcpServers":{"other":{"command":"echo"}},"keep":true}'
+    if corruption == "lost-heading":
+        original = '[mcp_servers.other]\ncommand = "echo"\n\n# keep\n[features]\none = true\n'
+    elif corruption == "lost-comment":
+        original = "/* keep */" + original
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(original)
+    render = install_engine.render_json
+    render_codex = install_engine.render_codex
+
+    def corrupt(target: str, text: str, name: str, entry: Mapping[str, object]) -> str:
+        rendered = render(target, text, name, entry)
+        if target != "claude-code":
+            return rendered
+        if corruption == "lost-comment":
+            return rendered.replace("/* keep */", "")
+        result = json.loads(rendered)
+        if corruption == "invalid":
+            return "{"
+        if corruption == "wrong-entry":
+            result["mcpServers"][name] = {}
+        else:
+            del result["mcpServers"]["other"]
+        return json.dumps(result)
+
+    def omit_heading(text: str, name: str, entry: Mapping[str, object]) -> str:
+        return render_codex(text, name, entry).replace("# keep\n", "")
+
+    monkeypatch.setattr(install_engine, "render_json", corrupt)
+    monkeypatch.setattr(install_engine, "render_codex", omit_heading)
+    code, text = execute(tmp_path, agents=(target, "cursor"))
+    assert code == 1 and "rendered config" in text and "left unchanged" in text
+    assert path.read_text() == original
+    assert layout(tmp_path).cursor_file().exists()
 
 
 def test_codex_and_opencode_keep_comments(tmp_path: Path) -> None:
@@ -803,12 +1018,25 @@ def test_nothing_detected_writes_nothing(tmp_path: Path) -> None:
     assert _fingerprint(tmp_path) == before
 
 
-def test_verify_handshake(tmp_path: Path) -> None:
+@pytest.mark.parametrize("descendant", [False, True], ids=["server-only", "server-with-helper"])
+def test_verify_handshake(tmp_path: Path, descendant: bool) -> None:
     script = tmp_path / "fake_server.py"
     names = ", ".join(f'"{name}"' for name in EXPECTED_TOOLS)
+    helper_pid = tmp_path / "helper.pid"
+    pulse = tmp_path / "pulse"
+    helper = "import pathlib,sys,time; p=pathlib.Path(sys.argv[1]); exec('while True:\\n p.touch(); time.sleep(0.01)')"
+    spawn = (
+        (
+            "import subprocess,pathlib,time\n"
+            f"child = subprocess.Popen([sys.executable, '-c', {helper!r}, {str(pulse)!r}])\n"
+            f"pathlib.Path({str(helper_pid)!r}).write_text(str(child.pid))\n"
+            f"while not pathlib.Path({str(pulse)!r}).exists(): time.sleep(0.01)\n"
+        )
+        if descendant
+        else ""
+    )
     script.write_text(
-        "import json,sys\n"
-        "init = json.loads(sys.stdin.readline())\n"
+        "import json,sys\n" + spawn + "init = json.loads(sys.stdin.readline())\n"
         "sys.stdout.write(json.dumps({'jsonrpc':'2.0','id':init['id'],'result':{'serverInfo':{'name':'jev-mcp'}}})+'\\n')\n"
         "sys.stdout.flush()\n"
         "while True:\n"
@@ -823,7 +1051,20 @@ def test_verify_handshake(tmp_path: Path) -> None:
         "        break\n",
         encoding="utf-8",
     )
-    verify_command([sys.executable, str(script)], timeout=5)
+    try:
+        verify_command([sys.executable, str(script)], timeout=5)
+        if descendant:
+            import time
+
+            # A zombie can keep its PID after group cleanup, but can never update this file.
+            time.sleep(0.05)
+            last = pulse.stat().st_mtime_ns
+            time.sleep(0.1)
+            assert pulse.stat().st_mtime_ns == last, "the helper survived the completed handshake"
+    finally:
+        if helper_pid.exists():
+            with suppress(ProcessLookupError):
+                os.kill(int(helper_pid.read_text()), signal.SIGKILL)
     script.write_text(
         "import json,sys\n"
         "init = json.loads(sys.stdin.readline())\n"
@@ -833,6 +1074,28 @@ def test_verify_handshake(tmp_path: Path) -> None:
     )
     with pytest.raises(VerifyError, match=r"serverInfo\.name"):
         verify_command([sys.executable, str(script)], timeout=5)
+
+
+@pytest.mark.parametrize(
+    "bad_reply",
+    [
+        {"id": True},
+        {"id": 1.0},
+        {"id": 1, "method": "server/request"},
+        {"id": 1, "jsonrpc": "1.0"},
+        {"id": 1, "error": None},
+    ],
+    ids=["bool-id", "float-id", "request", "version", "two-outcomes"],
+)
+def test_verify_ignores_frames_that_are_not_responses(bad_reply: dict[str, object]) -> None:
+    forged = {"jsonrpc": "2.0", "result": {"serverInfo": {"name": "forged"}}, **bad_reply}
+    good = {"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "jev-mcp"}}}
+    tools = {"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": name} for name in EXPECTED_TOOLS]}}
+    child = (
+        f"import sys; sys.stdin.readline(); print({json.dumps(forged)!r}); "
+        f"print({json.dumps(good)!r}); print({json.dumps(tools)!r}, flush=True); sys.stdin.read()"
+    )
+    verify_command([sys.executable, "-c", child], timeout=5)
 
 
 def test_verify_error_carries_the_child_stderr(tmp_path: Path) -> None:
@@ -849,7 +1112,7 @@ def test_verify_error_carries_the_child_stderr(tmp_path: Path) -> None:
     with pytest.raises(VerifyError) as caught:
         verify_command([sys.executable, str(script)], timeout=5)
     message = str(caught.value)
-    assert "server closed stdout" in message
+    assert message.partition(";")[0] in {"server closed stdin", "server closed stdout"}
     assert "3.10.19" in message
     assert "Python>=3.12" in message
 
@@ -912,7 +1175,7 @@ def test_the_stderr_tail_is_capped(tmp_path: Path) -> None:
         verify_command([sys.executable, str(script)], timeout=5)
     message = str(caught.value)
     assert "x" * 201 not in message
-    assert "x" * 200 in message
+    assert "[oversized stderr line omitted]" in message
 
 
 def test_verify_failure_text_is_redacted_like_every_summary_line(tmp_path: Path) -> None:
@@ -970,37 +1233,75 @@ def test_failed_verify_is_recorded_and_exits_non_zero(tmp_path: Path) -> None:
     assert record["entry_sha256"] == entry_hash(entry)
 
 
-def test_remove_still_removes_an_entry_that_failed_verify(tmp_path: Path) -> None:
+@pytest.mark.parametrize("target", ["claude-code", "claude-desktop"])
+def test_remove_still_removes_an_entry_that_failed_verify(tmp_path: Path, target: str) -> None:
     def failing(command: list[str]) -> None:
         raise VerifyError("no answer")
 
-    code, _ = execute(tmp_path, agents=("claude-code",), launch=PYPI_LAUNCH, verify=failing)
+    code, _ = execute(tmp_path, agents=(target,), desktop_key=MARKER, launch=PYPI_LAUNCH, verify=failing)
     assert code == 1
-    code, text = execute(tmp_path, agents=("claude-code",), remove=True, launch=PYPI_LAUNCH)
+    code, text = execute(tmp_path, agents=(target,), remove=True, launch=PYPI_LAUNCH)
     assert code == 0, text
-    assert "jev" not in json.loads((tmp_path / ".claude.json").read_text(encoding="utf-8"))["mcpServers"]
+    assert "jev" not in json.loads(layout(tmp_path).target_path(target).read_text(encoding="utf-8"))["mcpServers"]
     assert _state_targets(tmp_path) == {}
 
 
-def test_passed_verify_is_recorded(tmp_path: Path) -> None:
+def test_retry_verification_of_an_owned_entry_without_rewriting(tmp_path: Path) -> None:
+    attempts: list[list[str]] = []
+
+    def verify(command: list[str]) -> None:
+        attempts.append(command)
+        if len(attempts) < 3:
+            raise VerifyError("no answer")
+
+    config = layout(tmp_path).cursor_file()
+    code, report = execute(tmp_path, agents=("cursor",), verify=verify)
+    assert code == 1, report
+    first_stat = config.stat()
+    for expected_code in [1, 0, 0]:
+        code, report = execute(tmp_path, agents=("cursor",), verify=verify)
+        assert code == expected_code, report
+        assert (config.stat().st_ino, config.stat().st_mtime_ns) == (first_stat.st_ino, first_stat.st_mtime_ns)
+        assert _state_targets(tmp_path)["cursor"]["verified"] is (expected_code == 0)
+    assert attempts == [LAUNCH.invoke()] * 3
+
+
+@pytest.mark.parametrize("fails", [False, True], ids=["pass", "fail"])
+def test_all_targets_share_one_verification(tmp_path: Path, fails: bool) -> None:
     calls: list[list[str]] = []
-    code, text = execute(tmp_path, agents=("claude-code",), launch=PYPI_LAUNCH, verify=calls.append)
-    assert code == 0, text
+    paths = [layout(tmp_path).claude_code_dir(), layout(tmp_path).cursor_dir()]
+    for path in paths:
+        path.mkdir()
+
+    def verify(command: list[str]) -> None:
+        calls.append(command)
+        if fails:
+            raise VerifyError("no answer")
+
+    code, text = _run_raw(
+        Request(layout=layout(tmp_path), launch=PYPI_LAUNCH, select_all=True, assume_yes=True, verify=verify)
+    )
+    assert code == int(fails), text
     assert calls == [PYPI_LAUNCH.invoke()]
-    assert _state_targets(tmp_path)["claude-code"]["verified"] is True
+    records = _state_targets(tmp_path)
+    assert set(records) == {"claude-code", "cursor"}
+    assert all(record["verified"] is not fails for record in records.values())
 
 
-def test_reinstall_migrates_a_checkout_entry_to_the_pinned_spec(tmp_path: Path) -> None:
+@pytest.mark.parametrize("target", ["claude-code", "claude-desktop"])
+def test_reinstall_migrates_a_checkout_entry_to_the_pinned_spec(tmp_path: Path, target: str) -> None:
     """The ADR-0051 migration: one plain re-run rewrites entries this installer owns."""
-    code, _ = execute(tmp_path, agents=("claude-code",), launch=LAUNCH)
+    code, _ = execute(tmp_path, agents=(target,), desktop_key=MARKER, launch=LAUNCH)
     assert code == 0
-    path = tmp_path / ".claude.json"
+    path = layout(tmp_path).target_path(target)
     assert SPEC in path.read_text(encoding="utf-8")
-    code, text = execute(tmp_path, agents=("claude-code",), launch=PYPI_LAUNCH)
+    code, text = execute(tmp_path, agents=(target,), launch=PYPI_LAUNCH)
     assert code == 0, text
     entry = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["jev"]
     assert entry["args"] == PYPI_LAUNCH.args()
-    assert _state_targets(tmp_path)["claude-code"]["entry_sha256"] == entry_hash(entry)
+    assert _state_targets(tmp_path)[target]["entry_sha256"] == entry_hash(entry)
+    if target == "claude-desktop":
+        assert entry["env"]["TYPESAFE_API_KEY"] == MARKER
 
 
 def test_reinstall_replaces_an_entry_without_the_python_request(tmp_path: Path) -> None:
@@ -1161,3 +1462,527 @@ def test_an_unexpanded_environment_key_is_never_stored_as_the_desktop_key(monkey
     key, secrets = cli._desktop_key(True, {"TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}"})  # pyright: ignore[reportPrivateUsage] -- the env read IS the boundary under test
     assert key == ""
     assert secrets == ()
+
+
+@pytest.mark.parametrize("remove", [False, True])
+def test_scout_003_interrupted_state_commit_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remove: bool
+) -> None:
+    config = layout(tmp_path).claude_code_file()
+    state = layout(tmp_path).state_file()
+    if remove:
+        assert execute(tmp_path, agents=("claude-code",))[0] == 0
+    original_replace = os.replace
+
+    def interrupted(source: Path, destination: Path) -> None:
+        if (
+            destination == state
+            and config.exists()
+            and ("jev" in json.loads(config.read_text())["mcpServers"]) != remove
+        ):
+            raise OSError("simulated interruption")
+        original_replace(source, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", interrupted)
+        with pytest.raises((InstallError, OSError)):
+            execute(tmp_path, agents=("claude-code",), remove=remove)
+    assert ("jev" in json.loads(config.read_text())["mcpServers"]) != remove
+    installed, pending = config.read_bytes(), state.read_bytes()
+    config.write_bytes(installed + b" ")
+    with pytest.raises(InstallError, match="recovery"):
+        execute(tmp_path, agents=("claude-code",), remove=True)
+    assert config.read_bytes() == installed + b" "
+    assert state.read_bytes() == pending
+    config.write_bytes(installed)
+    assert execute(tmp_path, agents=("claude-code",), remove=True)[0] == 0
+    assert "jev" not in json.loads(config.read_text())["mcpServers"]
+    assert _state_targets(tmp_path) == {}
+
+
+def test_scout_003_overlapping_writers(tmp_path: Path) -> None:
+    def overlapping(_: Path) -> None:
+        try:
+            code, _text = execute(tmp_path, agents=("cursor",))
+        except InstallError as error:
+            assert "busy" in str(error)
+            return
+        assert code == 0
+
+    assert execute(tmp_path, agents=("claude-code",), before_write=overlapping)[0] == 0
+    expected = {"claude-code"}
+    if layout(tmp_path).cursor_file().exists():
+        expected.add("cursor")
+    assert _state_targets(tmp_path).keys() == expected
+
+
+@pytest.mark.parametrize("broken", [b"{", b"{}", b'{"targets":{"cursor":{}}}', bytes([255])])
+def test_scout_003_invalid_state_blocks_writes(tmp_path: Path, broken: bytes) -> None:
+    state = layout(tmp_path).state_file()
+    state.parent.mkdir(parents=True, mode=0o700)
+    state.write_bytes(broken)
+    with pytest.raises(InstallError, match="state"):
+        execute(tmp_path, agents=("cursor",))
+    assert state.read_bytes() == broken
+    assert not layout(tmp_path).cursor_file().exists()
+
+
+def test_deeply_nested_state_fails_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state = layout(tmp_path).state_file()
+    state.parent.mkdir(parents=True, mode=0o700)
+    state.write_text('{"targets":{}}')
+
+    def reject_nesting(*_args: object, **_kwargs: object) -> object:
+        raise RecursionError("JSON nesting limit")
+
+    monkeypatch.setattr(json, "loads", reject_nesting)
+    with pytest.raises(InstallError, match="state"):
+        execute(tmp_path, agents=("cursor",))
+    assert not layout(tmp_path).cursor_file().exists()
+
+
+def test_scout_003_named_ownership(tmp_path: Path) -> None:
+    req = Request(layout=layout(tmp_path), launch=LAUNCH, agents=("cursor",), assume_yes=True)
+    assert run(req).code == 0
+    path = req.layout.cursor_file()
+    doc = json.loads(path.read_text())
+    doc["mcpServers"]["foreign"] = doc["mcpServers"]["jev"]
+    path.write_text(json.dumps(doc))
+    assert run(replace(req, name="foreign", remove=True)).code == 0
+    assert run(replace(req, name="second")).code == 0
+    assert run(replace(req, remove=True)).code == 0
+    assert run(replace(req, name="second", remove=True)).code == 0
+    assert json.loads(path.read_text())["mcpServers"] == {"foreign": doc["mcpServers"]["foreign"]}
+
+
+def test_scout_007_backups_survive_collisions_and_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = [write_backup(tmp_path, "stamp", "cursor", ".json", data) for data in (b"one", b"two")]
+    assert [path.read_bytes() for path in paths] == [b"one", b"two"]
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in paths)
+
+    def failure(_fd: int, _data: bytes) -> int:
+        raise OSError("simulated write failure")
+
+    monkeypatch.setattr(os, "write", failure)
+    with pytest.raises(OSError):
+        write_backup(tmp_path, "stamp", "cursor", ".json", b"three")
+    assert {p for p in tmp_path.rglob("*") if p.is_file()} == set(paths)
+
+
+@pytest.mark.parametrize("mode", ["explicit", "chooser", "all"])
+def test_scout_026_selection_order(tmp_path: Path, mode: str) -> None:
+    chooser = mode == "chooser"
+    if mode == "all":
+        layout(tmp_path).cursor_dir().mkdir(parents=True)
+    choices = ("cursor", "claude-code", "cursor")
+    calls: list[list[str]] = []
+    req = Request(
+        layout=layout(tmp_path),
+        launch=LAUNCH,
+        agents=() if chooser else choices,
+        select_all=mode == "all",
+        assume_yes=not chooser,
+        chooser=lambda _: choices,
+        confirmer=lambda _: True,
+        verify=calls.append,
+    )
+    result = run(req)
+    assert result.code == 0, result.text
+    assert len(calls) == 1
+    assert result.text.index("cursor: add") < result.text.index("claude-code: add")
+    assert run(req).code == 0
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("output", ["x" * 64, "{}\n" * 6])
+def test_scout_020_stdout_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, output: str) -> None:
+    monkeypatch.setattr(verify_module, "STDOUT_LINE_BYTES", 32, raising=False)
+    monkeypatch.setattr(verify_module, "STDOUT_MESSAGES", 4, raising=False)
+    script = tmp_path / "local.py"
+    script.write_text("import sys\nsys.stdin.readline()\nsys.stdout.write(" + repr(output) + ")\nsys.stdout.flush()\n")
+    with pytest.raises(VerifyError, match="limit") as result:
+        verify_command([sys.executable, str(script)], timeout=1)
+    assert output not in str(result.value)
+
+
+def test_scout_007_failed_backup_preserves_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = layout(tmp_path).claude_code_file()
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_bytes(b'{"mcpServers":{}}')
+
+    def failure(_fd: int, _data: bytes) -> int:
+        raise OSError("simulated backup failure")
+
+    monkeypatch.setattr(os, "write", failure)
+    assert execute(tmp_path, agents=("claude-code",))[0] == 1
+    assert config.read_bytes() == b'{"mcpServers":{}}'
+    assert not layout(tmp_path).state_file().exists()
+
+
+def test_scout_020_deadline_reaps_child(tmp_path: Path) -> None:
+    pidfile = tmp_path / "pid"
+    child = "import os,sys,time; open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(10)"
+    with pytest.raises(VerifyError, match="timed out"):
+        verify_command([sys.executable, "-c", child, str(pidfile)], timeout=1)
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pidfile.read_text()), 0)
+
+
+def test_scout_020_aggregate_byte_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(verify_module, "STDOUT_TOTAL_BYTES", 16)
+    with pytest.raises(VerifyError, match="total byte limit"):
+        verify_command([sys.executable, "-c", "print('{}\\n' * 6)"])
+
+
+@pytest.mark.parametrize(("length", "failure"), [(31, "closed stdout"), (32, "closed stdout"), (33, "line byte limit")])
+def test_scout_020_line_boundary(length: int, failure: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(verify_module, "STDOUT_LINE_BYTES", 32)
+    with pytest.raises(VerifyError, match=failure):
+        verify_command([sys.executable, "-c", f"import sys; sys.stdin.readline(); print('a' * {length})"])
+
+
+def test_scout_020_non_string_tool_name() -> None:
+    replies = [
+        '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"jev-mcp"}}}',
+        '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":[]}]}}',
+    ]
+    child = (
+        f"import sys; sys.stdin.readline(); print({replies[0]!r}, flush=True); "
+        f"sys.stdin.readline(); sys.stdin.readline(); print({replies[1]!r})"
+    )
+    with pytest.raises(VerifyError, match="tools/list"):
+        verify_command([sys.executable, "-c", child])
+
+
+@pytest.mark.parametrize("close_stdout", [False, True])
+def test_scout_020_early_pipe_close_preserves_child_stderr(monkeypatch: pytest.MonkeyPatch, close_stdout: bool) -> None:
+    children: list[subprocess.Popen[bytes]] = []
+
+    def capture(child: subprocess.Popen[bytes]) -> subprocess.Popen[bytes]:
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(subprocess.Popen, "__enter__", capture)
+    # The reply makes the parent send its next request after the child has closed stdin.
+    response = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "jev-mcp"}}})
+    early_exit = "os.close(1)" if close_stdout else f"print({response!r}, flush=True)"
+    child = (
+        f"import os, sys, time; sys.stdin.readline(); os.close(0); {early_exit}; "
+        "time.sleep(0.08); print('local resolver diagnostic', file=sys.stderr, flush=True)"
+    )
+    with pytest.raises(VerifyError, match="local resolver diagnostic"):
+        verify_command([sys.executable, "-c", child], timeout=2)
+
+    (process,) = children
+    assert process.returncode is not None
+    assert all(pipe is not None and pipe.closed for pipe in (process.stdin, process.stdout, process.stderr))
+
+
+def test_overlarge_state_refused_before_config_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    state = layout(tmp_path).state_file()
+    state.parent.mkdir(parents=True, mode=0o700)
+    state.write_text('{"targets":{}}')
+    real_stat = os.fstat
+    inode = state.stat().st_ino
+
+    def large(fd: int) -> os.stat_result:
+        info = real_stat(fd)
+        if info.st_ino == inode:
+            fields = list(info)
+            fields[6] = 1 << 30
+            return os.stat_result(fields)
+        return info
+
+    monkeypatch.setattr(os, "fstat", large)
+    with pytest.raises(InstallError, match="state"):
+        execute(tmp_path, agents=("cursor",))
+    assert not layout(tmp_path).cursor_file().exists()
+
+
+@pytest.mark.parametrize("original", [None, b"{}"])
+def test_commit_preserves_an_edit_after_the_last_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, original: bytes | None
+) -> None:
+    from jev_judge_mcp.install import fs
+
+    config = tmp_path / "config.json"
+    edit = b'{"other":1}'
+    config.write_bytes(edit)
+    read = fs.read_bytes
+
+    # All optimistic reads saw the planned snapshot. The commit must use the actual destination.
+    def snapshot(path: Path) -> bytes | None:
+        return original if path == config else read(path)
+
+    monkeypatch.setattr(fs, "read_bytes", snapshot)
+    with pytest.raises((fs.ConfigChangedError, InstallError)) as conflict:
+        atomic_write(config, '{"jev":1}', 0o600, original)
+    assert "changed" in str(conflict.value)
+    saved = [p for p in tmp_path.iterdir() if p.is_file() and p.read_bytes() == edit]
+    assert len(saved) == 1
+    assert config == saved[0] or str(saved[0]) in str(conflict.value)
+
+
+def test_recovery_reports_the_displaced_edit_after_interruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = layout(tmp_path).claude_code_file()
+    config.write_text("{}")
+    edit = '{"editor":"saved"}'
+    sync = os.fsync
+
+    def save_concurrent_edit(path: Path, state: Mapping[str, object]) -> None:
+        write_state(path, state)
+        if "pending" in state:
+            config.write_text(edit)
+
+    def interrupt_after_swap(fd: int) -> None:
+        if "mcpServers" in config.read_text():
+            raise KeyboardInterrupt
+        sync(fd)
+
+    with monkeypatch.context() as patch:
+        patch.setattr("jev_judge_mcp.install.engine.write_state", save_concurrent_edit)
+        patch.setattr(os, "fsync", interrupt_after_swap)
+        with pytest.raises(KeyboardInterrupt):
+            execute(tmp_path, agents=("claude-code",))
+    pending = json.loads(layout(tmp_path).state_file().read_text())["pending"]
+    saved = config.with_name(pending["staging"])
+    assert saved.read_text() == edit
+    with pytest.raises(InstallError, match="Reconcile") as conflict:
+        execute(tmp_path, agents=("claude-code",))
+    assert str(saved) in str(conflict.value)
+    assert saved.read_text() == edit
+    assert json.loads(layout(tmp_path).state_file().read_text()) == {"targets": {}}
+
+
+@pytest.mark.parametrize("pending", [False, True], ids=["planning", "recovery"])
+def test_installer_rejects_a_nonregular_config_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending: bool
+) -> None:
+    config = layout(tmp_path).cursor_file()
+    state = layout(tmp_path).state_file()
+    assert execute(tmp_path, agents=("cursor",))[0] == 0
+    if pending:
+        records = _state_targets(tmp_path)
+        (owner,) = records
+        write_state(
+            state,
+            {
+                "targets": records,
+                "pending": {
+                    "key": owner,
+                    "path": str(config),
+                    "before": "1" * 64,
+                    "after": "2" * 64,
+                    "record": None,
+                },
+            },
+        )
+    before = state.read_bytes()
+    inode = config.stat().st_ino
+    fstat = os.fstat
+
+    def describe(fd: int) -> os.stat_result:
+        st = fstat(fd)
+        return os.stat_result((stat.S_IFIFO | 0o600, *st[1:])) if st.st_ino == inode else st
+
+    monkeypatch.setattr(os, "fstat", describe)
+    if pending:
+        with pytest.raises(InstallError, match=r"recover.*regular file"):
+            execute(tmp_path, agents=("cursor",))
+    else:
+        code, text = execute(tmp_path, agents=("cursor",))
+        assert code == 1 and "regular file" in text
+    assert state.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        *secret_env(),
+        "stored",
+        "literal",
+        "truncated",
+    ],
+)
+def test_verify_diagnostic_redacts_every_secret_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], source: str
+) -> None:
+    _fake_home(monkeypatch, tmp_path)
+    path = tmp_path / "stored-key"
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(path))
+    marker = secret_env().get(source, "marker-stored-key")
+    diagnostic = f"child diagnostic {marker}"
+    if source == "literal":
+        marker = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        diagnostic = f'child diagnostic token = "{marker}"'
+    elif source == "truncated":
+        path.write_text("marker-stored-key-" + "x" * 250)
+    elif source == "stored":
+        path.write_text(marker)
+    elif source == "TYPESAFE_API_KEY":
+        settings = load_settings().model_copy(update={"typesafe_api_key": SecretStr(marker)})
+        monkeypatch.setattr(install_redact, "load_settings", lambda: settings, raising=False)
+    else:
+        monkeypatch.setenv(source, marker)
+    if source == "truncated":
+        diagnostic = "child diagnostic " + path.read_text()
+    launcher = tmp_path / "uvx"
+    launcher.write_text(f"#!{sys.executable}\nimport sys\nprint({diagnostic!r}, file=sys.stderr, flush=True)\n")
+    launcher.chmod(0o700)
+
+    def on_path(name: str) -> str | None:
+        return str(launcher) if name == "uvx" else None
+
+    monkeypatch.setattr(install_cli, "which", on_path)
+    assert install_cli.main(["--agent", "claude-code", "-y"]) == 1
+    output = capsys.readouterr().out
+    assert "child diagnostic" in output and "[redacted]" in output
+    assert marker not in output
+
+
+@pytest.mark.parametrize(
+    ("swapped", "rewritten", "stage_missing"),
+    [
+        pytest.param(False, False, False, id="before-exchange-unchanged"),
+        pytest.param(False, True, False, id="before-exchange"),
+        pytest.param(True, False, False, id="after-exchange"),
+        pytest.param(True, True, False, id="after-exchange-rewritten"),
+        pytest.param(False, False, True, id="missing-stage-config-before"),
+        pytest.param(True, False, True, id="missing-stage-config-after"),
+        pytest.param(True, True, True, id="missing-stage-config-rewritten"),
+    ],
+)
+def test_recovery_cleans_staging_without_touching_other_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, swapped: bool, rewritten: bool, stage_missing: bool
+) -> None:
+    paths = layout(tmp_path)
+    config = paths.claude_code_file()
+    assert execute(tmp_path, agents=("claude-code", "cursor"))[0] == 0
+    original = config.read_text()
+    records = _state_targets(tmp_path)
+
+    def interrupt_exchange(_left: Path, _right: Path) -> None:
+        raise KeyboardInterrupt
+
+    sync = install_fs.sync_directory
+
+    def interrupt_sync(path: Path) -> None:
+        if path == config.parent and config.read_text() != original:
+            raise KeyboardInterrupt
+        sync(path)
+
+    with monkeypatch.context() as patch:
+        if swapped:
+            patch.setattr(install_fs, "sync_directory", interrupt_sync)
+        else:
+            patch.setattr(install_fs, "_exchange_files", interrupt_exchange)
+        with pytest.raises(KeyboardInterrupt):
+            execute(tmp_path, agents=("claude-code",), launch=PYPI_LAUNCH)
+    journal = paths.state_file().read_bytes()
+    pending = json.loads(journal)["pending"]
+    staged = config.with_name(pending["staging"])
+    assert install_fs.digest(staged.read_bytes()) == pending["before" if swapped else "after"]
+    assert install_fs.digest(config.read_bytes()) == pending["after" if swapped else "before"]
+    if stage_missing:
+        staged.unlink()
+    if rewritten:
+        document = json.loads(config.read_text())
+        document["agent-edit"] = True
+        config.write_text(json.dumps(document))
+
+    if rewritten and (swapped or stage_missing):
+        rewritten_config = config.read_bytes()
+        with pytest.raises(InstallError, match="config changed during installer recovery"):
+            execute(tmp_path, agents=("claude-code",), remove=True)
+        assert config.read_bytes() == rewritten_config
+        assert paths.state_file().read_bytes() == journal
+        assert staged.exists() is not stage_missing
+        if not stage_missing:
+            assert staged.read_text() == original
+        return
+
+    before_recovery = config.read_bytes()
+    assert execute(tmp_path, agents=("cursor",))[0] == 0
+    assert config.read_bytes() == before_recovery
+    assert not staged.exists()
+    recovered_records = {**records, "claude-code": pending["record"]} if swapped else records
+    assert json.loads(paths.state_file().read_bytes()) == {"targets": recovered_records}
+
+    recovered = execute(tmp_path, agents=("claude-code",), remove=True)
+    assert recovered[0] == 0, recovered[1]
+    assert not staged.exists()
+    document = json.loads(config.read_text())
+    assert document == ({"mcpServers": {}, "agent-edit": True} if rewritten else {"mcpServers": {}})
+    assert _state_targets(tmp_path) == {"cursor": records["cursor"]}
+
+
+def test_backup_retention_applies_only_after_a_successful_write(tmp_path: Path) -> None:
+    paths = layout(tmp_path)
+    for target in ("cursor", "claude-code"):
+        assert execute(tmp_path, agents=(target,))[0] == 0
+        assert execute(tmp_path, agents=(target,), launch=PYPI_LAUNCH)[0] == 0
+    for attempt in range(7):
+        launch = Launch(uvx=UVX, spec=f"jev-judge-mcp[typesafe]==1.{attempt}")
+        result = run(
+            Request(
+                layout=paths, launch=launch, agents=("claude-code",), stamp=f"20990101T00000{attempt}Z", assume_yes=True
+            )
+        )
+        assert result.code == 0, result.text
+    backups = paths.state_dir() / "backups"
+    assert [path.parent.name for path in sorted(backups.glob("*/claude-code.json"))] == [
+        "20990101T000004Z",
+        "20990101T000005Z",
+        "20990101T000006Z",
+    ]
+    (cursor_backup,) = backups.glob("*/cursor.json")
+    assert "jev" in json.loads(cursor_backup.read_text())["mcpServers"]
+    retained = set(backups.glob("*/claude-code.json"))
+    config = paths.claude_code_file()
+    previous = config.read_bytes()
+
+    def fail(_path: Path) -> None:
+        raise OSError("interrupted before publishing")
+
+    code, text = execute(tmp_path, agents=("claude-code",), launch=LAUNCH, before_write=fail)
+    assert code == 1, text
+    assert config.read_bytes() == previous
+    assert all(path.is_file() for path in retained)
+    assert len(list(backups.glob("*/claude-code.json"))) == len(retained) + 1
+
+
+@pytest.mark.parametrize("bom", [True, False], ids=["bom", "oversize"])
+def test_pi_adapter_settings_use_a_bounded_bom_tolerant_read(tmp_path: Path, bom: bool) -> None:
+    paths = layout(tmp_path)
+    _pi_adapter(tmp_path, "npm:pi-mcp-adapter")
+    original = paths.pi_settings().read_bytes()
+    data = b"\xef\xbb\xbf" + original if bom else original + b" " * (16 * 1024 * 1024)
+    paths.pi_settings().write_bytes(data)
+    code, text = execute(tmp_path, agents=("pi",))
+    assert code == (0 if bom else 1), text
+    assert paths.pi_file().exists() is bom
+
+
+def test_missing_package_metadata_does_not_write_a_fake_installer_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def missing(_package: str) -> str:
+        raise PackageNotFoundError(PACKAGE)
+
+    monkeypatch.setattr(launch_module, "version", missing)
+    with pytest.raises(InstallError, match="version cannot be pinned"):
+        execute(tmp_path, agents=("cursor",))
+    assert not layout(tmp_path).cursor_file().exists()
+
+
+def test_installer_refuses_an_existing_loose_state_directory(tmp_path: Path) -> None:
+    paths = layout(tmp_path)
+    paths.state_dir().mkdir(parents=True, mode=0o755)
+    with pytest.raises(InstallError, match="private directory"):
+        execute(tmp_path, agents=("cursor",))
+    assert stat.S_IMODE(paths.state_dir().stat().st_mode) == 0o755
+    assert not paths.cursor_file().exists()

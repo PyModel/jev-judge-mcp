@@ -6,9 +6,9 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from shutil import which
 
 from jev_judge_mcp.domain import is_json_object
+from jev_judge_mcp.install.fs import read_bytes
 from jev_judge_mcp.install.values import is_json_array
 
 PYTHINKER_DESKTOP_ID = "com.pythinker.desktop"
@@ -143,11 +143,12 @@ def _optional_path(value: str | None) -> Path | None:
 
 def pi_adapter_installed(settings_path: Path) -> bool:
     """True when Pi's settings list the MCP adapter package."""
-    if not settings_path.is_file():
-        return False
     try:
-        parsed: object = json.loads(settings_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        data = read_bytes(settings_path)
+        if data is None:
+            return False
+        parsed: object = json.loads(data.decode("utf-8-sig"))
+    except (OSError, ValueError, RecursionError):
         return False
     if not is_json_object(parsed):
         return False
@@ -186,14 +187,6 @@ def pythinker_desktop_installed(applications: Path) -> bool:
 
 def chatgpt_installed(applications: Path) -> bool:
     return (applications / "ChatGPT.app").exists()
-
-
-def command_exists(name: str) -> bool:
-    return which(name) is not None
-
-
-def default_bins(names: tuple[str, ...]) -> dict[str, bool]:
-    return {name: command_exists(name) for name in names}
 
 
 def running_on_macos(platform: str | None = None) -> bool:

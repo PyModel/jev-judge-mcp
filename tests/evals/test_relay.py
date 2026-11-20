@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -42,14 +43,19 @@ def _relay(proxy: str, log: Path, messages: list[Any]) -> tuple[list[Any], list[
     child.stdin.write(b"".join((json.dumps(message) + "\n").encode() for message in messages))
     child.stdin.flush()
     out: list[bytes] = []
-    reader = threading.Thread(target=lambda: out.append(child.stdout.read() if child.stdout else b""))
+    reader = threading.Thread(target=lambda: out.append(child.stdout.read() if child.stdout else b""), daemon=True)
     reader.start()
     reader.join(timeout=30)
     try:
         assert not reader.is_alive(), "the relay never closed the client's stdout"
     finally:
         child.stdin.close()
-        assert child.wait(timeout=30) == 0
+        try:
+            assert child.wait(timeout=30) == 0
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait(timeout=5)
+            raise
     replies = [json.loads(line) for line in out[0].splitlines()]
     rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
     return replies, rows
@@ -69,7 +75,7 @@ def _hang_server(pid: Path, log: Path, marker: Path, *, reads: int) -> str:
     if reads:
         reply = (
             "sys.stdin.readline()\n" * reads
-            + "sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': [1]}) + '\\n')\n"
+            + "sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': {'content': []}}) + '\\n')\n"
             + "sys.stdout.flush()\n"
         )
     return (
@@ -100,11 +106,9 @@ def _reap(pid_path: Path) -> None:
         pass
 
 
-def _proxy_argv(proxy: str, log: Path, server: Path) -> list[str]:
-    return [sys.executable, "-m", proxy, str(log), "--", sys.executable, str(server)]
-
-
-def _run_until_dead(argv: list[str], server_source: str, messages: list[Any], pid_path: Path) -> tuple[str, str]:
+def _run_until_dead(
+    argv: list[str], server_source: str, messages: list[Any], pid_path: Path, *, stderr: int = subprocess.PIPE
+) -> tuple[str, str]:
     """Run a relay until it exits. Returns stderr and the log text captured at SIGTERM."""
     server = pid_path.with_name("server.py")
     marker = pid_path.with_name("at-term.txt")
@@ -113,15 +117,18 @@ def _run_until_dead(argv: list[str], server_source: str, messages: list[Any], pi
         argv,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=stderr,
         cwd=REPO,
     )
     try:
         deadline = time.monotonic() + 30
         while not pid_path.exists():
             if proc.poll() is not None:
-                _out, err = proc.communicate()
-                raise AssertionError(f"proxy exited before the server wrote its pid\n{err.decode()}")
+                try:
+                    _out, err = proc.communicate(timeout=1)
+                except subprocess.TimeoutExpired as exc:
+                    err = exc.stderr or b""
+                raise AssertionError(f"proxy exited before the server wrote its pid\n{(err or b'').decode()}")
             if time.monotonic() > deadline:
                 raise AssertionError("server pid was never written")
             time.sleep(0.02)
@@ -130,15 +137,17 @@ def _run_until_dead(argv: list[str], server_source: str, messages: list[Any], pi
         proc.stdin.flush()
         try:
             _out, err = proc.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            _out, err = proc.communicate()
-            raise AssertionError(f"relay did not exit\n{err.decode()}") from None
+        except subprocess.TimeoutExpired as exc:
+            raise AssertionError(f"relay did not exit\n{(exc.stderr or b'').decode()}") from exc
+        assert proc.returncode != 0
         captured = marker.read_text(encoding="utf-8") if marker.exists() else ""
-        return err.decode(), captured
+        return (err or b"").decode(), captured
     finally:
         if proc.poll() is None:
             proc.kill()
+            for pipe in (proc.stdin, proc.stdout, proc.stderr):
+                if pipe is not None:
+                    pipe.close()
             proc.wait(timeout=5)
         _reap(pid_path)
 
@@ -345,10 +354,21 @@ def test_every_action_bearing_tool_yields_a_headline_from_recorded_output() -> N
             headlines.setdefault(str(call.payload["tool"]), set()).add(fields["headline_action"])
     assert all(value in {None, "auto", "review", "escalate"} for values in headlines.values() for value in values)
     with_headline = {tool for tool, values in headlines.items() if values - {None}}
-    assert with_headline == set(HEADLINE_TOOLS)
+    # The recorded parity snapshot predates the local range tool (covered separately below).
+    assert with_headline | {"jev_gate_range"} == set(HEADLINE_TOOLS)
 
 
 # --- FIX-06: log pending rows, then terminate the child --------------------------------------------
+
+_RESPONSE_RAISES = """
+import importlib
+import sys
+from unittest.mock import patch
+
+proxy = importlib.import_module(sys.argv[1])
+with patch.object(proxy, "result_fields", side_effect=RuntimeError("injected recorder failure")):
+    raise SystemExit(proxy.main(sys.argv[2:]))
+"""
 
 # response() raises, and close() logs one pending call before raising too. The relay must keep the other.
 _CLOSE_RAISES = """
@@ -392,7 +412,7 @@ def test_response_raise_logs_the_recorders_unanswered_row_and_kills_the_child(pr
     server = pid.with_name("server.py")
     try:
         err, at_term = _run_until_dead(
-            _proxy_argv(proxy, log, server),
+            [sys.executable, "-c", _RESPONSE_RAISES, proxy, str(log), "--", sys.executable, str(server)],
             _hang_server(pid, log, pid.with_name("at-term.txt"), reads=1),
             [_tools_call(1, {"name": "jev_verify", "arguments": {"k": hidden}})],
             pid,
@@ -408,13 +428,32 @@ def test_response_raise_logs_the_recorders_unanswered_row_and_kills_the_child(pr
             assert row["seq"] == 0 and row["arguments"] == {"k": hidden} and row["text"] is None
         else:
             assert "seq" not in row and "arguments" not in row and hidden not in at_term
-        assert "Traceback" in err
+        assert "RuntimeError: injected recorder failure" in err
         _assert_dead(pid)
     finally:
         _reap(pid)
 
 
-def test_recorder_close_raise_writes_fallback_rows_and_kills_the_child(tmp_path: Path) -> None:
+@pytest.fixture(params=[False, True], ids=["drained-stderr", "full-unread-stderr"])
+def relay_stderr(request: pytest.FixtureRequest) -> Iterator[int]:
+    if not request.param:
+        yield subprocess.PIPE
+        return
+    reader, writer = os.pipe()
+    try:
+        os.set_blocking(writer, False)
+        for chunk in (b"x" * 512, b"x"):
+            with pytest.raises(BlockingIOError):
+                while True:
+                    os.write(writer, chunk)
+        os.set_blocking(writer, True)
+        yield writer
+    finally:
+        os.close(writer)
+        os.close(reader)
+
+
+def test_recorder_close_raise_writes_fallback_rows_and_kills_the_child(tmp_path: Path, relay_stderr: int) -> None:
     """recorder.close also raises. The call it did not log is a fallback row, and seq does not collide."""
     log = tmp_path / "calls.jsonl"
     pid = tmp_path / "server.pid"
@@ -428,6 +467,7 @@ def test_recorder_close_raise_writes_fallback_rows_and_kills_the_child(tmp_path:
                 _tools_call(2, {"name": "jev_screen", "arguments": {"k": 2}}),
             ],
             pid,
+            stderr=relay_stderr,
         )
         rows = _rows(at_term)
         assert {row["tool"] for row in rows} == {"jev_verify", "jev_screen"}
@@ -439,3 +479,134 @@ def test_recorder_close_raise_writes_fallback_rows_and_kills_the_child(tmp_path:
         _assert_dead(pid)
     finally:
         _reap(pid)
+
+
+@pytest.mark.parametrize("action", ["auto", "review", "escalate"])
+def test_scout_024_range_has_the_same_headline_action(action: str) -> None:
+    assert result_fields(_result({"tool": "jev_gate_range", "action": action}))["headline_action"] == action
+
+
+def test_scout_033_private_from_creation_and_refuse_unsafe_append(tmp_path: Path) -> None:
+    log = tmp_path / "calls.jsonl"
+    argv = [sys.executable, "-m", "evals.bench.proxy", str(log), "--", sys.executable, FAKE]
+    subprocess.run(argv, input=b"", capture_output=True, timeout=5, check=True, umask=0)
+    for path in [log, log.with_suffix(".stderr")]:
+        assert path.stat().st_mode & 0o777 == 0o600
+        path.chmod(0o644)
+        result = subprocess.run(argv, input=b"", capture_output=True, timeout=5)
+        assert result.returncode != 0
+        path.chmod(0o600)
+
+
+def test_scout_022_idle_client_survives_but_outstanding_request_expires(tmp_path: Path) -> None:
+    pid = tmp_path / "pid"
+    log = tmp_path / "calls.jsonl"
+    marker = tmp_path / "at-term.txt"
+    server = tmp_path / "server.py"
+    server.write_text(_hang_server(pid, log, marker, reads=0))
+    code = (
+        "from evals.relay import serve; from evals.ab.proxy import Recorder; "
+        "raise SystemExit(serve(None,'ab',Recorder,idle_timeout=.2))"
+    )
+    with subprocess.Popen(
+        [sys.executable, "-c", code, str(log), "--", sys.executable, str(server)],
+        cwd=REPO,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        umask=0,
+    ) as proxy:
+        try:
+            deadline = time.monotonic() + 3
+            while not pid.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert pid.is_file()
+            for path in [log, log.with_suffix(".stderr")]:
+                assert path.stat().st_mode & 0o777 == 0o600
+            time.sleep(0.3)
+            assert proxy.poll() is None
+            assert proxy.stdin is not None
+            proxy.stdin.write((json.dumps(_call(1)) + "\n").encode())
+            proxy.stdin.flush()
+            # Keep client input open while communicate drains both output pipes.
+            with os.fdopen(os.dup(proxy.stdin.fileno()), "wb"):
+                proxy.communicate(timeout=4)
+            assert proxy.returncode != 0
+            assert json.loads(marker.read_text())["unanswered"] is True
+            _assert_dead(pid)
+        finally:
+            if proxy.poll() is None:
+                proxy.kill()
+            _reap(pid)
+
+
+def test_early_exit_with_an_inherited_pipe_reports_the_proxy_exit(tmp_path: Path) -> None:
+    script = "import subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(4)'])"
+    started = time.monotonic()
+    with pytest.raises(AssertionError, match="exited before"):
+        _run_until_dead([sys.executable, "-c", script], "", [], tmp_path / "pid")
+    assert time.monotonic() - started < 3, "a descendant kept the output pipe open"
+
+
+@pytest.mark.parametrize(("reported", "tokens", "expected"), [(False, 0, 3.5), (True, 0, 0), (False, 100_000_000, 4.2)])
+def test_study_relay_books_reported_or_reserved_usage(
+    tmp_path: Path, reported: bool, tokens: int, expected: float
+) -> None:
+    from evals.spend import SpendLedger, SpendPolicy
+
+    fields = result_fields(_result({"usage": {"input_tokens": tokens, "reported": reported}}))
+    book = SpendLedger.load(tmp_path / "ledger.json", SpendPolicy(10, 25, 0.042, 3.5))
+    assert book.cost_of(0, [fields]).jev_usd == expected
+    assert fields["usage_reported"] is reported
+
+
+def test_metadata_recorder_discards_unrecognized_values() -> None:
+    from io import StringIO
+
+    from evals.ab.proxy import Recorder
+
+    trace = StringIO()
+    recorder = Recorder(trace)
+    marker = "private fixture text"
+    recorder.request(_tools_call(1, {"name": {"nested": marker}}))
+    recorder.response(_result({"action": [marker], "model": marker, "usage": {"input_tokens": marker}}))
+    record = json.loads(trace.getvalue())
+    assert marker not in trace.getvalue()
+    assert all(record[field] is None for field in ("tool", "action", "model", "input_tokens"))
+
+
+def test_study_child_keeps_usage_provenance_through_stdio(tmp_path: Path) -> None:
+    child = """
+import json, sys
+from jev_judge_mcp.providers.base import parse_envelope
+for line in sys.stdin:
+    call = json.loads(line)
+    body = {"answers": {}}
+    if call["id"] == 2:
+        body["usage"] = {"input_tokens": 0, "output_tokens": 0}
+    usage = parse_envelope(body, "fixture").usage.to_wire()
+    content = [{"type":"text","text":json.dumps({"usage":usage})}]
+    print(json.dumps({"id":call["id"],"result":{"content":content}}),flush=True)
+"""
+    log = tmp_path / "study.jsonl"
+    command = [sys.executable, "-m", "evals.ab.proxy", str(log), "--", sys.executable, "-c", child]
+    subprocess.run(
+        command,
+        input="".join(json.dumps(_call(i)) + "\n" for i in (1, 2)),
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=10,
+    )
+    assert [(row["input_tokens"], row["usage_reported"]) for row in _rows(log.read_text())] == [(0, False), (0, True)]
+
+
+@pytest.mark.parametrize(
+    "reply", [["invalid"], {"content": [7]}, {"content": {"type": "text"}}, {"content": [{"type": "text", "text": 5}]}]
+)
+def test_metadata_recorder_marks_malformed_response_unknown(reply: object) -> None:
+    from evals.relay import result_text
+
+    response = {"id": 1, "result": reply}
+    assert result_fields(response) == {"is_error": True}
+    assert result_text(response) is None

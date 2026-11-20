@@ -5,6 +5,7 @@ import json
 import logging
 from collections.abc import Generator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -62,10 +63,15 @@ def _code_block(result: CallToolResult) -> str:
     return block.text
 
 
-async def test_handler_keyerror_reaches_stderr_and_is_an_error(capsys: pytest.CaptureFixture[str]) -> None:
+async def test_handler_keyerror_reaches_stderr_and_is_an_error(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     async def handler(_parsed: dict[str, Any], _runtime: Runtime) -> ToolResult:
         raise KeyError(f"missing {_CONFIGURED}")
 
+    key_file = tmp_path / "key"
+    key_file.write_text(_CONFIGURED, encoding="utf-8")
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(key_file))
     toolset = _toolset(handler)
     try:
         with _stderr([_CONFIGURED]):
@@ -75,7 +81,8 @@ async def test_handler_keyerror_reaches_stderr_and_is_an_error(capsys: pytest.Ca
         await toolset.aclose()
 
     assert result.is_error
-    assert _text(result) == str(KeyError(f"missing {_CONFIGURED}"))
+    assert result.structured_content == {"code": "internal"}
+    assert _text(result) == str(KeyError("missing [redacted]"))
     assert toolset.runtime.telemetry.spans.spans[-1].attributes["outcome"] == "handler_error"
     assert "Traceback (most recent call last):" in err
     assert "KeyError" in err

@@ -5,13 +5,14 @@ import getpass
 import os
 import sys
 from collections.abc import Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from shutil import which
 
 from jev_judge_mcp.install.engine import TARGETS, Request, run
 from jev_judge_mcp.install.errors import InstallError
 from jev_judge_mcp.install.launch import checkout_launch, local_install_warning, pypi_launch, require_checkout_uvx
-from jev_judge_mcp.install.layout import Layout, layout_from_env
+from jev_judge_mcp.install.layout import layout_from_env
 from jev_judge_mcp.install.verify import verify_command
 from jev_judge_mcp.settings import is_unexpanded_reference
 
@@ -77,7 +78,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 key_in_environment=bool(_environment_key(environ)),
                 confirmer=confirmer,
                 chooser=_chooser(parsed.yes, parsed.dry_run),
-                verify=None if parsed.dry_run or parsed.remove else verify_command,
+                verify=None if parsed.dry_run or parsed.remove else partial(verify_command, secrets=secrets),
             )
         )
     except InstallError as exc:
@@ -140,14 +141,5 @@ def _chooser(assume_yes: bool, dry_run: bool):
 
 
 def _bins() -> dict[str, bool]:
-    return {name: which(name) is not None for name in ("claude", "codex", "opencode", "pi", "omp", "pythinker")}
-
-
-def layout_for_tests(environ: Mapping[str, str], home: Path) -> Layout:
-    """Test helper: build a layout without consulting the real home directory."""
-    return layout_from_env(
-        environ,
-        home=home,
-        applications=home / "Applications",
-        application_support=home / "Library" / "Application Support",
-    )
+    names = ("claude" if target == "claude-code" else target for target in TARGETS if target != "claude-desktop")
+    return {name: which(name) is not None for name in names}

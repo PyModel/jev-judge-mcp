@@ -7,6 +7,9 @@ module cannot read keeps the whole diff a string rather than guessing a path. Fa
 `GitDiffError`, whose message each caller wraps in its own refusal shape.
 """
 
+import codecs
+import os
+import re
 import subprocess
 import threading
 from pathlib import Path
@@ -21,6 +24,8 @@ here, not in `limits.py` (ADR-0080)."""
 
 _CANONICAL = (
     "--no-color",
+    "--no-relative",
+    "--submodule=short",
     "--no-ext-diff",
     "--no-textconv",
     "--no-renames",
@@ -49,7 +54,45 @@ def repo_root(cwd: Path) -> Path:
     return Path(run.stdout.strip()).resolve()
 
 
-def git_diff(repo: Path, rev_range: str, *, paths: tuple[str, ...] = ()) -> str:
+def scoped_range(repo: Path, rev_range: str) -> tuple[str, set[Path]]:
+    """Pin both endpoints and bind the path printed by Git to each possible repository origin."""
+    if not rev_range or rev_range.startswith("-") or "\x00" in rev_range:
+        raise GitDiffError("refusing that git range")
+    sep = "..." if "..." in rev_range else ".." if ".." in rev_range else ""
+    ends = rev_range.split(sep, 1) if sep else [rev_range]
+    origins = set[Path]() if sep else {Path(".")}  # a single revision compares to the working tree
+    ids: list[str] = []
+    for end in ends:
+        rev, colon, subtree = (end or "HEAD").partition(":")
+        if (
+            not rev
+            or rev.startswith("-")
+            or (colon and (sep == "..." or any(part in {".", "..", ""} for part in subtree.split("/") if subtree)))
+        ):
+            raise GitDiffError("refusing that git range")
+        commit = _git(
+            repo, "rev-parse", "--verify", "--quiet", "--end-of-options", rev.removesuffix("^{tree}") + "^{commit}"
+        )
+        if commit is not None and commit.returncode == 0:
+            oid = commit.stdout.strip()
+            if colon:
+                tree = _git(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{oid}:{subtree}")
+                if tree is None or tree.returncode:
+                    raise GitDiffError("refusing that git range")
+                oid = tree.stdout.strip()
+            ids.append(oid)
+            origins.add(Path(subtree))
+        else:
+            # A bare nonempty tree could be a subtree at any prefix. Only an empty tree
+            # contributes no paths and can therefore be accepted without origin information.
+            empty = _git(repo, "hash-object", "-t", "tree", "--stdin")
+            if colon or sep == "..." or empty is None or empty.returncode or rev != empty.stdout.strip():
+                raise GitDiffError("refusing that git range")
+            ids.append(rev)
+    return sep.join(ids), origins
+
+
+def git_diff(repo: Path, rev_range: str, *, paths: tuple[str, ...] = (), flags: tuple[str, ...] = ()) -> str:
     """`git diff <rev_range> [-- paths]` run in `repo`, read no further than the gate's budget.
 
     Refuses an empty range, a leading `-`, a NUL, and an end that does not name a commit or a tree:
@@ -62,15 +105,17 @@ def git_diff(repo: Path, rev_range: str, *, paths: tuple[str, ...] = ()) -> str:
     for end in _range_ends(rev_range):
         if not _names_a_tree(repo, end):
             raise GitDiffError("refusing that git range")
-    out = _bounded_diff(repo, [*_CANONICAL, rev_range, "--", *paths] if paths else [*_CANONICAL, rev_range])
+    out = _bounded_diff(repo, [*_CANONICAL, *flags, rev_range, "--", *paths])
     if not out.strip():
         raise GitDiffError("git diff was empty")
     return out
 
 
-def diff_argument(repo: Path, rev_range: str, *, paths: tuple[str, ...] = ()) -> str | list[dict[str, str]]:
+def diff_argument(
+    repo: Path, rev_range: str, *, paths: tuple[str, ...] = (), flags: tuple[str, ...] = ()
+) -> str | list[dict[str, str]]:
     """The range as jev_gate's `diff`: the file list, or the raw text when a header does not split."""
-    diff = git_diff(repo, rev_range, paths=paths)
+    diff = git_diff(repo, rev_range, paths=paths, flags=flags)
     files = split_unified(diff)
     return files if files is not None else diff
 
@@ -104,6 +149,7 @@ def _bounded_diff(repo: Path, args: list[str]) -> str:
     try:
         process = subprocess.Popen(  # noqa: S603 - fixed argv0; the range was checked above
             ["git", "-C", str(repo), "diff", *args],  # noqa: S607
+            env={name: value for name, value in os.environ.items() if name != "GIT_DIFF_OPTS"},
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -141,6 +187,7 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str] | None:
             ["git", "-C", str(cwd), *args],  # noqa: S607
             check=False,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             timeout=GIT_TIMEOUT_SECONDS,
         )
@@ -172,10 +219,23 @@ def _path_from_header(chunk: str) -> str | None:
     (`a/old b/new`) has no such symmetry: its `+++ b/` line names the new path when the content
     changed (git ends that line with a tab when the path holds spaces), else the last ` b/` stands.
     """
-    lines = chunk.splitlines()
+    lines = chunk.split("\n")
     first = lines[0]
     rest = first.removeprefix("diff --git ")
     path: str | None = None
+    if rest.startswith('"'):
+        # Git uses C quoting for arbitrary filename bytes; accept only its canonical escapes.
+        field = r'"((?:[^"\\]|\\(?:[abtnvfr"\\]|[0-3][0-7]{2}))*)"'
+        pair = re.fullmatch(field + " " + field, rest)
+        if pair is None:
+            return None
+        try:
+            left, right = (codecs.escape_decode(value.encode())[0].decode("utf-8") for value in pair.groups())
+        except (UnicodeError, ValueError):
+            return None
+        if not left.startswith("a/") or right != "b/" + left[2:]:
+            return None
+        path = right[2:]
     middle = len(rest) // 2
     if len(rest) % 2 == 1 and rest[middle] == " ":
         left, right = rest[:middle], rest[middle + 1 :]
@@ -190,6 +250,6 @@ def _path_from_header(chunk: str) -> str | None:
         if marker not in first:
             return None
         path = first.rsplit(marker, 1)[-1]
-    if not path or path.startswith("/") or ".." in Path(path).parts:
+    if not path or "\x00" in path or path.startswith("/") or ".." in Path(path).parts:
         return None
     return path

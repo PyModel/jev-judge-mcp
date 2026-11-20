@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, override
 
+import httpx
 from pydantic import RootModel
 
 from jev_judge_mcp.domain import JsonValue
@@ -19,15 +20,17 @@ from jev_judge_mcp.providers.base import (
     Evaluation,
     JevProvider,
     ProviderConnectionError,
+    ProviderDeliveryError,
     ProviderError,
     ProviderName,
+    bounded_response_hook,
     decode_body,
     origin_of,
     parse_envelope,
+    pre_send_timeout,
     refuse_credentials_in_url,
-    request_id_of,
 )
-from jev_judge_mcp.providers.retry import RetryPolicy
+from jev_judge_mcp.providers.retry import RetryPolicy, retry_after_seconds
 from jev_judge_mcp.serialize import stringify_compact
 
 if TYPE_CHECKING:
@@ -59,7 +62,7 @@ def sdk_importable() -> bool:
 
 
 async def _remember_headers(response: "httpx2.Response") -> None:
-    """The SDK returns the body only. Keep this response's headers for ``request_id_of``."""
+    """The SDK returns the body only. Keep its headers for envelope parsing."""
     _response_headers.set(response.headers)
 
 
@@ -132,7 +135,11 @@ class TypeSafeProvider(JevProvider):
             self._wrapper = httpx2.AsyncClient(
                 timeout=None,
                 transport=self._transport,
-                event_hooks={"request": [self._reject_cross_origin], "response": [_remember_headers]},
+                headers={"Accept-Encoding": "identity"},
+                event_hooks={
+                    "request": [self._reject_cross_origin],
+                    "response": [bounded_response_hook(httpx2.AsyncByteStream), _remember_headers],
+                },
             )
             self._client = AsyncTypeSafeClient(
                 api_key=self._api_key,
@@ -152,6 +159,7 @@ class TypeSafeProvider(JevProvider):
         import httpx2
         from typesafe_sdk import TypeSafeAPIConnectionError, TypeSafeAPIError
 
+        before_send = pre_send_timeout(timeout)
         token = _response_headers.set(None)
         try:
             try:
@@ -161,39 +169,39 @@ class TypeSafeProvider(JevProvider):
                     cast(Any, state),
                     cast(Any, questions),
                     model=model,
-                    # `timeout` is this attempt's deadline from `evaluate` (ADR-0057). `None` must wait, as
-                    # fetch does, for a direct `_send` caller: the SDK reads a bare `None` as its 10 s default.
-                    timeout=httpx2.Timeout(None) if timeout is None else timeout,
+                    timeout=httpx2.Timeout(timeout, connect=before_send, pool=before_send),
                     response_model=_RawBody,
                 )
             except TypeSafeAPIError as error:
-                # Only the 429 subclass carries `retry_after_ms`; other statuses have no hint.
-                retry_after_ms = cast("float | None", getattr(error, "retry_after_ms", None))
                 raise self._status_error(
                     error.status,
                     _body_text(error.body),
-                    retry_after=None if retry_after_ms is None else retry_after_ms / 1000,
+                    retry_after=retry_after_seconds(error.headers),
                 ) from None
             except TypeSafeAPIConnectionError as error:
                 # The SDK writes `Connection error: {cause}`; a reset's cause has an empty message.
                 cause = error.__cause__
-                if isinstance(error, TimeoutError) or cause is None or str(cause):
+                if isinstance(cause, httpx2.ConnectTimeout):
+                    raise httpx.ConnectTimeout(str(cause)) from None
+                if isinstance(cause, httpx2.PoolTimeout):
+                    raise httpx.PoolTimeout(str(cause)) from None
+                if isinstance(cause, httpx2.ConnectError):
+                    raise ProviderConnectionError(f"{self.label} request failed: {error}") from None
+                if isinstance(error, TimeoutError):
                     raise
-                # A reset is a transient connection failure even without a message (ADR-0057): the
-                # subclass keeps today's text and marks the error retryable.
-                raise ProviderConnectionError(f"{self.label} request failed: {error}{type(cause).__name__}") from None
+                detail = str(error) if cause is None or str(cause) else f"{error}{type(cause).__name__}"
+                raise ProviderDeliveryError(f"{self.label} request failed: {detail}") from None
             headers = _response_headers.get()
         finally:
             _response_headers.reset(token)
-        envelope = parse_envelope(response.root, self.label)
+        envelope = parse_envelope(response.root, self.label, headers)
         # The reference reports the requested model, never one from the body (`provider.ts:122`).
-        # A header-only id is kept, matching the compatible provider (ADR-0068).
         return Evaluation(
             envelope.answers,
             envelope.usage,
             self.name,
             model,
-            request_id=envelope.request_id or request_id_of({}, headers),
+            request_id=envelope.request_id,
         )
 
     @override

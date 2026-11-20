@@ -24,11 +24,12 @@ import json
 import os
 import platform
 import random
-import shutil
+import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterable, Mapping, Sequence
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -37,36 +38,38 @@ from typing import Any, cast
 from evals.ab import arms, ledger, outcomes, report, stream, tasks, unsafe
 from evals.ab.grade import old_rule_success, run_correct
 from evals.agent import (
-    PREFLIGHT_TIMEOUT_S,
     AgentCommand,
-    AgentPreflightError,
     AgentRunResult,
     AgentSetupError,
     container_boundary,
     exploration_paths,
+    read_relay_log,
     real_agent_dir,
     run_agent,
-    run_preflight,
     scoped_models,
     write_preflight,
 )
+from evals.artifacts import incomplete_message, read_artifact, read_records, write_json
 from evals.bench import pi
 from evals.confinement.launch import (
     CONTAINER_ADAPTER,
+    KEY_PREFIX,
     ConfinementError,
     ConfinementSpec,
     Upstream,
+    clear_leased_directory,
     confined_reference,
+    directory_lease,
     docker_available,
+    docker_run,
     exit_on_sigterm,
-    image_present,
     probe_provider,
     reap,
     run_confined,
 )
 from evals.isolation import IsolationInfrastructureError, postprocess
-from evals.spend import SpendLedger, agent_started, book_outcome
-from evals.study_runner import record_row, run_recorded, write_record
+from evals.spend import SpendLedger, agent_started, amount, reconciliation_notes
+from evals.study_runner import InfrastructureStop, record_row, recover_attempts, run_recorded, write_record
 
 LIVE_FLAG = "JEV_AB_LIVE"
 AGENTS = ("claude", "pi")
@@ -74,26 +77,22 @@ OUT = arms.REPO_ROOT / "evals" / "reports" / "agent-outcomes"
 REPORT = arms.REPO_ROOT / "evals" / "reports" / "agent-outcomes.md"
 SEED = 8
 REVIEW_TOOL = "mcp__harness__request_human_review"
-PINNED = ("jev_revision", "fixture_sha256", "agent", "agent_version", "held_constant", "hardware")
+PINNED = (
+    "wheel_sha256",
+    "lock_sha256",
+    "image_id",
+    "jev_revision",
+    "fixture_sha256",
+    "agent",
+    "agent_version",
+    "held_constant",
+    "hardware",
+)
 """Meta fields a resumed study must match exactly."""
 
 
 class StudyRefusedError(RuntimeError):
     pass
-
-
-class _InfrastructureStop(BaseException):
-    """Escapes `write_record` and `run_recorded`.
-
-    An infrastructure failure is not an `Exception` the study runner would book as an unfinished
-    agent run, and it is not a failed-agent result. The study books `incurred_usd` when the agent
-    already ran, then stops.
-    """
-
-    def __init__(self, reason: str, incurred_usd: float | None) -> None:
-        super().__init__(reason)
-        self.reason = reason
-        self.incurred_usd = incurred_usd
 
 
 @dataclass(frozen=True)
@@ -114,8 +113,6 @@ class Setup:
     """The grader's interpreter."""
     auth_provider: str = ""
     """The one auth.json provider entry the agent's model needs; empty copies no auth."""
-    server_python: str = ""
-    """The study venv interpreter the sandbox launcher wraps; empty is the offline dry-run shape."""
     timeout_s: float = arms.RUN_TIMEOUT_S
     confinement: ConfinementSpec | None = None
     """The broker + container boundary live runs use (ADR-0074); None is the offline dry run."""
@@ -170,49 +167,6 @@ def run_id(task_id: str, arm: str, repeat: int) -> str:
     return f"{task_id}.{arm}.r{repeat}"
 
 
-def preflight(setup: Setup, out: Path | None = None) -> AgentRunResult:
-    """One prompt through `run_agent`'s own env, before the first paid run of a study.
-
-    A preflight that never reaches the model refuses the batch and books nothing. When `out` is given,
-    the cost is written to `preflight.json` either way, so a report can add it and a rerun of a
-    finished study is not what records it. Only Claude gets the login-keychain link.
-    """
-    try:
-        result = run_preflight(
-            lambda config: [
-                *setup.binary,
-                *argv_tail(setup.agent, "Reply with the single word ok.", config, arms.SYSTEM_ADDENDUM),
-            ],
-            base_env=setup.base_env,
-            secret=setup.secret,
-            mcp_config={},
-            login_keychain=setup.agent == "claude",
-            parse=parser_for(setup.agent),
-            timeout_s=PREFLIGHT_TIMEOUT_S,
-            auth_provider=setup.auth_provider or None,
-        )
-    except AgentPreflightError as error:
-        if out is not None:
-            write_preflight(out, cost_usd=error.cost_usd, model=error.model)
-        raise StudyRefusedError(
-            f"{setup.agent} preflight could not reach its model ({error}); refusing the batch before any run is booked"
-        ) from error
-    if out is not None:
-        write_preflight(out, cost_usd=_usd(result), model=result.trace.model)
-    return result
-
-
-def _usd(result: AgentRunResult) -> float | None:
-    cost = result.trace.result_field("total_cost_usd")
-    if isinstance(cost, bool) or not isinstance(cost, int | float):
-        return None
-    return float(cost)
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
-
-
 def arm_spec(spec: ConfinementSpec, arm: str) -> ConfinementSpec:
     """The run's boundary, per arm: the without-Jev arm gets no TypeSafe upstream at all, so no
     in-container TypeSafe shim starts and its broker has no route to answer one — treatment
@@ -258,8 +212,7 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
             ) as run:
                 record = _record_inside(run_dir, run, rid, task, arm, repeat, setup, book, jev_log)
         except ConfinementError as error:
-            # The agent container did not start. No trace, no incurred cost, no failed-agent result.
-            raise _InfrastructureStop(str(error), None) from error
+            raise InfrastructureStop(str(error)) from error
     else:
         command = AgentCommand(
             argv=lambda config: [*setup.binary, *argv_tail(setup.agent, prompt, config, addendum)],
@@ -273,7 +226,6 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
                 sandbox=sandbox,
                 server_env=setup.server_env,
                 api_key=setup.secret if arm == "B" else "",
-                interpreter=setup.server_python or None,
             ),
             base_env=setup.base_env,
             secret=setup.secret,
@@ -420,12 +372,6 @@ def _outcome_record(
     return record_row(_RECORD_KEYS, values)
 
 
-def _incurred_usd(run: AgentRunResult, book: SpendLedger, jev_log: Path) -> float:
-    """The cost the agent already incurred, from its trace and the Jev log. Not the run bound unless
-    the agent reported no usable cost — that clamp is `SpendLedger.cost_of`, not a synthesized failure."""
-    return book.cost_of(run.trace.result_field("total_cost_usd"), _read_jsonl(jev_log)).total_usd
-
-
 def _record(
     rid: str,
     task: tasks.Task,
@@ -447,11 +393,17 @@ def _record(
             reference_ids=setup.reference_ids,
         )
     except IsolationInfrastructureError as error:
-        raise _InfrastructureStop(str(error), _incurred_usd(run, book, jev_log)) from error
+        incurred = amount(error.incurred_usd)
+        if incurred is None:
+            try:
+                incurred = book.cost_of(trace.result_field("total_cost_usd"), read_relay_log(jev_log)).total_usd
+            except (OSError, ValueError, RecursionError) as read_error:
+                error.add_note(f"Relay cost evidence could not be read: {type(read_error).__name__}")
+        raise InfrastructureStop(str(error), incurred) from error
     (run_dir / "diff.patch").write_text(graded.patch, encoding="utf-8")
     result = graded.grade
     protected = frozenset(tasks.protected_files())
-    calls = _read_jsonl(jev_log)
+    calls = read_relay_log(jev_log)
     reached = outcomes.reached_model(trace)
     chosen = outcomes.decision(trace.result_field("result"), task.judgment)
     cycles = outcomes.test_cycles(trace.tool_uses)
@@ -579,7 +531,7 @@ def failed_record(
             "decision": None,
             "decision_correct": None,
             "agent_cost_usd": run_bound,
-            "jev_cost_usd": 0.0,
+            "jev_cost_usd": None,
             "cost_usd": run_bound,
             "agent_cost_reported": False,
             "unsafe": [],
@@ -602,22 +554,35 @@ def schedule(
 
 def _load_book(
     setup: Setup, out: Path, *, repeats: int, seed: int
-) -> tuple[SpendLedger, list[tuple[tasks.Task, int, tuple[str, ...]]]]:
-    """The ledger after already-started runs are booked, and the plan those runs came from."""
+) -> tuple[SpendLedger, list[tuple[tasks.Task, int, tuple[str, ...]]], str | None]:
+    """Recover charges and check recorded outcomes before admitting another pair."""
     book = SpendLedger.load(out / "ledger.json", setup.policy or ledger.POLICIES[setup.agent])
     plan = schedule(setup.task_list, repeats, seed)
-    for task, repeat, order in plan:
-        for arm in order:
-            rid = run_id(task.id, arm, repeat)
-            if agent_started(out / rid):
-                book_outcome(book, rid, out / rid / "result.json")
-    return book, plan
+    records, incomplete = _records(out)
+    shortfall = recover_attempts(
+        book,
+        out,
+        (run_id(task.id, arm, repeat) for task, repeat, order in plan for arm in order),
+        records,
+        cost_key="cost_usd",
+    )
+    prior = incomplete_message(incomplete, out) if incomplete else shortfall
+    for row in records.values():
+        if row.get("failure_category") == "escape":
+            prior = prior or f"stopped: sandbox escape on {row['run_id']} (recorded earlier)"
+    return book, plan, prior
 
 
 def runs_remain(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int = SEED) -> bool:
     """True when a study call would launch at least one run. A finished study does not."""
-    book, plan = _load_book(setup, out, repeats=repeats, seed=seed)
-    return any(run_id(task.id, arm, repeat) not in book.runs for task, repeat, order in plan for arm in order)
+    book, plan, prior = _load_book(setup, out, repeats=repeats, seed=seed)
+    if prior:
+        return False
+    for task, repeat, order in plan:
+        pending = sum(run_id(task.id, arm, repeat) not in book.runs for arm in order)
+        if pending:
+            return book.can_start(pending)
+    return False
 
 
 def study(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int = SEED) -> str:
@@ -626,11 +591,9 @@ def study(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int =
     A recorded escape stops the study: the agent left its boundary, so nothing recorded after it is
     comparable until the escape is understood. The guard also fires on resume, before any new run.
     """
-    for path in sorted(out.glob("*/result.json")):
-        record = json.loads(path.read_text(encoding="utf-8"))
-        if record.get("failure_category") == "escape":
-            return f"stopped: sandbox escape on {record.get('run_id')} (recorded earlier)"
-    book, plan = _load_book(setup, out, repeats=repeats, seed=seed)
+    book, plan, prior = _load_book(setup, out, repeats=repeats, seed=seed)
+    if prior:
+        return prior
     for task, repeat, order in plan:
         pending = [arm for arm in order if run_id(task.id, arm, repeat) not in book.runs]
         if not pending:
@@ -640,19 +603,27 @@ def study(setup: Setup, out: Path, *, repeats: int = ledger.REPEATS, seed: int =
         for arm in pending:
             rid = run_id(task.id, arm, repeat)
             sys.stderr.write(f"run {setup.agent} {rid} (spent ${book.spent:.2f})\n")
-            try:
-                record = run_recorded(
-                    book,
-                    rid,
-                    out / rid / "result.json",
-                    lambda task=task, arm=arm, repeat=repeat: run_one(task, arm, repeat, setup, book, out),
-                )
-            except _InfrastructureStop as stop:
-                if stop.incurred_usd is not None and rid not in book.runs:
-                    book.record(rid, stop.incurred_usd)
-                return f"stopped: isolation infrastructure: {stop.reason}"
-            if isinstance(record, Mapping) and record.get("failure_category") == "escape":
+            record = run_recorded(
+                book,
+                rid,
+                out / rid / "result.json",
+                lambda task=task, arm=arm, repeat=repeat: run_one(task, arm, repeat, setup, book, out),
+            )
+            if isinstance(record, str):
+                return record
+            if record.get("failure_category") == "escape":
                 return f"stopped: sandbox escape on {rid}"
+    records, incomplete = _records(out)
+    if incomplete:
+        return incomplete_message(incomplete, out)
+    missing = [
+        run_id(task.id, arm, repeat)
+        for task, repeat, order in plan
+        for arm in order
+        if out / run_id(task.id, arm, repeat) / "result.json" not in records
+    ]
+    if missing:
+        return "incomplete result records: " + ", ".join(missing)
     return f"all {len(plan)} pairs recorded"
 
 
@@ -672,18 +643,10 @@ def container_env(agent: str) -> dict[str, str]:
     return env
 
 
-def derived_records(out: Path) -> list[dict[str, Any]]:
-    """The records with the failure category and the exploration evidence derived from the kept
-    grade fields and streams, not as stored: a canary fix re-renders a finished study without a
-    rerun, and the category keeps one owner (`outcomes.failure_category`). An escape stays an
-    escape — that is the voided-study stop, not a derived value."""
-    box = container_boundary(container_env(_meta_agent(out)))
-    stored = {str(record.get("run_id")): record for record in load_records(out)}
+def _derive(stored: Mapping[Path, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recompute failure categories and exploration from saved evidence, preserving escapes."""
     derived: list[dict[str, Any]] = []
-    for result_path in sorted(out.glob("*/*/result.json")):
-        record = stored.get(result_path.parent.name)
-        if record is None:
-            continue
+    for result_path, record in stored.items():
         row = dict(record)
         if row.get("failure_category") != "escape":
             added = cast(list[Mapping[str, Any]], row.get("added_tests") or [])
@@ -700,39 +663,83 @@ def derived_records(out: Path) -> list[dict[str, Any]]:
             )
         stream = result_path.parent / "stream.jsonl"
         if stream.is_file():
+            box = container_boundary(container_env(record["agent"]))
             row["exploration"] = list(exploration_paths(stream.read_text(encoding="utf-8"), box))
         derived.append(row)
     return derived
 
 
-def _meta_agent(out: Path) -> str:
-    """The agent a study's meta was pinned for; `pi` when there is no meta to read."""
-    try:
-        return next(iter(load_meta(out)))
-    except (OSError, json.JSONDecodeError, StopIteration):
-        return "pi"
+def _records(out: Path, *, all_agents: bool = False) -> tuple[dict[Path, dict[str, Any]], list[Path]]:
+    return read_records(
+        out.glob("*/*/result.json" if all_agents else "*/result.json"),
+        required=("run_id", "agent", "task", "arm", "status"),
+        valid=lambda r: (
+            r["agent"] in AGENTS
+            and r["arm"] in arms.ARMS
+            and type(r.get("repeat")) is int
+            and r["repeat"] > 0
+            and r["run_id"] == run_id(r["task"], r["arm"], r["repeat"])
+            and {"measurement", "success", "final_tests_passed", "jev_tool_called", "decision", "decision_correct"}
+            <= r.keys()
+            and amount(r.get("wall_s")) is not None
+            and all(type(r.get(k)) is int for k in ("tool_calls", "jev_calls", "test_cycles", "retries"))
+            and isinstance(r.get("tokens"), dict)
+            and type(r["tokens"].get("total")) is int
+            and "wrong_branches" in r
+            and (
+                r["wrong_branches"] is None
+                or (
+                    isinstance(r["wrong_branches"], list)
+                    and all(isinstance(v, str) for v in cast(list[object], r["wrong_branches"]))
+                )
+            )
+            and (
+                r.get("added_tests") is None
+                or (
+                    isinstance(r["added_tests"], list)
+                    and all(isinstance(v, dict) for v in cast(list[object], r["added_tests"]))
+                )
+            )
+        ),
+    )
 
 
 def load_records(out: Path) -> list[dict[str, Any]]:
-    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(out.glob("*/*/result.json"))]
+    return list(_records(out, all_agents=True)[0].values())
 
 
 def load_meta(out: Path) -> dict[str, dict[str, Any]]:
-    return {p.parent.name: json.loads(p.read_text(encoding="utf-8")) for p in sorted(out.glob("*/meta.json"))}
+    return {p.parent.name: _read_meta(p) for p in sorted(out.glob("*/meta.json"))}
 
 
-def _git_head() -> str:
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=arms.REPO_ROOT, capture_output=True, text=True, check=False
-    ).stdout.strip()
-    dirty = subprocess.run(
-        ["git", "status", "--porcelain", "--", "src", "evals"],
-        cwd=arms.REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    ).stdout.strip()
-    return f"{head}{'+dirty' if dirty else ''}"
+def source_revision() -> str:
+    def git(*args: str) -> str:
+        try:
+            return subprocess.run(
+                ["git", *args], cwd=arms.REPO_ROOT, capture_output=True, text=True, check=True, timeout=15
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError) as error:
+            raise StudyRefusedError("cannot verify the study source with git") from error
+
+    head = git("rev-parse", "--verify", "HEAD")
+    if not re.fullmatch(r"(?:[a-f0-9]{40}|[a-f0-9]{64})", head):
+        raise StudyRefusedError("git returned an invalid revision")
+    paths = (
+        "src",
+        "evals",
+        "docker",
+        "pyproject.toml",
+        "uv.lock",
+        "Makefile",
+        "README.md",
+        "LICENSE",
+        "THIRD_PARTY_NOTICES.md",
+        ".python-version",
+        ":(exclude)evals/reports/**",
+    )
+    if git("status", "--porcelain=v1", "--untracked-files=all", "--", *paths):
+        raise StudyRefusedError("study inputs have uncommitted changes")
+    return head
 
 
 def held_constant(agent: str, timeout_s: float, model: str = "") -> dict[str, str]:
@@ -770,9 +777,22 @@ def held_constant(agent: str, timeout_s: float, model: str = "") -> dict[str, st
     }
 
 
-def meta_for(agent: str, agent_version: str, timeout_s: float, model: str = "") -> dict[str, Any]:
+def meta_for(
+    agent: str,
+    agent_version: str,
+    timeout_s: float,
+    model: str = "",
+    *,
+    revision: str,
+    wheel_sha256: str,
+    lock_sha256: str,
+    image_id: str,
+) -> dict[str, Any]:
     return {
-        "jev_revision": _git_head(),
+        "jev_revision": revision,
+        "wheel_sha256": wheel_sha256,
+        "lock_sha256": lock_sha256,
+        "image_id": image_id,
         "fixture_sha256": tasks.fixture_digest(),
         "agent": agent,
         "agent_version": agent_version,
@@ -781,27 +801,132 @@ def meta_for(agent: str, agent_version: str, timeout_s: float, model: str = "") 
     }
 
 
-def pin_meta(out: Path, current: Mapping[str, Any]) -> None:
+def _read_meta(path: Path) -> dict[str, Any]:
+    try:
+        stored: object = json.loads(read_artifact(path).decode("utf-8"))
+    except (ValueError, OSError, RecursionError) as error:
+        raise StudyRefusedError(f"Unreadable study metadata at {path}") from error
+    if not isinstance(stored, dict):
+        raise StudyRefusedError(f"Invalid study metadata at {path}")
+    return cast(dict[str, Any], stored)
+
+
+def pin_meta(out: Path, current: Mapping[str, Any], *, check_only: bool = False) -> None:
     """Write the study's meta on its first run; refuse a resume whose pinned fields differ."""
     path = out / "meta.json"
-    if path.exists():
-        stored = json.loads(path.read_text(encoding="utf-8"))
-        changed = [key for key in PINNED if stored.get(key) != current.get(key)]
+    if path.exists() or path.is_symlink():
+        stored = _read_meta(path)
+        changed = [key for key in PINNED if key not in current or stored.get(key) != current[key]]
         if changed:
             raise StudyRefusedError(
                 f"{out} was recorded under a different {', '.join(changed)}; pairs must not span two setups. "
                 "Move the directory aside to start a new study"
             )
         return
-    out.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({**current, "started": datetime.date.today().isoformat()}, indent=2) + "\n", "utf-8")
+    if (out / "ledger.json").exists() or any(agent_started(run_dir) for run_dir in out.glob("*")):
+        raise StudyRefusedError(
+            f"{out} contains historical runs without comparable metadata; start a new study directory"
+        )
+    if not check_only:
+        out.mkdir(parents=True, exist_ok=True)
+        write_json(path, {**current, "started": datetime.date.today().isoformat()})
 
 
-def _which(name: str, path: str) -> str:
-    found = shutil.which(name, path=path)
-    if found is None:
-        raise StudyRefusedError(f"{name} not found on PATH")
-    return found
+def _image_id(image: str) -> str:
+    try:
+        probe = docker_run(["docker", "image", "inspect", "--format", "{{.Id}}", "--", image], check=False, timeout=30)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise StudyRefusedError("cannot inspect the local confined agent image") from error
+    image_id = probe.stdout.strip()
+    if probe.returncode or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+        raise StudyRefusedError("cannot identify the local confined agent image; run `make confinement-image`")
+    return image_id
+
+
+def study_provenance(image_id: str, agent: str, model: str) -> dict[str, Any]:
+    revision = source_revision()
+    script = (
+        "import json,subprocess,sys; from importlib.metadata import distribution; "
+        "origin=json.loads(distribution('jev-judge-mcp').read_text('direct_url.json')); "
+        "version=subprocess.check_output([sys.argv[1], '--version'], text=True, timeout=20).strip(); "
+        "print(json.dumps([origin['archive_info']['hashes']['sha256'], version]))"
+    )
+    try:
+        with tempfile.TemporaryDirectory() as staging:
+            wheel = arms.digest(arms.ensure_wheel(Path(staging)))
+        lock = arms.digest(arms.REPO_ROOT / "uv.lock")
+        probe = docker_run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--pull",
+                "never",
+                "--network",
+                "none",
+                "--read-only",
+                "--tmpfs",
+                "/scratch",
+                "--env",
+                "TMPDIR=/scratch",
+                "--env",
+                "HOME=/scratch",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
+                "--entrypoint",
+                "python3",
+                image_id,
+                "-I",
+                "-c",
+                script,
+                agent,
+            ],
+            check=False,
+            timeout=45,
+        )
+        if probe.returncode:
+            raise StudyRefusedError("cannot verify the wheel and agent version inside the confined image")
+        identity: object = json.loads(probe.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise StudyRefusedError("could not verify study build provenance") from error
+    if not isinstance(identity, list) or len(cast(list[object], identity)) != 2:
+        raise StudyRefusedError("invalid confined image provenance")
+    installed, version = cast(list[object], identity)
+    if installed != wheel or not isinstance(version, str) or not version.strip() or source_revision() != revision:
+        raise StudyRefusedError("study source, agent or installed wheel is not comparable; rebuild the confined image")
+    return meta_for(
+        agent,
+        version,
+        arms.RUN_TIMEOUT_S,
+        model,
+        revision=revision,
+        wheel_sha256=wheel,
+        lock_sha256=lock,
+        image_id=image_id,
+    )
+
+
+@contextmanager
+def private_secrets() -> Generator[Path]:
+    path = Path(tempfile.mkdtemp(prefix=KEY_PREFIX))
+    with ExitStack() as resources:
+        primary: BaseException | None = None
+        try:
+            resources.enter_context(directory_lease(path))
+            yield path
+        except BaseException as error:
+            primary = error
+            raise
+        finally:
+            try:
+                clear_leased_directory(path)
+            except OSError:
+                message = f"could not remove private credential directory {path}; remove it locally"
+                if primary is None:
+                    raise StudyRefusedError(message) from None
+                primary.add_note(message)
 
 
 EVAL_IMAGE = "jev-eval-agent:latest"
@@ -810,23 +935,19 @@ agent CLIs. Build it with `make confinement-image`."""
 
 
 def _confinement(
-    environ: Mapping[str, str], agent: str, base_env: Mapping[str, str], auth_provider: str, out: Path
-) -> tuple[ConfinementSpec, Path, str]:
+    environ: Mapping[str, str], agent: str, base_env: Mapping[str, str], auth_provider: str, resources: ExitStack
+) -> tuple[ConfinementSpec, str]:
     """The broker + container boundary live runs use (ADR-0074), plus the scoped provider key
     file the study must delete when it ends. Refuses (never bypasses) when a piece is missing."""
     unavailable = docker_available()
     if unavailable:
         raise StudyRefusedError(f"live runs are confined (ADR-0074) and need Docker: {unavailable}")
     image = environ.get("JEV_EVAL_IMAGE", EVAL_IMAGE)
-    if not image_present(image):
-        raise StudyRefusedError(f"the confined agent image {image} is not built; run `make confinement-image`")
+    image = _image_id(image)
     typesafe_key_file = environ.get("JEV_STUDY_KEY_FILE", "")
     if not typesafe_key_file or not Path(typesafe_key_file).is_file():
         raise StudyRefusedError("JEV_STUDY_KEY_FILE must name the study key file for the broker's read-only mount")
     upstreams: list[Upstream] = [Upstream.typesafe(typesafe_key_file)]
-    scoped_dir = Path(tempfile.mkdtemp(prefix="jev-ab-secrets-"))
-    scoped_dir.chmod(0o700)
-    provider_key_file = scoped_dir / "provider.key"
     provider_secret = ""
     if agent == "pi":
         real = real_agent_dir(base_env)
@@ -852,8 +973,11 @@ def _confinement(
                 f"the confined pi arm needs an API-key auth.json entry for `{auth_provider}` "
                 "(an OAuth login cannot cross the container boundary)"
             )
-        provider_key_file.write_text(key + "\n", encoding="utf-8")
-        provider_key_file.chmod(0o600)
+        scoped_dir = resources.enter_context(private_secrets())
+        provider_key_file = scoped_dir / "provider.key"
+        fd = os.open(provider_key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as provider_file:
+            provider_file.write(key + "\n")
         provider_secret = key
         upstreams.append(
             Upstream.provider(
@@ -888,7 +1012,7 @@ def _confinement(
         uid=os.getuid(),
         gid=os.getgid(),
     )
-    return spec, scoped_dir, provider_secret
+    return spec, provider_secret
 
 
 def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = ledger.REPEATS) -> str:
@@ -897,6 +1021,8 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
     # The policy is read before anything is built or booked: a paid remote pi model without an
     # explicit run ceiling, or a bad JEV_AB_MAX_USD, refuses the whole invocation, and the lowered
     # cap is what every later can_start checks against and what the ledger persists.
+    if agent not in AGENTS:
+        raise StudyRefusedError(f"unknown study agent {agent!r}")
     model = environ.get("JEV_AB_MODEL", pi.PI_MODEL)
     try:
         policy = ledger.live_policy(agent, environ, model=model, default_model=pi.PI_MODEL)
@@ -906,44 +1032,31 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
         key = arms.study_key(environ)
     except ValueError as error:
         raise StudyRefusedError(str(error)) from error
-    if agent not in AGENTS:
-        raise StudyRefusedError(f"unknown agent {agent!r}; one of {', '.join(AGENTS)}")
     base_env = arms.agent_env(environ)
-    agent_path = base_env["PATH"]
-    binary = _which(agent, agent_path)
-    python3 = _which("python3", agent_path)
-    if agent == "pi":
-        try:
-            pi.adapter_path()
-        except pi.AdapterMissing as error:
-            raise StudyRefusedError(str(error)) from error
-    version = subprocess.run([binary, "--version"], capture_output=True, text=True, check=False).stdout.strip()
     agent_out = out / agent
-    interpreter = arms.study_venv(Path(tempfile.gettempdir()) / f"jev-study-{_git_head()[:12]}", arms.ensure_wheel())
     auth_provider = model.split("/")[0] if agent == "pi" else ""
     setup = Setup(
         agent=agent,
-        binary=[binary],
+        binary=[agent],
         server_env={"JEV_PROVIDER": "typesafe", "JEV_MCP_MODEL": arms.JEV_MODEL},
         base_env=base_env,
         secret=key,
-        python3=python3,
+        python3="python3",
         auth_provider=auth_provider,
-        server_python=str(interpreter),
         model=model,
         policy=policy,
     )
-    # A finished study has nothing left to launch: it pins and re-renders with no boundary built,
-    # so a resume or a report pass never needs Docker.
+    # With no launchable run, no canary or image probe is needed.
     if not runs_remain(setup, agent_out, repeats=repeats):
-        pin_meta(agent_out, meta_for(agent, version, arms.RUN_TIMEOUT_S, model))
         return study(setup, agent_out, repeats=repeats)
     # The confinement boundary is how live runs execute (ADR-0074); the macOS sandbox path stays
     # the offline dry-run shape only. A killed earlier run's orphans go first (F5).
-    reap()
-    spec, scoped_dir, provider_secret = _confinement(environ, agent, base_env, auth_provider, out)
-    setup = replace(setup, confinement=spec, provider_secret=provider_secret)
-    try:
+    with ExitStack() as resources:
+        spec, provider_secret = _confinement(environ, agent, base_env, auth_provider, resources)
+        setup = replace(setup, confinement=spec, provider_secret=provider_secret)
+        current = study_provenance(spec.agent_image, agent, model)
+        pin_meta(agent_out, current, check_only=True)
+        reap()
         # Reference ids, once, in the image, before any run is booked. Each confined grade receives
         # this immutable input and does not recompute it on the host (ADR-0074).
         ids = {task.id: confined_reference(spec.agent_image, task.id) for task in setup.task_list}
@@ -959,14 +1072,22 @@ def live(environ: Mapping[str, str], out: Path, *, agent: str, repeats: int = le
                 f"confined preflight could not reach the model provider through the broker ({detail}); "
                 "refusing the batch before any run is booked"
             )
-        pin_meta(agent_out, meta_for(agent, version, arms.RUN_TIMEOUT_S, model))
+        pin_meta(agent_out, current)
         return study(setup, agent_out, repeats=repeats)
-    finally:
-        shutil.rmtree(scoped_dir, ignore_errors=True)
 
 
 def write_report(out: Path, path: Path = REPORT) -> str:
-    text = report.render(derived_records(out), load_meta(out))
+    rows, incomplete = _records(out, all_agents=True)
+    text = report.render(_derive(rows), load_meta(out))
+    notes = [incomplete_message(incomplete, out)] if incomplete else []
+    for agent in AGENTS:
+        directory = out / agent
+        agent_rows = {path: row for path, row in rows.items() if path.parent.parent == directory}
+        malformed = [path for path in incomplete if path.parent.parent == directory]
+        for note in reconciliation_notes(directory, agent_rows, malformed, cost_key="cost_usd"):
+            notes.append(f"{agent}: {note}")
+    if notes:
+        text += "\n" + "\n".join(notes) + "\n"
     path.write_text(text, encoding="utf-8")
     return text
 
@@ -985,6 +1106,8 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] = os.envi
         write_report(OUT)
     except (StudyRefusedError, AgentSetupError, ConfinementError) as refusal:
         sys.stderr.write(f"refused: {refusal}\n")
+        for note in getattr(refusal, "__notes__", ()):
+            sys.stderr.write(f"{note}\n")
         return 2
     sys.stderr.write(f"report: {REPORT}\n")
     return 0

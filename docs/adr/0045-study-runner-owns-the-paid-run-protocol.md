@@ -10,11 +10,28 @@ ADR-0026 put the agent run, the relay, and the spend ledger in one place each, a
 
 - `write_record` writes the success record. On `Exception` it writes the failed record and re-raises. It does not catch `KeyboardInterrupt`, `SystemExit`, or `CancelledError`.
 - `record_row` builds a record from one key sequence. Each package has one sequence, the success record's keys, and fills it for both outcomes. A missing or extra key raises. The failed record does not keep its own key list.
-- `run_recorded` books once. `KeyboardInterrupt` and `SystemExit` call `book_outcome`, which reads `cost_usd`. Success books `record[cost_key]`. The A/B study uses `cost_usd`. The bench uses `jev_cost_usd`, because its dollar cap does not include agent spend. `Exception` types passed as `file_cost` book that field from the written file and re-raise; the bench passes `HarnessMismatchError` and `WrongModelError`. `stop` returns a reason after the same booking instead of re-raising; the bench uses it for `AuthRejected` and `ServerUnreachable`, with `file_default=0` when the field is missing. Any other `Exception` calls `record_unfinished` (the run bound) and does not read the file. `CancelledError` is not caught and is not booked.
-- Resume still calls `book_outcome` before `can_start`. That call is the money rule, not a second handler.
+- `run_recorded` books the selected cost once. A/B selects `cost_usd`. The bench selects `jev_cost_usd` because its cap covers only Jev spend. A finite, nonnegative price books its recorded value, including an explicit zero. A missing or invalid price reserves the full per-run bound.
+- Success uses the returned record. On `KeyboardInterrupt`, `SystemExit`, or a named `file_cost` exception, the runner reads the selected cost from the saved result and re-raises. The bench uses `file_cost` for `HarnessMismatchError` and `WrongModelError`. A rejected key or unreachable provider uses the same booking rule and returns a stop reason. Other ordinary exceptions book the full bound. Cancellation propagates unbooked.
+- Before scheduling new paid work, each study reconciles previously started attempts with the ledger. The bench validates the saved results and reserves at least the bound for an unusable row. If a historical booking is too small to cover the required charge, the bench stops for reconciliation.
 
 ## Consequences
 
-- Ledger amounts and result records are unchanged. A post-processing failure is still charged the run bound. A harness mismatch, wrong model, rejected key, or unreachable provider is still charged the bench's written `jev_cost_usd`, or 0 when that field is absent. The A/B study still charges `cost_usd`.
+- An interruption between result publication and ledger booking preserves the same charge on recovery. Bench grading failures record unknown spend as `null`. On recovery, older grading failures with a placeholder zero reserve the run bound.
 - No parity surface. `evals/relay.py` and `evals/agent.py` are unchanged.
 - This amends ADR-0026: the protocol around the shared agent run and ledger has one owner. Grading, gates, and the fields inside a row stay in each caller.
+
+## Amendment 2026-11-19: account for a launch before capture finishes
+
+- Both agent launchers durably publish `agent.started` before capture, syncing the marker and
+  its directory entries. A crash after that handoff leaves a chargeable attempt even if the
+  transcript never appears. Recovery still recognizes transcripts and results from older runs.
+- Both studies use `study_runner` to recover a started attempt once and exclude it from scheduling.
+  A validated result supplies the selected finite charge, including a measured zero. A missing
+  charge reserves the bound. An invalid result reserves at least the bound and can only raise
+  that amount with a finite charge whose run ID matches the attempt. Existing bookings below
+  the charge supported by a valid result stop the study for reconciliation.
+- An infrastructure stop carries a measured charge when one is available. Otherwise the runner
+  uses the saved result or the bound after launch, and leaves failures before the launch handoff
+  unbooked. It stops without synthesizing an agent failure. A/B failure records use `null` for
+  unmeasured Jev spend.
+- A/B reads pinned metadata for resume and reporting through the bounded artifact reader.

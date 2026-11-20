@@ -1,6 +1,6 @@
 """Triplet analysis over recorded runs. Only items with A, B, and C are summarized.
 
-A server failure is not an arm result and cannot complete a triplet. Arm C's use-gate miss voids its
+A provider failure, harness mismatch, or model pin failure invalidates the triplet. Arm C's use-gate miss voids its
 answer. Arm B's "did not call Jev" does not: the answer is still scored (ADR-0036). `per_tool` adds
 each tool's own L3 scorer over the wrapped answers of labeled items. Wall time is the per-arm median,
 p90, and p95, plus the paired differences B minus A and C minus A.
@@ -12,27 +12,39 @@ from typing import Any, cast
 
 from evals.bench import answer, gate
 from evals.bench.items import Item
-from evals.bench.ledger import ARMS
+from evals.bench.ledger import ARMS, POLICY
 from evals.bench.stats import percentile, sign_test
 from evals.scorers.fields import Json
 from evals.scorers.tools import SCORERS, Example
+from evals.spend import amount
 
 Record = Mapping[str, Any]
 Triplet = tuple[Record, Record, Record]
 
 
+def terminal_reason(record: Record) -> str | None:
+    """Honor the persisted stop, including the underlying evidence in pre-stop-status rows."""
+    status = str(record.get("status", ""))
+    if record.get("server_failure") or status.startswith("server_failure:"):
+        return f"stopped: provider failure on {record['run_id']}; not an arm result"
+    if status.startswith(("blocked:", "stopped:")):
+        return status
+    if record.get("cross_check") is not None:
+        return f"stopped: harness mismatch: {record['cross_check']}"
+    wrong = gate.wrong_models(record.get("jev_calls") or [])
+    if wrong:
+        return f"stopped: wrong Jev model: {', '.join(wrong)}"
+    return None
+
+
 def complete_triplets(records: Iterable[Record]) -> dict[str, Triplet]:
-    """`{item: (A, B, C)}` for items whose three arms are recorded and none is a server failure."""
+    """`{item: (A, B, C)}` for items whose three arms are recorded and none triggered a study stop."""
     by_item: dict[str, dict[str, Record]] = {}
     for record in records:
-        if record.get("server_failure"):
+        if terminal_reason(record) is not None:
             continue
         by_item.setdefault(str(record["item"]), {})[str(record["arm"])] = record
-    return {
-        item: (arms["A"], arms["B"], arms["C"])
-        for item, arms in by_item.items()
-        if set(ARMS) <= set(arms) and not any(arms[arm].get("server_failure") for arm in ARMS)
-    }
+    return {item: (arms["A"], arms["B"], arms["C"]) for item, arms in by_item.items() if set(ARMS) <= set(arms)}
 
 
 def _spread(values: list[float]) -> dict[str, float | None]:
@@ -62,13 +74,15 @@ def headline(triplets: Mapping[str, Triplet]) -> dict[str, Any]:
     columns = [[triplet[index] for triplet in triplets.values()] for index in range(3)]
     walls = [[float(record["wall_s"]) for record in column] for column in columns]
     result: dict[str, Any] = {"triplets": len(triplets)}
-    for arm, samples in zip(ARMS, walls, strict=True):
+    for arm, samples, arm_records in zip(ARMS, walls, columns, strict=True):
         spread = _spread(samples)
         result[f"wall_{arm}_median_s"] = spread["median"]
         result[f"wall_{arm}_p90_s"] = spread["p90"]
         result[f"wall_{arm}_p95_s"] = spread["p95"]
-        result[f"jev_usd_{arm}"] = sum(float(record.get("jev_cost_usd") or 0) for record in columns[ARMS.index(arm)])
-        called = sum(called_jev(record) for record in columns[ARMS.index(arm)])
+        costs = [amount(record.get("jev_cost_usd")) for record in arm_records]
+        result[f"jev_usd_{arm}"] = sum(cost for cost in costs if cost is not None)
+        result[f"jev_reserve_usd_{arm}"] = costs.count(None) * POLICY.run_bound_usd
+        called = sum(called_jev(record) for record in arm_records)
         result[f"called_jev_{arm}"] = called
         result[f"called_jev_share_{arm}"] = called / len(columns[0]) if columns[0] else None
     if walls[0]:
@@ -91,11 +105,11 @@ def _recorded_answer(record: Record) -> answer.Answer | None:
     """The parsed answer, or None when the run cannot be scored.
 
     Arm C's use-gate miss voids the answer. Arm B's "did not call Jev" and "called Jev, no answer"
-    do not. A wrong Jev model voids whichever arm received it.
+    do not. Terminal study errors have already been excluded from the triplets.
     """
     forced_miss = record.get("arm") == "C" and record.get("gate") is not None
-    failed = record["status"] != "ok" or forced_miss or record.get("cross_check") is not None
-    if failed or gate.wrong_models(record.get("jev_calls") or []):
+    failed = record["status"] != "ok" or forced_miss
+    if failed:
         return None
     given = record["answer"]
     return tuple(cast(list[str], given)) if isinstance(given, list) else cast(str | None, given)

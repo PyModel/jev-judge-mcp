@@ -13,7 +13,7 @@
 
 </div>
 
-An MCP server that gives your coding agent fifteen judgment tools backed by TypeSafe's Jev model. The agent hands a tool some evidence and a question it can enumerate: is this claim supported, is this page safe to read, which of these files answers the question, did this patch finish the task. Jev answers with probabilities, usually in under a second (median 464.6 ms round trip in the recorded bench), for about $0.025 per 1,000 decisions on the recorded classify run — and on that benchmark every answer the policy auto-accepted was correct, with the misses routed to review instead of through. Policy turns the probabilities into one of three actions: `auto` (proceed), `review` (check it another way), or `escalate` (stop). The numbers and their sources: [Measured results](#measured-results).
+An MCP server that gives your coding agent fifteen judgment tools backed by TypeSafe's Jev model. The agent hands a tool some evidence and a question it can enumerate: is this claim supported, is this page safe to read, which of these files answers the question, did this patch finish the task. Jev answers with probabilities, usually in under a second (median 464.6 ms round trip in the recorded bench), for about $0.025 per 1,000 decisions on the recorded classify run — and on that benchmark every answer the policy auto-accepted was correct, with the misses routed to review instead of through. Policy turns the probabilities into one of three actions: `auto` (act on the verdict), `review` (check it another way), or `escalate` (stop). The numbers and their sources: [Measured results](#measured-results).
 
 Use it for checks that have a fixed set of answers. When the step needs new text, code, or options you cannot list, the agent should write it itself.
 
@@ -50,11 +50,17 @@ That extra is only for running the server. Development and `make typecheck` need
 
 Running `install` from an unreleased clone without `--from-checkout`? It prints a note that the pinned PyPI build does not include your local changes, and points here. The post-write check then exercises the published build, not your tree.
 
-Installed from a clone earlier? One plain re-run of `install` rewrites the entries this installer owns to the version-pinned PyPI spec — that is the whole migration. Entries the installer does not own are left alone.
+To migrate a previous checkout install, rerun the installer and select the same agents:
+
+```sh
+uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install
+```
+
+It updates each installer-owned entry to `jev-judge-mcp[typesafe]==<installed version>` and preserves foreign entries. One post-write check covers the shared launch command across all selected agents and may download the pinned version from PyPI. If the check fails, the command exits non-zero and `install --remove` can still remove the entry.
 
 Restart your agent. The tools show up as `jev_verify`, `jev_gate`, and so on (`mcp__jev__*` in Claude Code).
 
-`setup` reads the key from `TYPESAFE_API_KEY`, or asks for it at a hidden prompt. It never takes the key as an argument, so the key stays out of your shell history. It makes one live call to check the key and writes nothing if TypeSafe rejects it. A good key goes to `~/.config/jev-mcp/key`, readable only by you. The server uses that file whenever `TYPESAFE_API_KEY` is unset, so agents you start without exporting the key still work. When the variable is set, it wins.
+`setup` reads the key from `TYPESAFE_API_KEY`. If the variable is unset or empty, it asks at a hidden prompt. It never takes the key as an argument, so the key stays out of your shell history. It makes one live call to check the key and writes nothing if TypeSafe rejects it. A good key goes to `~/.config/jev-mcp/key`, readable only by you. The server uses that file whenever `TYPESAFE_API_KEY` is unset or empty, so agents you start without exporting the key still work. A non-empty key in the variable takes precedence.
 
 `install` finds the agents on your machine, shows what it will change, and asks before writing. It supports Claude Code, Claude Desktop, Codex (CLI and the ChatGPT app), Cursor, OpenCode, Pi, omp, and Pythinker.
 
@@ -64,7 +70,7 @@ uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install -a claude-code    # o
 uvx --from 'jev-judge-mcp[typesafe]' jev-judge-mcp install --remove    # undo what install wrote
 ```
 
-Terminal agents get a reference to `TYPESAFE_API_KEY`, never the key itself. Desktop apps don't see your shell's environment. Claude Desktop (macOS only) is skipped unless you pass `--desktop-key`, which writes the key into that app's config file. The same flag writes the key into the Codex and Pythinker files when the ChatGPT or Pythinker desktop app shares them; without it, `install` says that app has no key. The installer warns if a file holding the key ends up readable by other users. Pi also needs its MCP adapter first: `pi install npm:pi-mcp-adapter`.
+Terminal agents get a reference to `TYPESAFE_API_KEY`, never the key itself. Desktop apps don't see your shell's environment. Creating a Claude Desktop entry (macOS only) requires `--desktop-key`, which writes the key into that app's config file. Migrating an owned entry keeps its existing key. The same flag writes the key into the Codex and Pythinker files when the ChatGPT or Pythinker desktop app shares them; without it, `install` says that app has no key. The installer warns if a file holding the key ends up readable by other users. Pi also needs its MCP adapter first: `pi install npm:pi-mcp-adapter`.
 
 </details>
 
@@ -213,7 +219,7 @@ enumerated into bounded options; or when the same unchanged decision was already
 | `jev_extract` | Your regex proposes candidates, Jev picks, the value comes back verbatim (versions, prices, dates, IDs) | 50,000 units per document, ≤32 fields |
 | `jev_score` | Grade severity or risk on your own ordered rubric; threshold the level, never interpolate a magnitude between levels | 2–10 levels |
 | `jev_file_judge` | Judge a file without reading it: the server reads the path as state, you get the typed answer, the bytes never enter your context | 100,000 units per file, refused over |
-| `jev_ask` | Your own questions (noul, choice, score) over one composed state: framing text, server-read files, a gate-judged command's output. Typed answers keyed by your ids; overflow refuses with a split suggestion | 1–20 questions, ≤20 paths, 120,000 units of state plus questions |
+| `jev_ask` | Your own questions (noul, choice, score) over one composed state: framing text, server-read files, or redacted output from an opt-in read-only command with allowlisted options. One provider call returns typed answers keyed by your ids; overflow refuses with a split suggestion | 1–20 questions, ≤20 paths, 120,000 units of state plus questions |
 | `jev_files_judge` | The same judgment over many files: glob patterns, directories, and paths in, one call per surviving file, skips reported with reasons | ≤64 files, ≤32 path entries |
 
 Caps are UTF-16 code units, frozen in the server's `limits.py`. "no length bound" is not a token budget: Jev's context is 64k tokens per request (32k for state), and an input inside the table can still overflow it. `jev_gate` sends the diff and the test log twice. An overflow comes back as `input_too_large` (ADR-0079): split the call.
@@ -229,10 +235,10 @@ Rules:
   read no files. Paste the real `git diff` output, never an excerpt, a paraphrase, an elided
   `...`, a path, or "see evidence item". A large change goes as a `[{path, patch}]` file list or
   as separate calls split by concern. Test logs go in `tests` (`tests_path` for
-  `jev_gate_range`) as the raw pass/fail lines; a file list's per-file reviews never see `evidence`.
-- **Act on `action`:** `auto` → proceed · `review` → confirm with tests, source reading, or a
-  stronger check · `escalate` → stop and surface it. `invalid_response` → the row is unjudged;
-  leave it without a verdict.
+  `jev_gate_range`) as the raw pass/fail lines. Per-file gates read caller evidence and sibling patches as space permits. The review lists optional omissions in `context_omissions`.
+- **Act on `action`:** `auto` → the verdict stands and you act on it. A contradicted claim at
+  `auto` is confidently false. `review` → confirm with tests, source reading, or a stronger check.
+  `escalate` → stop and surface it. An invalid required judgment leaves the row unjudged.
 - **Jev screens; it never proves.** A Jev check never replaces running the tests, lint, or types.
   A `jev_gate` `auto` is the recommended final judgment before "done", not
   sufficient, and it is skipped when tests, type checks, build, lint, or another
@@ -335,6 +341,7 @@ The server reads environment variables only. It does not load a `.env` file.
 | `JEV_MCP_KEY_FILE` | `~/.config/jev-mcp/key` | where `setup` stores the key and the server reads it |
 | `JEV_PROVIDER` | `auto` | `auto` takes the first provider with credentials: typesafe, openrouter, cloudflare, compatible. The reference's vercel provider (`AI_GATEWAY_API_KEY`) is not supported |
 | `JEV_MCP_MODEL` | `jev-latest` | Jev model to ask |
+| `JEV_ASK_COMMANDS` | off | Set to `1` to let `jev_ask` run read-only commands with allowlisted options directly without a shell. An ask uses one provider call for its questions |
 | `JEV_MCP_CACHE` | off | replay identical requests from disk at no API cost; leave it off when answers must be fresh, and delete the directory to clear it |
 | `JEV_MCP_CACHE_DIR` | `~/.cache/jev-mcp` | where the cache lives |
 | `JEV_MCP_CACHE_MAX_ENTRIES` | `4096` | cache entry cap; a store past it evicts the oldest entries first (`0` disables) |
@@ -355,12 +362,11 @@ or latency:
 text are sent to the provider in one request, however large, so token cost and latency scale with
 what the caller passes. Bound the text at the call site when it is not yours.
 - Requests over stdio still carry no whole-call provider deadline (the sanctioned divergence
-`stdio-attempt-deadline`): the client's cancellation remains the recovery path for a call. Every
-provider attempt is bounded, though (ADR-0057): a hung connection times out after 30 s and a
-transient failure — connection errors, timeouts, 408/429/5xx — is retried, up to 3 attempts with
-capped exponential backoff (server `Retry-After` hints honored, capped at 5 s) inside a 90 s
-budget. A call whose attempts all fail reports the provider, the attempt count, and the last
-failure.
+`stdio-attempt-deadline`), and client cancellation stops the call. The provider policy allows
+up to 3 attempts, each capped at 30 s, inside a 90 s budget (ADR-0057). Only connection or
+pool-acquisition failures before delivery and HTTP 429 are retried. Generated backoff is capped at
+5 s, and a server `Retry-After` hint can raise the delay when at least 1 s remains for the next
+attempt. Exhausted retries report the provider, the attempt count, and the last failure.
 
 Other operator facts:
 
@@ -372,12 +378,10 @@ Other operator facts:
   candidate's probability, to four decimal places. The response has no spread field. A flat band of
   low values means the candidates were not distinguishable: treat the order as weak, and read
   `ranked[].relevance` rather than the rank numbers.
-- `jev_review` and `jev_gate` escalate when the lowest rubric confidence, or `safe_to_apply`, is
-  below `thresholds.review_at` (the reference rule; default 0.5). That includes a low-confidence
-  ancillary score such as `test_gap` on a patch the other scores accept. Escalate here is
-  uncertainty, not a finding that the patch is wrong. The driving score is the `scores` entry —
-  under `review` on `jev_gate` — whose `confidence` is below `thresholds.review_at`. Compare
-  `safe_to_apply` to the same threshold. The response does not name the driver; those two fields do.
+- In `jev_review` and `jev_gate`, uncertainty alone requires review. An escalation identifies a
+  changed line with a defect, evidence contradicting a claim, or an explicit safety refusal.
+  An invalid required judgment also stops the decision. Read the
+  change verdict in `rollup` and use the single `next_checks` entry to act.
 - Per-tool weak spots and what recorded evidence exists for each tool are in
   [`docs/tools.md`](docs/tools.md); per-release evidence, including certified operating points, is
   recorded in [`docs/EVIDENCE.md`](docs/EVIDENCE.md).

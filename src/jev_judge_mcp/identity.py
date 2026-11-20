@@ -3,15 +3,20 @@
 A wheel reports the installed version. So does a git source tree whose HEAD commit is exactly
 the tag `v<version>`. Any other checkout of this distribution reports the PEP 440 local version
 `<version>+g<short sha>`. The git state is read from files under `.git` — including a worktree's
-`.git` file, `commondir`, loose refs, and `packed-refs` — and never by spawning git. A dirty
-worktree is not detected: the same commit is the same build.
+`.git` file, `commondir`, loose refs, and `packed-refs` — for the PEP 440 identity.
+Git peels annotated tag objects. Session metadata records startup dirtiness and detects source drift.
 """
 
+import os
 import re
+import subprocess
+import time
 import tomllib
-import zlib
-from importlib.metadata import version
+from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+
+import anyio
 
 from jev_judge_mcp.domain import is_json_object
 
@@ -39,8 +44,8 @@ def reported_version(start: Path | None = None) -> str:
     sha = _resolve_ref(*dirs, "HEAD")
     if sha is None:
         return installed
-    tag = _peel(_resolve_ref(*dirs, f"refs/tags/v{installed}"), *dirs)
-    if tag is not None and tag == sha:
+    tag = _resolve_ref(*dirs, f"refs/tags/v{installed}")
+    if tag == sha or (tag is not None and _tag_commit(tag, dirs[0]) == sha):
         return installed
     return f"{installed}+g{sha[:SHORT_SHA]}"
 
@@ -62,7 +67,7 @@ def _source_root(start: Path) -> Path | None:
             continue
         try:
             loaded = tomllib.loads(manifest.read_text(encoding="utf-8"))
-        except (OSError, tomllib.TOMLDecodeError):
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError):
             return None
         project = loaded.get("project")
         name = project.get("name") if is_json_object(project) else None
@@ -85,7 +90,7 @@ def _git_dirs(root: Path) -> tuple[Path, Path] | None:
         if not marker.is_file():
             return None
         line = next((item.strip() for item in marker.read_text(encoding="utf-8").splitlines() if item.strip()), "")
-    except OSError:
+    except (OSError, UnicodeError):
         return None
     if not line.startswith("gitdir:"):
         return None
@@ -97,7 +102,7 @@ def _git_dirs(root: Path) -> tuple[Path, Path] | None:
         git_dir = marker.parent / git_dir
     try:
         git_dir = git_dir.resolve()
-    except OSError:
+    except (OSError, UnicodeError):
         return None
     common = git_dir
     common_file = git_dir / "commondir"
@@ -106,7 +111,7 @@ def _git_dirs(root: Path) -> tuple[Path, Path] | None:
             rel = common_file.read_text(encoding="utf-8").strip()
             if rel:
                 common = (git_dir / rel).resolve()
-    except OSError:
+    except (OSError, UnicodeError):
         return git_dir, git_dir
     return git_dir, common
 
@@ -134,7 +139,7 @@ def _resolve_ref(git_dir: Path, common: Path, name: str, depth: int = 0) -> str 
             if not path.is_file():
                 continue
             text = path.read_text(encoding="utf-8").strip()
-        except OSError:
+        except (OSError, UnicodeError):
             return None
         if text.startswith("ref:"):
             return _resolve_ref(git_dir, common, text.split(":", 1)[1].strip(), depth + 1)
@@ -154,7 +159,7 @@ def _packed_ref(base: Path, name: str) -> str | None:
         if not path.is_file():
             return None
         lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeError):
         return None
     for index, line in enumerate(lines):
         if not line or line.startswith("#") or line.startswith("^"):
@@ -173,44 +178,125 @@ def _packed_ref(base: Path, name: str) -> str | None:
     return None
 
 
-def _peel(sha: str | None, git_dir: Path, common: Path) -> str | None:
-    """Follow a loose annotated tag to its commit. A missing object is left as-is.
-
-    `packed-refs` peels via its `^` line. A loose tag ref names the tag object; without this
-    step, HEAD on the tagged commit would not match `v<version>` and a release checkout would
-    wear a dev suffix.
-    """
-    if sha is None:
-        return None
-    current = sha
-    for _ in range(4):
-        raw = next((obj for base in _bases(git_dir, common) if (obj := _loose_object(current, base)) is not None), None)
-        target = _tag_target(raw) if raw is not None else None
-        if target is None:
-            return current
-        current = target
-    return current
-
-
-def _loose_object(sha: str, base: Path) -> bytes | None:
-    path = base / "objects" / sha[:2] / sha[2:]
+def _tag_commit(tag: str, git_dir: Path) -> str | None:
+    """Git peels loose or packed tag objects, including nested annotated tags."""
     try:
-        if not path.is_file():
-            return None
-        return zlib.decompress(path.read_bytes())
-    except (OSError, zlib.error):
+        result = subprocess.run(  # noqa: S603
+            ["git", "--no-replace-objects", "--git-dir", str(git_dir), "rev-parse", "--verify", f"{tag}^{{commit}}"],  # noqa: S607
+            env={**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")}, "GIT_NO_LAZY_FETCH": "1"},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return None
+    return result.stdout.strip().decode("ascii", "replace") if result.returncode == 0 else None
 
 
-def _tag_target(raw: bytes) -> str | None:
-    """The `object` line of a tag object, or None when `raw` is a commit or anything else."""
-    if not raw.startswith(b"tag "):
+@dataclass(frozen=True, slots=True)
+class DiskVersion:
+    package: str | None
+    commit: str | None = None
+    source: tuple[tuple[str, int, int, int], ...] | None = None
+
+
+def _source_stamp(root: Path) -> tuple[tuple[str, int, int, int], ...]:
+    """Stat package files without following directory links or reading their contents."""
+    manifest = root / "pyproject.toml"
+    st = manifest.stat()
+    stamps = [(str(manifest), st.st_ino, st.st_size, st.st_ctime_ns)]
+    directories = [str(root / "src" / "jev_judge_mcp")]
+    remaining = 1024
+    while directories:
+        with os.scandir(directories.pop()) as entries:
+            for entry in entries:
+                remaining -= 1
+                if remaining < 0:
+                    raise OSError("package tree exceeds the bounded identity scan")
+                if entry.name == "__pycache__" or entry.name.endswith((".pyc", ".pyo")):
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    directories.append(entry.path)
+                else:
+                    st = entry.stat()
+                    stamps.append((entry.path, st.st_ino, st.st_size, st.st_ctime_ns))
+    return tuple(sorted(stamps))
+
+
+def _dirty(root: Path) -> bool | None:
+    try:
+        status = subprocess.run(  # noqa: S603 - fixed command in the installation checkout
+            [  # noqa: S607 - use the operator's git on PATH
+                "git",
+                "--no-optional-locks",
+                "-C",
+                str(root),
+                "-c",
+                "core.fsmonitor=false",
+                "status",
+                "--porcelain",
+                "--untracked-files=normal",
+                "--ignore-submodules=none",
+            ],
+            env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return None
-    nul = raw.find(b"\0")
-    if nul < 0:
-        return None
-    for line in raw[nul + 1 :].splitlines():
-        if line.startswith(b"object "):
-            target = line.removeprefix(b"object ").decode("ascii", "replace").strip().lower()
-            return target if _SHA.fullmatch(target) else None
-    return None
+    return bool(status.stdout) if status.returncode == 0 else None
+
+
+class ServerVersion:
+    """Loaded identity and fresh disk observations. Concurrent completions share a scan."""
+
+    def __init__(self) -> None:
+        self.root = _source_root(Path(__file__))
+        self.dirs = _git_dirs(self.root) if self.root else None
+        self.loaded = self._observe()
+        self.dirty = _dirty(self.root) if self.root and self.dirs else None
+        self.lock = anyio.Lock()
+        self.current = self.loaded
+        self.retry_at = time.monotonic() + 1 if self.dirs and self.current.source is None else 0.0
+
+    def _observe(self) -> DiskVersion:
+        if self.root and self.dirs:
+            commit = _resolve_ref(*self.dirs, "HEAD")
+            try:
+                return DiskVersion(None, commit, _source_stamp(self.root))
+            except OSError:
+                return DiskVersion(None, commit)
+        try:
+            return DiskVersion(version(DISTRIBUTION))
+        except PackageNotFoundError:
+            return DiskVersion(None)
+
+    async def field(self) -> dict[str, object]:
+        previous = self.current
+        async with self.lock:
+            if previous is self.current and time.monotonic() >= self.retry_at:
+                self.current = await anyio.to_thread.run_sync(self._observe)
+                if self.dirs and self.current.source is None:
+                    self.retry_at = time.monotonic() + 1
+            current = self.current
+        loaded = self.loaded
+        unavailable = (current.commit is None or current.source is None) if self.dirs else current.package is None
+        stale = loaded != current or unavailable
+        info: dict[str, object] = {
+            "loaded": {"package": loaded.package, "commit": loaded.commit, "dirty": self.dirty},
+            "current_commit": current.commit,
+            "current_package": current.package,
+            "restart_needed": stale,
+        }
+        if stale:
+            info["notice"] = (
+                "Jev MCP cannot verify the current installation. Check it and restart the server."
+                if unavailable
+                else "Jev MCP source changed since startup. Restart the server to load it."
+            )
+        return info

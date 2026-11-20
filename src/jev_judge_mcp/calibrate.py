@@ -63,6 +63,7 @@ class ParsedRow:
     correct: bool
     family: str
     tool: str | None
+    implicit_family: bool = False
 
 
 def _reject_constant(value: str) -> None:
@@ -87,11 +88,16 @@ def _row(parsed: dict[str, Any], source: str, number: int) -> ParsedRow:
     family = parsed.get("family")
     if family is not None and (not isinstance(family, str) or not family):
         raise CalibrateError(f"{where}: family must be a non-empty string")
+    if family is not None:
+        try:
+            family.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise CalibrateError(f"{where}: family must contain valid Unicode") from error
     tool = parsed.get("tool")
-    if tool is not None and tool not in PRECISION_TARGETS:
+    if tool is not None and (not isinstance(tool, str) or tool not in PRECISION_TARGETS):
         known = ", ".join(PRECISION_TARGETS)
         raise CalibrateError(f"{where}: unknown tool {tool!r} (one of {known})")
-    return ParsedRow(float(score), correct, family if family else f"row{number}", tool)
+    return ParsedRow(float(score), correct, family if family else f"row{number}", tool, family is None)
 
 
 def _finite(score: int | float) -> bool:
@@ -106,7 +112,7 @@ def parse_rows(text: str, source: str) -> list[ParsedRow]:
     """Strict rows: every non-blank line must be one JSON object with the fields above."""
     rows = [
         _row(_decoded(line, source, number), source, number)
-        for number, line in enumerate(text.splitlines(), 1)
+        for number, line in enumerate(text.split("\n"), 1)
         if line.strip()
     ]
     if not rows:
@@ -139,7 +145,7 @@ def resolve_tool(flag_tool: str | None, rows: Sequence[ParsedRow]) -> str | None
     row_tools = {row.tool for row in rows if row.tool is not None}
     if len(row_tools) > 1:
         named = ", ".join(sorted(row_tools))
-        raise CalibrateError(f"rows carry the tools {named}; pass --tool to choose one")
+        raise CalibrateError(f"rows carry the tools {named}; provide rows for one tool")
     return next(iter(row_tools), None)
 
 
@@ -150,13 +156,13 @@ def split_rows(rows: Sequence[ParsedRow]) -> tuple[list[ParsedRow], list[ParsedR
     processes and repeats. A family that would overflow the target stays in the selection split,
     so one big family never empties the selection; a row without a family is its own family.
     """
-    families: dict[str, list[ParsedRow]] = {}
+    families: dict[tuple[str, bool], list[ParsedRow]] = {}
     for row in rows:
-        families.setdefault(row.family, []).append(row)
+        families.setdefault((row.family, row.implicit_family), []).append(row)
     target = math.ceil(HOLDOUT_SHARE * len(rows))
     held_out: list[ParsedRow] = []
     selection: list[ParsedRow] = []
-    for family in sorted(families, key=lambda name: family_order(name, _SPLIT_SALT)):
+    for family in sorted(families, key=lambda key: (family_order(key[0], _SPLIT_SALT), key[1])):
         group = families[family]
         if len(held_out) + len(group) <= target:
             held_out.extend(group)
@@ -272,10 +278,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         selection, held_out = split_rows(rows)
         point = select_threshold([(row.score, row.correct) for row in selection], max_error=budget)
         if point is None:
-            zero_error_min = math.ceil(math.log(1 - DEFAULT_CONFIDENCE) / math.log(1 - budget))
+            ratio = math.log1p(-DEFAULT_CONFIDENCE) / math.log1p(-budget)
+            needed = (
+                f"at least {math.ceil(ratio)} rows" if math.isfinite(ratio) else "more rows than can be represented"
+            )
             sys.stderr.write(
                 f"no threshold meets the error budget {budget:g} on the {len(selection)} selection rows;"
-                f" a zero-error selection split needs at least {zero_error_min} rows at this budget"
+                f" a zero-error selection split needs {needed} at this budget"
                 " — collect more rows or raise --max-error\n"
             )
             return 1

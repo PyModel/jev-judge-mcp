@@ -3,12 +3,10 @@ measures, report, refusal. Nothing here calls a model or a provider; the live st
 """
 
 import json
-import os
 import re
 import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +17,7 @@ from evals.ab import run as ab_run
 from evals.ab.grade import changed_protected, compare_source, expected_ids, grade, old_rule_success, run_tests
 from evals.ab.stream import ToolUse, Trace
 from evals.agent import AgentRunResult
+from evals.artifacts import RESULT_BYTES_MAX
 from evals.bench import pi
 from evals.spend import JEV_PUBLISHED_USD_PER_MTOK_INPUT, SpendLedger
 from tests.evals.booking_cases import (
@@ -28,7 +27,7 @@ from tests.evals.booking_cases import (
     seeded_nan_books_the_bound,
     seeded_result_books_the_file_cost,
 )
-from tests.support.agent_stubs import dead_login, reaches_model
+from tests.support.agent_stubs import dead_login
 
 PYTHON = sys.executable
 REPO = Path(__file__).resolve().parents[2]
@@ -452,7 +451,7 @@ def test_jev_ab_max_usd_lowers_the_cap_and_a_pair_that_no_longer_fits_refuses(tm
 
 
 def test_the_lowered_cap_persists_and_a_resume_cannot_raise_it(tmp_path: Path) -> None:
-    """F9: JEV_AB_MAX_USD is per invocation, so a resume without it must not silently return to
+    """F9: The lowered cap persists, so a resume without JEV_AB_MAX_USD must not return to
     the policy ceiling: the effective cap rides in ledger.json and the load takes the minimum."""
     lowered = SpendLedger.load(
         tmp_path / "ledger.json", ledger.capped(ledger.POLICIES["pi"], {ledger.MAX_USD_ENV: "1.91"})
@@ -508,7 +507,7 @@ def test_ledger_never_retries(tmp_path: Path) -> None:
 
 def test_cost_of_is_the_agent_cost_plus_the_priced_jev_tokens(tmp_path: Path) -> None:
     book = _book(tmp_path)
-    cost = book.cost_of(0.5, [{"input_tokens": 1_000_000}, {"input_tokens": None}, {}])
+    cost = book.cost_of(0.5, [{"input_tokens": 1_000_000}, {"input_tokens": 0}, {"refused": True}])
     assert (cost.agent_usd, cost.jev_usd, cost.total_usd) == (0.5, 0.042, 0.542)
     unreported = book.cost_of(None, [{"input_tokens": 1_000_000}])
     assert (unreported.agent_usd, unreported.agent_reported) == (ledger.RUN_BOUND_USD, False)
@@ -546,13 +545,11 @@ def test_the_mcp_config_names_no_host_path(tmp_path: Path) -> None:
     """The agent reads its own MCP config (the D3 study proved it), so the document names only paths
     inside the run sandbox: no repo root, no interpreter path, no log path under the records."""
     sandbox = tmp_path / "box"
-    neutral = tmp_path / "neutral-venv" / "bin" / "python"
     for arm in arms.ARMS:
         doc = arms.mcp_config(
             arm,
             sandbox=sandbox / arm,
             server_env={"K": "v"} if arm == "B" else {},
-            interpreter=str(neutral),
         )
         text = json.dumps(doc)
         assert str(arms.REPO_ROOT) not in text
@@ -560,42 +557,6 @@ def test_the_mcp_config_names_no_host_path(tmp_path: Path) -> None:
         assert str(tmp_path / "records") not in text
         for entry in doc["mcpServers"].values():
             assert entry["command"].startswith(str(sandbox / arm))
-
-
-def test_no_file_under_the_sandbox_names_the_repo(tmp_path: Path) -> None:
-    """Layer 2 is about every file the run sandbox carries, not only the JSON: the launcher names
-    the study venv (neutral, outside the repo), so neither an agent-visible file nor `sys.prefix`
-    inside the sandbox can reach the repo root and its gold fixtures."""
-    sandbox = tmp_path / "box"
-    neutral = tmp_path / "neutral-venv" / "bin" / "python"
-    arms.mcp_config("B", sandbox=sandbox, server_env={"K": "v"}, interpreter=str(neutral))
-    for path in sandbox.rglob("*"):
-        if path.is_file():
-            body = path.read_text(encoding="utf-8", errors="replace")
-            assert str(arms.REPO_ROOT) not in body, path
-            assert sys.executable not in body, path
-    launcher = (sandbox / "bin" / "python3").read_text(encoding="utf-8")
-    assert str(neutral) in launcher
-
-
-def test_the_study_venv_is_built_from_the_wheel_outside_the_repo(tmp_path: Path) -> None:
-    """`study_venv` builds a venv from the built wheel: the interpreter's `sys.prefix` names no repo
-    path, so a server process cannot be talked into reading the checkout. Skipped without a wheel;
-    `make ci` builds one before the eval stage."""
-    wheels = sorted((arms.REPO_ROOT / "dist").glob("jev_judge_mcp-*.whl"))
-    if not wheels:
-        pytest.skip("no built wheel; run `make build` first")
-    python = arms.study_venv(tmp_path, wheels[-1])
-    done = subprocess.run(
-        [str(python), "-I", "-c", "import sys;print(sys.prefix);import jev_judge_mcp"],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=60,
-    )
-    prefix = done.stdout.strip().splitlines()[0]
-    assert str(arms.REPO_ROOT) not in prefix
-    assert prefix.startswith(str(tmp_path))
 
 
 def test_the_typesafe_key_never_rides_in_the_config(tmp_path: Path) -> None:
@@ -730,10 +691,8 @@ def test_the_study_refuses_without_its_flag_or_key(tmp_path: Path) -> None:
             tmp_path,
             agent="claude",
         )
-    with pytest.raises(ab_run.StudyRefusedError, match="claude not found"):
-        ab_run.live({"JEV_AB_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key), "PATH": ""}, tmp_path, agent="claude")
-    with pytest.raises(ab_run.StudyRefusedError, match="pi not found"):
-        ab_run.live({"JEV_AB_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key), "PATH": ""}, tmp_path, agent="pi")
+    with pytest.raises(ab_run.StudyRefusedError, match="unknown study agent"):
+        ab_run.live({"JEV_AB_LIVE": "1", "JEV_STUDY_KEY_FILE": str(key)}, tmp_path, agent="other")
     assert ab_run.main([], environ={}) == 2
 
 
@@ -748,68 +707,6 @@ def test_the_harness_reads_the_key_from_the_operator_named_file(tmp_path: Path) 
     empty.write_text(" \n", encoding="utf-8")
     with pytest.raises(ValueError, match="empty"):
         arms.study_key({"JEV_STUDY_KEY_FILE": str(empty)})
-
-
-@pytest.mark.skipif(sys.platform != "darwin", reason="ps eww env disclosure is a macOS mechanism")
-def test_ps_eww_shows_a_child_env_until_the_broker_branch(tmp_path: Path) -> None:
-    """The mechanism, on a dummy variable: a same-uid child's environment is readable from the
-    process table for as long as it lives. That is why live() refuses an exported key and reads
-    JEV_STUDY_KEY_FILE instead - the harness process itself must never hold the key."""
-    child = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(6)"],
-        env={**os.environ, "MARKER_D3_KEY": "dummy-not-a-real-key"},
-    )
-    try:
-        seen = ""
-        for _ in range(40):
-            ps = subprocess.run(["ps", "eww", "-p", str(child.pid)], capture_output=True, text=True, check=False)
-            seen = ps.stdout
-            if "MARKER_D3_KEY" in seen:
-                break
-            time.sleep(0.1)
-        assert "MARKER_D3_KEY" in seen, "the mechanism must be demonstrated, not assumed"
-    finally:
-        child.terminate()
-        child.wait(timeout=10)
-    with pytest.raises(ValueError, match="TYPESAFE_API_KEY unset"):
-        arms.study_key(
-            {"JEV_STUDY_KEY_FILE": str(_key_file(tmp_path)), "TYPESAFE_API_KEY": "sk-test-refusal-not-a-real-key"}
-        )
-
-
-def _preflight_setup(tmp_path: Path, agent: str, script: str) -> ab_run.Setup:
-    fake_key = "sk-test-preflight-not-a-real-key"
-    return ab_run.Setup(
-        agent=agent,
-        binary=[sys.executable, "-c", script],
-        server_env={},
-        base_env=arms.agent_env({"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}),
-        secret=fake_key,
-        python3=sys.executable,
-    )
-
-
-@pytest.mark.parametrize("agent", ab_run.AGENTS)
-def test_preflight_refuses_when_the_agent_never_reaches_its_model(
-    tmp_path: Path, agent: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A startup death ("Not logged in", no model turn) refuses the batch, and the error names the cause."""
-    (tmp_path / "adapter.ts").touch()
-    monkeypatch.setenv("PI_MCP_ADAPTER", str(tmp_path / "adapter.ts"))
-    with pytest.raises(ab_run.StudyRefusedError, match="preflight could not reach its model") as refusal:
-        ab_run.preflight(_preflight_setup(tmp_path, agent, dead_login()))
-    assert "Not logged in" in str(refusal.value)
-
-
-@pytest.mark.parametrize("agent", ab_run.AGENTS)
-def test_preflight_passes_when_the_agent_reaches_its_model(
-    tmp_path: Path, agent: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The gate is not unconditional: a run that billed a model turn is not a refusal."""
-    (tmp_path / "adapter.ts").touch()
-    monkeypatch.setenv("PI_MCP_ADAPTER", str(tmp_path / "adapter.ts"))
-    result = ab_run.preflight(_preflight_setup(tmp_path, agent, reaches_model(agent)))
-    assert result.trace.model
 
 
 def _agent_bin(bindir: Path, name: str, body: str) -> None:
@@ -899,18 +796,46 @@ def test_a_finished_study_does_not_preflight_again(tmp_path: Path, monkeypatch: 
     runs = {ab_run.run_id(task.id, arm, repeat): 0.0 for task, repeat, order in plan for arm in order}
     (study_out / "ledger.json").write_text(json.dumps({"runs": runs}) + "\n", encoding="utf-8")
     stop = ab_run.live(_live_env(tmp_path / "bin", tmp_path), out, agent="claude")
-    assert stop == f"all {len(plan)} pairs recorded"
+    assert "incomplete" in stop and all(rid in stop for rid in runs)
     assert not log.exists()
 
 
 def test_a_resume_under_another_setup_is_refused(tmp_path: Path) -> None:
-    meta = ab_run.meta_for("claude", "2.1.278 (Claude Code)", 900)
+    meta = ab_run.meta_for(
+        "claude",
+        "2.1.278 (Claude Code)",
+        900,
+        revision="a" * 40,
+        wheel_sha256="b" * 64,
+        lock_sha256="c" * 64,
+        image_id="sha256:" + "d" * 64,
+    )
     assert set(ab_run.PINNED) <= set(meta)
     ab_run.pin_meta(tmp_path, meta)
     ab_run.pin_meta(tmp_path, meta)
-    for key, value in (("fixture_sha256", "other"), ("jev_revision", "abc"), ("agent_version", "2.2.0")):
+    for key, value in (
+        ("fixture_sha256", "other"),
+        ("jev_revision", "abc"),
+        ("agent_version", "2.2.0"),
+        ("wheel_sha256", "e" * 64),
+        ("lock_sha256", "f" * 64),
+        ("image_id", "other"),
+    ):
         with pytest.raises(ab_run.StudyRefusedError, match=key):
             ab_run.pin_meta(tmp_path, {**meta, key: value})
+
+
+@pytest.mark.parametrize("report", [False, True], ids=["resume", "report"])
+def test_oversize_metadata_is_refused(tmp_path: Path, report: bool) -> None:
+    out = tmp_path / "claude"
+    out.mkdir()
+    meta: dict[str, str] = {key: "pinned" for key in ab_run.PINNED}
+    (out / "meta.json").write_text(json.dumps({**meta, "padding": " " * RESULT_BYTES_MAX}))
+    with pytest.raises(ab_run.StudyRefusedError, match="Unreadable study metadata"):
+        if report:
+            ab_run.load_meta(tmp_path)
+        else:
+            ab_run.pin_meta(out, meta, check_only=True)
 
 
 def test_the_history_reports_are_never_a_target() -> None:
@@ -1265,7 +1190,6 @@ def test_a_study_where_jev_was_never_used_is_not_measured() -> None:
     assert "Measured pairs: 0." in text and "**Not measured.** No pair of claude runs" in text
     assert "- 2 x B: Jev not used: no Jev call" in text
     assert "### Outcomes" not in text and "with minus without" not in text
-    assert report.measured_pairs(records) == {}
 
 
 def test_an_unused_jev_drops_the_whole_pair_so_both_arms_cover_the_same_tasks() -> None:
@@ -1278,7 +1202,6 @@ def test_an_unused_jev_drops_the_whole_pair_so_both_arms_cover_the_same_tasks() 
         _run("j3", "B"),
         _run("j3", "A", 2),
     ]
-    assert list(report.measured_pairs(records)) == [("claude", "j1", 1)]
     text = report.render(records, {})
     assert "Pairs: 4. Measured pairs: 1." in text
     for reason in ("B: Jev not used: no Jev call", "A: never reached the model", "incomplete: no B run"):
@@ -1359,6 +1282,21 @@ def test_resume_books_the_bound_when_the_seeded_cost_is_nan(tmp_path: Path, monk
     seeded_nan_books_the_bound(ab_loop(tmp_path, monkeypatch))
 
 
+@pytest.mark.parametrize("above_bound", [False, True])
+def test_resume_reserves_at_least_the_bound_for_an_invalid_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, above_bound: bool
+) -> None:
+    from tests.evals.booking_cases import write_result
+
+    loop = ab_loop(tmp_path, monkeypatch)
+    rid = loop.ids[0]
+    charge = loop.bound + 1 if above_bound else 0.25
+    write_result(loop.out, rid, charge, bench_keys=False, wall_s=True)
+    loop.install(lambda *_: pytest.fail("relaunched an incomplete run"))
+    assert "incomplete result records" in loop.go()
+    assert loop.load().runs == {rid: max(charge, loop.bound)}
+
+
 def test_a_grading_timeout_fails_every_test_instead_of_raising(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A hung suite (agent or pristine) is a measured failure: every expected id counts as not
     passed, and the study keeps its record instead of dying in post-processing."""
@@ -1394,6 +1332,7 @@ def test_an_escaped_run_keeps_its_category_on_the_post_processing_failure_path()
     )
     record = ab_run.failed_record("t.A.r1", task, "A", 1, "pi", run, 0.0, KeyError("boom"))
     assert record["failure_category"] == "escape"
+    assert record["jev_cost_usd"] is None
 
 
 def test_out_of_task_exploration_records_the_category_and_keeps_the_grade(tmp_path: Path) -> None:
@@ -1586,3 +1525,229 @@ def test_an_mcpscript_call_counts_for_repeats() -> None:
     calls = [{"tool": "jev_find", "is_error": False}, {"tool": "jev_find", "is_error": False}]
     uses = [ToolUse("mcpScript", {"code": code}), ToolUse("mcpScript", {"code": code})]
     assert outcomes.unnecessary_jev_calls(control=False, uses=uses, calls=calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["setup", "after_write", "body"])
+def test_scout_011_scoped_credentials_cleaned_on_every_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    import tempfile
+
+    owned = tmp_path / "private"
+    owned.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(owned))
+    _agent_bin(tmp_path / "bin", "pi", "print('1.0')")
+    env = _confined_env(tmp_path / "bin", tmp_path, "pi")
+    monkeypatch.setenv("PI_MCP_ADAPTER", env["PI_MCP_ADAPTER"])
+    monkeypatch.setattr(ab_run, "docker_available", lambda: None)
+
+    def image_id(_image: str) -> str:
+        return "sha256:" + "a" * 64
+
+    def runtime_meta(*_args: str) -> dict[str, str]:
+        return {"image_id": "synthetic"}
+
+    monkeypatch.setattr(ab_run, "_image_id", image_id)
+    monkeypatch.setattr(ab_run, "study_provenance", runtime_meta)
+    monkeypatch.setattr(ab_run, "reap", lambda: None)
+
+    def stop(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("synthetic failure")
+
+    if failure == "setup":
+        (tmp_path / ".pi/agent/models.json").write_text("{}")
+    elif failure == "after_write":
+        monkeypatch.setattr(ab_run.Upstream, "provider", stop)
+    else:
+        monkeypatch.setattr(ab_run, "confined_reference", stop)
+    key = Path(env["JEV_STUDY_KEY_FILE"])
+    before = key.read_bytes()
+    with pytest.raises(
+        (ab_run.StudyRefusedError, RuntimeError), match="baseUrl" if failure == "setup" else "synthetic failure"
+    ):
+        ab_run.live(env, tmp_path / "out", agent="pi", repeats=1)
+    assert not list(owned.glob("jev-ab-secrets-*"))
+    assert key.read_bytes() == before
+
+
+def test_scout_021_unverifiable_or_dirty_git_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(arms, "REPO_ROOT", tmp_path)
+    with pytest.raises(ab_run.StudyRefusedError):
+        ab_run.source_revision()
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+            "--allow-empty",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    clean = ab_run.source_revision()
+    assert len(clean) == 40
+    for contents in ["first", "second"]:
+        (tmp_path / "uv.lock").write_text(contents)
+        with pytest.raises(ab_run.StudyRefusedError):
+            ab_run.source_revision()
+
+
+def test_scout_029_operator_run_ceiling_matches_current_grid() -> None:
+    maximum = len(tasks.TASK_IDS) * len(arms.ARMS) * ledger.REPEATS
+    assert all(policy.max_runs == maximum for policy in ledger.POLICIES.values())
+    assert f"{maximum} runs" in (arms.REPO_ROOT / "Makefile").read_text()
+    current = (arms.REPO_ROOT / "evals" / "README.md").read_text()
+    assert f"{len(tasks.TASK_IDS) * len(arms.ARMS) * ledger.REPEATS} runs" in next(
+        line for line in current.splitlines() if line.startswith("| `ab/ledger.py`")
+    )
+
+
+def test_scout_013_each_agent_keeps_its_own_record_and_incomplete_runs_are_named(tmp_path: Path) -> None:
+    for agent in ("pi", "claude"):
+        run_dir = tmp_path / agent / "task.A.r1"
+        run_dir.mkdir(parents=True)
+        record = _run("task", "A", agent=agent, success=False, status="failed")
+        (run_dir / "result.json").write_text(json.dumps(record))
+    path = tmp_path / "report.md"
+    rendered = ab_run.write_report(tmp_path, path)
+    assert "## claude\n" in rendered and "## pi\n" in rendered
+    assert rendered.count("| task.A.r1 |") == 2
+
+    (tmp_path / "pi/task.A.r1/result.json").write_text("{")
+    rendered = ab_run.write_report(tmp_path, path)
+    assert "pi/task.A.r1" in rendered
+    assert "## claude\n" in rendered and "## pi\n" not in rendered
+    assert rendered.count("| task.A.r1 |") == 1
+
+
+@pytest.mark.parametrize(
+    "wall",
+    [True, False, -1, float("inf"), float("nan"), 10**400],
+    ids=["true", "false", "negative", "inf", "nan", "overflow"],
+)
+def test_invalid_saved_duration_is_excluded_from_ab_reports(tmp_path: Path, wall: object) -> None:
+    run_dir = tmp_path / "claude/task.A.r1"
+    run_dir.mkdir(parents=True)
+    row = _run("task", "A", status="ok", wall_s=wall)
+    (run_dir / "result.json").write_text(json.dumps(row))
+    assert ab_run.load_records(tmp_path) == []
+    assert "claude/task.A.r1" in ab_run.write_report(tmp_path, tmp_path / "report.md")
+
+
+def test_ensure_wheel_uses_the_fresh_build_even_with_stale_wheels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(arms, "REPO_ROOT", tmp_path)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    fresh_name = "jev_judge_mcp-2-py3-none-any.whl"
+    (dist / fresh_name).write_bytes(b"old build")
+    (dist / "jev_judge_mcp-99-py3-none-any.whl").touch()
+
+    def build(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert argv[:4] == ["uv", "build", "--wheel", "--out-dir"]
+        (Path(argv[4]) / fresh_name).write_bytes(b"new build")
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(subprocess, "run", build)
+    wheel = arms.ensure_wheel()
+    assert wheel == dist / fresh_name
+    assert wheel.read_bytes() == b"new build"
+
+
+def test_scout_021_confined_provenance_refuses_stale_wheel_and_legacy_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ab_run, "source_revision", lambda: "a" * 40)
+    wheel = tmp_path / "package.whl"
+    wheel.write_bytes(b"first package")
+
+    def fresh(_staging: Path) -> Path:
+        return wheel
+
+    installed = arms.digest(wheel)
+
+    def runtime(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert "none" in argv and "--pull" in argv and "never" in argv
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps([installed, "confined version"]))
+
+    monkeypatch.setattr(arms, "ensure_wheel", fresh)
+    monkeypatch.setattr(ab_run, "docker_run", runtime)
+    image = "sha256:" + "b" * 64
+    first = ab_run.study_provenance(image, "pi", "local")
+    assert first["wheel_sha256"] == installed and first["agent_version"] == "confined version"
+    wheel.write_bytes(b"second package")
+    with pytest.raises(ab_run.StudyRefusedError, match="wheel"):
+        ab_run.study_provenance(image, "pi", "local")
+    installed = arms.digest(wheel)
+    second = ab_run.study_provenance(image, "pi", "local")
+    assert second["jev_revision"] == first["jev_revision"] and second["wheel_sha256"] != first["wheel_sha256"]
+    out = tmp_path / "pi"
+    out.mkdir()
+    stored = json.dumps({"agent": "pi", "jev_revision": "abc+dirty"})
+    (out / "meta.json").write_text(stored)
+    with pytest.raises(ab_run.StudyRefusedError, match="different"):
+        ab_run.pin_meta(out, second, check_only=True)
+    assert ab_run.load_meta(tmp_path)["pi"]["jev_revision"] == "abc+dirty"
+    assert (out / "meta.json").read_text() == stored
+
+
+def test_scout_011_cleanup_failure_preserves_primary_error_and_redacts_detail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+
+    def fail(_path: Path) -> None:
+        raise OSError("private diagnostic")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "rmdir", fail)
+        with pytest.raises(RuntimeError, match="interrupted") as caught, ab_run.private_secrets() as owned:
+            raise RuntimeError("interrupted")
+    assert str(owned) in caught.value.__notes__[0] and "remove it locally" in caught.value.__notes__[0]
+    assert "private diagnostic" not in caught.value.__notes__[0]
+    assert ab_run.reap()["dirs"] == [owned.name]
+
+
+def test_scout_013_partial_json_object_is_reported(tmp_path: Path) -> None:
+    run_dir = tmp_path / "pi" / "task.A.r1"
+    run_dir.mkdir(parents=True)
+    row = _run("task", "A", agent="pi", status="ok")
+    del row["tokens"]
+    (run_dir / "result.json").write_text(json.dumps(row))
+    assert "incomplete result records: pi/task.A.r1" in ab_run.write_report(tmp_path, tmp_path / "report.md")
+
+
+def test_scout_011_malformed_provider_entry_has_no_key(tmp_path: Path) -> None:
+    path = tmp_path / "auth.json"
+    path.write_text(json.dumps({"model": None}))
+    assert arms.scoped_provider_key(path, "model") == ""
+
+
+def test_scout_013_report_names_booked_run_without_result_by_agent(tmp_path: Path) -> None:
+    agent = tmp_path / "pi"
+    agent.mkdir()
+    path = agent / "ledger.json"
+    path.write_text(json.dumps({"runs": {"task.A.r1": 0.5}}))
+    before = path.read_bytes()
+    report_text = ab_run.write_report(tmp_path, tmp_path / "report.md")
+    assert "pi: booked without result: task.A.r1" in report_text
+    assert path.read_bytes() == before
+    assert not (agent / "ledger.json.lock").exists()
+
+
+def test_scout_011_key_file_refuses_an_existing_nonprivate_destination(tmp_path: Path) -> None:
+    target = tmp_path / "typesafe.key"
+    target.write_text("existing")
+    target.chmod(0o644)
+    with pytest.raises(PermissionError):
+        arms.keyfile_env(tmp_path, "synthetic")
+    assert target.read_text() == "existing"

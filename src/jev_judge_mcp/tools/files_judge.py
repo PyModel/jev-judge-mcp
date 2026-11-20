@@ -11,17 +11,24 @@ expansion, the prune, and the bounded fan-out. Every prune step precedes the fir
 and a pruned path costs nothing.
 """
 
-from collections.abc import Iterator, Sequence
+import logging
+import os
+import time
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
 import anyio
 
+from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain import ChoiceQuestion, ScoreQuestion
+from jev_judge_mcp.errors import Redactor
+from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import FILE_JUDGE, FILES_JUDGE
 from jev_judge_mcp.providers import Evaluation, ProviderConfigError
-from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
+from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, code_of, define, frame
 from jev_judge_mcp.tools.file_judge import (
     KIND_REFINEMENT,
     KINDS,
@@ -30,9 +37,10 @@ from jev_judge_mcp.tools.file_judge import (
     build_question,
     project_answer,
 )
-from jev_judge_mcp.tools.file_state import read_state, resolve_scoped
+from jev_judge_mcp.tools.file_state import pinned_directory, read_state, resolve_scoped
 from jev_judge_mcp.tools.files import combined
-from jev_judge_mcp.tools.toolset import code_of
+
+logger = logging.getLogger(__name__)
 
 SKIP_DIRECTORIES = frozenset(
     {
@@ -89,7 +97,7 @@ DEFINITION = define(
     "server expands the paths inside its working directory and prunes deterministically before any provider "
     "call: dependency, build, cache, and VCS-internal directories are not entered, known secret stores are "
     "never read, binary and empty files are skipped, each file is capped like jev_file_judge, and a hard cap "
-    "of {FILES_JUDGE.files_max} surviving files bounds the call. One provider call runs per surviving file; a "
+    f"of {FILES_JUDGE.files_max} surviving files bounds the call. One provider call runs per surviving file; a "
     "failed call is reported as a skipped path (call_failed:<code>), never a batch error, and the payload "
     "carries the typed answers plus the skipped paths with their reasons — summarized as one aggregate row "
     "per cause when a tree yields more than the caps — no file's bytes enter your context. Every read is "
@@ -170,69 +178,104 @@ def _glob_pattern(entry: str) -> PurePosixPath | None:
     return pattern
 
 
-def _walk(directory: Path, *, recursive: bool) -> Iterator[Path]:
-    """The files under `directory`, sorted per directory; skip-listed directories are never entered.
+@dataclass
+class _Discovery:
+    remaining: int
+    unreadable: Callable[[Path], None]
+    check_cancelled: Callable[[], None]
+    transitions_left: int
+    failures: int = 0
+    stopped: Path | None = None
+    listings: dict[Path, list[Path]] = field(default_factory=dict[Path, list[Path]])
 
-    A generator, so a caller with a full discovery budget never descends the rest of the tree.
-    Non-recursive lists the immediate files only; recursive descends with the same in-place pruning
-    a glob's directory expansion uses, so a skip-listed subtree is neither scanned nor listed.
-    """
-    if not recursive:
-        for child in sorted(directory.iterdir()):
-            if child.is_file():
-                yield child
-        return
-    for root, directories, files in directory.walk(on_error=lambda _: None):
-        directories[:] = sorted(name for name in directories if name not in SKIP_DIRECTORIES)
-        for name in sorted(files):
-            yield Path(root, name)
-
-
-def _glob_files(root: Path, parts: tuple[str, ...]) -> Iterator[Path]:
-    """The files a glob's last segment matches, expanded by a pruned walk (ADR-0077).
-
-    `pathlib`'s `glob` descends into every directory the segment names — `node_modules`, `.git`,
-    build output — and only filters afterwards, so a `**` over a real repo scans hundreds of
-    thousands of entries before the prune runs. This expansion scans each level with `scandir`,
-    matches segment patterns with `fnmatchcase` (the same POSIX case rules and dotfile behavior as
-    `pathlib`), and never enters a skip-listed directory, so the prune happens during the walk.
-    A `**` segment matches any depth including zero; a trailing `**` is every file under the
-    frontier, per the `recursive` walk the caller asked for. Directories and files are yielded in
-    sorted order per directory.
-    """
-
-    def scan(directory: Path, segment: str) -> Iterator[Path]:
+    def children(self, directory: Path) -> list[Path]:
+        """Only sort a completed listing. A partial directory has no deterministic prefix."""
+        self.check_cancelled()
+        if self.stopped is not None:
+            return []
+        if directory in self.listings:
+            return self.listings[directory]
+        if self.remaining == 0:
+            self.stopped = directory
+            return []
+        self.remaining -= 1
+        entries: list[Path] = []
         try:
-            entries = sorted(directory.iterdir(), key=lambda child: child.name)
+            with pinned_directory(directory) as fd, os.scandir(fd) as scan:
+                for entry in scan:
+                    self.check_cancelled()
+                    if self.remaining == 0:
+                        self.stopped = directory
+                        return []
+                    self.remaining -= 1
+                    if entry.name not in SKIP_DIRECTORIES:
+                        entries.append(directory / entry.name)
         except OSError:
-            return
-        for child in entries:
-            if child.name in SKIP_DIRECTORIES:
-                continue
-            if fnmatchcase(child.name, segment):
-                yield child
+            self.failures += 1
+            self.unreadable(directory)
+            return []
+        entries.sort()
+        self.listings[directory] = entries
+        return entries
 
-    *heads, tail = parts
-    frontier: list[Path] = [root]
-    for segment in heads:
-        next_frontier: list[Path] = []
-        for directory in frontier:
-            if segment == "**":
-                # Zero or more directories: the directory itself, then every kept descendant.
-                next_frontier.append(directory)
-                for root_, directories, _files in directory.walk(on_error=lambda _: None):
-                    directories[:] = sorted(name for name in directories if name not in SKIP_DIRECTORIES)
-                    next_frontier.extend(Path(root_, name) for name in sorted(directories))
-            else:
-                next_frontier.extend(child for child in scan(directory, segment) if child.is_dir())
-        frontier = next_frontier
-    for directory in frontier:
-        if tail == "**":
-            yield from _walk(directory, recursive=True)
+
+def _walk(directory: Path, budget: _Discovery, *, recursive: bool) -> Iterator[Path]:
+    pending = [directory]
+    while pending and budget.stopped is None:
+        children = budget.children(pending.pop())
+        if recursive:
+            pending.extend(child for child in reversed(children) if not child.is_symlink() and child.is_dir())
+        yield from (child for child in children if child.is_file())
+
+
+def _glob_files(
+    root: Path, parts: tuple[str, ...], budget: _Discovery, outside: Callable[[Path], None]
+) -> Iterator[Path]:
+    pending = [(root, root, 0)]
+    visited: set[tuple[Path, int]] = set()
+    while pending and budget.stopped is None:
+        directory, display, index = pending.pop()
+        if (directory, index) in visited:
+            continue
+        if budget.transitions_left == 0:
+            budget.stopped = directory
+            break
+        budget.transitions_left -= 1
+        visited.add((directory, index))
+        segment = parts[index]
+        last = index + 1 == len(parts)
+        if segment == "**" and last:
+            for child in _walk(directory, budget, recursive=True):
+                yield display / child.relative_to(directory)
+            continue
+        children = budget.children(directory)
+        if segment == "**":
+            pending.extend(
+                (child, display / child.name, index)
+                for child in reversed(children)
+                if not child.is_symlink() and child.is_dir()
+            )
+            pending.append((directory, display, index + 1))
         else:
-            # Files and directories: a matched directory is walked per the caller's recursive
-            # flag, exactly like a directory the caller named directly.
-            yield from scan(directory, tail)
+            matches = [child for child in children if fnmatchcase(child.name, segment)]
+            if last:
+                yield from (display / child.name for child in matches)
+            else:
+                for child in reversed(matches):
+                    target = child
+                    if child.is_symlink():
+                        if _has_glob_magic(segment):
+                            continue
+                        try:
+                            target = resolve_scoped(str(child), root)
+                        except ToolError:
+                            budget.failures += 1
+                            outside(display / child.name)
+                            continue
+                        if SKIP_DIRECTORIES.intersection(target.relative_to(root).parts):
+                            continue
+                    if target.is_dir():
+                        pending.append((target, display / child.name, index + 1))
 
 
 def _aggregate(reason: str, count: int, first: Sequence[str]) -> dict[str, str]:
@@ -252,7 +295,13 @@ def _aggregate(reason: str, count: int, first: Sequence[str]) -> dict[str, str]:
 
 
 def plan(
-    paths: Sequence[str], scope: Path | None = None, *, recursive: bool = False
+    paths: Sequence[str],
+    scope: Path | None = None,
+    *,
+    recursive: bool = False,
+    key_path: Path | None = None,
+    redact: Redactor | None = None,
+    check_cancelled: Callable[[], None] = lambda: None,
 ) -> tuple[list[tuple[str, str]], list[dict[str, str]]]:
     """Expand, prune, and read — the whole deterministic half of the tool, before any provider call.
 
@@ -265,12 +314,14 @@ def plan(
     path for everything discovered.
 
     Three bounds keep a real tree inside one call: discovery stops at `FILES_JUDGE.discovery_max`
-    candidates (glob expansion never enters a skip-listed directory on the way), reading stops as
+    candidates, with a separate allowance of twice that many directory opens and entries examined
+    (including empty directories and nonmatches). Glob expansion prunes skip-listed directories. Reading stops as
     soon as `FILES_JUDGE.files_max` survivors exist, and at most `FILES_JUDGE.skip_rows_max` skip
     rows are listed individually before the overflow collapses into one aggregate row per reason —
     count plus the first few paths. Nothing past a bound is read: an unexpanded or unread candidate
     is part of an aggregate, never a judgment.
     """
+    started = time.monotonic()
     root = (scope if scope is not None else Path.cwd()).resolve()
     skipped: list[dict[str, str]] = []
     overflow: dict[str, int] = {}
@@ -286,6 +337,12 @@ def plan(
         if len(first) < _FIRST_SHOWN:
             first.append(path)
 
+    budget = _Discovery(
+        2 * FILES_JUDGE.discovery_max,
+        lambda path: skip(path.relative_to(root).as_posix(), "unreadable_directory"),
+        check_cancelled,
+        transitions_left=2 * FILES_JUDGE.discovery_max,
+    )
     candidates: list[tuple[Path, str]] = []
     seen: set[Path] = set()
     discovery_overflow = 0
@@ -306,7 +363,11 @@ def plan(
             if len(discovery_first) < _FIRST_SHOWN:
                 discovery_first.append(text)
             return False
-        resolved = path.resolve()
+        try:
+            resolved = path.resolve()
+        except (OSError, RuntimeError):
+            skip(text, "outside_scope")
+            return True
         if resolved in seen:
             return True
         if not resolved.is_relative_to(root):
@@ -319,6 +380,10 @@ def plan(
         return True
 
     for entry in paths:
+        check_cancelled()
+        if budget.stopped is not None:
+            break
+        failures_before = budget.failures
         if _has_glob_magic(entry):
             pattern = _glob_pattern(entry)
             if pattern is None:
@@ -326,11 +391,21 @@ def plan(
                 continue
             matched_any = False
             full = False
-            for match in _glob_files(root, pattern.parts):
+            for match in _glob_files(
+                root, pattern.parts, budget, lambda path: skip(path.relative_to(root).as_posix(), "outside_scope")
+            ):
                 matched_any = True
                 if match.is_dir():
-                    for discovered in _walk(match, recursive=recursive):
-                        if not discover(discovered, discovered.relative_to(root).as_posix(), traversed=True):
+                    try:
+                        directory = resolve_scoped(match.relative_to(root).as_posix(), scope=root)
+                    except ToolError:
+                        skip(match.relative_to(root).as_posix(), "outside_scope")
+                        continue
+                    if any(part in SKIP_DIRECTORIES for part in directory.relative_to(root).parts):
+                        continue
+                    for discovered in _walk(directory, budget, recursive=recursive):
+                        display = match.relative_to(root) / discovered.relative_to(directory)
+                        if not discover(discovered, display.as_posix(), traversed=True):
                             full = True
                             break
                 elif match.is_file():
@@ -338,7 +413,7 @@ def plan(
                         full = True
                 if full:
                     break
-            if not matched_any:
+            if not matched_any and budget.stopped is None and budget.failures == failures_before:
                 skip(entry, "not_found")
             continue
         try:
@@ -353,11 +428,11 @@ def plan(
                 skip(entry, "skipped_directory")
                 continue
             walked_any = False
-            for discovered in _walk(resolved, recursive=recursive):
+            for discovered in _walk(resolved, budget, recursive=recursive):
                 walked_any = True
                 if not discover(discovered, discovered.relative_to(root).as_posix(), traversed=True):
                     break
-            if not walked_any:
+            if not walked_any and budget.stopped is None and budget.failures == failures_before:
                 skip(entry, "not_found")  # the directory exists but holds nothing to judge
         else:
             discover(resolved, entry, traversed=False)
@@ -366,6 +441,7 @@ def plan(
     cap_overflow = 0
     cap_first: list[str] = []
     for resolved, text in candidates:
+        check_cancelled()
         if len(survivors) == FILES_JUDGE.files_max:
             # Reading stops here: everything past the cap is one aggregate row, not a row per file.
             cap_overflow += 1
@@ -373,7 +449,7 @@ def plan(
                 cap_first.append(text)
             continue
         try:
-            content = read_state(resolved, caps=FILES_JUDGE)
+            content = read_state(resolved, caps=FILES_JUDGE, key_path=key_path, redact=redact)
         except ToolError as error:
             skip(text, _SKIP_REASONS[error.code])
             continue
@@ -383,6 +459,13 @@ def plan(
         survivors.append((text, content))
     if cap_overflow:
         skipped.append(_aggregate("over_the_file_cap", cap_overflow, cap_first))
+    if budget.stopped is not None:
+        skipped.append(
+            {
+                "path": f"directory scan budget exhausted at {budget.stopped.relative_to(root)}",
+                "reason": "over_the_file_cap",
+            }
+        )
     if discovery_overflow:
         # Discovery stopped mid-tree: the walk was aborted at the bound, so the remainder cannot be
         # counted without the scan the bound exists to avoid. The row names the bound and the first
@@ -396,13 +479,29 @@ def plan(
         )
     for reason, count in overflow.items():
         skipped.append(_aggregate(reason, count, overflow_first[reason]))
+    logger.debug(
+        "file discovery examined=%d truncated=%d unreadable=%d duration_ms=%.3f",
+        2 * FILES_JUDGE.discovery_max - budget.remaining,
+        int(budget.stopped is not None or bool(discovery_overflow or cap_overflow)),
+        budget.failures,
+        1000 * (time.monotonic() - started),
+    )
     return survivors, skipped
 
 
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     kind: str = args["kind"]
     question = build_question(kind, args["instructions"], args["criteria"])
-    survivors, skipped = plan(args["paths"], recursive=bool(args.get("recursive", False)))
+    redact = Redactor(await anyio.to_thread.run_sync(redaction_values, runtime.settings))
+    survivors, skipped = await anyio.to_thread.run_sync(
+        lambda: plan(
+            args["paths"],
+            recursive=bool(args.get("recursive", False)),
+            key_path=stored_key_path(runtime.settings),
+            redact=redact,
+            check_cancelled=anyio.from_thread.check_cancelled,
+        )
+    )
 
     evaluations: list[Evaluation | None] = [None] * len(survivors)
     failures: list[tuple[int, dict[str, str]]] = []
@@ -411,7 +510,10 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     async def judge(index: int) -> None:
         path_text, content = survivors[index]
         try:
-            evaluations[index] = await runtime.ask({"path": path_text, "content": content}, {QUESTION_ID: question})
+            async with runtime.file_fanout:
+                evaluations[index] = await runtime.ask(
+                    {"path": redact_credential_literals(path_text, redact), "content": content}, {QUESTION_ID: question}
+                )
         except ProviderConfigError as error:
             # The server cannot ask at all — not a per-file failure. Cancel the siblings and re-raise
             # outside the group, so the kernel's `auth` refusal keeps its code (the raw group would
@@ -421,9 +523,6 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         except Exception as error:  # a per-file failure is a skip, never a batch error (ADR-0077)
             failures.append((index, {"path": path_text, "reason": f"call_failed:{code_of(error)}"}))
 
-    # One call per surviving file; the ADR-0069 in-flight cap in `runtime.ask` bounds the overlap
-    # (the semaphore and the provider resolution it fronts are built synchronously, so concurrent
-    # first calls cannot double-construct it).
     async with anyio.create_task_group() as task_group:
         for index in range(len(survivors)):
             task_group.start_soon(judge, index)
@@ -448,7 +547,16 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         "skipped": skipped + [record for _, record in sorted(failures)],
         "calls": len(survivors),
     }
-    return ToolResult(frame("jev_files_judge", combined(asked) if asked else None, body))
+    return ToolResult(
+        frame(
+            "jev_files_judge",
+            combined(asked) if asked else None,
+            body,
+            model=runtime.model,
+            provider=runtime.provider_name if survivors else "none",
+        ),
+        unresolved=not results or any(result["status"] != "ok" for result in results),
+    )
 
 
 TOOL = JevTool(DEFINITION, handle, {"kind": KIND_REFINEMENT})
