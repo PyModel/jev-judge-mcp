@@ -13,7 +13,6 @@ from typing import NoReturn
 
 from jev_judge_mcp import git
 from jev_judge_mcp.domain import NoulCriteria, Question
-from jev_judge_mcp.gate_budget import fits_budget
 from jev_judge_mcp.limits import ASK
 from jev_judge_mcp.policy.guard import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.process import OutputTooLarge, capture
@@ -23,6 +22,7 @@ from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import ToolError
 from jev_judge_mcp.tools.file_state import is_secret_store, read_state, resolve_scoped
+from jev_judge_mcp.tools.gate_budget import fits_budget
 
 OWN_PART = "state"
 OUTPUT_PART = "command output"

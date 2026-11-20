@@ -165,7 +165,13 @@ def test_version_flag_prints_the_same_identity() -> None:
 def test_help_flag_prints_usage_and_exits_zero_without_serving(flag: str) -> None:
     """`--help`/`-h` print every subcommand and exit 0; the server never starts."""
     result = subprocess.run(
-        [sys.executable, "-m", "jev_judge_mcp", flag],
+        [
+            sys.executable,
+            "-c",
+            "import runpy, sys; sys.modules['jev_judge_mcp.server'] = None; "
+            "runpy.run_module('jev_judge_mcp', run_name='__main__')",
+            flag,
+        ],
         capture_output=True,
         text=True,
         check=False,

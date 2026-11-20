@@ -82,7 +82,7 @@ def test_cli_configuration_failures_emit_a_result(
 ) -> None:
     import sys
 
-    from jev_judge_mcp.server import main
+    from jev_judge_mcp.__main__ import main
 
     monkeypatch.setenv(variable, value)
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", *args])
@@ -565,7 +565,7 @@ def test_git_options_select_the_repository_and_keep_the_shell_directory(
     tmp_path: Path, command: str, repository: str | None
 ) -> None:
     """`-C` resolves like git (chained, empty, absolute); a target git options could redirect is unknown."""
-    (target,) = cli._completion_targets(command, tmp_path)
+    (target,) = cli.completion_targets(command, tmp_path)
     assert target.shell_cwd == tmp_path
     assert target.git_cwd == (None if repository is None else tmp_path / repository)
 

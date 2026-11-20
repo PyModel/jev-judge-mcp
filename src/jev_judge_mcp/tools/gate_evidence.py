@@ -7,10 +7,10 @@ from itertools import zip_longest
 from typing import Any, TypedDict
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question
-from jev_judge_mcp.gate_budget import fits_budget
-from jev_judge_mcp.gate_diagnostics import Blocker, review_blockers
 from jev_judge_mcp.responses import EXCERPT_UNITS, hunk_counts
 from jev_judge_mcp.text import head
+from jev_judge_mcp.tools.gate_budget import fits_budget
+from jev_judge_mcp.tools.gate_diagnostics import Blocker, review_blockers
 from jev_judge_mcp.tools.observed import validate_choice
 from jev_judge_mcp.tools.review_half import ANTI_INJECTION, ReviewHalf
 

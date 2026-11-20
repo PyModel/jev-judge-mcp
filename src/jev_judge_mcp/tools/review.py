@@ -6,12 +6,12 @@ shared with jev_gate; the per-file pass over a `[{path, patch}]` diff lives in `
 
 from typing import Any
 
-from jev_judge_mcp.gate_diagnostics import input_cuts
 from jev_judge_mcp.limits import REVIEW
 from jev_judge_mcp.policy import file_list_action
 from jev_judge_mcp.responses import SCORE_SCALE
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, combined, define, frame
 from jev_judge_mcp.tools.files import file_list_refusal, file_patches, review_file_list
+from jev_judge_mcp.tools.gate_diagnostics import input_cuts
 from jev_judge_mcp.tools.gate_evidence import add_citations, grounded_review
 from jev_judge_mcp.tools.review_half import (
     ReviewSettings,

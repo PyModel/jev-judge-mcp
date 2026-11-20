@@ -45,8 +45,8 @@ from jev_judge_mcp.install.launch import (
 )
 from jev_judge_mcp.install.layout import Layout
 from jev_judge_mcp.install.redact import redact_text
-from jev_judge_mcp.install.verify import EXPECTED_TOOLS, VerifyError, verify_command
-from jev_judge_mcp.server import installer_requested
+from jev_judge_mcp.install.verify import VerifyError, verify_command
+from jev_judge_mcp.registry import TOOL_NAMES
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS
 from tests.support.secrets import secret_env
@@ -118,12 +118,6 @@ def _run_raw(request: Request) -> tuple[int, str]:
 def assert_secret_absent(path: Path) -> None:
     if path.is_file() and MARKER in path.read_text(encoding="utf-8"):
         raise AssertionError("a state file contains a secret")
-
-
-def test_no_arguments_stay_on_the_stdio_server() -> None:
-    assert installer_requested(["jev-judge-mcp"]) is False
-    assert installer_requested(["jev-judge-mcp", "install"]) is True
-    assert installer_requested(["jev-judge-mcp", "--help"]) is False
 
 
 def test_launch_uses_the_local_path_and_the_distribution_name() -> None:
@@ -1060,7 +1054,7 @@ def test_nothing_detected_writes_nothing(tmp_path: Path) -> None:
 @pytest.mark.parametrize("descendant", [False, True], ids=["server-only", "server-with-helper"])
 def test_verify_handshake(tmp_path: Path, descendant: bool) -> None:
     script = tmp_path / "fake_server.py"
-    names = ", ".join(f'"{name}"' for name in EXPECTED_TOOLS)
+    names = ", ".join(f'"{name}"' for name in TOOL_NAMES)
     helper_pid = tmp_path / "helper.pid"
     pulse = tmp_path / "pulse"
     helper = "import pathlib,sys,time; p=pathlib.Path(sys.argv[1]); exec('while True:\\n p.touch(); time.sleep(0.01)')"
@@ -1137,7 +1131,7 @@ def test_verify_ignores_frames_that_are_not_responses(bad_reply: dict[str, objec
         forged_line = json.dumps({**forged, **bad_reply}).encode()
     forged_line += b"\n"
     good = {"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "jev-mcp"}}}
-    tools = {"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": name} for name in EXPECTED_TOOLS]}}
+    tools = {"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": name} for name in TOOL_NAMES]}}
     child = (
         f"import sys; sys.stdin.readline(); sys.stdout.buffer.write({forged_line!r}); "
         "sys.stdout.buffer.flush(); "
@@ -1172,7 +1166,7 @@ def test_verify_drains_a_flooding_stderr_before_the_child_answers(tmp_path: Path
     concurrent drain the child blocks on write and this test dies at the timeout instead.
     """
     script = tmp_path / "flooding_server.py"
-    names = ", ".join(f'"{name}"' for name in EXPECTED_TOOLS)
+    names = ", ".join(f'"{name}"' for name in TOOL_NAMES)
     script.write_text(
         "import json,sys\n"
         "sys.stderr.write(('stderr noise ' * 40 + '\\n') * 2000)\n"
@@ -1199,7 +1193,7 @@ def test_verify_reads_a_reply_that_arrived_with_an_earlier_line(tmp_path: Path) 
     """Both replies in one chunk: `readline` buffers the second past the first, where a wait on
     the pipe would never see it. The line reader hands it over instead of timing out."""
     script = tmp_path / "eager_server.py"
-    names = ", ".join(f'"{name}"' for name in EXPECTED_TOOLS)
+    names = ", ".join(f'"{name}"' for name in TOOL_NAMES)
     script.write_text(
         "import json,sys\n"
         "init = json.loads(sys.stdin.readline())\n"
@@ -1240,13 +1234,24 @@ def test_verify_failure_text_is_redacted_like_every_summary_line(tmp_path: Path)
     assert "[redacted]" in text
 
 
+def test_installer_and_doctor_can_read_names_without_loading_handlers() -> None:
+    probe = "import sys; import jev_judge_mcp.install.launch, jev_judge_mcp.install.verify, jev_judge_mcp.doctor; "
+    result = subprocess.run(
+        [sys.executable, "-c", probe + "print('\\n'.join(sys.modules))"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert {tool.handler.__module__ for tool in TOOLS}.isdisjoint(result.stdout.splitlines())
+
+
 def test_reference_tool_list_matches_the_published_names() -> None:
     """The install handshake expects every published tool: the reference ten plus the extension (ADR-0048)."""
     document = json.loads(Path("docs/reference/ts-0.5.0-tools-list.json").read_text(encoding="utf-8"))
     reference_names = tuple(tool["name"] for tool in document["tools"])
     published = tuple(tool.name for tool in TOOLS)
-    assert EXPECTED_TOOLS == published
-    assert EXPECTED_TOOLS[: len(reference_names)] == reference_names
+    assert TOOL_NAMES == published
+    assert TOOL_NAMES[: len(reference_names)] == reference_names
 
 
 def test_remove_drops_both_spec_shapes(tmp_path: Path) -> None:

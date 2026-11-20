@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from jev_judge_mcp.__main__ import main as cli_main
 from jev_judge_mcp.doctor import ALLOW_RULES, main
 from jev_judge_mcp.policy.thresholds import (
     DEFAULT_AUTO_ACCEPT,
@@ -24,8 +25,6 @@ from jev_judge_mcp.policy.thresholds import (
     SCREEN_RELEVANCE_SKIP_BELOW,
     SCREEN_SUBSTANCE_SKIP_BELOW,
 )
-from jev_judge_mcp.server import doctor_requested, hook_requested, installer_requested
-from jev_judge_mcp.server import main as server_main
 
 _DOCTOR = Path(__file__).resolve().parents[2] / "src" / "jev_judge_mcp" / "doctor.py"
 MARKER = "marker-doctor-8f3c1a9e-do-not-print"
@@ -73,15 +72,6 @@ def _assert_marker_absent(out: str, err: str) -> None:
     assert MARKER not in err
     assert "[redacted]" not in out
     assert "[redacted]" not in err
-
-
-def test_doctor_subcommand_is_only_doctor() -> None:
-    assert doctor_requested(["jev-judge-mcp"]) is False
-    assert doctor_requested(["jev-judge-mcp", "doctor"]) is True
-    assert doctor_requested(["jev-judge-mcp", "install"]) is False
-    assert doctor_requested(["jev-judge-mcp", "hook"]) is False
-    assert installer_requested(["jev-judge-mcp", "doctor"]) is False
-    assert hook_requested(["jev-judge-mcp", "doctor"]) is False
 
 
 def test_extra_arguments_are_usage(capsys: pytest.CaptureFixture[str]) -> None:
@@ -278,7 +268,7 @@ def test_server_dispatches_doctor_and_does_not_start(
     monkeypatch.setattr("jev_judge_mcp.server.load_settings", started)
     monkeypatch.setattr("jev_judge_mcp.server.serve", started)
     with pytest.raises(SystemExit) as caught:
-        server_main()
+        cli_main()
     captured = capsys.readouterr()
     assert caught.value.code == 0
     assert calls == []

@@ -128,13 +128,6 @@ def run_gate(
     )
 
 
-def calibrate_main(argv: Sequence[str]) -> int:
-    """Advisory threshold fitting on the caller's labeled rows (ADR-0070); offline, no provider."""
-    from jev_judge_mcp import calibrate
-
-    return calibrate.main(argv)
-
-
 def _gate_options(argv: Sequence[str]) -> dict[str, str]:
     options: dict[str, str] = {}
     index = 0
@@ -444,7 +437,7 @@ def _git_target(argv: list[str], cwd: Path | None) -> _CompletionTarget | None:
     return None
 
 
-def _completion_targets(command: str, cwd: Path) -> list[_CompletionTarget]:
+def completion_targets(command: str, cwd: Path) -> list[_CompletionTarget]:
     matches: list[_CompletionTarget] = []
     shell_cwd: Path | None = cwd
     previous = ""
@@ -484,7 +477,7 @@ def _completion_targets(command: str, cwd: Path) -> list[_CompletionTarget]:
 
 
 def completion_matches(command: str) -> bool:
-    return bool(_completion_targets(command, Path.cwd()))
+    return bool(completion_targets(command, Path.cwd()))
 
 
 def _pr_base(repo: Path, target: _CompletionTarget) -> str:
@@ -621,7 +614,7 @@ def completion_hook_main(
     command = command_from_hook_event(parsed)
     origin = parsed.get("cwd")
     cwd = Path(origin) if isinstance(origin, str) and Path(origin).is_absolute() else Path.cwd()
-    matches = _completion_targets(command, cwd)
+    matches = completion_targets(command, cwd)
     if not matches:
         return 0
     claims = env.get("JEV_COMPLETION_CLAIMS")

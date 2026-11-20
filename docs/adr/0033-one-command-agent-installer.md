@@ -76,3 +76,11 @@ and JSONC retain UTF-8 BOM support and JSONC retains comments and trailing comma
 agent config, including invalid UTF-8, stays untouched and gets a one-line parse diagnostic.
 Unreadable or malformed Pi settings are treated as adapter unavailable and keep the
 existing adapter hint. Unreadable or malformed installer state blocks writes.
+
+## Amendment (2026-11-19): one entry point for subcommands and help
+
+The console script and `python -m jev_judge_mcp` both enter `__main__.main`. One ordered
+table maps each command spelling to its lazy handler and help text. Only the fallback loads
+the MCP server. Missing and unrecognized commands take that path, as before. The POSIX check
+precedes dispatch, and the logging and failure policies for judgments and hooks run before
+their handlers. Calibration calls `calibrate.main` directly.
