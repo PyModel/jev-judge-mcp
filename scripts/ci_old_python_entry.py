@@ -7,10 +7,12 @@ after `actions/setup-python` has put Python 3.10 first on PATH. Without the writ
 request, `uvx` resolves jev-judge-mcp against that interpreter and the entry cannot start
 (dogfood finding F2: "the current Python version (3.10.19) does not satisfy Python>=3.12").
 
-The guard builds the wheel, runs the old plain form first and requires it to fail (proving the
-old interpreter really is the first one uv discovers), then installs through the installer
-exactly as a user would and requires the installer's own post-write verify handshake to pass
-against the written entry. A managed Python download is expected: that is the fix working.
+The guard builds the wheel, runs the old plain form first and requires it to fail with the F2
+error, then installs through the installer exactly as a user would and requires the installer's
+own post-write verify handshake to pass against the written entry. A managed Python download is
+expected: that is the fix working. Current uv re-resolves an extra-free tool requirement against
+another interpreter it can find or download, so the plain form sees only the old interpreter's
+directory on PATH, with downloads off; that keeps the old class reproducible on any uv.
 
 Exits 0 when the guard holds, 1 when it does not.
 """
@@ -101,10 +103,11 @@ def main() -> int:
         print(f"== wheel {wheels[0].name}: version {version}, requires-python {requires_python} ==")
 
         print("== the old class: the plain form must fail on this interpreter ==")
-        plain = run([uvx, "--from", spec, DISTRIBUTION, "--help"], env, 240)
-        if plain.returncode == 0:
+        old_only = dict(env, PATH=str(Path(python).parent), UV_PYTHON_DOWNLOADS="never")
+        plain = run([uvx, "--from", spec, DISTRIBUTION, "--help"], old_only, 240)
+        if plain.returncode == 0 or "does not satisfy Python" not in plain.stderr:
             raise GuardError(
-                "the plain form (no --python) started anyway, so the guard proves nothing. "
+                "the plain form (no --python) did not fail with the F2 error, so the guard proves nothing. "
                 f"stdout:\n{plain.stdout}\nstderr:\n{plain.stderr}"
             )
 
