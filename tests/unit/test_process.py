@@ -38,7 +38,11 @@ def gone(pid: int) -> bool:
     except ProcessLookupError:
         return True
     stat = Path(f"/proc/{pid}/stat")
-    return stat.exists() and stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
+    try:
+        # macOS has no /proc, so a live pid stays not gone there.
+        return stat.exists() and stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
+    except ProcessLookupError:  # reaped between the kill and the read
+        return True
 
 
 def wait_until(condition: Callable[[], bool], seconds: float = 3) -> bool:
