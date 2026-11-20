@@ -36,7 +36,7 @@ _OLD_CLAIM = (
 
 
 def expect_program(
-    bodies: list[Any], text: str, is_error: bool, _arguments: Mapping[str, Any], *, verify_hold: bool = False
+    bodies: list[Any], text: str, is_error: bool, _arguments: Mapping[str, Any], *, verify_hold: bool | str = False
 ) -> tuple[list[Any], str, bool]:
     rewritten = [_rewrite_body(body) for body in bodies]
     if is_error or not text.startswith("{"):
@@ -178,7 +178,7 @@ def _rewrite_payload(
     evidence: list[dict[str, object]],
     had_tests: bool,
     bodies: list[Any],
-    verify_hold: bool,
+    verify_hold: bool | str,
 ) -> dict[str, Any]:
     has_defect_question = any("defect_kind" in body.get("questions", {}) for body in bodies if isinstance(body, dict))
     invalid_defect = False
@@ -227,6 +227,8 @@ def _rewrite_payload(
         if verify_hold:
             (row,) = rows
             row["action"] = "review"
+            if isinstance(verify_hold, str):
+                row["reason_codes"] = [verify_hold]
         _annotate_claims(rows, evidence)
         summary = payload.get("summary")
         if isinstance(summary, dict):

@@ -21,7 +21,7 @@ from jev_judge_mcp.policy import (
     gate_reason_codes,
     worst_action,
 )
-from jev_judge_mcp.policy.claims import claim_action
+from jev_judge_mcp.policy.claims import VERIFIED_WITHOUT_SOURCE, claim_action
 from jev_judge_mcp.providers import Evaluation, ProviderError
 from jev_judge_mcp.responses import claim_extras, summary_extras
 from jev_judge_mcp.serialize import js_number_to_locale_string_en_us
@@ -310,6 +310,7 @@ async def _ask_gate(
         claims=verification.judgments,
         action=action,
         thresholds=thresholds,
+        verified_without_source=VERIFIED_WITHOUT_SOURCE in verification.source_issues.values(),
         caller_note="caller_note_only" in verification.source_issues.values(),
     )
     body: dict[str, object] = {
@@ -391,10 +392,12 @@ def _verify_claims(
             answer.confidence,
             thresholds,
             truncated=False,
-            source=None if source is None else source.choice,
+            source=support,
             evidence=asked_evidence,
         )
-        if claim_action(verdict, answer.confidence, thresholds.auto_accept, thresholds.review_at) == "auto":
+        if verdict == "verified" and source is not None and source.confidence_kind != "malformed" and support is None:
+            source_issues[index] = VERIFIED_WITHOUT_SOURCE
+        elif claim_action(verdict, answer.confidence, thresholds.auto_accept, thresholds.review_at) == "auto":
             if source is None or source.confidence_kind == "malformed":
                 source_issues[index] = "source_invalid"
                 action = "review"
@@ -652,6 +655,7 @@ async def _handle_file_list(
         claims=verification.judgments,
         action=action,
         thresholds=settings.thresholds,
+        verified_without_source=VERIFIED_WITHOUT_SOURCE in verification.source_issues.values(),
         caller_note="caller_note_only" in verification.source_issues.values(),
     )
     payload: dict[str, object] = {

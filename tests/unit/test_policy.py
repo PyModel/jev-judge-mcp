@@ -321,6 +321,7 @@ def test_gate_reason_code_vocabulary_is_frozen() -> None:
         "claim_confidence_low",
         "claim_confidence_below_auto_accept",
         "caller_note_only",
+        "claim_verified_without_source",
         "accepted",
     )
 

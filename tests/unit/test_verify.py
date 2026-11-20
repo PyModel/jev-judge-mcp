@@ -204,3 +204,16 @@ async def test_a_confident_contradiction_keeps_auto_without_standing() -> None:
     assert not outcome.is_error, outcome.text
     row = outcome.payload["results"][0]
     assert (row["verdict"], row["action"], row["stands"]) == ("contradicted", "auto", False)
+
+
+@pytest.mark.parametrize(("source", "expected"), [("none", "review"), ("a", "auto")])
+async def test_verified_claim_requires_a_selected_source(source: str, expected: str) -> None:
+    args = {"claims": ["Tests pass."], "evidence": [{"id": "a", "text": "3 passed"}, {"id": "b", "text": "log"}]}
+    answers = {
+        "relation_claim0": _relation(0.97, present=True),
+        "source_claim0": {"choice": source, "probabilities": {key: int(key == source) for key in ("a", "b", "none")}},
+    }
+    row = (await call_tool("jev_verify", args, answers)).payload["results"][0]
+    assert row["action"] == expected
+    assert row["supporting_evidence"] == (None if source == "none" else source)
+    assert ("claim_verified_without_source" in row.get("reason_codes", [])) == (source == "none")

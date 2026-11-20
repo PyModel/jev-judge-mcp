@@ -141,6 +141,11 @@ def _expected_tool(frozen: dict[str, Any], actual: dict[str, Any]) -> dict[str, 
     current = actual["inputSchema"]["properties"]
     for field in _DESCRIPTION_CHANGES.get(name, ()):
         props[field]["description"] = _description(current[field])
+    if name == "jev_review":
+        props["review_at"]["description"] = (
+            "An uncited low-confidence concern requires review. A confident defect with a qualifying changed-line "
+            "citation escalates. Must be <= auto_accept. Default min(0.5, auto_accept)."
+        )
     if name == "jev_gate":
         expected["description"] = _description(actual)
         props["review_at"]["description"] = (

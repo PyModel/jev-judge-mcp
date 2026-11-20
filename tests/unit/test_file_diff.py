@@ -90,7 +90,7 @@ _GATE_ANSWERS = {
 
 
 def _verified_with_source(*ids: str) -> dict[str, Any]:
-    return {**_GATE_ANSWERS, "source_0": choice("none", "none", *ids)}
+    return {**_GATE_ANSWERS, "source_0": choice(ids[0], "none", *ids)}
 
 
 async def _call_gate_raw(diff: object, evidence: list[dict[str, str]]) -> tuple[CallToolResult, FakeProvider]:
@@ -721,7 +721,11 @@ class SlowReviewProvider(FakeProvider):
                 error = ProviderError("context overflow")
                 error.status, error.error_type = 400, "max_tokens_exceeded"
                 raise error
-            answers = _verified_with_source(*(item["id"] for item in items))
+            answers: dict[str, object] = (
+                _verified_with_source(*(item["id"] for item in items))
+                if "claim_0" in questions
+                else dict(_REVIEW_ANSWERS)
+            )
             if "low" in diff:
                 answers["correctness"] = {"score": 1, "confidence": 0.2}
             return Evaluation(answers, Usage(1, 1), self.name, model)
