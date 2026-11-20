@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.10.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.9.2...v0.10.0) (2026-11-20)
+
+
+### Features
+
+* explain gate holds and share bounded file review context ([58a2110](https://github.com/PyModel/jev-judge-mcp/commit/58a21108558b1f96ac7a7538182b2640978c465a))
+
+
+### Bug Fixes
+
+* explain held files and preflight complete gate inputs ([74cad2d](https://github.com/PyModel/jev-judge-mcp/commit/74cad2d0c44fab1aba21bd81397b6ce41213f89e))
+* **installer:** enforce exact pins and migrate owned desktop entries ([30a45cd](https://github.com/PyModel/jev-judge-mcp/commit/30a45cd46d9d4aaac79b4fdb886b664323120ee2))
+* **installer:** preserve edits at the config commit boundary ([ea6b9c8](https://github.com/PyModel/jev-judge-mcp/commit/ea6b9c81c3874bb38b2c2b7ffc2b60541b951e45))
+* **installer:** recover after adapter removal and explain access errors ([f8bfc11](https://github.com/PyModel/jev-judge-mcp/commit/f8bfc115f8be3897d3c324425eaccbc1babffcd3))
+* **installer:** retry verification of matching unverified entries ([9387c0e](https://github.com/PyModel/jev-judge-mcp/commit/9387c0ee7994779c43bf5ab3eea3bbd351ea4ff6))
+* **io:** bound installer state and study record reads ([c06fbd7](https://github.com/PyModel/jev-judge-mcp/commit/c06fbd7b70419f54653f0593351ea19e29a00afd))
+* preserve child diagnostics when install verification ends early ([17c4bd7](https://github.com/PyModel/jev-judge-mcp/commit/17c4bd7c273a518387dc784dddbaa024787f35d4))
+* recover installer writes and bind releases to verified artifacts ([1e022bc](https://github.com/PyModel/jev-judge-mcp/commit/1e022bc4862ca041c5ebd6e12dcd7ebca7bb0f62))
+* report omitted peer context without changing gate actions ([ae256c9](https://github.com/PyModel/jev-judge-mcp/commit/ae256c94673721c102923cba26a9e5149ca0e869))
+* report oversized git ranges as input budget errors ([488da29](https://github.com/PyModel/jev-judge-mcp/commit/488da2987967bb1a1081b10d354ce5d12ca15048))
+* report source drift in running MCP sessions ([84ada93](https://github.com/PyModel/jev-judge-mcp/commit/84ada93f12ba0f03aafb18ac68e1c920614c5487))
+* retain reported usage on provider evaluations ([5a3340e](https://github.com/PyModel/jev-judge-mcp/commit/5a3340e3394fbc5a479be8ac7a8d6eff66c065d2))
+* **setup:** validate the stored key size before rotation ([bdc6ae5](https://github.com/PyModel/jev-judge-mcp/commit/bdc6ae51ee6b95bf42bbe20d37be57544caca473))
+
+
+### Documentation
+
+* **installer:** record the standalone workflow lint timeout ([145fc08](https://github.com/PyModel/jev-judge-mcp/commit/145fc08c42bc18db1efb1e5298cb68c72a9beb3c))
+* move installer validation evidence out of the repository ([038a1d6](https://github.com/PyModel/jev-judge-mcp/commit/038a1d64002ccd5c252e0f1764beeb392083cf90))
+
 ## [0.9.2](https://github.com/PyModel/jev-judge-mcp/compare/v0.9.1...v0.9.2) (2026-10-20)
 
 
