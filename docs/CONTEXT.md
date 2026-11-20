@@ -45,7 +45,7 @@ _Avoid_: lead, spread
 ### Deciding
 
 **Action**:
-What the caller may do with a judgment: `auto` (stands alone), `review` (a human or stronger check should confirm), or `escalate` (must not proceed as is).
+What the caller may do with a judgment: `auto` (stands alone), `review` (the caller settles it with its own check), or `escalate` (must not proceed as is).
 _Avoid_: decision, status, verdict
 
 **Verdict**:

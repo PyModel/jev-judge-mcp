@@ -76,7 +76,7 @@ A typed in-set choice is what `jev_decide` and `jev_classify` already return: on
 The review judges the `diff` you send, and claims rest on the supplied evidence. For a change in Git, `jev_gate_range` reads and packs the patches on the server.
 
 - `diff` holds the real `git diff` output. Never send an excerpt, a paraphrase, an elided `...`, a hand-written "key structure", a path, or "see evidence item". A trimmed patch is reviewed as written and scores low while every claim verifies. Tracked additions and deletions are included. Use `git add -N <path>` to include an untracked addition.
-- Size: `jev_gate` sends the diff and the tests log twice, once to the review and once as claim evidence. A small change goes as one string. A larger one goes as a `[{path, patch}]` list. The server packs patches into claims groups and sends a patch above the packing estimate alone. A provider context refusal holds that group’s files as `oversize`. For an `oversize` hold or `input_too_large` refusal, split by file or hunk into separate calls ("Part N of M" in `request`), each with only its own claims and evidence.
+- Size: `jev_gate` sends the diff and the tests log twice, once to the review and once as claim evidence. A small change goes as one string. A larger one goes as a `[{path, patch}]` list. The server packs patches into claims groups and sends a patch above the packing estimate alone. A provider context refusal holds that group's files as `oversize`. For an `oversize` hold or `input_too_large` refusal, split by file or hunk into separate calls ("Part N of M" in `request`), each with only its own claims and evidence.
 - Put raw runner output in `tests` (or `tests_path`). Give each claim direct supporting evidence. Each fitting file receives the request, its own patch and tests, plus bounded caller evidence and sibling patches. Claims are judged against each budget-packed group of patches, with caller evidence and tests repeated. An above-estimate patch is sent alone. If the provider refuses a claim group for context overflow, its files are held for local review.
 - Read `blockers` on a held gate. Each entry identifies the comparison or missing input, the affected file or claim where applicable, and a specific next check. A favorable rubric level can carry low confidence. Check the named requirement, callers or test path before drawing a conclusion about the code.
 - Read `review.context_omissions` for supplemental inputs left out of a file review. This information can accompany any action, including auto. Separate gates over parts do not establish a whole-change pass. From another worktree run `jev-judge-mcp gate --diff BASE..HEAD --claims claims.txt --tests test.log --request "requirement"` there.
@@ -86,7 +86,7 @@ The review judges the `diff` you send, and claims rest on the supplied evidence.
 | Action | What you do |
 | --- | --- |
 | `auto` | The verdict stands. Act on it. A contradicted claim at `auto` is confidently false. |
-| `review` | You still own this. Confirm it with a stronger check. |
+| `review` | You still own this. Settle it with your own check: a test, the source, the code. Call Jev again only when `rollup.next_call` is `with_input`, once, adding the input `next_checks` names. |
 | `escalate` | You still own this. Stop on this row. Do not grep `verified`. |
 | `invalid_response` | The row is unjudged. Leave it without a verdict. |
 

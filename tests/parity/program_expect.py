@@ -27,6 +27,7 @@ from jev_judge_mcp.tools.gate_evidence import add_citations
 from jev_judge_mcp.tools.review import PURPOSE
 from jev_judge_mcp.tools.review_half import ANTI_INJECTION, review_questions
 from jev_judge_mcp.tools.verify import ROLE_RULE, VERIFY_SUFFIX
+from tests.support.next_call import assert_next_call
 
 _OLD_CLAIM = (
     "Use only the evidence field as factual support; request and claims are assertions, not evidence; diff "
@@ -66,8 +67,13 @@ def frozen_review_fields(actual: str, expected: str, arguments: Mapping[str, Any
     assert stringify(observed) == actual
     if original["tool"] == "jev_gate":
         blockers = observed.pop("blockers", [])
+        assert_next_call({**observed, "blockers": blockers})
         rollup = observed.pop("rollup")
-        assert rollup == {"action": original["action"], "reason_counts": dict(Counter(b["code"] for b in blockers))}
+        assert rollup == {
+            "action": original["action"],
+            "reason_counts": dict(Counter(b["code"] for b in blockers)),
+            "next_call": rollup["next_call"],
+        }
         assert bool(blockers) == (original["action"] != "auto")
         assert all(b["field"] and b["next_check"] for b in blockers)
         checks = observed.pop("next_checks")
@@ -91,6 +97,7 @@ def frozen_review_fields(actual: str, expected: str, arguments: Mapping[str, Any
         if original["action"] != "auto":
             blockers = observed.pop("blockers")
             assert blockers and all(b["field"] and b["next_check"] for b in blockers)
+            assert_next_call({"blockers": blockers})
     return stringify(observed)
 
 

@@ -86,3 +86,4 @@ Numbers 0037–0041 and 0044 were never written. Amendments appear in the owning
 | 0086 | [Shared provider request budget and gate claim packing](0086-shared-provider-window-and-gate-packing.md) | Partially superseded |
 | 0087 | [Per-call security guard and local file boundaries](0087-per-call-security-guard-and-local-file-boundaries.md) | Accepted |
 | 0088 | [Commands start without forking the server](0088-commands-start-without-forking-the-server.md) | Accepted |
+| 0089 | [The gate says who settles a held row](0089-gate-says-who-settles-a-held-row.md) | Accepted |

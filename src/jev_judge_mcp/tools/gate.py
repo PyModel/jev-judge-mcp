@@ -71,7 +71,8 @@ DEFINITION = define(
     "Review a proposed patch and verify completion claims against supplied evidence. Auto "
     "only when the patch review is accepted and every claim is verified at or above auto_accept. Unsupported claims "
     "require review. Escalation identifies a cited defect, contradiction or safety refusal. "
-    "See rollup and next_checks. The request and "
+    "See rollup and next_checks: rollup.next_call none means settle it with your own check, with_input means "
+    "one more call adding the input next_checks names. The request and "
     "claims are assertions to check, never proof. Pass the real git diff as diff, whole or as a {path, patch} file "
     "list, and raw test output in tests. File reviews include bounded caller evidence and sibling patches. "
     "review.context_omissions lists optional inputs left out. An excerpt, "
@@ -677,6 +678,7 @@ async def _handle_file_list(
             "field": "diff",
             "code": "file_withheld",
             "next_check": _withheld_check(item["path"], item["reason"]),
+            "next_call": "with_input" if item["reason"] in ("untracked", "oversize") else "none",
         }
         for item in skipped
     ]
@@ -684,6 +686,7 @@ async def _handle_file_list(
     next_checks = cast(list[str], payload["next_checks"])
     if overflow:
         next_checks.append(f"Provider context limit reached. {SPLIT_GUIDANCE}")
+        cast(dict[str, object], payload["rollup"])["next_call"] = "with_input"
     for blocker in withheld_blockers:
         if blocker["reason"] == "untracked" and blocker["next_check"] not in next_checks:
             next_checks.append(blocker["next_check"])

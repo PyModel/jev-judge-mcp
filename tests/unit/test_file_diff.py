@@ -16,6 +16,7 @@ from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from jev_judge_mcp.tools.base import combined
 from tests.support.jev import NO_DEFECT, FakeProvider, Outcome, call_tool, choice
+from tests.support.next_call import assert_next_call
 
 pytestmark = pytest.mark.anyio
 
@@ -109,6 +110,8 @@ async def _call_gate_raw(diff: object, evidence: list[dict[str, str]]) -> tuple[
         )
     finally:
         await toolset.aclose()
+    if not result.is_error:
+        assert_next_call(json.loads(cast(TextContent, result.content[0]).text))
     return result, provider
 
 
@@ -745,9 +748,12 @@ async def _call_slow(provider: FakeProvider, files: list[str]) -> CallToolResult
     }
     toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: provider), TOOLS)
     try:
-        return await toolset.call("jev_gate", arguments)
+        result = await toolset.call("jev_gate", arguments)
     finally:
         await toolset.aclose()
+    if not result.is_error:
+        assert_next_call(json.loads(cast(TextContent, result.content[0]).text))
+    return result
 
 
 async def test_file_reviews_overlap_and_keep_the_input_order() -> None:

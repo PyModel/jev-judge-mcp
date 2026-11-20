@@ -257,13 +257,19 @@ and threshold 0.5. Check the requirement against its implementation. Summary rea
 frozen vocabulary. Read detailed blocker codes in `blockers` and `rollup.reason_counts`. The
 request, target patch and tests are the primary review inputs. The target path,
 caller evidence items and sibling patches share a supplemental UTF-16 budget. When any of these
-are omitted, `jev_review.context_omissions` or the gate’s `review.context_omissions` lists each
+are omitted, `jev_review.context_omissions` or the gate's `review.context_omissions` lists each
 target path and index, required and allowed units, and omitted entries. This field is informational
 on every action, including auto. Coverage flags and decisions still follow the primary inputs and
 judgments. See [ADR-0081](adr/0081-gate-diagnostics-and-file-context.md) and [ADR-0086](adr/0086-shared-provider-window-and-gate-packing.md).
 
 Read `rollup.action` for the whole change. `rollup.reason_counts` counts each detailed blocker
 by code across files, withheld paths and claims. Accepted changes have an empty count map.
+`rollup.next_call` says who settles the held rows ([ADR-0089](adr/0089-gate-says-who-settles-a-held-row.md)):
+`with_input` means one more call that adds the input `next_checks` names (the real diff, a test
+log, an untracked file, a smaller split) can move the verdict; `none` means no call settles it,
+so settle it with your own check. An unchanged re-call returns the same judgment. Each blocker
+carries its own `next_call`; `jev_review` blockers carry it too, without a rollup. `next_call`
+never changes `action`.
 `review.file_rows` is ordered by input position and preserves repeated paths. The existing
 `action`, `review.file_actions`, `score_file`, `reason_codes`, and numeric scores remain available.
 `next_checks` starts with a prioritized action and also lists intent-to-add commands for untracked
