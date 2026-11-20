@@ -14,7 +14,7 @@ from jev_judge_mcp.providers import Evaluation, ProviderError
 from jev_judge_mcp.providers.base import parse_envelope
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
-from jev_judge_mcp.tools.files import combined
+from jev_judge_mcp.tools.base import combined
 from tests.support.jev import NO_DEFECT, FakeProvider, Outcome, call_tool, choice
 
 pytestmark = pytest.mark.anyio

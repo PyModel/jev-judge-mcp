@@ -9,10 +9,9 @@ from tomlkit.container import Container
 from tomlkit.exceptions import TOMLKitError
 from tomlkit.items import AoT, Comment, Item, Key, Null, Table, Whitespace
 
-from jev_judge_mcp.domain import is_json_object
+from jev_judge_mcp.domain import is_json_array, is_json_object
 from jev_judge_mcp.install.errors import ConfigParseError, ConfigShapeError
 from jev_judge_mcp.install.jsonedit import assign, delete, loads
-from jev_judge_mcp.install.values import is_json_array
 
 
 def json_entry_path(target: str, document: object, name: str) -> list[str]:

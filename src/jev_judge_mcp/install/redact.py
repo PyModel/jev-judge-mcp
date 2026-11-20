@@ -6,8 +6,7 @@ from collections.abc import Iterable, Mapping
 
 from pydantic import ValidationError
 
-from jev_judge_mcp.domain import is_json_object
-from jev_judge_mcp.install.values import is_json_array
+from jev_judge_mcp.domain import is_json_array, is_json_object
 from jev_judge_mcp.keyfile import redaction_values
 from jev_judge_mcp.redaction.literals import redact_credential_literals
 from jev_judge_mcp.redaction.values import REDACTED, Redactor

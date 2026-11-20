@@ -6,9 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from jev_judge_mcp.domain import decode_json, is_json_object
+from jev_judge_mcp.domain import decode_json, is_json_array, is_json_object
 from jev_judge_mcp.install.fs import read_bytes
-from jev_judge_mcp.install.values import is_json_array
 
 PYTHINKER_DESKTOP_ID = "com.pythinker.desktop"
 PI_ADAPTER_HINT = "pi install npm:pi-mcp-adapter"

@@ -16,7 +16,7 @@ import anyio
 from mcp.types import Tool
 
 from jev_judge_mcp import cache
-from jev_judge_mcp.domain import JsonValue, Question
+from jev_judge_mcp.domain import JsonValue, Question, Usage
 from jev_judge_mcp.extract.worker import ProcessRegexExecutor
 from jev_judge_mcp.policy import Action, worst_action
 from jev_judge_mcp.providers import (
@@ -168,6 +168,23 @@ def frame(
     if evaluation.request_id:
         framed["request_id"] = evaluation.request_id
     return framed
+
+
+def combined(evaluations: list[Evaluation]) -> Evaluation:
+    """One frame for per-file asks: usage summed across every call, request id kept when one sent it."""
+    first = evaluations[0]
+    request_id = next((item.request_id for item in evaluations if item.request_id), None)
+    return Evaluation(
+        {},
+        Usage(
+            sum(item.usage.input_tokens for item in evaluations),
+            sum(item.usage.output_tokens for item in evaluations),
+            reported=all(item.usage.reported for item in evaluations),
+        ),
+        first.provider,
+        first.model,
+        request_id=request_id,
+    )
 
 
 class _Pending:

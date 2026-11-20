@@ -1,7 +1,7 @@
 """Canonical questions, answers, and usage owned by jev_judge_mcp, not SDK classes."""
 
 from jev_judge_mcp.domain.answers import ChoiceAnswer, RawAnswer, RubricAnswer, ScoreAnswer
-from jev_judge_mcp.domain.json import JsonValue, as_number, decode_json, is_json_object
+from jev_judge_mcp.domain.json import JsonValue, as_number, decode_json, is_json_array, is_json_object
 from jev_judge_mcp.domain.questions import (
     ChoiceQuestion,
     Description,
@@ -28,6 +28,7 @@ __all__ = [
     "Usage",
     "as_number",
     "decode_json",
+    "is_json_array",
     "is_json_object",
     "questions_to_wire",
 ]

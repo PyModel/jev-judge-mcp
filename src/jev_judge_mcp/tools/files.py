@@ -12,7 +12,7 @@ from typing import Any, cast
 
 import anyio
 
-from jev_judge_mcp.domain import Question, Usage
+from jev_judge_mcp.domain import Question
 from jev_judge_mcp.gate_budget import fits_budget
 from jev_judge_mcp.gate_diagnostics import Blocker, size_blocker
 from jev_judge_mcp.limits import GATE, GateCaps
@@ -306,21 +306,4 @@ async def review_file_list(
         scopes,
         blockers,
         [omissions[index] for index in sorted(omissions)],
-    )
-
-
-def combined(evaluations: list[Evaluation]) -> Evaluation:
-    """One frame for per-file asks: usage summed across every call, request id kept when one sent it."""
-    first = evaluations[0]
-    request_id = next((item.request_id for item in evaluations if item.request_id), None)
-    return Evaluation(
-        {},
-        Usage(
-            sum(item.usage.input_tokens for item in evaluations),
-            sum(item.usage.output_tokens for item in evaluations),
-            reported=all(item.usage.reported for item in evaluations),
-        ),
-        first.provider,
-        first.model,
-        request_id=request_id,
     )

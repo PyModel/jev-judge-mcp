@@ -6,7 +6,7 @@ surviving file under the ADR-0069 in-flight cap. The payload reports a typed ans
 and a stable reason per skipped one; no file's bytes ever enter the agent's context. This is the
 extension-tool path ADR-0048 opened (divergence `file-judge-tools`): the question building and the
 answer projection are `jev_file_judge`'s, the per-file read and its refusals are `file_state`'s, and
-the usage summing is the `tools/files.py` `combined()` precedent — this module owns only the
+the usage summing is the `tools/base.py` `combined()` precedent — this module owns only the
 expansion, the prune, and the bounded fan-out. Every prune step precedes the first provider call,
 and a pruned path costs nothing.
 """
@@ -26,7 +26,7 @@ from jev_judge_mcp.domain import ChoiceQuestion, ScoreQuestion
 from jev_judge_mcp.limits import FILE_JUDGE, FILES_JUDGE
 from jev_judge_mcp.providers import Evaluation, ProviderConfigError
 from jev_judge_mcp.security import SecurityGuard
-from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, code_of, define, frame
+from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, code_of, combined, define, frame
 from jev_judge_mcp.tools.file_judge import (
     KIND_REFINEMENT,
     KINDS,
@@ -36,7 +36,6 @@ from jev_judge_mcp.tools.file_judge import (
     project_answer,
 )
 from jev_judge_mcp.tools.file_state import pinned_directory, read_state, resolve_scoped
-from jev_judge_mcp.tools.files import combined
 
 logger = logging.getLogger(__name__)
 

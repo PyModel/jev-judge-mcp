@@ -45,6 +45,11 @@ def is_json_object(value: object) -> TypeGuard[dict[str, object]]:
     return isinstance(value, dict)
 
 
+def is_json_array(value: object) -> TypeGuard[list[object]]:
+    """A JSON array. `isinstance(x, list)` alone is `list[Unknown]` under pyright."""
+    return isinstance(value, list)
+
+
 def as_number(value: object) -> float | None:
     """The float64 a JS `number` would hold, or `None` when `typeof value !== "number"`.
 
