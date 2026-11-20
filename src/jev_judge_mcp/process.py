@@ -1,4 +1,4 @@
-"""Capture a command's output under one deadline and a per-stream byte bound (ADR-0088).
+"""Capture a command's output under a deadline and a per-stream byte bound (ADR-0088).
 
 Every command runs in the server's current directory, in its own session, with stdin at /dev/null
 and no descriptor but its two output pipes: none of the server's files or sockets reach it. The
@@ -58,7 +58,7 @@ if sys.platform == "linux":
 
         def wait() -> None:
             try:
-                with contextlib.suppress(ChildProcessError):  # reaped elsewhere: close() reports it
+                with contextlib.suppress(ChildProcessError):  # reaped elsewhere (SIGCHLD ignored): it exited
                     os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
             finally:
                 os.close(write_end)
@@ -104,8 +104,9 @@ def capture(
     argv: Sequence[str], *, env: Mapping[str, str], timeout_seconds: float, byte_cap: int
 ) -> subprocess.CompletedProcess[bytes]:
     """Run argv. Raises `subprocess.TimeoutExpired` past the deadline, `OutputTooLarge` past byte_cap
-    on either stream, and `OSError` when output stays open after the command exited; the command's
-    process group is killed before any of them is raised."""
+    on either stream, and `OSError` when output stays open DRAIN_GRACE_SECONDS after the command
+    exited, which can end past the deadline; the command's process group is killed before any of
+    them is raised."""
     deadline = time.monotonic() + timeout_seconds
     child = _Child(argv, env)
     try:
@@ -139,10 +140,12 @@ class _Child:
         try:
             self.exit_fd, self._release_watch = _exit_watch(self.pid)
         except BaseException:
-            self.kill()
-            self._reap()
-            os.close(self.stdout)
-            os.close(self.stderr)
+            try:
+                self.kill()
+                self._reap()
+            finally:
+                os.close(self.stdout)
+                os.close(self.stderr)
             raise
 
     def kill(self) -> None:

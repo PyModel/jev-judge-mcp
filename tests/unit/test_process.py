@@ -1,7 +1,9 @@
 """The command runner's contract (ADR-0088): what a command receives, and how its run ends."""
 
 import errno
+import fcntl
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -88,11 +90,43 @@ def test_a_signal_death_is_a_negative_status() -> None:
     assert sh("kill -TERM $$").returncode == -15
 
 
-def test_stdin_is_dev_null() -> None:
-    started = time.monotonic()
-    result = run(["cat"])
-    assert (result.stdout, result.returncode) == (b"", 0)
-    assert time.monotonic() - started < 5  # the server's stdin (the MCP channel) never reaches it
+def test_the_servers_stdin_never_reaches_the_command(tmp_path: Path) -> None:
+    """The server's stdin is the MCP channel, an open pipe; a command reading it would block until
+    the deadline. pytest's own fd 0 is /dev/null, so the server runs in a child with a real pipe."""
+    report = tmp_path / "report"
+    script = (
+        "import os; r, w = os.pipe(); os.dup2(r, 0);"
+        "from jev_judge_mcp.process import capture;"
+        "res = capture(['cat'], env={'PATH': os.environ['PATH']}, timeout_seconds=5, byte_cap=100);"
+        f"open({str(report)!r}, 'w').write(repr((res.stdout, res.returncode)))"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True, timeout=30)
+    assert report.read_text() == repr((b"", 0))
+
+
+def test_a_command_leads_its_own_session() -> None:
+    probe = "import os; print(os.getsid(0) == os.getpgid(0) == os.getpid())"
+    assert run([sys.executable, "-c", probe]).stdout == b"True\n"
+
+
+def test_sigxfsz_is_default_in_the_command(tmp_path: Path) -> None:
+    """Python ignores SIGXFSZ; a command that inherited that would see a write error, not the signal."""
+    result = sh(f"ulimit -f 1; head -c 8192 /dev/zero > {tmp_path / 'big'}")
+    assert result.returncode in (-signal.SIGXFSZ, 128 + signal.SIGXFSZ)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Linux Popen keeps the caller's mask, as before")
+def test_the_macos_command_starts_with_an_empty_signal_mask() -> None:
+    result: list[int] = []
+
+    def blocked_caller() -> None:
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+        result.append(sh("kill -TERM $$").returncode)
+
+    thread = threading.Thread(target=blocked_caller)
+    thread.start()
+    thread.join()
+    assert result == [-signal.SIGTERM]
 
 
 def test_sigpipe_is_default_in_the_command() -> None:
@@ -126,8 +160,9 @@ def test_an_argument_or_variable_that_cannot_pass_raises_value_error(argv: list[
 def test_a_command_receives_no_descriptor_but_its_own() -> None:
     """Other threads keep creating sockets and pipes, which on macOS are inheritable for an instant,
     and the server holds a descriptor marked inheritable; no command sees either."""
-    marked_read, marked_write = os.pipe()
-    os.set_inheritable(marked_write, True)
+    marked_read, write_end = os.pipe()
+    marked_write = fcntl.fcntl(write_end, fcntl.F_DUPFD, 64)  # inheritable, and above any fd ls opens
+    os.close(write_end)
     baseline = run(["/bin/ls", "/dev/fd"]).stdout
     stop = threading.Event()
 
