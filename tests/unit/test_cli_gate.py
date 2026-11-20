@@ -548,6 +548,28 @@ def test_completion_claims_and_provider_deadline(
     assert 0 < remaining < timeout
 
 
+@pytest.mark.parametrize(
+    ("command", "repository"),
+    [
+        ("git -C a -C b push", "a/b"),
+        ("git -C '' push", ""),
+        ("git -C /srv/repo push", "/srv/repo"),
+        ("git -c core.hooksPath=x push", ""),
+        ("git -C $DIR push", None),
+        ("git -c remote.origin.url=x push", None),
+        ("git --git-dir=x push", None),
+    ],
+    ids=["chained", "empty", "absolute", "hooks-path", "dynamic", "other-config", "git-dir"],
+)
+def test_git_options_select_the_repository_and_keep_the_shell_directory(
+    tmp_path: Path, command: str, repository: str | None
+) -> None:
+    """`-C` resolves like git (chained, empty, absolute); a target git options could redirect is unknown."""
+    (target,) = cli._completion_targets(command, tmp_path)
+    assert target.shell_cwd == tmp_path
+    assert target.git_cwd == (None if repository is None else tmp_path / repository)
+
+
 @pytest.mark.parametrize("command", ["cd repo && git push", "git -C repo push"])
 def test_completion_uses_the_commands_repository(command: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = repo_with_diff(tmp_path)

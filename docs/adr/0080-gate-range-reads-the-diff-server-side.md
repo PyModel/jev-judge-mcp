@@ -107,6 +107,7 @@ tool's git refusals (`invalid_arguments`) now end with `(server working director
 the caller can tell a wrong range from a server started outside its project. The CLI omits
 that suffix because it runs in the operator's own shell.
 The path names the local process's directory and reaches only the client, never the provider.
+
 ## Amendment (2026-11-19): canonical worktree diff and one Git runner
 
 Range reads, build identity and ask use the same bounded Git runner. It selects the repository
