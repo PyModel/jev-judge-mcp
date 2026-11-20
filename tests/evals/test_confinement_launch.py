@@ -669,7 +669,7 @@ def test_relay_budget_is_shared_and_overflow_unwinds(
     cleanup = Mock()
     docker = Mock(return_value=subprocess.CompletedProcess([], 0, "", ""))
     capture = Mock(return_value=("", "", 0))
-    monkeypatch.setattr(agent, "RELAY_CAP_BYTES", budget, raising=False)
+    monkeypatch.setattr(agent, "RELAY_CAP_BYTES", budget)
     monkeypatch.setattr(launch, "wait_for_broker", Mock())
     monkeypatch.setattr(launch, "docker_run", docker)
     monkeypatch.setattr(launch, "capture_output", capture)
@@ -766,7 +766,7 @@ def test_secret_scan_and_scrub_read_bounded_chunks(tmp_path: Path, monkeypatch: 
     path = tmp_path / "artifact"
     original = b"1234567secretsecret.xsecret.las"
     path.write_bytes(original)
-    monkeypatch.setattr(agent, "ARTIFACT_CHUNK_BYTES", 8, raising=False)
+    monkeypatch.setattr(agent, "ARTIFACT_CHUNK_BYTES", 8)
     fdopen = agent.os.fdopen
 
     class BoundedReader:

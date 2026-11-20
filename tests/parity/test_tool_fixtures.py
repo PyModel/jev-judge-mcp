@@ -8,14 +8,11 @@ are replayed against the Python expectation in `DIVERGENT` instead. Fixture call
 `tests.support.fixtures`, the one loader (ADR-0015).
 """
 
-import os
-
 import pytest
 
 from tests.parity.divergences import DIVERGENT
 from tests.support.fixtures import FixtureCall, divergences, iter_calls
 from tests.support.replay import replay_call
-from tests.support.stdio import server_env
 from tests.support.tools_list import load_snapshot
 
 IMPLEMENTED = {tool["name"] for tool in load_snapshot()}
@@ -31,14 +28,6 @@ CALLS = [call for call in ALL_CALLS if call.payload["tool"] in IMPLEMENTED]
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
-
-
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    kept = server_env()
-    for key in list(os.environ):
-        if key not in kept:
-            monkeypatch.delenv(key)
 
 
 def test_every_fixture_call_is_replayed() -> None:

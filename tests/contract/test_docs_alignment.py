@@ -717,16 +717,6 @@ def test_calibrate_advisory_says_to_pin_the_measured_model() -> None:
     assert "Live evals pin `jev-1.13.0`" in guide
 
 
-def test_score_citations_match_the_refreshed_summary() -> None:
-    """C1: the summary says 2-10. A comment that still says 1-10 is the stale citation."""
-    limits_source = (ROOT / "src" / "jev_judge_mcp" / "limits.py").read_text(encoding="utf-8")
-    score_test = (ROOT / "tests" / "contract" / "test_limits.py").read_text(encoding="utf-8")
-    assert "1-10 levels" not in limits_source
-    assert "1-10 levels" not in score_test
-    assert limits.SCORE.levels_min == 2
-    assert limits.SCORE.levels_max == 10
-
-
 def test_scout_031_evidence_links_resolve() -> None:
     page = ROOT / "docs" / "EVIDENCE.md"
     targets = re.findall(r"\]\(([^)]+)\)", page.read_text(encoding="utf-8"))

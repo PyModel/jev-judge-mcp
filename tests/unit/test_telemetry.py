@@ -3,7 +3,6 @@
 import ast
 import inspect
 import logging
-import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, get_args, override
@@ -22,7 +21,6 @@ from jev_judge_mcp.validation.caps import CapScope
 from tests.security.tools import CASES, choice
 from tests.support.jev import FakeProvider
 from tests.support.secrets import secret_env
-from tests.support.stdio import server_env
 
 pytestmark = pytest.mark.anyio
 
@@ -34,13 +32,6 @@ ALLOWED_ATTRIBUTE_TYPES = (bool, int, float, str)
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
-
-
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    kept = server_env()
-    for key in [key for key in os.environ if key not in kept]:
-        monkeypatch.delenv(key)
 
 
 class FailingProvider(FakeProvider):

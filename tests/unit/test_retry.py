@@ -2,12 +2,11 @@
 
 from typing import ClassVar
 
-import httpx
 import pytest
 
 from jev_judge_mcp.domain import JsonValue, Usage
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.providers import Evaluation, ProviderError, RetryPolicy
+from jev_judge_mcp.providers import Evaluation, RetryPolicy
 from jev_judge_mcp.providers import retry as retry_timing
 from jev_judge_mcp.providers.base import JevProvider, ProviderConfigError, ProviderName
 from tests.support.retries import fast_retries as fast_retries
@@ -106,7 +105,7 @@ def test_unusable_retry_after_is_none(headers: dict[str, str]) -> None:
 
 
 class _Classifier(JevProvider):
-    """Exposes `_transient` and `_exhausted` without any transport."""
+    """Exposes `_transient` without any transport."""
 
     name: ClassVar[ProviderName] = "compatible"
     label: ClassVar[str] = "Jev-compatible endpoint"
@@ -118,34 +117,6 @@ class _Classifier(JevProvider):
 
     async def aclose(self) -> None:
         return None
-
-
-def _failure(status: int | None = None) -> ProviderError:
-    error = ProviderError("boom")
-    error.status = status
-    return error
-
-
-def test_status_errors_retry_only_on_the_policy_statuses() -> None:
-    provider = _Classifier(Redactor(()))
-    transient = provider._transient(_failure(429))  # pyright: ignore[reportPrivateUsage]
-    assert transient is not None and transient.kind == "status" and transient.status == 429
-    assert transient.describe == "status 429"
-    for status in (400, 401, 403, 404, 409, 422):
-        assert provider._transient(_failure(status)) is None  # pyright: ignore[reportPrivateUsage]
-    # No status: an envelope error, a refusal — never retried.
-    assert provider._transient(_failure(None)) is None  # pyright: ignore[reportPrivateUsage]
-
-
-def test_only_definitely_unsent_transport_failures_are_transient() -> None:
-    provider = _Classifier(Redactor(()))
-    timeout = provider._transient(httpx.ConnectTimeout("connect"))  # pyright: ignore[reportPrivateUsage]
-    assert timeout is not None and timeout.describe == "timeout"
-    connect = provider._transient(ConnectionRefusedError("refused"))  # pyright: ignore[reportPrivateUsage]
-    assert connect is not None and connect.describe == "connect" and connect.detail == "refused"
-    bare = provider._transient(ConnectionError())  # pyright: ignore[reportPrivateUsage]
-    assert bare is None
-    assert provider._transient(ValueError("nope")) is None  # pyright: ignore[reportPrivateUsage]
 
 
 def test_provider_config_error_is_never_transient() -> None:

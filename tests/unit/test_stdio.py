@@ -6,7 +6,9 @@ import pytest
 from mcp.types import JSONRPCRequest, JSONRPCResponse
 from pydantic.aliases import AliasChoices
 
+from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.stdio import encode_frame, parse_line
+from tests.support.stdio import server_env
 
 
 def test_lone_surrogate_escape_is_kept() -> None:
@@ -43,18 +45,10 @@ def test_lone_surrogates_are_escaped_and_split_pairs_rejoined() -> None:
     assert json.loads(frame)["result"]["text"] == "x\ud83dy é 😀"
 
 
-def test_every_setting_the_server_reads_is_scrubbed_from_its_spawn_env() -> None:
-    """The developer's shell cannot change a spawned server's behavior.
-
-    Every environment variable `Settings` reads (its validation aliases, derived here from the
-    schema) is scrubbed before a test spawns the server. The alias set, not the scrub list, is
-    the source of truth: a knob added to `Settings` without joining `_SCRUBBED_ENV` makes every
-    spawned server behavior depend on the developer's shell — `JEV_MCP_MAX_INFLIGHT` exported in
-    a verification shell changed the security suite's servers this way.
-    """
-    from jev_judge_mcp.settings import Settings
-    from tests.support.stdio import _SCRUBBED_ENV  # pyright: ignore[reportPrivateUsage]
-
+def test_every_setting_the_server_reads_is_scrubbed_from_its_spawn_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Child environments ignore parent settings and honor only explicit overrides."""
     aliases: set[str] = set()
     for field in Settings.model_fields.values():
         alias = field.validation_alias
@@ -64,5 +58,9 @@ def test_every_setting_the_server_reads_is_scrubbed_from_its_spawn_env() -> None
             aliases.update(choice for choice in alias.choices if isinstance(choice, str))
 
     assert aliases, "the schema derivation found no aliases; the guard would pass vacuously"
-    missing = aliases - set(_SCRUBBED_ENV)
-    assert not missing, f"settings read from the developer's shell by spawned servers: {sorted(missing)}"
+    for alias in aliases:
+        monkeypatch.setenv(alias, "inherited-setting")
+    extra = {"JEV_MCP_CACHE": "1"}
+    child_env = server_env(extra)
+    assert all(child_env.get(alias) != "inherited-setting" for alias in aliases)
+    assert child_env["JEV_MCP_CACHE"] == extra["JEV_MCP_CACHE"]

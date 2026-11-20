@@ -6,7 +6,6 @@ never bind at all.
 """
 
 import json
-import os
 from pathlib import Path
 
 import httpx
@@ -22,7 +21,7 @@ from jev_judge_mcp.http_auth import (
 )
 from jev_judge_mcp.server import build_server, ensure_secrets_redactable, http_asgi_app
 from jev_judge_mcp.settings import Settings, load_settings
-from tests.support.stdio import INITIALIZE, server_env
+from tests.support.stdio import INITIALIZE
 
 TOKEN = "test-token-" + "x" * 32
 
@@ -36,14 +35,6 @@ OTHER_HOSTS = [
     "jev.example",
     "2001:db8::1",
 ]
-
-
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    kept = server_env()
-    for key in list(os.environ):
-        if key not in kept:
-            monkeypatch.delenv(key)
 
 
 def settings_with(monkeypatch: pytest.MonkeyPatch, **env: str) -> Settings:

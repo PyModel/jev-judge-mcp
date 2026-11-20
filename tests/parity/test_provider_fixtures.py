@@ -10,7 +10,6 @@ loader (ADR-0015); `question_from_wire` lives there too.
 """
 
 import json
-import os
 from typing import Any
 
 import httpx
@@ -23,7 +22,6 @@ from jev_judge_mcp.providers.resolver import VERCEL_UNSUPPORTED
 from jev_judge_mcp.settings import load_settings
 from tests.support.fixtures import FixtureCall, iter_calls, question_from_wire, tagged
 from tests.support.replay import FAKE_URL, apply_call_env, ordered
-from tests.support.stdio import server_env
 
 pytestmark = pytest.mark.anyio
 
@@ -44,14 +42,6 @@ EXCHANGES = [
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
-
-
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    kept = server_env()
-    for key in list(os.environ):
-        if key not in kept:
-            monkeypatch.delenv(key)
 
 
 def test_fixtures_were_found() -> None:

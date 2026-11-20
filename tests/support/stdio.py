@@ -16,42 +16,12 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any, Self
 
+from tests.support.environment import SETTINGS_ENV as _SCRUBBED_ENV
 from tests.support.rpc_replies import REPLY_TIMEOUT, ReplyStream, TimedReply, pipe_chunks
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROTOCOL_VERSION = "2025-06-18"
 TIMEOUT = REPLY_TIMEOUT
-
-# Provider variables are scrubbed so the developer's shell cannot leak into a test run.
-_SCRUBBED_ENV = (
-    "JEV_PROVIDER",
-    "JEV_MCP_MODEL",
-    "TYPESAFE_API_KEY",
-    "TYPESAFE_BASE_URL",
-    "OPENROUTER_API_KEY",
-    "JEV_CLOUDFLARE_API_TOKEN",
-    "CLOUDFLARE_API_TOKEN",
-    "CLOUDFLARE_ACCOUNT_ID",
-    "AI_GATEWAY_API_KEY",
-    "JEV_API_KEY",
-    "JEV_API_BASE_URL",
-    "JEV_MCP_TRANSPORT",
-    "JEV_MCP_KEY_FILE",
-    "JEV_STUDY_USAGE_PROVENANCE",
-    "JEV_MCP_CACHE",
-    "JEV_MCP_CACHE_DIR",
-    "JEV_MCP_CACHE_MAX_ENTRIES",
-    "JEV_MCP_CACHE_TTL_SECONDS",
-    "JEV_MCP_HTTP_HOST",
-    "JEV_MCP_HTTP_PORT",
-    "JEV_MCP_HTTP_TOKEN",
-    "JEV_MCP_LOG_LEVEL",
-    "JEV_MCP_MAX_INFLIGHT",
-    "JEV_MCP_TELEMETRY_PAYLOADS",
-    "JEV_ASK_COMMANDS",
-    "XDG_CACHE_HOME",
-    "XDG_CONFIG_HOME",
-)
 
 INITIALIZE: dict[str, Any] = {
     "jsonrpc": "2.0",

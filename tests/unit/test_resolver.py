@@ -1,6 +1,5 @@
 """Provider resolution beyond the recorded error texts (`provider.ts:35-77`, ADR-0007)."""
 
-import os
 import re
 from pathlib import Path
 
@@ -13,21 +12,12 @@ from jev_judge_mcp.providers.openrouter import OpenRouterProvider
 from jev_judge_mcp.providers.resolver import NO_CREDENTIALS, VERCEL_UNSUPPORTED
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
 from jev_judge_mcp.settings import load_settings
-from tests.support.stdio import server_env
 
 TYPESAFE = {"TYPESAFE_API_KEY": "typesafe-fake-key"}
 OPENROUTER = {"OPENROUTER_API_KEY": "sk-or-v1"}
 CLOUDFLARE = {"CLOUDFLARE_API_TOKEN": "cloudflare-fake-token", "CLOUDFLARE_ACCOUNT_ID": "acct"}
 VERCEL = {"AI_GATEWAY_API_KEY": "gateway-fake-key"}
 COMPATIBLE = {"JEV_API_KEY": "compatible-fake-key", "JEV_API_BASE_URL": "https://jev.example/v1"}
-
-
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    kept = server_env()
-    for key in list(os.environ):
-        if key not in kept:
-            monkeypatch.delenv(key)
 
 
 def resolve(monkeypatch: pytest.MonkeyPatch, *envs: dict[str, str]) -> object:

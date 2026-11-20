@@ -8,7 +8,6 @@ import re
 import shutil
 import signal
 import stat
-import subprocess
 import sys
 import time
 from collections.abc import Sequence
@@ -34,6 +33,7 @@ from evals.bench import ledger as bench_ledger
 from evals.bench import run
 from evals.bench.items import load_items
 from evals.spend import SpendLedger, SpendPolicy
+from tests.support.workers import alive, gone_or_zombie
 
 KEY = "sekrit-123"
 REPO = Path(__file__).resolve().parents[2]
@@ -290,31 +290,13 @@ def test_timeout_has_no_return_code_and_is_scrubbed(tmp_path: Path) -> None:
     assert KEY not in _kept(tmp_path) and not agent.workdir.exists()
 
 
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-def _gone(pid: int) -> bool:
-    """Dead, or a zombie that has not been reaped. A zombie is not running."""
-    if not _alive(pid):
-        return True
-    stat_text = subprocess.run(
-        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False
-    ).stdout.strip()
-    return stat_text == "" or stat_text.startswith("Z")
-
-
 def _wait_gone(pid: int) -> None:
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
-        if _gone(pid):
+        if gone_or_zombie(pid):
             return
         time.sleep(0.05)
-    assert _gone(pid), f"pid {pid} still running"
+    assert gone_or_zombie(pid), f"pid {pid} still running"
 
 
 def _group_gone(pgid: int) -> bool:
@@ -389,7 +371,7 @@ def test_timeout_kills_the_agent_group_and_leaves_the_study_alive(tmp_path: Path
             agent_pgid = int((agent.workdir / "agent.pgid").read_text(encoding="utf-8"))
             assert agent.returncode is None and agent.status == "failed: timeout after 2s"
             assert agent_pid != study and child_pid != study
-        assert study == os.getpid() and _alive(study)
+        assert study == os.getpid() and alive(study)
         assert agent_pgid != study_pgid
         _wait_gone(agent_pid)
         _wait_gone(child_pid)

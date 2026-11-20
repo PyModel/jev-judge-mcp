@@ -34,9 +34,6 @@ def fake_url(value: str) -> str:
 
 def apply_call_env(call: FixtureCall, monkeypatch: pytest.MonkeyPatch) -> None:
     """Install the fixture call's `env`, `{{FAKE_URL}}` resolved to the fake provider."""
-    # Pin the key file away from the developer's machine first (ADR-0046): no resolver-error
-    # fixture may depend on whether this host ran `setup`. A fixture that names it still wins.
-    monkeypatch.setenv("JEV_MCP_KEY_FILE", "/nonexistent/jev-mcp-key")
     for key, value in call.payload["env"].items():
         monkeypatch.setenv(key, fake_url(value))
 

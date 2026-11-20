@@ -1,14 +1,19 @@
 """Guard against host-wide command-line disclosure and unscoped extract-worker counts."""
 
 import ast
-import re
+import shlex
 import subprocess
-from collections.abc import Sequence
+from collections import defaultdict
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
+WORKER_SUPPORT = REPO / "tests/support/workers.py"
+PROCESS_COMMANDS = {"ps", "pgrep"}
+SHELL_RUNNERS = {"getoutput", "getstatusoutput"}
+SUBPROCESS_RUNNERS = {"call", "check_call", "check_output", "Popen", "run"} | SHELL_RUNNERS
 
 
 def owned_test_py_files(root: Path = REPO) -> list[Path]:
@@ -30,19 +35,72 @@ def owned_test_py_files(root: Path = REPO) -> list[Path]:
     return files
 
 
+def _possible_commands(
+    expr: ast.expr, bindings: dict[str, list[ast.expr]], visited: frozenset[str] = frozenset()
+) -> Iterator[str]:
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+        yield expr.value
+    elif isinstance(expr, (ast.List, ast.Tuple)) and expr.elts:
+        yield from _possible_commands(expr.elts[0], bindings, visited)
+    elif isinstance(expr, ast.Starred):
+        yield from _possible_commands(expr.value, bindings, visited)
+    elif isinstance(expr, ast.Name) and expr.id not in visited:
+        for value in bindings.get(expr.id, ()):
+            yield from _possible_commands(value, bindings, visited | {expr.id})
+    elif isinstance(expr, ast.IfExp):
+        yield from _possible_commands(expr.body, bindings, visited)
+        yield from _possible_commands(expr.orelse, bindings, visited)
+
+
+def _process_command(command: str, *, shell: bool) -> bool:
+    tokens = shlex.shlex(command, posix=True, punctuation_chars=True) if shell else [command]
+    if isinstance(tokens, shlex.shlex):
+        tokens.whitespace_split = True
+    return any(Path(token).name in PROCESS_COMMANDS for token in tokens)
+
+
 def unsafe_process_listing(source: str) -> bool:
-    """Test process probes must select their target rather than collect a default host listing."""
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.Call) or not node.args or not isinstance(node.args[0], (ast.List, ast.Tuple)):
+    """Find subprocess arguments that could invoke a process listing."""
+    nodes = list(ast.walk(ast.parse(source)))
+    bindings: dict[str, list[ast.expr]] = defaultdict(list)
+    modules = {"subprocess"}
+    imports: dict[str, str] = {}
+    for node in nodes:
+        if isinstance(node, ast.Import):
+            modules.update(alias.asname or alias.name for alias in node.names if alias.name == "subprocess")
+        elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+            imports.update((alias.asname or alias.name, alias.name) for alias in node.names)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    bindings[target.id].append(node.value)
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and isinstance(node.target, ast.Name):
+            if node.value is not None:
+                bindings[node.target.id].append(node.value)
+
+    for node in nodes:
+        if not isinstance(node, ast.Call):
             continue
-        argv = node.args[0].elts
-        if not argv or not isinstance(argv[0], ast.Constant) or argv[0].value != "ps":
+        func = node.func
+        runner = None
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in modules:
+            runner = func.attr
+        elif isinstance(func, ast.Name):
+            runner = imports.get(func.id)
+        if runner not in SUBPROCESS_RUNNERS:
             continue
-        flags = {arg.value for arg in argv[1:] if isinstance(arg, ast.Constant) and isinstance(arg.value, str)}
-        # BSD and UNIX ps combine short flags (auxww, -ef). Additional selectors
-        # may broaden a -p query, so a PID alone is insufficient in a mixed invocation.
-        unscoped = any(re.fullmatch(r"-[A-Za-z]*[AaegNUu][A-Za-z]*|a[uxwl]*|--deselect", arg) for arg in flags)
-        if unscoped or not flags.intersection({"-p", "--pid", "--ppid", "--pgroup"}):
+        kwargs = {kw.arg: kw.value for kw in node.keywords}
+        shell = kwargs.get("shell")
+        uses_shell = runner in SHELL_RUNNERS or (isinstance(shell, ast.Constant) and shell.value is True)
+        command = node.args[0] if node.args else kwargs.get("args", kwargs.get("cmd"))
+        if command is not None and any(
+            _process_command(value, shell=uses_shell) for value in _possible_commands(command, bindings)
+        ):
+            return True
+        executable = kwargs.get("executable")
+        if executable is not None and any(
+            _process_command(value, shell=False) for value in _possible_commands(executable, bindings)
+        ):
             return True
     return False
 
@@ -50,7 +108,11 @@ def unsafe_process_listing(source: str) -> bool:
 def unsafe_process_listings(files: Sequence[Path]) -> list[str]:
     if not files:
         raise ValueError("no test files to scan")
-    return [str(path) for path in files if unsafe_process_listing(path.read_text(encoding="utf-8"))]
+    return [
+        str(path)
+        for path in files
+        if path.resolve() != WORKER_SUPPORT and unsafe_process_listing(path.read_text(encoding="utf-8"))
+    ]
 
 
 def test_process_listings_keep_host_arguments_private_and_worker_counts_scoped() -> None:
@@ -58,24 +120,33 @@ def test_process_listings_keep_host_arguments_private_and_worker_counts_scoped()
 
 
 @pytest.mark.parametrize(
-    "argv",
+    "source",
     [
-        '["ps", "-ax", "-o", "pid=,command="]',
-        '["ps", "-A", "-o", "pid=,ppid=,command="]',
-        '["ps", "-A"]',
-        '["ps", "-ef"]',
-        '["ps", "auxww"]',
-        '["ps", "-ax", "-o", fields]',
-        '["ps", "-ef", "-p", str(pid)]',
+        'subprocess.run(["ps", "-ax", "-o", "pid=,command="])',
+        'subprocess.run(["ps", "-A", "-o", "pid=,ppid=,command="])',
+        'subprocess.run(["ps", "-A"])',
+        'subprocess.run(["ps", "-ef"])',
+        'subprocess.run(["ps", "auxww"])',
+        'subprocess.run(["ps", "-ax", "-o", fields])',
+        'subprocess.run(["ps", "-ef", "-p", str(pid)])',
+        pytest.param('subprocess.run(["/bin/ps", "-ax"])', id="absolute-path"),
+        pytest.param('subprocess.run("ps ax", shell=True)', id="shell-string"),
+        pytest.param('argv = ["ps", "ax"]\nsubprocess.run(argv)', id="argv-variable"),
+        pytest.param('subprocess.run(["pgrep", "-fl", "python"])', id="pgrep"),
+        pytest.param('subprocess.run(["ps", "-p", str(pid)])', id="pid-scoped-outside-helper"),
+        pytest.param(
+            'from subprocess import run as execute\ncmd: str = "true; /bin/ps ax"\nexecute(args=cmd, shell=True)',
+            id="import-alias-and-command-variable",
+        ),
     ],
 )
-def test_guard_detects_host_command_lines(argv: str) -> None:
-    assert unsafe_process_listing(f"subprocess.run({argv})")
+def test_guard_detects_process_queries(source: str) -> None:
+    assert unsafe_process_listing(source)
 
 
-def test_guard_accepts_a_pid_scoped_probe_and_refuses_an_empty_scan(tmp_path: Path) -> None:
-    scoped = tmp_path / "test_scoped.py"
-    scoped.write_text('subprocess.run(["ps", "-p", str(pid), "-o", "stat="])')
-    assert unsafe_process_listings([scoped]) == []
+def test_guard_ignores_non_process_commands_and_refuses_an_empty_scan(tmp_path: Path) -> None:
+    unrelated = tmp_path / "test_unrelated.py"
+    unrelated.write_text('subprocess.run(["docker", "ps"])\nrecord(["ps", "-A"])')
+    assert unsafe_process_listings([unrelated]) == []
     with pytest.raises(ValueError, match="no test files"):
         unsafe_process_listings([])

@@ -1,4 +1,3 @@
-import os
 import re
 from pathlib import Path
 
@@ -8,7 +7,6 @@ from pydantic import SecretStr
 from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.settings import Settings, load_settings, unexpanded_references
 from tests.support.secrets import is_secret_field, secret_env
-from tests.support.stdio import server_env
 
 SECRETS = {
     "TYPESAFE_API_KEY": "ts-secret",
@@ -20,14 +18,6 @@ SECRETS = {
     "JEV_API_KEY": "jev-secret",
     "JEV_API_BASE_URL": "https://user:pw@jev.example",
 }
-
-
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    kept = server_env()
-    for key in list(os.environ):
-        if key not in kept:
-            monkeypatch.delenv(key)
 
 
 def test_defaults() -> None:

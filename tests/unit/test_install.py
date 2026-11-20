@@ -1611,8 +1611,8 @@ def test_scout_026_selection_order(tmp_path: Path, mode: str) -> None:
 
 @pytest.mark.parametrize("output", ["x" * 64, "{}\n" * 6])
 def test_scout_020_stdout_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, output: str) -> None:
-    monkeypatch.setattr(verify_module, "STDOUT_LINE_BYTES", 32, raising=False)
-    monkeypatch.setattr(verify_module, "STDOUT_MESSAGES", 4, raising=False)
+    monkeypatch.setattr(verify_module, "STDOUT_LINE_BYTES", 32)
+    monkeypatch.setattr(verify_module, "STDOUT_MESSAGES", 4)
     script = tmp_path / "local.py"
     script.write_text("import sys\nsys.stdin.readline()\nsys.stdout.write(" + repr(output) + ")\nsys.stdout.flush()\n")
     with pytest.raises(VerifyError, match="limit") as result:

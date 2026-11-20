@@ -488,7 +488,7 @@ async def test_oversized_cache_record_is_a_miss(cache_env: Path, monkeypatch: py
     await runtime.ask({}, _question())
     entry = next(cache_env.iterdir())
     size = entry.stat().st_size
-    monkeypatch.setattr(cache, "_RECORD_BYTES_MAX", size, raising=False)
+    monkeypatch.setattr(cache, "_RECORD_BYTES_MAX", size)
     with entry.open("ab") as handle:
         handle.write(b" ")
     await runtime.ask({}, _question())

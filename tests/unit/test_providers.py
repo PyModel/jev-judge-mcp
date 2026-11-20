@@ -190,22 +190,33 @@ def test_redactor_leaves_urls_without_userinfo_alone_except_whole() -> None:
     assert redact("https://jev.example/v1 and https://jev.example/") == f"{REDACTED} and https://jev.example/"
 
 
-@pytest.mark.parametrize("malformed", [False, True], ids=["valid-format", "malformed-format"])
-def test_redacting_filter_covers_message_args_and_traceback(malformed: bool) -> None:
+@pytest.mark.parametrize("record_kind", ["valid-format", "malformed-format", "cached-traceback", "stack-info"])
+def test_redacting_filter_covers_message_args_and_traceback(record_kind: str) -> None:
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
+
+    def keep_formatted_traceback(record: logging.LogRecord) -> bool:
+        if record.exc_info is not None:
+            logging.Formatter().format(record)
+            record.exc_info = None
+        return True
+
+    if record_kind == "cached-traceback":
+        handler.addFilter(keep_formatted_traceback)
     handler.addFilter(RedactingFilter(Redactor(["s3cret-value"])))
     logger = logging.Logger("tests.redaction")
     logger.addHandler(handler)
     logger.propagate = False
     try:
         logger.warning("key %s in %r", "s3cret-value", {"k": "s3cret-value"})
-        if malformed:
+        if record_kind == "malformed-format":
             logger.warning("key %d", "s3cret-value")
         try:
             raise RuntimeError("boom s3cret-value")
         except RuntimeError:
             logger.exception("failed with s3cret-value")
+        if record_kind == "stack-info":
+            logger.error("stack evidence %s", "s3cret-value", stack_info=True)
     finally:
         logger.removeHandler(handler)
 
@@ -213,8 +224,11 @@ def test_redacting_filter_covers_message_args_and_traceback(malformed: bool) -> 
     assert "s3cret-value" not in output
     assert "key [redacted] in {'k': '[redacted]'}" in output
     assert "RuntimeError: boom [redacted]" in output
-    if malformed:
+    if record_kind == "malformed-format":
         assert "key %d" in output and "('[redacted]',)" in output
+    if record_kind == "stack-info":
+        _, _, stack = output.partition("Stack (most recent call last):")
+        assert "[redacted]" in stack
 
 
 def test_server_logging_redacts_configured_secrets(capsys: pytest.CaptureFixture[str]) -> None:
@@ -295,8 +309,8 @@ async def test_scout_019_stream_limit_stops_consumption(
 ) -> None:
     from jev_judge_mcp.providers import base
 
-    monkeypatch.setattr(base, "SUCCESS_BYTES_MAX", 8, raising=False)
-    monkeypatch.setattr(base, "ERROR_BYTES_MAX", 8, raising=False)
+    monkeypatch.setattr(base, "SUCCESS_BYTES_MAX", 8)
+    monkeypatch.setattr(base, "ERROR_BYTES_MAX", 8)
     consumed: list[bytes] = []
     closed: list[bool] = []
 

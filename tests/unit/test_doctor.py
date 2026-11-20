@@ -3,7 +3,6 @@
 import ast
 import hashlib
 import json
-import os
 import sys
 import urllib.request
 from pathlib import Path
@@ -27,7 +26,6 @@ from jev_judge_mcp.policy.thresholds import (
 )
 from jev_judge_mcp.server import doctor_requested, hook_requested, installer_requested
 from jev_judge_mcp.server import main as server_main
-from tests.support.stdio import server_env
 
 _DOCTOR = Path(__file__).resolve().parents[2] / "src" / "jev_judge_mcp" / "doctor.py"
 MARKER = "marker-doctor-8f3c1a9e-do-not-print"
@@ -44,16 +42,6 @@ _POLICY = (
     ("EXISTS_FOUND_AT", EXISTS_FOUND_AT),
     ("EXISTS_ABSENT_BELOW", EXISTS_ABSENT_BELOW),
 )
-
-
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    kept = server_env()
-    for key in list(os.environ):
-        if key not in kept:
-            monkeypatch.delenv(key)
-    # No test may resolve a key file the developer's machine happens to carry (ADR-0046).
-    monkeypatch.setenv("JEV_MCP_KEY_FILE", "/nonexistent/jev-mcp-key")
 
 
 def _field(text: str, label: str) -> str:
@@ -332,13 +320,13 @@ def test_a_stored_key_filling_an_unset_variable_is_reported_as_the_source(
 
 
 def test_an_unexpanded_reference_is_named_without_its_value(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], isolated_key_file: Path
 ) -> None:
     monkeypatch.setenv("TYPESAFE_API_KEY", "${TYPESAFE_API_KEY}")
     assert main([]) == 1
     out = capsys.readouterr().out
     assert _field(out, "warning") == "TYPESAFE_API_KEY holds an unexpanded reference and counts as unset"
-    assert _field(out, "key file") == "absent at /nonexistent/jev-mcp-key"
+    assert _field(out, "key file") == f"absent at {isolated_key_file}"
 
 
 def test_oversized_claude_settings_are_ignored(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
