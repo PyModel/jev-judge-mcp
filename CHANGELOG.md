@@ -3,9 +3,40 @@
 ## [0.11.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.10.0...v0.11.0) (2026-11-20)
 
 
+### ⚠ BREAKING CHANGES
+
+* **http:** the Streamable HTTP transport requires `JEV_MCP_HTTP_TOKEN` on every bind address, loopback included (ADR-0050) ([#23](https://github.com/PyModel/jev-judge-mcp/pull/23))
+* colliding caller IDs are refused instead of renamed, and results no longer carry `renamed_ids` (ADR-0085) ([#23](https://github.com/PyModel/jev-judge-mcp/pull/23))
+
+
+### Features
+
+* say who settles each held row: gate and review blockers, `jev_verify` rows and both rollups carry `next_call` ([#31](https://github.com/PyModel/jev-judge-mcp/pull/31))
+* judge large gate ranges by packing claims into groups that fit the provider window, instead of refusing them (ADR-0086) ([#23](https://github.com/PyModel/jev-judge-mcp/pull/23))
+* run TypeSafe on the base install through the shared HTTP provider; the `[typesafe]` extra and the `typesafe-sdk` dependency are removed, and installed entries with the old suffix are migrated (ADR-0084) ([#23](https://github.com/PyModel/jev-judge-mcp/pull/23))
+* **cli:** emit error results and accept plain-text completion claims ([#23](https://github.com/PyModel/jev-judge-mcp/pull/23))
+
+
 ### Bug Fixes
 
 * enforce file-state limits and preserve key-path refusals ([bd60f86](https://github.com/PyModel/jev-judge-mcp/commit/bd60f86a477dd81f3ae13f76f67ed6c3ff4d62d9))
+* hold a claim for review when the model marks it verified but names no supporting evidence, in `jev_verify` and `jev_gate` ([#30](https://github.com/PyModel/jev-judge-mcp/pull/30))
+* abandon a blocked version refresh on shutdown ([#29](https://github.com/PyModel/jev-judge-mcp/pull/29))
+* cancel a shared cached evaluation when its last caller leaves, and count its token usage once ([#21](https://github.com/PyModel/jev-judge-mcp/pull/21))
+* stop a `jev_ask` command word longer than the file-name limit from failing the key-store match ([#21](https://github.com/PyModel/jev-judge-mcp/pull/21))
+* validate scores against their distributions (ADR-0048) ([#23](https://github.com/PyModel/jev-judge-mcp/pull/23))
+* hold binary files in a mixed range for review in the CLI gate instead of refusing them as secret files; a binary-only range is refused as `binary_file` ([#23](https://github.com/PyModel/jev-judge-mcp/pull/23))
+* strip foreign `GIT_*` redirects and turn off hooks and fsmonitor in every Git run ([#23](https://github.com/PyModel/jev-judge-mcp/pull/23))
+* **http:** bind the port once, restart through TIME_WAIT, and refuse a held port, including on macOS, where a wildcard bind probes only loopback ([#23](https://github.com/PyModel/jev-judge-mcp/pull/23))
+* split stdio frames only at LF ([#23](https://github.com/PyModel/jev-judge-mcp/pull/23))
+* keep hook provider budgets below their harness timeouts ([#23](https://github.com/PyModel/jev-judge-mcp/pull/23))
+* fall back to defaults for blank settings, expand `~` in paths, and print settings errors on one line ([#23](https://github.com/PyModel/jev-judge-mcp/pull/23))
+
+
+### Performance Improvements
+
+* take the version refresh off the call path, so concurrent calls no longer queue behind a source scan; `jev_gate_range` tails grow from 32 concurrent calls ([#25](https://github.com/PyModel/jev-judge-mcp/pull/25))
+* start commands without forking the server, and end each run when its command exits ([#28](https://github.com/PyModel/jev-judge-mcp/pull/28))
 
 ## [0.10.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.9.2...v0.10.0) (2026-11-20)
 
