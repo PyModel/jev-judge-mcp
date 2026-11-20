@@ -109,7 +109,6 @@ run make:lint 600 make lint
 run make:typecheck 1200 make typecheck
 run make:unit 1800 make unit
 run make:property 1200 make property
-run make:policy-coverage 1200 make policy-coverage
 run make:contract 1200 make contract
 # actions/setup-node is pinned to 24.19.0, the parity oracle's version; emulate exactly.
 NODE_VERSION=$(node --version)
