@@ -1,6 +1,6 @@
 """The frozen input caps, typed per tool (ADR-0014); the manifest is the oracle, not the source.
 
-Every value is transcribed from `docs/reference/parity-manifest.json` `caps`, and
+Reference values are transcribed from `docs/reference/parity-manifest.json` `caps`, and
 `tests/contract/test_limits.py` fails when the two disagree, so a re-freeze points here. VALUES
 ONLY: UTF-16 measurement stays in `text.py` (ADR-0005) and applying a cap — reject is the schema
 itself — lives in the tools and `validation/caps.py`. A tool that hardcodes one of these numbers is
@@ -89,7 +89,6 @@ class DecideCaps:
     candidate_id_max: int
     candidate_description_min: int
     candidate_description_max: int
-    requirements_min: int
     requirements_max: int
     requirement_min: int
     requirement_max: int
@@ -112,7 +111,6 @@ class CompareCaps:
 
     passage_min: int
     passage_max: int
-    aspects_min: int
     aspects_max: int
     aspect_min: int
     aspect_max: int
@@ -151,7 +149,7 @@ class ReviewCaps:
 
 @dataclass(frozen=True, slots=True)
 class GateCaps:
-    """jev_gate: claim/item/text caps and the two aggregate isError budgets.
+    """jev_gate: per-document, claim, item-count and aggregate admission caps.
 
     `files_max` bounds a `[{path, patch}]` diff for jev_gate and jev_review alike (ADR-0066
     amendment): one review request runs per file, so the count is capped like the evidence item
@@ -191,8 +189,8 @@ class ScoreCaps:
 class FileJudgeCaps:
     """jev_file_judge (extension tool, ADR-0077): one kind-discriminated judgment about a file the
     server reads. No parity-manifest block exists, so the ADR owns every value (the ScoreCaps
-    precedent). The file cap is the per-request state budget shared with the question, in UTF-16
-    units (ADR-0005); the option bounds are the `jev_classify` convention for caller-supplied sets;
+    precedent). The file read cap counts UTF-16 units (ADR-0005). The option bounds follow the
+    `jev_classify` convention for caller-supplied sets;
     the score bounds are the ADR-0048 rubric freeze; the sniff window is the first-8,000-byte NUL
     scan git uses.
     """
@@ -213,9 +211,8 @@ class AskCaps:
     """jev_ask (extension tool, ADR-0077): the caller writes the questions over a composed state —
     own text, server-read files, and a gated command's output. No parity-manifest block exists, so
     the ADR owns every value (the ScoreCaps precedent). No part truncates: an over-budget call
-    refuses typed, with each part's size and a Split suggestion. The request cap is the composed
-    aggregate of question and state units, strict greater-than; the command timeout is the budget
-    the hook passes its provider call; `questions_min`/`questions_max` and `files_max` reject.
+    refuses typed, with each part's size and a Split suggestion. The composed cap counts the sum of
+    question and state UTF-16 units. `questions_min`/`questions_max` and `files_max` reject.
     """
 
     questions_min: int
@@ -225,6 +222,14 @@ class AskCaps:
     command_output_units_max: int
     request_units_max: int
     command_timeout_seconds: int
+
+
+STATE_QUESTION_BYTES: Final = 30_000
+REQUEST_BYTES: Final = 60_000
+"""Compact UTF-8 packing targets approximate byte-level tokenization and leave framing room
+within the documented 32k state-plus-question and 64k whole-request token windows
+(docs/jev_docs/models.md). The provider enforces its actual token windows (ADR-0079).
+"""
 
 
 CANDIDATES: Final = CandidatesCaps(min_items=1, max_items=250, text_units=2000)
@@ -260,15 +265,12 @@ DECIDE: Final = DecideCaps(
     candidate_id_max=64,
     candidate_description_min=1,
     candidate_description_max=2000,
-    requirements_min=0,
     requirements_max=3,
     requirement_min=1,
     requirement_max=500,
 )
 RERANK: Final = RerankCaps(query_min=1, query_max=2000, aggregate_candidate_units=100_000, top_k_min=1, top_k_max=250)
-COMPARE: Final = CompareCaps(
-    passage_min=1, passage_max=20_000, aspects_min=0, aspects_max=10, aspect_min=1, aspect_max=200
-)
+COMPARE: Final = CompareCaps(passage_min=1, passage_max=20_000, aspects_max=10, aspect_min=1, aspect_max=200)
 EXTRACT: Final = ExtractCaps(
     document_min=1,
     document_max=50_000,
@@ -332,12 +334,12 @@ class FilesJudgeCaps:
 FILE_JUDGE: Final = FileJudgeCaps(
     file_units_max=100_000,
     instructions_units_max=2_000,
-    choice_options_min=2,
-    choice_options_max=250,
-    choice_option_units_max=2_000,
-    score_levels_min=2,
-    score_levels_max=10,
-    score_level_units_max=200,
+    choice_options_min=CLASSIFY.classes_min,
+    choice_options_max=CLASSIFY.classes_max,
+    choice_option_units_max=CLASSIFY.class_description_units,
+    score_levels_min=SCORE.levels_min,
+    score_levels_max=SCORE.levels_max,
+    score_level_units_max=SCORE.level_units_max,
     binary_sniff_bytes=8_000,
 )
 ASK: Final = AskCaps(

@@ -1,8 +1,6 @@
 """The one retry policy for upstream Jev calls and the math behind it (ADR-0057).
 
-Every provider shares this policy, so there is exactly one definition and one test suite: the
-typesafe-sdk transport is constructed with `RetryPolicy(max_retries=0)` (its own default policy is
-disabled) and `JevProvider.evaluate` drives the attempts for all four providers.
+`JevProvider.evaluate` drives the attempts for all four providers.
 Only failures known to precede delivery and rate-limit rejections qualify for replay.
 
 The module-level `sleep`, `clock` and `uniform` are the loop's dependencies; tests replace them to
@@ -45,11 +43,9 @@ def uniform() -> float:
 class RetryPolicy:
     """The bounded retry shape every provider is driven by (ADR-0057).
 
-    The retry counts, backoff and jitter match the typesafe-sdk `RetryPolicy` defaults
-    (max 2 retries, 0.5 s backoff doubling to 5 s, 25% subtractive jitter, `Retry-After`
-    honored). The SDK in use (0.7.1) does not leave those deadlines unset: `constants.DEFAULT_TIMEOUT`
-    is 10 s per HTTP operation, and `RetryPolicy.timeout` is a 30 s total retry budget. This policy's
-    30 s per-attempt timeout and 90 s overall budget are this server's bounds (ADR-0057), not SDK gaps.
+    The defaults allow three attempts, 30 s per attempt and a 90 s overall budget.
+    Backoff starts at 0.5 s and doubles to 5 s with 25% subtractive jitter.
+    A server's `Retry-After` sets a minimum delay.
     """
 
     max_attempts: int = 3

@@ -8,7 +8,6 @@ become part of the key. Nothing here ever logs the value.
 
 import logging
 import os
-import stat
 from pathlib import Path
 from threading import Lock
 
@@ -24,7 +23,7 @@ def stored_key_path(settings: Settings) -> Path:
     """Where the stored key lives: `JEV_MCP_KEY_FILE`, else the XDG config default."""
     if settings.key_file is not None:
         return settings.key_file
-    return fsutil.xdg_home("config") / "jev-mcp" / "key"
+    return fsutil.xdg_home("config", settings) / "jev-mcp" / "key"
 
 
 KEY_FILE_BYTES_MAX = 4096
@@ -32,26 +31,28 @@ KEY_FILE_BYTES_MAX = 4096
 path, a device, a dump) is not a key and reads as empty, never as a hang or a traceback."""
 
 
+class _UntrustedKeyFile(Exception):
+    pass
+
+
 def stored_key(settings: Settings) -> str:
     """The stored key, or `""`. Missing, unreadable, undecodable, oversized, or blank stores as
     empty — never an error."""
     path = stored_key_path(settings)
+
+    def inspect(info: os.stat_result) -> None:
+        if info.st_uid not in (0, os.geteuid()):
+            raise _UntrustedKeyFile("owned by neither root nor the effective user")
+        if info.st_mode & 0o022:
+            raise _UntrustedKeyFile("group or other can write")
+
     try:
-        with open(path, "rb", opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK)) as handle:
-            info = os.fstat(handle.fileno())
-            if not stat.S_ISREG(info.st_mode):
-                return _reject_key_file(path, "not a regular file")
-            if info.st_uid not in (0, os.geteuid()):
-                return _reject_key_file(path, "owned by neither root nor the effective user")
-            if info.st_mode & 0o022:
-                return _reject_key_file(path, "group or other can write")
-            data = handle.read(KEY_FILE_BYTES_MAX + 1)
-        if len(data) > KEY_FILE_BYTES_MAX:
-            return ""
-        # utf-8-sig drops a leading BOM when present and is otherwise plain UTF-8.
+        data = fsutil.read_bounded(path, max_bytes=KEY_FILE_BYTES_MAX, follow=True, inspect=inspect)
         return data.decode("utf-8-sig").strip()
-    except IsADirectoryError:
+    except fsutil.NotRegularFile:
         return _reject_key_file(path, "not a regular file")
+    except _UntrustedKeyFile as error:
+        return _reject_key_file(path, str(error))
     except (OSError, UnicodeDecodeError):
         return ""
 
@@ -73,9 +74,21 @@ def redaction_values(settings: Settings) -> list[str]:
     One owner for the set, so the provider redactor, the log filter, the hooks, and the ask
     tool's output scrub cannot disagree about what a secret is.
     """
-    stored = stored_key(settings)
-    values = settings.secret_values()
-    return [*values, stored] if stored else values
+    return [value for _, value in named_redaction_values(settings, stored_key(settings))]
+
+
+def named_redaction_values(settings: Settings, stored: str) -> list[tuple[str, str]]:
+    values = settings.named_secrets()
+    if settings.typesafe_api_key is not None:
+        key = settings.typesafe_api_key.get_secret_value()
+        if (bearer := key.strip()) and bearer != key:
+            values.append(("TYPESAFE_API_KEY", bearer))
+    if stored:
+        source = f"the key file {stored_key_path(settings)}"
+        if settings.key_file is not None:
+            source += " set by JEV_MCP_KEY_FILE"
+        values.append((source, stored))
+    return values
 
 
 def normalized_key(api_key: str) -> str:

@@ -6,7 +6,8 @@ Value-shape primitives (`as_number`, `is_json_object`) live in `domain/json.py`.
 import math
 
 from jev_judge_mcp.domain.answers import ConfidenceKind
-from jev_judge_mcp.domain.json import as_number
+from jev_judge_mcp.domain.json import as_number, is_json_object
+from jev_judge_mcp.serialize import js_key_order
 
 
 def unit_interval(value: object) -> float | None:
@@ -15,6 +16,23 @@ def unit_interval(value: object) -> float | None:
     if number is None or not math.isfinite(number) or number < 0 or number > 1:
         return None
     return number
+
+
+def validate_distribution(raw: object, expected: set[str], tolerance: float) -> dict[str, float] | None:
+    """Validate the exact keys, finite unit probabilities, and sum in JavaScript property order."""
+    if not is_json_object(raw) or raw.keys() != expected:
+        return None
+    probabilities: dict[str, float] = {}
+    for key, value in raw.items():
+        probability = unit_interval(value)
+        if probability is None:
+            return None
+        probabilities[key] = probability
+    # JavaScript adds one float64 at a time. Python's sum can compensate rounding.
+    total = 0.0
+    for key in js_key_order(list(probabilities)):
+        total += probabilities[key]
+    return probabilities if abs(total - 1) <= tolerance else None
 
 
 def confidence_kind(answer: dict[str, object]) -> ConfidenceKind:

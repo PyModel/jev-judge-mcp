@@ -51,3 +51,20 @@ call headline (`extract.py`). They are now `policy.verify_claim_action`, `policy
 `policy.file_list_action`, and `policy.extract_call_action`; the tools project them. The caller-note
 rule receives the raw source answer, so a caller item literally named `none` still blocks auto. No
 wire change; ADR-0078 records the module moves made alongside.
+
+## Amendment (2026-11-19): tools import policy directly
+
+`tools/observed.py` wraps Answer Validation in `jev.validate` spans. Tools import pure
+policy functions from `policy/`. The validation spans carry the fail-closed signal.
+
+## Amendment (2026-11-19): command-hook guard policy
+
+`policy/guard.py` owns the Bash, Write/Edit and fallback questions, validates their answers,
+and decides whether the hook allows, asks or denies. It also owns the confidence floors used
+by the compaction hook. The guard decision is pure and falls under the 100% branch gate in
+`make policy-coverage`. The hook computes path containment and credential-literal matches
+before calling the provider and renders the decision in the harness format. This supersedes
+the threshold locations in ADR-0035, ADR-0065 and ADR-0076.
+
+The package import graph must be acyclic, including function-local imports. Tools may
+depend on guard policy directly. Hook entry points and rendering belong to the CLI.

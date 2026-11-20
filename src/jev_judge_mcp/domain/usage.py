@@ -1,6 +1,5 @@
 """Token usage reported by a provider."""
 
-import os
 from dataclasses import dataclass
 
 from jev_judge_mcp.domain.json import JsonValue
@@ -16,8 +15,8 @@ class Usage:
     # False when any contributing provider call omitted metering. Counts then form a lower bound.
     reported: bool = True
 
-    def to_wire(self) -> dict[str, JsonValue]:
+    def to_wire(self, *, include_reported: bool = False) -> dict[str, JsonValue]:
         counts: dict[str, JsonValue] = {"input_tokens": self.input_tokens, "output_tokens": self.output_tokens}
-        if os.environ.get("JEV_STUDY_USAGE_PROVENANCE") == "1":
+        if include_reported:
             counts["reported"] = self.reported
         return counts

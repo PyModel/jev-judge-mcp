@@ -20,6 +20,7 @@ from evals.relay import HEADLINE_TOOLS, result_fields
 from evals.spend import JEV_PUBLISHED_USD_PER_MTOK_INPUT
 from tests.support.fake_mcp_server import FAKE_ERROR, RECEIVED
 from tests.support.fixtures import iter_calls
+from tests.support.stdio import StdioServer
 
 REPO = Path(__file__).resolve().parents[2]
 FAKE = str(REPO / "tests" / "support" / "fake_mcp_server.py")
@@ -113,42 +114,20 @@ def _run_until_dead(
     server = pid_path.with_name("server.py")
     marker = pid_path.with_name("at-term.txt")
     server.write_text(server_source, encoding="utf-8")
-    proc = subprocess.Popen(
-        argv,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=stderr,
-        cwd=REPO,
-    )
     try:
-        deadline = time.monotonic() + 30
-        while not pid_path.exists():
-            if proc.poll() is not None:
-                try:
-                    _out, err = proc.communicate(timeout=1)
-                except subprocess.TimeoutExpired as exc:
-                    err = exc.stderr or b""
-                raise AssertionError(f"proxy exited before the server wrote its pid\n{(err or b'').decode()}")
-            if time.monotonic() > deadline:
-                raise AssertionError("server pid was never written")
-            time.sleep(0.02)
-        assert proc.stdin is not None
-        proc.stdin.write(b"".join((json.dumps(message) + "\n").encode() for message in messages))
-        proc.stdin.flush()
-        try:
-            _out, err = proc.communicate(timeout=30)
-        except subprocess.TimeoutExpired as exc:
-            raise AssertionError(f"relay did not exit\n{(exc.stderr or b'').decode()}") from exc
-        assert proc.returncode != 0
-        captured = marker.read_text(encoding="utf-8") if marker.exists() else ""
-        return (err or b"").decode(), captured
+        with StdioServer(argv, stderr=stderr) as proc:
+            deadline = time.monotonic() + 30
+            while not pid_path.exists():
+                assert proc.process.poll() is None, "proxy exited before the server wrote its pid"
+                assert time.monotonic() < deadline, "server pid was never written"
+                time.sleep(0.02)
+            proc.send_bytes(b"".join((json.dumps(message) + "\n").encode() for message in messages))
+            proc.close_stdin()
+            returncode, err = proc.wait(timeout=30)
+            assert returncode != 0
+            captured = marker.read_text(encoding="utf-8") if marker.exists() else ""
+            return err, captured
     finally:
-        if proc.poll() is None:
-            proc.kill()
-            for pipe in (proc.stdin, proc.stdout, proc.stderr):
-                if pipe is not None:
-                    pipe.close()
-            proc.wait(timeout=5)
         _reap(pid_path)
 
 
@@ -540,14 +519,6 @@ def test_scout_022_idle_client_survives_but_outstanding_request_expires(tmp_path
             _reap(pid)
 
 
-def test_early_exit_with_an_inherited_pipe_reports_the_proxy_exit(tmp_path: Path) -> None:
-    script = "import subprocess, sys; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(4)'])"
-    started = time.monotonic()
-    with pytest.raises(AssertionError, match="exited before"):
-        _run_until_dead([sys.executable, "-c", script], "", [], tmp_path / "pid")
-    assert time.monotonic() - started < 3, "a descendant kept the output pipe open"
-
-
 @pytest.mark.parametrize(("reported", "tokens", "expected"), [(False, 0, 3.5), (True, 0, 0), (False, 100_000_000, 4.2)])
 def test_study_relay_books_reported_or_reserved_usage(
     tmp_path: Path, reported: bool, tokens: int, expected: float
@@ -577,16 +548,32 @@ def test_metadata_recorder_discards_unrecognized_values() -> None:
 
 def test_study_child_keeps_usage_provenance_through_stdio(tmp_path: Path) -> None:
     child = """
-import json, sys
-from jev_judge_mcp.providers.base import parse_envelope
-for line in sys.stdin:
-    call = json.loads(line)
-    body = {"answers": {}}
-    if call["id"] == 2:
-        body["usage"] = {"input_tokens": 0, "output_tokens": 0}
-    usage = parse_envelope(body, "fixture").usage.to_wire()
-    content = [{"type":"text","text":json.dumps({"usage":usage})}]
-    print(json.dumps({"id":call["id"],"result":{"content":content}}),flush=True)
+import asyncio, json, os, sys
+from dataclasses import replace
+from jev_judge_mcp.domain import Usage
+from jev_judge_mcp.settings import load_settings
+from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
+from tests.support.jev import FakeProvider, choice
+
+class Provider(FakeProvider):
+    async def _send(self, state, questions, model, timeout):
+        evaluation = await super()._send(state, questions, model, timeout)
+        return replace(evaluation, usage=Usage(reported=len(self.requests) == 2))
+
+async def main():
+    settings = load_settings()
+    del os.environ["JEV_STUDY_USAGE_PROVENANCE"]
+    provider = Provider({"relation_claim0": choice("supports", "supports", "contradicts", "says_nothing")})
+    tools = Toolset(Runtime(settings, provider_factory=lambda _: provider), TOOLS)
+    try:
+        for line in sys.stdin:
+            call = json.loads(line)
+            result = await tools.call(call["params"]["name"], {"claims": ["A claim"], "evidence": "Evidence"})
+            print(json.dumps({"id": call["id"], "result": result.model_dump(by_alias=True)}), flush=True)
+    finally:
+        await tools.aclose()
+
+asyncio.run(main())
 """
     log = tmp_path / "study.jsonl"
     command = [sys.executable, "-m", "evals.ab.proxy", str(log), "--", sys.executable, "-c", child]

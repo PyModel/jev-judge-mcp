@@ -7,8 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.support.stdio import StdioServer
-
 AGENT = Path(__file__).resolve().parents[1] / "support" / "bench_agent.py"
 PEER = """
 import json, subprocess, sys
@@ -102,30 +100,3 @@ def test_agent_reply_contract(tmp_path: Path, mode: str, count: int, parallel: b
         assert [e["message"]["content"][0]["content"] for e in events if e["type"] == "user"] == [
             [str(i + 1)] for i in range(count)
         ]
-
-
-def test_request_deadline_includes_notifications() -> None:
-    script = """
-import json, sys, time
-sys.stdin.readline()
-note = json.dumps({"jsonrpc": "2.0", "method": "notifications/message"})
-for _ in range(30):
-    print(note, flush=True)
-    time.sleep(0.01)
-print(json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}), flush=True)
-"""
-    with StdioServer([sys.executable, "-c", script]) as server, pytest.raises(TimeoutError, match="deadline"):
-        server.request({"jsonrpc": "2.0", "id": 1, "method": "ping"}, timeout=0.15)
-
-
-def test_request_preserves_another_outstanding_reply() -> None:
-    peer = """
-import json, sys
-for line in sys.stdin:
-    request = json.loads(line)
-    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": {}}), flush=True)
-"""
-    with StdioServer([sys.executable, "-c", peer]) as server:
-        server.send({"jsonrpc": "2.0", "id": 10, "method": "ping"})
-        assert server.request({"jsonrpc": "2.0", "id": 11, "method": "ping"})["id"] == 11
-        assert server.receive(timeout=1)["id"] == 10

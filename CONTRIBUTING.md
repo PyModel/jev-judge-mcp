@@ -21,10 +21,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 uv sync --locked --all-extras
 ```
 
-Development and `make typecheck` need every extra. `--extra typesafe` is only for running the
-server: a plain or partial sync fails `make typecheck` with confusing `Import "typesafe_sdk"
-could not be resolved` errors, and the same missing import fails the TypeSafe provider tests in
-`make unit`, so a plain sync breaks two stages, not one.
+The development checks include the optional HTTP telemetry dependencies.
 
 ## Prove a change
 
@@ -151,7 +148,7 @@ workflow `release.yml`, environment `pypi`.
 
 ## License
 
-The copyright holder is elkaix.
+The copyright holder is PyModel LLC.
 
 By contributing, you agree that your contributions are licensed under the MIT
 License in `LICENSE`.

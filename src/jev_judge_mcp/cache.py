@@ -23,7 +23,6 @@ import json
 import logging
 import os
 import re
-import stat
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -49,7 +48,7 @@ def cache_dir(settings: Settings) -> Path:
     """`JEV_MCP_CACHE_DIR`, else the XDG cache default."""
     if settings.cache_dir is not None:
         return settings.cache_dir
-    return fsutil.xdg_home("cache") / "jev-mcp"
+    return fsutil.xdg_home("cache", settings) / "jev-mcp"
 
 
 def request_key(
@@ -127,30 +126,21 @@ def lookup(
     filename = f"{key}.json"
     try:
         fsutil.require_private_dir(directory)
-        for parent in (directory / _RECORDS, directory):
-            try:
-                fsutil.require_private_dir(parent)
-                handle = open(
-                    parent / filename,
-                    "rb",
-                    opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK | os.O_NOFOLLOW),
-                )
-            except FileNotFoundError:
-                continue
-            with handle:
-                info = os.fstat(handle.fileno())
-                if not stat.S_ISREG(info.st_mode) or info.st_size > _RECORD_BYTES_MAX:
-                    return None
-                ttl = settings.cache_ttl_seconds
-                if ttl > 0 and time.time() - info.st_mtime > ttl:
-                    return None
-                data = handle.read(info.st_size + 1)
-                if len(data) != info.st_size:
-                    return None
-                parsed: object = decode_json(data.decode("utf-8"))
-                break
-        else:
+        records = directory / _RECORDS
+        fsutil.require_private_dir(records)
+        size = 0
+
+        def inspect(info: os.stat_result) -> None:
+            nonlocal size
+            ttl = settings.cache_ttl_seconds
+            if ttl > 0 and time.time() - info.st_mtime > ttl:
+                raise ValueError("expired cache record")
+            size = info.st_size
+
+        data = fsutil.read_bounded(records / filename, max_bytes=_RECORD_BYTES_MAX, inspect=inspect)
+        if len(data) != size:
             return None
+        parsed = decode_json(data.decode("utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(parsed, dict):

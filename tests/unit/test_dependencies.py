@@ -7,6 +7,8 @@ import shlex
 import shutil
 import subprocess
 import tomllib
+from graphlib import TopologicalSorter
+from importlib.util import resolve_name
 from pathlib import Path
 
 import pytest
@@ -59,7 +61,7 @@ def test_roadmap_mcp_row_quotes_the_pyproject_pin() -> None:
     assert f"`{pin}`" in row
 
 
-def test_confinement_image_stages_a_fresh_wheel_and_locked_typesafe_runtime(tmp_path: Path) -> None:
+def test_confinement_image_stages_a_fresh_wheel_and_locked_runtime(tmp_path: Path) -> None:
     shutil.copy(ROOT / "Makefile", tmp_path)
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -72,7 +74,7 @@ def test_confinement_image_stages_a_fresh_wheel_and_locked_typesafe_runtime(tmp_
         "  build) shift; out=dist; while [[ $# -gt 0 ]]; do\n"
         '    if [[ "$1" == --out-dir ]]; then out=$2; shift; fi; shift; done\n'
         '    touch "$out/jev_judge_mcp-current.whl" ;;\n'
-        '  export) printf "%s\\n" "$*" > export-args; printf "typesafe-sdk==1 --hash=sha256:abc\\n" ;;\n'
+        '  export) printf "%s\\n" "$*" > export-args; printf "httpx==1 --hash=sha256:abc\\n" ;;\n'
         "  *) exit 2 ;;\n"
         "esac\n"
     )
@@ -100,10 +102,8 @@ def test_confinement_image_stages_a_fresh_wheel_and_locked_typesafe_runtime(tmp_
         "--frozen",
         "--no-dev",
         "--no-emit-project",
-        "--extra",
-        "typesafe",
     ]
-    assert (tmp_path / "requirements").read_text() == "typesafe-sdk==1 --hash=sha256:abc\n"
+    assert (tmp_path / "requirements").read_text() == "httpx==1 --hash=sha256:abc\n"
     assert stale.exists()
     assert not Path((tmp_path / "context").read_text().strip()).exists()
 
@@ -114,7 +114,7 @@ def test_confinement_install_consumes_one_wheel_and_locked_requirements(tmp_path
     before, command = dockerfile.rsplit("\nRUN ", 1)
     copy = next(line for line in reversed(before.splitlines()) if line.startswith("COPY "))
     destination = shlex.split(copy)[-1].rstrip("/")
-    (tmp_path / "requirements.txt").write_text("typesafe-sdk==1 --hash=sha256:abc\n")
+    (tmp_path / "requirements.txt").write_text("httpx==1 --hash=sha256:abc\n")
     for i in range(count):
         (tmp_path / f"jev_judge_mcp-0.{i}-py3-none-any.whl").touch()
     result = subprocess.run(
@@ -138,3 +138,41 @@ def test_confinement_install_consumes_one_wheel_and_locked_requirements(tmp_path
     assert "--require-hashes" in runtime.split() and runtime.endswith(f"-r {tmp_path / 'requirements.txt'}")
     assert "--no-deps" in package.split() and package.endswith("jev_judge_mcp-0.0-py3-none-any.whl")
     assert check.startswith("python3 -c import jev_judge_mcp")
+
+
+@pytest.fixture(scope="module")
+def module_imports() -> dict[str, set[str]]:
+    """Include function-local imports and resolve from-imports of package children."""
+    src = ROOT / "src"
+    modules = {
+        ".".join(path.relative_to(src).with_suffix("").parts).removesuffix(".__init__"): path
+        for path in (src / "jev_judge_mcp").rglob("*.py")
+    }
+    graph: dict[str, set[str]] = {}
+    for module, path in modules.items():
+        package = module if path.name == "__init__.py" else module.rpartition(".")[0]
+        imports: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                imports.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                base = resolve_name("." * node.level + (node.module or ""), package)
+                for alias in node.names:
+                    child = f"{base}.{alias.name}"
+                    imports.add(child if child in modules else base)
+        graph[module] = imports.intersection(modules)
+    return graph
+
+
+def test_module_imports_are_acyclic(module_imports: dict[str, set[str]]) -> None:
+    TopologicalSorter(module_imports).prepare()
+
+
+def test_tools_do_not_import_hooks(module_imports: dict[str, set[str]]) -> None:
+    assert not {
+        (module, dep)
+        for module, deps in module_imports.items()
+        if module == "jev_judge_mcp.tools" or module.startswith("jev_judge_mcp.tools.")
+        for dep in deps
+        if dep.startswith("jev_judge_mcp.hook")
+    }

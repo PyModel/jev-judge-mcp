@@ -3,6 +3,8 @@ status: accepted
 ---
 # Amendment to ADR-0035: opt-in required hook
 
+> Partially superseded. The command-hook guard amendment in ADR-0002 supersedes the original threshold location; `policy/guard.py` owns the confidence floors.
+
 ADR-0035 fail-opens when stdin is not JSON or credentials are missing, so an unconfigured hook does not freeze every watched command. A hook that an operator has marked as the enforcer must not go silent.
 
 The flag applies to both `jev-judge-mcp hook gate` and `jev-judge-mcp completion-hook`. Both call `hook_required` and `fail_open_or_ask`, so the value and the ask text cannot drift.

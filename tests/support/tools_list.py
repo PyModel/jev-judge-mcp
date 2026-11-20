@@ -36,7 +36,7 @@ def compared_view(tool: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def field_mismatches(expected: Sequence[Mapping[str, Any]], served: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Differences for each served tool against the snapshot tool of the same name."""
+    """Differences for matched tools and names present on only one side."""
     by_name = {tool["name"]: compared_view(tool) for tool in expected}
     problems: list[str] = []
     for tool in served:
@@ -48,13 +48,15 @@ def field_mismatches(expected: Sequence[Mapping[str, Any]], served: Sequence[Map
         for field in COMPARED_FIELDS:
             if want.get(field, "<absent>") != got.get(field, "<absent>"):
                 problems.append(f"{name}: {field} differs")
+    served_names = {tool.get("name") for tool in served}
+    problems.extend(f"{name}: missing from served tools" for name in by_name if name not in served_names)
     return problems
 
 
 def order_mismatch(expected: Sequence[Mapping[str, Any]], served: Sequence[Mapping[str, Any]]) -> str | None:
     """Served tools must appear in snapshot order (registration order in the reference)."""
     served_names = [tool.get("name") for tool in served]
-    expected_order = [tool["name"] for tool in expected if tool["name"] in served_names]
+    expected_order = [tool["name"] for tool in expected]
     if served_names != expected_order:
         return f"served order {served_names} != snapshot order {expected_order}"
     return None

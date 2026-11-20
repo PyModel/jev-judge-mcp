@@ -3,6 +3,8 @@ status: accepted
 ---
 # A stored API key and a `setup` command onboard TypeSafe without an export
 
+> Partially superseded. ADR-0087 centralizes private atomic writes and validates the opened stored-key file.
+
 Amends ADR-0008: credentials still come only from process configuration, and no MCP tool argument
 can set or influence one — that rule is unchanged. This decision adds one more source *beside* the
 environment: a key file the server itself writes, through a dedicated command.

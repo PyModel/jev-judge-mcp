@@ -18,12 +18,16 @@ def pipe_chunks(pipe: IO[bytes], stopping: threading.Event) -> Iterator[bytes]:
     """Let teardown cancel a read even when a descendant inherited the write end."""
     with selectors.DefaultSelector() as selector:
         selector.register(pipe, selectors.EVENT_READ)
-        while not stopping.is_set():
-            if selector.select(timeout=0.1):
-                chunk = os.read(pipe.fileno(), 65536)
-                if not chunk:
+        while True:
+            stopped = stopping.is_set()
+            if not selector.select(timeout=0 if stopped else 0.1):
+                if stopped:
                     return
-                yield chunk
+                continue
+            chunk = os.read(pipe.fileno(), 65536)
+            if not chunk:
+                return
+            yield chunk
 
 
 class ReplyStream:
@@ -85,19 +89,22 @@ class ReplyStream:
         return arrived, message
 
     def _read(self, timeout: float) -> TimedReply:
-        entry = self._lines.get(timeout=timeout)
-        if entry is None:
-            self._lines.put(None)
-            raise EOFError("server stdout reached EOF")
-        if isinstance(entry, OSError):
-            raise entry
-        arrived, line = entry
+        arrived, line = self.read_line(timeout)
         if not line.endswith(b"\n"):
             raise ValueError("server stdout reached EOF during a JSON-RPC frame")
         message: object = json.loads(line)
         if not isinstance(message, dict):
             raise ValueError("expected a JSON-RPC object")
         return arrived, cast(dict[str, Any], message)
+
+    def read_line(self, timeout: float) -> tuple[float, bytes]:
+        entry = self._lines.get(timeout=timeout)
+        if entry is None:
+            self._lines.put(None)
+            raise EOFError("server stdout reached EOF")
+        if isinstance(entry, OSError):
+            raise entry
+        return entry
 
     def _read_until(self, deadline: float, *, include_deferred: bool = False) -> TimedReply:
         remaining = max(0.0, deadline - time.monotonic())

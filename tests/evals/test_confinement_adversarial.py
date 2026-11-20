@@ -142,7 +142,7 @@ def image() -> str:
         "    && rm -rf /var/lib/apt/lists/*\n"
         "COPY jev_judge_mcp-*.whl /tmp/\n"
         "RUN wheel=$(ls /tmp/jev_judge_mcp-*.whl) \\\n"
-        '    && pip install --no-cache-dir "$wheel[typesafe]" \\\n'
+        '    && pip install --no-cache-dir "$wheel" \\\n'
         "    && rm /tmp/jev_judge_mcp-*.whl\n",
         encoding="utf-8",
     )

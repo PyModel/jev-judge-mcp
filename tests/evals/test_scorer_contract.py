@@ -35,6 +35,11 @@ def anyio_backend() -> str:
 INPUTS: dict[str, Json] = {}
 for _item in load_items():
     INPUTS.setdefault(_item.tool, _item.input)
+_gate = INPUTS["jev_gate"]
+INPUTS["jev_gate"] = {
+    **_gate,
+    "evidence": [{**item, "id": "submitted-diff"} if item["id"] == "diff" else item for item in _gate["evidence"]],
+}
 INPUTS["jev_score"] = {
     "subject": "Regression risk of the rename.",
     "levels": ["minor risk", "major risk", "severe risk"],
@@ -87,12 +92,9 @@ class ConfidentProvider(FakeProvider):
                     probabilities = {key: 0.99 if key == pick else rest for key in keys}
                     answers[question_id] = {"choice": pick, "confidence": 0.99, "probabilities": probabilities}
                 case "score":
-                    # A full distribution over the question's own levels: the rubric validator
-                    # (jev_score) requires it, and the fixed-rubric tools tolerate the extra field.
                     levels = list(question["criteria"])
                     top = min(2, len(levels) - 1)
-                    rest = 0.01 / max(1, len(levels) - 1)
-                    probabilities = {str(i): (0.99 if i == top else rest) for i in range(len(levels))}
+                    probabilities = {str(i): int(i == top) for i in range(len(levels))}
                     answers[question_id] = {"score": top, "confidence": 0.99, "probabilities": probabilities}
                 case _:
                     answers[question_id] = {"score": 2, "confidence": 0.99}

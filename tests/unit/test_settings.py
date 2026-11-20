@@ -1,14 +1,12 @@
-import os
 import re
 from pathlib import Path
 
 import pytest
 from pydantic import SecretStr
 
-from jev_judge_mcp.errors import Redactor
+from jev_judge_mcp.redaction.values import Redactor
 from jev_judge_mcp.settings import Settings, load_settings, unexpanded_references
 from tests.support.secrets import is_secret_field, secret_env
-from tests.support.stdio import server_env
 
 SECRETS = {
     "TYPESAFE_API_KEY": "ts-secret",
@@ -20,14 +18,6 @@ SECRETS = {
     "JEV_API_KEY": "jev-secret",
     "JEV_API_BASE_URL": "https://user:pw@jev.example",
 }
-
-
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    kept = server_env()
-    for key in list(os.environ):
-        if key not in kept:
-            monkeypatch.delenv(key)
 
 
 def test_defaults() -> None:
@@ -80,6 +70,37 @@ def test_http_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = load_settings()
     assert settings.transport == "streamable-http"
     assert settings.http_port == 9123
+
+
+def test_empty_variables_use_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    aliases = [field.validation_alias for field in Settings.model_fields.values()]
+    for alias in aliases:
+        assert isinstance(alias, str)
+        monkeypatch.delenv(alias, raising=False)
+    defaults = load_settings()
+    for alias in aliases:
+        assert isinstance(alias, str)
+        monkeypatch.setenv(alias, "")
+    assert load_settings() == defaults
+
+
+@pytest.mark.parametrize("level", ["debug", "dEbUg"])
+def test_log_level_is_case_insensitive(monkeypatch: pytest.MonkeyPatch, level: str) -> None:
+    monkeypatch.setenv("JEV_MCP_LOG_LEVEL", level)
+    assert load_settings().log_level == "DEBUG"
+
+
+def test_cache_and_key_paths_expand_the_home_prefix(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("JEV_MCP_CACHE_DIR", "~/cache")
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", "~/provider-key")
+    monkeypatch.setenv("XDG_CACHE_HOME", "~/xdg-cache")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "~/xdg-config")
+    settings = load_settings()
+    assert settings.cache_dir == tmp_path / "cache"
+    assert settings.key_file == tmp_path / "provider-key"
+    assert settings.xdg_cache_home == tmp_path / "xdg-cache"
+    assert settings.xdg_config_home == tmp_path / "xdg-config"
 
 
 def test_telemetry_payloads_flag(monkeypatch: pytest.MonkeyPatch) -> None:

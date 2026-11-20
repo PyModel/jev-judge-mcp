@@ -11,15 +11,10 @@ from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from typing import IO, cast
 
-from jev_judge_mcp.domain import is_json_object
+from jev_judge_mcp.domain import decode_json, is_json_object
 from jev_judge_mcp.install.launch import SERVER_NAME
 from jev_judge_mcp.install.redact import redact_diagnostic
-from jev_judge_mcp.tools import TOOLS
-
-EXPECTED_TOOLS: tuple[str, ...] = tuple(tool.name for tool in TOOLS)
-"""The published tool names, in registry order (ADR-0013: one registry): the reference ten in
-snapshot order, then the extensions (ADR-0048, ADR-0077). The parity suite pins that order, so a
-hand copy here would only be a second place to forget."""
+from jev_judge_mcp.registry import TOOL_NAMES
 
 STDERR_TAIL_LINES = 5
 """How many of the child's last stderr lines a VerifyError carries (ADR-0053)."""
@@ -193,7 +188,7 @@ def _handshake(stdin: IO[bytes], output: _Output, deadline: float) -> None:
         if not is_json_object(item) or not isinstance(name := item.get("name"), str):
             raise VerifyError("tools/list returned an invalid tool name")
         names.add(name)
-    missing = [tool for tool in EXPECTED_TOOLS if tool not in names]
+    missing = [tool for tool in TOOL_NAMES if tool not in names]
     if missing:
         raise VerifyError("tools/list is missing " + ", ".join(missing))
 
@@ -218,8 +213,8 @@ def _read_response(reader: _Output, request_id: int, deadline: float) -> dict[st
         if line is None:
             raise _ClosedPipe("server closed stdout")
         try:
-            parsed: object = json.loads(line)
-        except (ValueError, RecursionError):
+            parsed = decode_json(line.decode("utf-8-sig"))
+        except ValueError:
             continue
         if (
             not is_json_object(parsed)

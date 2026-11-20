@@ -3,15 +3,19 @@
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, ClassVar, cast, override
 
 from mcp.types import CallToolResult, TextContent
 
 from jev_judge_mcp.domain import JsonValue, Usage
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.providers import NO_RETRIES, Evaluation, JevProvider, ProviderName
+from jev_judge_mcp.redaction.values import Redactor
+from jev_judge_mcp.security import SecurityGuard
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
+
+TEST_GUARD = SecurityGuard(Path("/nonexistent/jev-test-key"), Redactor(()))
 
 
 def choice(selected: str, *labels: str) -> dict[str, object]:

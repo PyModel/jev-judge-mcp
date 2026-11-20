@@ -1,7 +1,8 @@
-"""`sanitize_id` and `ensure_unique_ids` (`lib.ts:13-45`)."""
+"""Caller ID validation and allocation using the reference sanitizer."""
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
+from itertools import count
 from typing import NamedTuple
 
 from jev_judge_mcp.limits import SANITIZE_ID_UNITS
@@ -23,24 +24,55 @@ def sanitize_id(raw: str) -> str:
 class UniqueIds(NamedTuple):
     items: list[dict[str, object]]
 
+    @property
+    def ids(self) -> list[str]:
+        return [str(item["id"]) for item in self.items]
 
-def ensure_unique_ids(items: Sequence[Mapping[str, object]], fallback_prefix: str) -> UniqueIds:
-    """Give every item a safe, unique id: sanitized, else `{fallback_prefix}{index}`; collisions get `_1`, `_2`, ….
 
-    A missing or null `id` counts as empty. Fallback ids are not checked against later caller ids
-    beyond the shared collision loop, exactly as in the reference.
-    """
-    used: set[str] = set()
-    out: list[dict[str, object]] = []
-    for index, item in enumerate(items):
+def ensure_unique_ids(
+    items: Sequence[Mapping[str, object]], fallback_prefix: str, *, reserved: Collection[str] = ()
+) -> UniqueIds:
+    """Check supplied IDs before allocating positional IDs in the remaining namespace."""
+    # The tools package imports its handlers, which use this policy.
+    from jev_judge_mcp.tools.base import ToolError
+
+    supplied: dict[str, str] = {}
+    keys: list[str] = []
+    for item in items:
         raw = item.get("id")
-        raw_id = raw if isinstance(raw, str) else ""
-        base = sanitize_id(raw_id) or f"{fallback_prefix}{index}"
-        new_id = base
-        suffix = 1
-        while new_id in used:
-            new_id = f"{base}_{suffix}"
-            suffix += 1
-        used.add(new_id)
-        out.append({**item, "id": new_id})
-    return UniqueIds(out)
+        key = sanitize_id(raw) if isinstance(raw, str) else ""
+        if isinstance(raw, str):
+            if key in reserved:
+                raise ToolError(f"ID {raw!r} sanitizes to reserved ID {key!r}.", code="invalid_arguments")
+            if key in supplied:
+                raise ToolError(
+                    f"IDs {supplied[key]!r} and {raw!r} both sanitize to {key!r}.", code="invalid_arguments"
+                )
+            supplied[key] = raw
+        keys.append(key)
+
+    used = set(supplied).union(reserved)
+    overflow = (f"{fallback_prefix}{index}" for index in count(len(items)))
+    for index, key in enumerate(keys):
+        if not key:
+            positional = f"{fallback_prefix}{index}"
+            keys[index] = positional if positional not in used else next(key for key in overflow if key not in used)
+    return UniqueIds([{**item, "id": key} for item, key in zip(items, keys, strict=True)])
+
+
+def generated_ids(labels: Iterable[str]) -> list[str]:
+    """Allocate IDs for implicit file evidence, including repeated or aliased paths."""
+    keys = [sanitize_id(label) for label in labels]
+    used = set(keys)
+    seen: set[str] = set()
+    for index, key in enumerate(keys):
+        if key in seen:
+            suffixes = (f"_{n}" for n in count(1))
+            keys[index] = next(
+                candidate
+                for suffix in suffixes
+                if (candidate := key[: MAX_ID_LENGTH - len(suffix)] + suffix) not in used
+            )
+            used.add(keys[index])
+        seen.add(key)
+    return keys

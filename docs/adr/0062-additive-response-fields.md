@@ -3,6 +3,8 @@ status: accepted
 ---
 # Additive response fields stay beside the old keys
 
+> Partially superseded. ADR-0083 revises `stands`, source validation and gate diagnostics. ADR-0085 supersedes the caller-ID rename amendments below.
+
 Gate and verify summaries counted verdicts and actions in overlapping buckets. Claim rows omitted whether the row stands, and gate rows omitted the id and source pointer verify already had. Review scores are 0..2 and the payload did not say so. Reason codes did not say what to do next. Errors were prose only.
 
 ## Decision
@@ -17,7 +19,7 @@ Gate and verify summaries counted verdicts and actions in overlapping buckets. C
 - An error result also appends a second `content` text block, `JSON.stringify({"code": "<code>"})` with no extra space. The first block stays byte-equal. Success results stay one block. This is divergence `error-code-content-block`: Claude Code 2.1.283 does not pass `structuredContent` into the tool result, so a client that reads only `content` never saw the code.
 - Parity fixtures that change are a registered divergence. The expectation adds these fields to the recording. It does not hand-edit the corpus.
 
-## Amendment (2026-09-25)
+## Amendment (2026-09-25) — superseded by ADR-0085
 
 `jev_find`, `jev_verify`, and `jev_gate` sanitize and de-duplicate caller ids through
 `ensure_unique_ids`, and their schemas invite file paths as ids, but no response said which sent
@@ -55,9 +57,8 @@ the text.
 
 - A grep for `verified` can still hit a row whose action is `escalate`. `stands` is the boolean that grep should have been.
 - A client that reads only `content[0].text` still does not see the code. A client that reads later content blocks, or `structuredContent`, does.
-- A client that ignores `renamed_ids` keeps the old behavior: the returned ids are unchanged. A client that sent path-shaped or duplicate ids reads the map to match results back to its own ids. A guard test fails any tool module that calls `ensure_unique_ids` without surfacing the renames.
 
-## Amendment (2026-09-25): duplicate sent ids — the first occurrence keeps the sent id
+## Amendment (2026-09-25): duplicate sent ids — superseded by ADR-0085
 
 When one id is sent on several items, `ensure_unique_ids` keeps the sent id on the first
 occurrence in caller order and suffixes later occurrences `_1`, `_2`, … — the reference's own
@@ -103,3 +104,9 @@ as evidence", which it had already done and which could not reach the review.
 - The parity expectation (`tests/parity/program_expect.py`) applies the same function, so recorded
   fixtures differ from the reference only by these additive lines; `tests/unit/test_gate_next_checks.py`
   pins both arms over both diff shapes.
+
+## Amendment (2026-11-19): caller ID collisions are refused
+
+[ADR-0085](0085-shared-caller-id-policy.md) supersedes both 2026-09-25 amendments. A collision
+after sanitization returns `invalid_arguments` and the `renamed_ids` response field is removed.
+The other response fields and error framing still follow this decision.

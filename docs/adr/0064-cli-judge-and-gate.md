@@ -3,6 +3,8 @@ status: accepted
 ---
 # The CLI is the harness-agnostic path
 
+> Partially superseded. ADR-0083 makes completion consume the tool action and unresolved status. ADR-0087 shares scoped evidence reads between the CLI and file tools.
+
 MCP stays the product surface for clients that speak it. A client that cannot is not a reason to fork policy. `jev-judge-mcp judge` and `jev-judge-mcp gate` call the same tools.
 
 ## Decision
@@ -79,3 +81,46 @@ ask with it, never as a judgment). And the matcher read the whole line as one ar
   each simple command, skipping git's global options (`-C <dir>`, `-c <k=v>`, `--git-dir=…`, and
   the flag-only ones) before the subcommand. `git pushback`, `GIT PUSH`, and a line that does
   not tokenize still abstain.
+
+## Amendment (2026-11-19): configuration failures and local evidence
+
+Settings validation reports all invalid variable names and accepted values on one stderr line.
+For `gate` and `judge`, bad settings also produce a DecisionResult with
+`error.code=invalid_arguments` and a short configured secret produces one with
+`error.code=auth`. Both exit 1.
+
+Relative evidence paths resolve from the caller's working directory and remain confined to the
+checkout. A claims file can be a JSON object containing `request` and `claims`, or plain text
+with one claim per non-empty line. The standalone command still requires `--request` for plain
+text. The completion hook supplies the matched, redacted Bash command as the default request.
+Its 90-second harness limit reserves ten seconds for startup, cleanup, and the reply. Evidence
+preparation consumes part of the remaining 80-second judgment budget, which includes provider
+retries.
+
+## Amendment (2026-11-19): shared evidence reads and command-targeted completion
+
+The CLI uses the file judgment reader. Claims keep the aggregate evidence unit limit and tests
+keep the gate document unit limit. Reads decode UTF-8 with replacement, check the first 8,000
+bytes for NUL, and scrub configured secrets and credential literals. DecisionResult preserves
+the reader's codes, including `path_outside_scope`, `not_found`, `binary_file`, `file_too_large`,
+and `secret_file`. The caller's shell directory still anchors relative evidence paths. All
+evidence stays inside the selected repository.
+
+The hook recognizes simple commands across newlines as well as shell operators, including
+assignments, `then`, `time`, `command`, and absolute executable paths. A literal preceding
+`cd` changes the shell directory. Git's `-C` changes the repository lookup and leaves the shell
+directory intact. An ambiguous target follows the hook's existing failure policy, with an ask
+only when required. Git inspection uses the shared hardened runner (ADR-0080).
+
+An explicit `JEV_COMPLETION_DIFF` takes precedence. An ordinary push uses its upstream range,
+then the last commit when there is no upstream, and the empty tree through HEAD for a root
+commit. A PR command for the current branch uses the merge base with the local
+`origin/<base>` ref selected by `gh pr create --base` or `branch.<name>.gh-merge-base`. The
+default is the local `origin/HEAD` ref. This works after a push has advanced the upstream.
+Missing refs or an ambiguous PR require an explicit range to get a judgment. Empty ranges
+abstain. The hook never fetches refs.
+
+The gate holds a binary patch as `jev_gate_range` does: the judgment reviews the other files and
+lists the binary as unreviewed, so the action cannot be `auto`. Only a secret store refuses the
+whole range (`secret_file`). A range of only binary files has nothing to review and refuses with
+`binary_file`.

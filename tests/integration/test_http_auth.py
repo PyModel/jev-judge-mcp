@@ -38,8 +38,9 @@ def post(url: str, payload: object, headers: dict[str, str] | None = None) -> ht
             time.sleep(0.1)
 
 
-def test_non_loopback_bind_without_a_token_refuses_to_start() -> None:
-    env = {"JEV_MCP_TRANSPORT": "streamable-http", "JEV_MCP_HTTP_HOST": "192.0.2.1"}
+@pytest.mark.parametrize("host", ["127.0.0.1", "192.0.2.1"])
+def test_an_http_bind_without_a_token_refuses_to_start(host: str) -> None:
+    env = {"JEV_MCP_TRANSPORT": "streamable-http", "JEV_MCP_HTTP_HOST": host}
     with StdioServer(env=env) as server:
         returncode, stderr = server.wait()
     assert returncode != 0
@@ -123,11 +124,12 @@ def test_non_loopback_bind_with_token_authenticates_requests() -> None:
 def test_loopback_default_still_rejects_a_forged_host() -> None:
     port = free_port()
     url = f"http://127.0.0.1:{port}/mcp"
-    env = {"JEV_MCP_TRANSPORT": "streamable-http", "JEV_MCP_HTTP_PORT": str(port)}
+    env = {"JEV_MCP_TRANSPORT": "streamable-http", "JEV_MCP_HTTP_PORT": str(port), "JEV_MCP_HTTP_TOKEN": TOKEN}
+    auth = {"Authorization": f"Bearer {TOKEN}"}
     with StdioServer(env=env) as server:
-        forged = post(url, INITIALIZE, headers={"Host": "evil.example", "Origin": "http://evil.example"})
+        forged = post(url, INITIALIZE, headers={**auth, "Host": "evil.example", "Origin": "http://evil.example"})
         assert forged.status_code == 421
-        normal = post(url, INITIALIZE)
+        normal = post(url, INITIALIZE, headers=auth)
         assert normal.status_code == 200
         server.process.send_signal(signal.SIGTERM)
         returncode, stderr = server.wait()
@@ -135,9 +137,11 @@ def test_loopback_default_still_rejects_a_forged_host() -> None:
     assert "Traceback" not in stderr
 
 
-def test_a_short_configured_secret_refuses_startup_naming_the_variable() -> None:
-    env = {"TYPESAFE_API_KEY": "abc"}
+@pytest.mark.parametrize("key", ["abc", "   abc   "], ids=["short", "padded-short"])
+def test_a_short_configured_secret_refuses_startup_naming_the_variable(key: str) -> None:
+    env = {"TYPESAFE_API_KEY": key}
     with StdioServer(env=env) as server:
+        server.close_stdin()
         returncode, stderr = server.wait()
     assert returncode != 0
     assert "TYPESAFE_API_KEY" in stderr

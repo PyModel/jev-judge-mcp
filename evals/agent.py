@@ -580,6 +580,8 @@ class AgentRunResult:
     exploration: tuple[str, ...] = ()
     """Paths a confined run's commands used outside its task workdir (`exploration_paths`):
     out-of-task exploration, recorded per run, never a study stop by itself."""
+    relay_issue: str | None = None
+    receipt_issue: str | None = None
 
 
 ARTIFACT_CHUNK_BYTES = 64 * 1024
@@ -601,23 +603,32 @@ def read_relay_log(path: Path) -> list[dict[str, Any]]:
 
 
 def copy_regular_nofollow(
-    source: Path, target: Path, *, limit: int = RELAY_CAP_BYTES, private_source: bool = False
+    source: Path,
+    target: Path,
+    *,
+    limit: int = RELAY_CAP_BYTES,
+    private_source: bool = False,
+    owner_uid: int | None = None,
 ) -> bool:
     """Copy at most the remaining relay budget, including a source that grows after fstat."""
     try:
         fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as error:
+        if owner_uid is not None and error.errno in (errno.ELOOP, errno.ENXIO, errno.ENODEV):
+            raise PermissionError("study relay must be a singly linked regular file") from error
         if error.errno == errno.ENOENT or (error.errno == errno.ELOOP and not private_source):
             return False
         raise
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-            if private_source:
+            if private_source or owner_uid is not None:
                 raise PermissionError("study relay must be a singly linked regular file")
             return False
         if private_source and (info.st_uid != os.getuid() or info.st_mode & 0o077):
             raise PermissionError("study relay must be an owned private file")
+        if owner_uid is not None and info.st_uid != owner_uid:
+            raise PermissionError("study relay has an unexpected owner")
         if info.st_size > limit:
             raise OSError("incomplete transcript: aggregate relay log limit exceeded")
         with os.fdopen(fd, "rb", closefd=False) as reader, open(target, "wb", opener=private_opener) as writer:
@@ -631,11 +642,23 @@ def copy_regular_nofollow(
     return True
 
 
-def copy_relay_logs(source: Path, target: Path, *, private_source: bool = False) -> None:
+def copy_relay_logs(
+    source: Path, target: Path, *, private_source: bool = False, owner_uid: int | None = None
+) -> str | None:
     remaining = RELAY_CAP_BYTES
+    issue = None
     for name in (RELAY_LOG, str(Path(RELAY_LOG).with_suffix(".stderr"))):
-        if copy_regular_nofollow(source / name, target / name, limit=remaining, private_source=private_source):
-            remaining -= (target / name).stat().st_size
+        try:
+            if copy_regular_nofollow(
+                source / name, target / name, limit=remaining, private_source=private_source, owner_uid=owner_uid
+            ):
+                remaining -= (target / name).stat().st_size
+        except OSError:
+            if owner_uid is None:
+                raise
+            (target / name).unlink(missing_ok=True)
+            issue = f"relay log tampered or unreadable ({name})"
+    return issue
 
 
 def _stream_secret(artifact: BinaryIO, needle: bytes, output: BinaryIO | None = None) -> bool:

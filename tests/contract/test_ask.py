@@ -237,7 +237,7 @@ def _wide_choice(key_units: int) -> dict[str, object]:
 async def test_choice_option_keys_count_toward_the_composed_request_cap() -> None:
     outcome = await call_tool("jev_ask", _wide_choice(64), {})
     assert outcome.code == "input_too_large"
-    assert "questions alone exceed the cap" in outcome.text
+    assert "120,000-unit cap" in outcome.text
     assert not outcome.requests
     narrow = await call_tool("jev_ask", _wide_choice(3), {})
-    assert narrow.code != "input_too_large"
+    assert len(narrow.requests) == 1

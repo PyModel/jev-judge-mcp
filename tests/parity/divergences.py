@@ -106,12 +106,40 @@ def _same(bodies: list[Any], text: str, is_error: bool, arguments: Mapping[str, 
 def _classify_generated_id_collision(
     bodies: list[Any], text: str, is_error: bool, arguments: Mapping[str, Any]
 ) -> tuple[list[Any], str, bool]:
-    """ADR-0031: the reference returns two rows with the same id; Python rejects before the request.
+    """The opaque provider keys still address the same items and classes in order."""
+    payload = json.loads(text)
+    payload["summary"]["by_class"] = {"class0": 1, "class2": 1}
+    first, second = payload["results"]
+    first.update(id="item2", probabilities={"class2": 0.1, "class0": 0.9})
+    second.update(classification="class2", probabilities={"class2": 0.9, "class0": 0.1})
+    return bodies, stringify(payload), is_error
 
-    Items are checked first, so this recording fails on `item0` and never asks.
-    """
-    del bodies, text, is_error, arguments
-    return [], "Duplicate item id: item0", True
+
+def _rerank_generated_id_collision(
+    bodies: list[Any], text: str, is_error: bool, arguments: Mapping[str, Any]
+) -> tuple[list[Any], str, bool]:
+    payload = json.loads(text)
+    payload["ranked"][0]["id"] = "candidate3"
+    return bodies, stringify(payload), is_error
+
+
+def _classify_sanitized_ids(
+    bodies: list[Any], text: str, is_error: bool, arguments: Mapping[str, Any]
+) -> tuple[list[Any], str, bool]:
+    payload = json.loads(text)
+    payload["summary"]["by_class"] = {"moji-class": 1}
+    (row,) = payload["results"]
+    row.update(id="launch", classification="moji-class", probabilities={"moji-class": 0.95, "class1": 0.05})
+    return bodies, stringify(payload), is_error
+
+
+def _refused_text(message: str) -> Expectation:
+    def expect(
+        bodies: list[Any], text: str, is_error: bool, arguments: Mapping[str, Any]
+    ) -> tuple[list[Any], str, bool]:
+        return [], message, True
+
+    return expect
 
 
 def _gate_document_refusal(field: str, limit: int) -> Expectation:
@@ -149,6 +177,26 @@ _EXPECTATIONS: dict[str, Expectation] = {
     "mock-039#0": _gate_document_refusal("diff", 50000),
     "resolver-error/explicit-vercel-unset#0": _vercel_unsupported,
     "duplicate-id/classify-omitted-ids-get-positional-fallbacks#0": _classify_generated_id_collision,
+    "contradicted/gate-contradicted-below-auto-accept#0": _refused_text("ID 'diff' sanitizes to reserved ID 'diff'."),
+    "duplicate-id/classify-duplicate-class-id#0": _refused_text("IDs 'x' and 'x' both sanitize to 'x'."),
+    "duplicate-id/classify-duplicate-item-id#0": _refused_text("IDs 't1' and 't1' both sanitize to 't1'."),
+    "duplicate-id/decide-candidate-collides-with-escape-hatch#0": _refused_text(
+        "ID 'investigate' sanitizes to reserved ID 'investigate'."
+    ),
+    "duplicate-id/decide-duplicate-candidate-id#0": _refused_text("IDs 'same' and 'same' both sanitize to 'same'."),
+    "duplicate-id/extract-duplicate-field-id#0": _refused_text("IDs 'n' and 'n' both sanitize to 'n'."),
+    "duplicate-id/find-ids-sanitized-and-suffixed#0": _refused_text(
+        "IDs 'naïve café' and 'naïve café' both sanitize to 'na_ve_caf'."
+    ),
+    "duplicate-id/rerank-duplicate-id#0": _refused_text("IDs 'dup' and 'dup' both sanitize to 'dup'."),
+    "duplicate-id/rerank-fallback-avoids-supplied-ids#0": _rerank_generated_id_collision,
+    "duplicate-id/verify-duplicate-evidence-ids-suffixed#0": _refused_text(
+        "IDs 'doc' and 'doc' both sanitize to 'doc'."
+    ),
+    "low-confidence/gate-claim-confidence-tiers#0": _refused_text("ID 'diff' sanitizes to reserved ID 'diff'."),
+    "normal/gate-accepted#0": _refused_text("ID 'diff' sanitizes to reserved ID 'diff'."),
+    "unicode-astral/classify-astral-ids-preserved#0": _classify_sanitized_ids,
+    "unsupported/gate-unsupported-confident#0": _refused_text("ID 'diff' sanitizes to reserved ID 'diff'."),
 }
 
 

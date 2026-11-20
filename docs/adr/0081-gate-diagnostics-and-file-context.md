@@ -3,6 +3,8 @@ status: accepted
 ---
 # ADR-0081. Explain held gates and bound the context shared between file reviews
 
+> Partially superseded. ADR-0083 revises validation of source and defect answers and changed-line diagnostics. The ADR-0086 amendment uses byte estimates to pack optional context.
+
 ## Context
 
 The frozen review returns the worst action across safety, rubric confidence and the composite.
@@ -35,7 +37,7 @@ its `review` object. Supplemental omissions leave actions, summary codes, next c
 flags unchanged for the same judgments. The gate refuses oversized primary documents before
 any provider call. This supersedes ADR-0066's partial result for oversized gate patches;
 `jev_review` retains its partial review. Before fan-out the gate checks every review and the
-canonical verification. Compact UTF-8 must fit 30,000 bytes for state plus the longest
+canonical verification. In the original decision, compact UTF-8 had to fit 30,000 bytes for state plus the longest
 question and 60,000 bytes for the whole request. These conservative limits leave room for
 provider framing under its 32k and 64k token windows. Budget errors name the bound and describe
 how to split by file, hunk or claim. A git range that withholds a file names its path and reason,
@@ -50,3 +52,9 @@ with a favorable level. A next check identifies evidence to inspect. Only an ind
 can establish the specific defect. The server's git boundary and provider token limit still apply.
 The local CLI can read a different working tree from its own process. Its bounded git reader
 returns `input_too_large` on overflow, matching the range tool and the CLI's other budget errors.
+
+## Amendment (2026-11-19): estimate optional context
+
+The compact UTF-8 estimate guides how much supplemental context and which citation questions
+to add. Primary review inputs go to the provider under the raw tool caps. See the
+[ADR-0086 amendment](0086-shared-provider-window-and-gate-packing.md#amendment-2026-11-19-the-byte-budget-packs-the-provider-refuses).

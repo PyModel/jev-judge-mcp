@@ -5,6 +5,7 @@ here (the `test_score_tool.py` shape); the malformed-answer matrix is `test_fail
 Case, and the filesystem mechanics (sniff, caps, scope) are `tests/unit/test_file_state.py`.
 """
 
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -47,13 +48,23 @@ async def test_happy_path_projects_the_typed_answer_and_never_the_bytes() -> Non
     assert "8080" not in outcome.text  # the file's bytes stay out of the payload
 
 
-async def test_the_state_is_the_file_and_the_question_is_written_against_content() -> None:
-    outcome = await call_tool("jev_file_judge", noul_args(), {"file": {"noul": 0.5}})
-    assert not outcome.is_error
+@pytest.mark.parametrize("file_bytes", [None, 68_000], ids=["small-file", "68-kb-file"])
+async def test_the_state_is_the_file_and_the_question_is_written_against_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, file_bytes: int | None
+) -> None:
+    path = NOTES
+    if file_bytes is not None:
+        path = "notes.txt"
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / path).write_text("8080" + "x" * (file_bytes - 4), encoding="utf-8")
+    outcome = await call_tool("jev_file_judge", noul_args(path), {"file": {"noul": 0.5}})
+    assert not outcome.is_error, outcome.text
     state, questions = outcome.requests[0]
     request_state = cast(dict[str, object], state)
-    assert request_state["path"] == NOTES
+    assert request_state["path"] == path
     assert "8080" in cast(str, request_state["content"])
+    if file_bytes is not None:
+        assert len(cast(str, request_state["content"]).encode("utf-8")) == file_bytes
     assert list(questions) == ["file"]
     wire = cast(dict[str, object], questions["file"])
     assert wire["type"] == "noul"
@@ -90,11 +101,11 @@ async def test_a_score_question_carries_the_ordered_levels_and_the_full_distribu
     outcome = await call_tool(
         "jev_file_judge",
         args,
-        {"file": {"score": 1.5, "probabilities": {"0": 0.1, "1": 0.8, "2": 0.1}, "confidence": 0.8}},
+        {"file": {"score": 1.0, "probabilities": {"0": 0.1, "1": 0.8, "2": 0.1}, "confidence": 0.8}},
     )
     assert not outcome.is_error, outcome.text
     assert outcome.payload["answer"] == {
-        "score": 1.5,
+        "score": 1.0,
         "nearest_level": 1,
         "probabilities": {"0": 0.1, "1": 0.8, "2": 0.1},
         "confidence": 0.8,

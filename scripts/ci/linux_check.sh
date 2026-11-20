@@ -151,8 +151,9 @@ fi
 chmod 755 "$RUNNER"
 # --init: the runner reaps orphans, as GitHub's environment does; without an init the
 # killed agent groups in tests/evals linger as unreaped zombies and the group-death
-# assertions see them alive.
-CID=$(docker create --init "${CACHE_VOLUMES[@]}" --entrypoint bash -e CI=true -e "PREPUSH_LABEL=$LABEL" "$IMAGE" -c 'chmod 755 /run_stages.sh && chown -R runner:runner /src /home/runner/.cache/uv /home/runner/.local/share/uv && export HOME=/home/runner && exec runuser -u runner -- /run_stages.sh')
+# assertions see them alive. The copy arrives with the native leg's bytecode, which names
+# host paths; deleting it first gives the stages a fresh checkout's state, as in CI.
+CID=$(docker create --init "${CACHE_VOLUMES[@]}" --entrypoint bash -e CI=true -e "PREPUSH_LABEL=$LABEL" "$IMAGE" -c 'chmod 755 /run_stages.sh && find /src -name "*.pyc" -delete && chown -R runner:runner /src /home/runner/.cache/uv /home/runner/.local/share/uv && export HOME=/home/runner && exec runuser -u runner -- /run_stages.sh')
 docker cp "$SRC" "$CID:/src"
 docker cp "$RUNNER" "$CID:/run_stages.sh"
 set +e
@@ -183,7 +184,7 @@ cat >"$RUNNER.onecpu" <<'ONECPU_EOF'
 set -eux
 apt-get update -qq && apt-get install -y -qq make git procps ripgrep >/dev/null
 useradd -m runner
-cp -r /src /home/runner/app && chown -R runner:runner /home/runner/app
+cp -r /src /home/runner/app && find /home/runner/app -name '*.pyc' -delete && chown -R runner:runner /home/runner/app
 su runner -c "cd ~/app && uv sync --locked --all-extras && CI=true make security"
 ONECPU_EOF
 chmod 755 "$RUNNER.onecpu"

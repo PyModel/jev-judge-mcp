@@ -1,32 +1,24 @@
-"""Provider behavior outside the shared contract: slugs, Cloudflare's v4 envelope, TypeSafe's SDK, redaction."""
+"""Provider behavior outside the shared contract: slugs, Cloudflare's v4 envelope, redaction."""
 
 import io
 import json
 import logging
-import subprocess
-import sys
-from typing import Any, cast
+from typing import Any
 
+import httpcore
 import httpx
-import httpx2
 import pytest
 import respx
-from mcp.types import TextContent
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Usage
-from jev_judge_mcp.errors import REDACTED, RedactingFilter, Redactor
-from jev_judge_mcp.providers import NO_RETRIES, Evaluation, ProviderError, RetryPolicy
+from jev_judge_mcp.providers import NO_RETRIES, Evaluation, ProviderError
 from jev_judge_mcp.providers.base import decode_body, parse_envelope
 from jev_judge_mcp.providers.cloudflare import CloudflareProvider, cloudflare_slug
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.openrouter import openrouter_slug
-from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+from jev_judge_mcp.redaction.values import REDACTED, RedactingFilter, Redactor, configure_logging
 from jev_judge_mcp.serialize import stringify_compact
-from jev_judge_mcp.server import configure_logging
-from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.text import head
-from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
-from jev_judge_mcp.tools.base import code_of
 from tests.support.retries import fast_retries as fast_retries
 
 QUESTIONS = {"q": NoulQuestion("Is it?", NoulCriteria("yes", "no"))}
@@ -145,234 +137,6 @@ async def test_cloudflare_http_error_with_unparseable_body_prints_an_empty_objec
     assert await cloudflare_error(502, b"<html>bad gateway</html>") == "Cloudflare AI run 502: {}"
 
 
-# --- TypeSafe through typesafe-sdk ---
-
-
-def typesafe(handler: Any, retry: RetryPolicy | None = None) -> TypeSafeProvider:
-    """A TypeSafe provider over a mock transport; `retry` is jev's policy (ADR-0057)."""
-    return TypeSafeProvider(
-        Redactor(["typesafe-test-key"]),
-        api_key="typesafe-test-key",
-        base_url="https://ts.example",
-        transport=httpx2.MockTransport(handler),
-        retry=retry,
-    )
-
-
-@pytest.mark.anyio
-async def test_typesafe_sdk_retries_are_disabled(fast_retries: list[float]) -> None:
-    """One retry owner (ADR-0057): the SDK is built with `max_retries=0`, so a 429 is attempted
-    exactly jev policy's three times — never multiplied by the SDK's own default two retries."""
-    statuses = [429, 429, 200]
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(statuses.pop(0), json={"answers": {"q": 0.5}})
-
-    provider = typesafe(handler)
-    try:
-        evaluation = await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
-    finally:
-        await provider.aclose()
-
-    assert statuses == []
-    assert evaluation.answers == {"q": 0.5}
-    assert fast_retries == [0.5, 1.0]
-
-
-@pytest.mark.parametrize(
-    ("body", "headers", "expected"),
-    [
-        ({"answers": {}, "request_id": "from-body"}, {"x-request-id": "from-header"}, "from-body"),
-        ({"answers": {}}, {"x-request-id": "from-header"}, "from-header"),
-        ({"answers": {}}, {}, None),
-        ({"answers": {}}, {"x-typesafe-request-id": "live-id"}, "live-id"),
-        ({"answers": {}, "request_id": "from-body"}, {"x-typesafe-request-id": "live-id"}, "from-body"),
-    ],
-)
-@pytest.mark.anyio
-async def test_typesafe_request_id_comes_from_the_body_or_the_header(
-    body: dict[str, Any], headers: dict[str, str], expected: str | None
-) -> None:
-    """Body id wins over any header. A header-only id is kept, under the live
-    `x-typesafe-request-id` name as under the generic ones. Neither stays absent (ADR-0068)."""
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        del request
-        return httpx2.Response(200, json=body, headers=headers)
-
-    provider = typesafe(handler, NO_RETRIES)
-    try:
-        evaluation = await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
-    finally:
-        await provider.aclose()
-    assert evaluation.request_id == expected
-
-
-_REVIEW_ANSWERS = {
-    "correctness": {"score": 2, "confidence": 0.95},
-    "spec_match": {"score": 2, "confidence": 0.95},
-    "test_gap": {"score": 0, "confidence": 0.95},
-    "blast_radius": {"score": 0, "confidence": 0.95},
-    "safe_to_apply": {"noul": 0.95},
-}
-
-
-@pytest.mark.anyio
-async def test_a_file_list_review_frame_keeps_the_live_typesafe_request_id() -> None:
-    """The Claude dogfood failure: live TypeSafe sends the id only as `x-typesafe-request-id`,
-    so a two-file review frame dropped it while carrying provider and summed usage (ADR-0068)."""
-    calls = 0
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        nonlocal calls
-        calls += 1
-        del request
-        return httpx2.Response(
-            200, json={"answers": dict(_REVIEW_ANSWERS)}, headers={"x-typesafe-request-id": "req-live"}
-        )
-
-    provider = typesafe(handler, NO_RETRIES)
-    toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: provider), TOOLS)
-    try:
-        result = await toolset.call(
-            "jev_review",
-            {
-                "request": "fix the parser",
-                "diff": [
-                    {"path": "mathutil.py", "patch": "+ add"},
-                    {"path": "limits.py", "patch": "+ cap"},
-                ],
-            },
-        )
-    finally:
-        await toolset.aclose()
-
-    assert calls == 2  # one ask per file; the frame sums their usage (ADR-0066)
-    payload = json.loads(cast(TextContent, result.content[0]).text)
-    assert payload["provider"] == "typesafe"
-    assert payload["reviewed_files"] == ["mathutil.py", "limits.py"]
-    assert payload["request_id"] == "req-live"
-
-
-@pytest.mark.anyio
-async def test_typesafe_error_body_as_text() -> None:
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(400, text="bad key typesafe-test-key")
-
-    provider = typesafe(handler, NO_RETRIES)
-    with pytest.raises(ProviderError) as caught:
-        await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
-    await provider.aclose()
-
-    assert str(caught.value) == "TypeSafe API 400: bad key [redacted]"
-
-
-@pytest.mark.anyio
-async def test_typesafe_error_without_body() -> None:
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(404)
-
-    provider = typesafe(handler, NO_RETRIES)
-    with pytest.raises(ProviderError) as caught:
-        await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
-    await provider.aclose()
-
-    assert str(caught.value) == "TypeSafe API 404: "
-
-
-@pytest.mark.anyio
-async def test_typesafe_invalid_api_key_is_a_provider_error() -> None:
-    provider = TypeSafeProvider(
-        Redactor(["bad-test-key"]),
-        api_key="bad-test-key",
-        base_url=None,
-        transport=httpx2.MockTransport(lambda _: httpx2.Response(401, json={"error": "unauthorized"})),
-    )
-    with pytest.raises(ProviderError) as caught:
-        await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
-    await provider.aclose()
-
-    assert str(caught.value).startswith("TypeSafe API 401: ")
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(("status", "code"), [(401, "auth"), (403, "provider"), (404, "provider"), (422, "provider")])
-async def test_an_upstream_status_error_codes_as_adr_0072_says(status: int, code: str) -> None:
-    """`evaluate` keeps the status `_status_error` set, and the kernel maps that status (ADR-0072).
-
-    The body contains `401:` on every row, including 403. A text parse would code all of them `auth`.
-    """
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        del request
-        return httpx2.Response(status, json={"detail": "see 401: docs"})
-
-    provider = typesafe(handler, NO_RETRIES)
-    try:
-        with pytest.raises(ProviderError) as raised:
-            await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
-    finally:
-        await provider.aclose()
-    assert raised.value.status == status
-    assert code_of(raised.value) == code
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("status", "body", "code"),
-    [
-        (400, {"detail": {"error_type": "max_tokens_exceeded"}}, "input_too_large"),
-        (400, {"detail": {"error_type": "invalid_request"}}, "provider"),
-        (400, {"detail": "max_tokens_exceeded"}, "provider"),
-        (422, {"detail": {"error_type": "max_tokens_exceeded"}}, "provider"),
-    ],
-)
-async def test_an_upstream_context_overflow_codes_input_too_large(status: int, body: object, code: str) -> None:
-    """A 400 whose structured body says `max_tokens_exceeded` is the model's context window, not a
-    provider fault (ADR-0079): the caller splits the call. The type is read from the body's structure
-    at the boundary, never from the error text, so a bare string naming the token is still `provider`.
-    """
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        del request
-        return httpx2.Response(status, json=body)
-
-    provider = typesafe(handler, NO_RETRIES)
-    try:
-        with pytest.raises(ProviderError) as raised:
-            await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
-    finally:
-        await provider.aclose()
-    assert code_of(raised.value) == code
-
-
-@pytest.mark.anyio
-async def test_typesafe_without_the_sdk_installed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(sys.modules, "typesafe_sdk", None)
-    provider = TypeSafeProvider(Redactor([]), api_key="typesafe-test-key", base_url=None)
-
-    with pytest.raises(ProviderError) as caught:
-        await provider.evaluate("state", QUESTIONS, "jev-latest", 5)
-
-    assert str(caught.value) == (
-        "The typesafe provider needs the typesafe-sdk package: install jev-judge-mcp[typesafe]."
-    )
-
-
-def test_typesafe_sdk_is_imported_lazily() -> None:
-    script = (
-        "import sys, os\n"
-        "os.environ.update(TYPESAFE_API_KEY='typesafe-test-key')\n"
-        "from jev_judge_mcp.providers import resolve_provider\n"
-        "from jev_judge_mcp.server import build_server\n"
-        "from jev_judge_mcp.settings import load_settings\n"
-        "provider = resolve_provider(load_settings())\n"
-        "assert type(provider).__name__ == 'TypeSafeProvider'\n"
-        "assert 'typesafe_sdk' not in sys.modules, 'imported eagerly'\n"
-    )
-    subprocess.run([sys.executable, "-c", script], check=True)
-
-
 # --- Envelope parsing, JSON decoding ---
 
 
@@ -425,22 +189,33 @@ def test_redactor_leaves_urls_without_userinfo_alone_except_whole() -> None:
     assert redact("https://jev.example/v1 and https://jev.example/") == f"{REDACTED} and https://jev.example/"
 
 
-@pytest.mark.parametrize("malformed", [False, True], ids=["valid-format", "malformed-format"])
-def test_redacting_filter_covers_message_args_and_traceback(malformed: bool) -> None:
+@pytest.mark.parametrize("record_kind", ["valid-format", "malformed-format", "cached-traceback", "stack-info"])
+def test_redacting_filter_covers_message_args_and_traceback(record_kind: str) -> None:
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
+
+    def keep_formatted_traceback(record: logging.LogRecord) -> bool:
+        if record.exc_info is not None:
+            logging.Formatter().format(record)
+            record.exc_info = None
+        return True
+
+    if record_kind == "cached-traceback":
+        handler.addFilter(keep_formatted_traceback)
     handler.addFilter(RedactingFilter(Redactor(["s3cret-value"])))
     logger = logging.Logger("tests.redaction")
     logger.addHandler(handler)
     logger.propagate = False
     try:
         logger.warning("key %s in %r", "s3cret-value", {"k": "s3cret-value"})
-        if malformed:
+        if record_kind == "malformed-format":
             logger.warning("key %d", "s3cret-value")
         try:
             raise RuntimeError("boom s3cret-value")
         except RuntimeError:
             logger.exception("failed with s3cret-value")
+        if record_kind == "stack-info":
+            logger.error("stack evidence %s", "s3cret-value", stack_info=True)
     finally:
         logger.removeHandler(handler)
 
@@ -448,8 +223,11 @@ def test_redacting_filter_covers_message_args_and_traceback(malformed: bool) -> 
     assert "s3cret-value" not in output
     assert "key [redacted] in {'k': '[redacted]'}" in output
     assert "RuntimeError: boom [redacted]" in output
-    if malformed:
+    if record_kind == "malformed-format":
         assert "key %d" in output and "('[redacted]',)" in output
+    if record_kind == "stack-info":
+        _, _, stack = output.partition("Stack (most recent call last):")
+        assert "[redacted]" in stack
 
 
 def test_server_logging_redacts_configured_secrets(capsys: pytest.CaptureFixture[str]) -> None:
@@ -468,28 +246,28 @@ def test_server_logging_redacts_configured_secrets(capsys: pytest.CaptureFixture
     assert "HTTP Request: POST" in err
 
 
-def test_debug_logging_hides_sdk_wire_payloads_by_default(capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.anyio
+async def test_debug_logging_hides_http_wire_payloads_by_default(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = logging.getLogger()
     saved = root.handlers[:], root.level
-    sdk = logging.getLogger("typesafe_sdk")
-    sdk_level = sdk.level
+    backend = httpcore.AsyncMockBackend([b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"])
+    monkeypatch.setattr(httpcore.AnyIOBackend, "connect_tcp", backend.connect_tcp)
     try:
         configure_logging("DEBUG")
-        sdk.setLevel(logging.DEBUG)  # The SDK can set its own level when imported after configuration.
-        sdk.debug("wire body=%s", "private file contents")
-        sdk.info("SDK status")
+        async with httpx.AsyncClient(trust_env=False) as client:
+            response = await client.post("http://offline.example", content=b"private file contents", timeout=1)
+        assert response.status_code == 200
         logging.getLogger("jev_judge_mcp").debug("application diagnostic")
-        err = capsys.readouterr().err
-        assert "private file contents" not in err
-        assert "SDK status" in err
-        assert "application diagnostic" in err
-
-        configure_logging("DEBUG", telemetry_payloads=True)
-        sdk.debug("wire body=%s", "private file contents")
-        assert "private file contents" in capsys.readouterr().err
     finally:
         root.handlers[:], root.level = saved
-        sdk.setLevel(sdk_level)
+
+    err = capsys.readouterr().err
+    assert "send_request_body.started" in err
+    assert "HTTP Request: POST" in err
+    assert "application diagnostic" in err
+    assert "private file contents" not in err
 
 
 # --- Error-body helpers ---
@@ -522,98 +300,6 @@ def test_stringify_compact_matches_json_stringify(value: object, text: str) -> N
     assert stringify_compact(value) == text
 
 
-PHASES = ("connect", "read", "write", "pool")
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("timeout", "sent"),
-    [
-        (None, {"connect": 7.5, "read": 30.0, "write": 30.0, "pool": 7.5}),
-        (2.5, {"connect": 0.625, "read": 2.5, "write": 2.5, "pool": 0.625}),
-    ],
-    ids=["stdio-default", "bounded"],
-)
-async def test_typesafe_request_timeout(timeout: float | None, sent: dict[str, float | None]) -> None:
-    """The SDK receives the attempt cap and shorter limits for pre-delivery operations."""
-    seen: list[object] = []
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        seen.append(request.extensions["timeout"])
-        return httpx2.Response(200, json={"answers": {}})
-
-    provider = typesafe(handler, NO_RETRIES)
-    try:
-        await provider.evaluate("state", QUESTIONS, "m", timeout)
-    finally:
-        await provider.aclose()
-
-    # The cap is the caller's remaining budget, so the clock read leaves a sub-millisecond remainder.
-    assert seen == [pytest.approx(sent, rel=1e-3)]
-
-
-@pytest.mark.anyio
-async def test_compatible_refuses_a_base_url_with_credentials() -> None:
-    """Node `fetch` refuses it; httpx would silently swap the Bearer key for Basic auth."""
-    url = "https://user:pw-9@jev.example/v1"
-    provider = CompatibleProvider(Redactor(["compatible-test-key", url]), api_key="compatible-test-key", base_url=url)
-    with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
-        route = router.post("https://jev.example/v1").mock(return_value=httpx.Response(200, json={"answers": {}}))
-        with pytest.raises(ProviderError) as caught:
-            await provider.evaluate("state", QUESTIONS, "m", 5)
-        await provider.aclose()
-
-    assert str(caught.value) == (
-        "Jev-compatible endpoint request failed: Request cannot be constructed from a URL that includes credentials"
-    )
-    assert not route.called
-
-
-@pytest.mark.anyio
-async def test_typesafe_refuses_a_base_url_with_credentials() -> None:
-    sent: list[httpx2.Request] = []
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        sent.append(request)
-        return httpx2.Response(200, json={"answers": {}})
-
-    provider = TypeSafeProvider(
-        Redactor([]),
-        api_key="typesafe-test-key",
-        base_url="https://u:p@ts.example",
-        transport=httpx2.MockTransport(handler),
-    )
-    with pytest.raises(ProviderError, match=r"^TypeSafe API request failed: Request cannot be constructed"):
-        await provider.evaluate("state", QUESTIONS, "m", 5)
-    await provider.aclose()
-
-    assert sent == []
-
-
-@pytest.mark.anyio
-async def test_typesafe_refuses_a_redirect_off_the_configured_origin() -> None:
-    """ADR-0023 for the SDK transport too: the origin gate rides the wrapper the SDK is given."""
-    provider = TypeSafeProvider(Redactor([]), api_key="typesafe-test-key", base_url="https://ts.example")
-    gate = provider._reject_cross_origin  # pyright: ignore[reportPrivateUsage]
-    await gate(httpx2.Request("POST", "https://ts.example/v1/system-one"))
-    with pytest.raises(ProviderError, match="a redirect left the configured origin and was blocked"):
-        await gate(httpx2.Request("POST", "https://evil.example/v1/system-one"))
-    await provider.aclose()
-
-
-@pytest.mark.anyio
-async def test_typesafe_gates_the_client_the_sdk_is_given() -> None:
-    provider = TypeSafeProvider(Redactor([]), api_key="typesafe-test-key", base_url="https://ts.example")
-    try:
-        provider._sdk_client()  # pyright: ignore[reportPrivateUsage]
-        wrapper = provider._wrapper  # pyright: ignore[reportPrivateUsage]
-        assert wrapper is not None
-        assert wrapper.event_hooks["request"] == [provider._reject_cross_origin]  # pyright: ignore[reportPrivateUsage]
-        assert wrapper.timeout.connect is None and wrapper.timeout.read is None
-    finally:
-        await provider.aclose()
-
-
 @pytest.mark.anyio
 @pytest.mark.parametrize("status", [200, 500])
 @pytest.mark.parametrize("buffered", [False, True], ids=["streaming", "buffered"])
@@ -622,8 +308,8 @@ async def test_scout_019_stream_limit_stops_consumption(
 ) -> None:
     from jev_judge_mcp.providers import base
 
-    monkeypatch.setattr(base, "SUCCESS_BYTES_MAX", 8, raising=False)
-    monkeypatch.setattr(base, "ERROR_BYTES_MAX", 8, raising=False)
+    monkeypatch.setattr(base, "SUCCESS_BYTES_MAX", 8)
+    monkeypatch.setattr(base, "ERROR_BYTES_MAX", 8)
     consumed: list[bytes] = []
     closed: list[bool] = []
 
@@ -684,39 +370,6 @@ async def test_scout_005_ambiguous_post_is_never_replayed(
     finally:
         await provider.aclose()
     assert len(attempts) == 1
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("extra", [0, 1])
-async def test_scout_019_sdk_limits_unbuffered_success(monkeypatch: pytest.MonkeyPatch, extra: int) -> None:
-    from jev_judge_mcp.providers import base
-
-    body = b'{"answers":{"q":1}}'
-    monkeypatch.setattr(base, "SUCCESS_BYTES_MAX", len(body))
-    closed: list[bool] = []
-
-    class Stream(httpx2.AsyncByteStream):
-        async def __aiter__(self):
-            yield body
-            if extra:
-                yield b" "
-
-        async def aclose(self):
-            closed.append(True)
-
-    def send(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(200, stream=Stream())
-
-    provider = typesafe(send)
-    try:
-        if extra:
-            with pytest.raises(ProviderError, match="byte limit"):
-                await provider.evaluate({}, QUESTIONS, "fixture", 1)
-        else:
-            assert (await provider.evaluate({}, QUESTIONS, "fixture", 1)).answers == {"q": 1}
-    finally:
-        await provider.aclose()
-    assert closed == [True]
 
 
 @pytest.mark.anyio

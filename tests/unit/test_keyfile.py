@@ -116,12 +116,21 @@ def test_scout_010_descriptor_must_be_regular(
     assert str(isolated_key_file) in caplog.text and "not a regular file" in caplog.text
 
 
-@pytest.mark.parametrize("accepted,extra", [("x" * 4095, "x"), ("é" * 2047 + "x", "é")], ids=["ascii", "utf8"])
-def test_key_rotation_enforces_the_stored_byte_limit(isolated_key_file: Path, accepted: str, extra: str) -> None:
+@pytest.mark.parametrize(
+    ("accepted", "extra", "reason"),
+    [
+        pytest.param("x" * 4095, "x", "4096", id="ascii-byte-limit"),
+        pytest.param("é" * 2047 + "x", "é", "4096", id="utf8-byte-limit"),
+        pytest.param("existing-key", "\ud800", "valid UTF-8", id="invalid-utf8"),
+    ],
+)
+def test_key_rotation_refuses_invalid_values_without_replacing_the_key(
+    isolated_key_file: Path, accepted: str, extra: str, reason: str
+) -> None:
     store_key(settings(), "  " + accepted + "  ")
     assert stored_key(settings()) == accepted
     before = isolated_key_file.stat()
-    with pytest.raises(ValueError, match="4096"):
+    with pytest.raises(ValueError, match=reason):
         store_key(settings(), accepted + extra)
     assert isolated_key_file.stat().st_ino == before.st_ino
     assert stored_key(settings()) == accepted

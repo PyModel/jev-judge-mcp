@@ -12,7 +12,7 @@ from jev_judge_mcp.policy import (
     resolve_policy_thresholds,
 )
 from jev_judge_mcp.tools.base import ToolError
-from jev_judge_mcp.tools.review import review_settings
+from jev_judge_mcp.tools.review_half import review_settings
 from tests.support.jev import call_tool
 
 pytestmark = pytest.mark.anyio
@@ -23,10 +23,10 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-async def test_classify_allows_exactly_8000_item_class_pairs() -> None:
+async def test_classify_pair_cap_is_separate_from_the_provider_window() -> None:
     items = [{"text": f"item {i}"} for i in range(64)]
     at_cap = await call_tool("jev_classify", {"items": items, "classes": [{"description": "c"}] * 125}, {})
-    assert not at_cap.is_error
+    assert not at_cap.is_error and len(at_cap.requests) == 1
     assert at_cap.payload["summary"]["invalid_response"] == 64
 
     over = await call_tool("jev_classify", {"items": items, "classes": [{"description": "c"}] * 126}, {})
@@ -37,9 +37,9 @@ async def test_classify_allows_exactly_8000_item_class_pairs() -> None:
     assert over.requests == []
 
 
-async def test_rerank_allows_exactly_100000_candidate_units() -> None:
+async def test_rerank_candidate_cap_is_separate_from_the_provider_window() -> None:
     at_cap = await call_tool("jev_rerank", {"query": "q", "candidates": [{"text": "a" * 2000}] * 50}, {})
-    assert not at_cap.is_error
+    assert not at_cap.is_error and len(at_cap.requests) == 1
     assert at_cap.payload["status"] == "invalid_response"
 
     over = await call_tool(
@@ -80,47 +80,56 @@ def test_review_settings_reports_the_invariant_text_unchanged() -> None:
 
 
 @pytest.mark.parametrize(
-    ("arguments", "error"),
+    ("arguments", "item_ids", "class_ids"),
     [
         (
             {
                 "items": [{"text": "a"}, {"id": "item0", "text": "b"}],
                 "classes": [{"id": "x", "description": "x"}, {"id": "y", "description": "y"}],
             },
-            "Duplicate item id: item0",
+            ["item2", "item0"],
+            ["x", "y"],
         ),
         (
             {
                 "items": [{"id": "item1", "text": "a"}, {"text": "b"}],
                 "classes": [{"id": "x", "description": "x"}, {"id": "y", "description": "y"}],
             },
-            "Duplicate item id: item1",
+            ["item1", "item2"],
+            ["x", "y"],
         ),
         (
             {
                 "items": [{"id": "a", "text": "a"}, {"id": "b", "text": "b"}],
                 "classes": [{"description": "x"}, {"id": "class0", "description": "y"}],
             },
-            "Duplicate class id: class0",
+            ["a", "b"],
+            ["class2", "class0"],
         ),
         (
             {
                 "items": [{"id": "a", "text": "a"}, {"id": "b", "text": "b"}],
                 "classes": [{"id": "class1", "description": "x"}, {"description": "y"}],
             },
-            "Duplicate class id: class1",
+            ["a", "b"],
+            ["class1", "class2"],
         ),
     ],
     ids=["omitted-item-then-item0", "item1-then-omitted", "omitted-class-then-class0", "class1-then-omitted"],
 )
-async def test_classify_rejects_a_generated_id_that_collides_before_any_request(
-    arguments: dict[str, object], error: str
+async def test_classify_generated_ids_preserve_caller_ids(
+    arguments: dict[str, object], item_ids: list[str], class_ids: list[str]
 ) -> None:
-    """ADR-0031: a fallback id equal to a supplied id is Duplicate {kind} id, and nothing is asked."""
-    outcome = await call_tool("jev_classify", arguments, {"i0": {"choice": "c0"}})
-    assert outcome.is_error
-    assert outcome.text == error
-    assert outcome.requests == []
+    answers = {
+        "i0": {"choice": "c0", "probabilities": {"c0": 0.97, "c1": 0.03}},
+        "i1": {"choice": "c1", "probabilities": {"c0": 0.03, "c1": 0.97}},
+    }
+    outcome = await call_tool("jev_classify", arguments, answers)
+    assert not outcome.is_error, outcome.text
+    rows = outcome.payload["results"]
+    assert [row["id"] for row in rows] == item_ids
+    assert [row["classification"] for row in rows] == class_ids
+    assert len(outcome.requests) == 1
 
 
 async def test_classify_over_the_item_cap_stays_auto() -> None:

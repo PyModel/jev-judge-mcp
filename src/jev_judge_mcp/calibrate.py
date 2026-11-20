@@ -15,13 +15,11 @@ exceeded it, exit 2 is a bad invocation or bad rows.
 
 from __future__ import annotations
 
-import json
 import math
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
 
 from jev_judge_mcp.calibration.families import family_order
 from jev_judge_mcp.calibration.targets import PRECISION_TARGETS, error_budget
@@ -32,6 +30,7 @@ from jev_judge_mcp.calibration.threshold import (
     certify,
     select_threshold,
 )
+from jev_judge_mcp.domain.json import as_number, decode_json, is_json_object
 from jev_judge_mcp.policy import PolicyThresholds, resolve_policy_thresholds
 
 USAGE = "usage: jev-judge-mcp calibrate <rows.jsonl> [--tool TOOL] [--max-error P] [--min-rows N]\n"
@@ -66,22 +65,18 @@ class ParsedRow:
     implicit_family: bool = False
 
 
-def _reject_constant(value: str) -> None:
-    raise ValueError(f"{value} is not a finite JSON number")
-
-
-def _row(parsed: dict[str, Any], source: str, number: int) -> ParsedRow:
+def _row(parsed: dict[str, object], source: str, number: int) -> ParsedRow:
     where = f"{source}:{number}"
     unknown = sorted(set(parsed) - set(FIELDS))
     if unknown:
         raise CalibrateError(f"{where}: unknown field {unknown[0]!r}; need score, correct, optional family, tool")
     if "score" not in parsed or "correct" not in parsed:
         raise CalibrateError(f"{where}: need score and correct")
-    score = parsed["score"]
-    if isinstance(score, bool) or not isinstance(score, (int, float)) or not _finite(score):
+    score = as_number(parsed["score"])
+    if score is None or not math.isfinite(score):
         raise CalibrateError(f"{where}: score must be a finite number")
     if not 0.0 <= score <= 1.0:
-        raise CalibrateError(f"{where}: score {score} is outside [0, 1]")
+        raise CalibrateError(f"{where}: score {parsed['score']} is outside [0, 1]")
     correct = parsed["correct"]
     if not isinstance(correct, bool):
         raise CalibrateError(f"{where}: correct must be true or false")
@@ -97,15 +92,7 @@ def _row(parsed: dict[str, Any], source: str, number: int) -> ParsedRow:
     if tool is not None and (not isinstance(tool, str) or tool not in PRECISION_TARGETS):
         known = ", ".join(PRECISION_TARGETS)
         raise CalibrateError(f"{where}: unknown tool {tool!r} (one of {known})")
-    return ParsedRow(float(score), correct, family if family else f"row{number}", tool, family is None)
-
-
-def _finite(score: int | float) -> bool:
-    """`math.isfinite` over an integer wider than a double raises; such a score is not finite here."""
-    try:
-        return math.isfinite(float(score))
-    except OverflowError:
-        return False
+    return ParsedRow(score, correct, family if family else f"row{number}", tool, family is None)
 
 
 def parse_rows(text: str, source: str) -> list[ParsedRow]:
@@ -120,16 +107,15 @@ def parse_rows(text: str, source: str) -> list[ParsedRow]:
     return rows
 
 
-def _decoded(line: str, source: str, number: int) -> dict[str, Any]:
+def _decoded(line: str, source: str, number: int) -> dict[str, object]:
     where = f"{source}:{number}"
     try:
-        parsed = json.loads(line, parse_constant=_reject_constant)
-    except (ValueError, RecursionError) as error:
-        # RecursionError: nesting deeper than the interpreter allows is a bad row, not a crash.
+        parsed = decode_json(line)
+    except ValueError as error:
         raise CalibrateError(f"{where}: not one JSON object ({error})") from None
-    if not isinstance(parsed, dict):
+    if not is_json_object(parsed):
         raise CalibrateError(f"{where}: not one JSON object")
-    return cast("dict[str, Any]", parsed)
+    return parsed
 
 
 def resolve_tool(flag_tool: str | None, rows: Sequence[ParsedRow]) -> str | None:

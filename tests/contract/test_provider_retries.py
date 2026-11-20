@@ -13,16 +13,15 @@ from typing import Any
 
 import anyio
 import httpx
-import httpx2
 import pytest
 import respx
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question
-from jev_judge_mcp.errors import REDACTED, Redactor
 from jev_judge_mcp.providers import NO_RETRIES, JevProvider, ProviderError, ProviderTimeoutError, RetryPolicy
 from jev_judge_mcp.providers import retry as retry_timing
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+from jev_judge_mcp.redaction.values import REDACTED, Redactor
 from jev_judge_mcp.tools.base import code_of
 from tests.support.retries import ControlledClock
 from tests.support.retries import controlled_clock as controlled_clock
@@ -183,9 +182,9 @@ async def test_success_after_a_connect_timeout() -> None:
     assert len(sent) == 2
 
 
-@pytest.mark.parametrize("sdk", [False, True], ids=["httpx", "typesafe-sdk"])
+@pytest.mark.parametrize("provider_name", ["compatible", "typesafe"])
 async def test_a_stalled_connection_retries_without_uncertain_completion(
-    monkeypatch: pytest.MonkeyPatch, fast_retries: list[float], sdk: bool
+    monkeypatch: pytest.MonkeyPatch, fast_retries: list[float], provider_name: str
 ) -> None:
     connects: list[str] = []
 
@@ -198,7 +197,9 @@ async def test_a_stalled_connection_retries_without_uncertain_completion(
         monkeypatch.delenv(key, raising=False)
     policy = RetryPolicy(per_attempt_timeout=0.2, max_attempts=2)
     endpoint = (
-        TypeSafeProvider(Redactor([SECRET]), api_key=SECRET, base_url=URL, retry=policy) if sdk else provider(policy)
+        TypeSafeProvider(Redactor([SECRET]), api_key=SECRET, base_url=URL, retry=policy)
+        if provider_name == "typesafe"
+        else provider(policy)
     )
 
     message = await failure(endpoint)
@@ -485,122 +486,6 @@ async def test_cancellation_during_the_backoff_sleep_returns_promptly() -> None:
 
     assert len(cancelled) == 1 and isinstance(cancelled[0], anyio.get_cancelled_exc_class())
     assert len(sent) == 1  # the retry never started
-
-
-async def test_the_typesafe_provider_never_retries_nested(fast_retries: list[float]) -> None:
-    """ADR-0057: the SDK is built with `max_retries=0`, so jev's three attempts stay three requests."""
-    requested: list[httpx2.Request] = []
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        requested.append(request)
-        return httpx2.Response(200 if len(requested) == 3 else 429, content=OK)
-
-    sdk_provider = TypeSafeProvider(
-        Redactor([SECRET]),
-        api_key=SECRET,
-        base_url="https://typesafe-retry.example",
-        transport=httpx2.MockTransport(handler),
-    )
-    try:
-        evaluation = await sdk_provider.evaluate({"state": True}, QUESTIONS, "m", 5)
-    finally:
-        await sdk_provider.aclose()
-
-    assert evaluation.provider == "typesafe"
-    assert len(requested) == 3
-    assert fast_retries == [0.5, 1.0]  # jev's policy drove the waits, the SDK's drove none
-
-
-def typesafe_provider(handler: Callable[[httpx2.Request], httpx2.Response], retry: RetryPolicy | None = None):
-    return TypeSafeProvider(
-        Redactor([SECRET]),
-        api_key=SECRET,
-        base_url="https://typesafe-retry.example",
-        transport=httpx2.MockTransport(handler),
-        retry=retry,
-    )
-
-
-async def test_typesafe_connect_refusal_is_retryable(fast_retries: list[float]) -> None:
-    """R1: an SDK connection error whose cause has no message must be the retryable connection
-    failure it is, not a permanent error; its text stays exactly what a single attempt prints."""
-    requested: list[httpx2.Request] = []
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        requested.append(request)
-        if len(requested) == 1:
-            raise httpx2.ConnectError("refused")
-        return httpx2.Response(200, content=OK)
-
-    sdk_provider = typesafe_provider(handler)
-    try:
-        evaluation = await sdk_provider.evaluate({"state": True}, QUESTIONS, "m", 5)
-    finally:
-        await sdk_provider.aclose()
-
-    assert evaluation.provider == "typesafe"
-    assert len(requested) == 2
-    assert fast_retries == [0.5]
-
-
-@pytest.mark.parametrize(
-    ("retry", "expected_text", "expected_requests", "expected_delays"),
-    [
-        (NO_RETRIES, "TypeSafe API request failed: Connection error: ReadError", 1, []),
-        (
-            None,
-            "TypeSafe API request failed: Connection error: ReadError Completion is uncertain.",
-            1,
-            [],
-        ),
-    ],
-    ids=["single-attempt-compatibility", "default-reports-uncertain-completion"],
-)
-async def test_a_typesafe_reset_is_classified_by_policy(
-    fast_retries: list[float],
-    retry: RetryPolicy | None,
-    expected_text: str,
-    expected_requests: int,
-    expected_delays: list[float],
-) -> None:
-    """An SDK reset whose cause has no message keeps today's single-attempt text under the off
-    injection, and reports uncertain completion under the default policy."""
-    requested: list[httpx2.Request] = []
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        requested.append(request)
-        raise httpx2.ReadError("")
-
-    sdk_provider = typesafe_provider(handler, retry)
-    with pytest.raises(ProviderError) as caught:
-        try:
-            await sdk_provider.evaluate({"state": True}, QUESTIONS, "m", 5)
-        finally:
-            await sdk_provider.aclose()
-
-    assert str(caught.value) == expected_text
-    assert len(requested) == expected_requests
-    assert fast_retries == expected_delays
-
-
-async def test_a_typesafe_429_honors_retry_after_ms_then_succeeds(fast_retries: list[float]) -> None:
-    requested: list[httpx2.Request] = []
-
-    def handler(request: httpx2.Request) -> httpx2.Response:
-        requested.append(request)
-        if len(requested) == 1:
-            return httpx2.Response(429, content=b"slow down", headers={"retry-after-ms": "750"})
-        return httpx2.Response(200, content=OK)
-
-    sdk_provider = typesafe_provider(handler)
-    try:
-        evaluation = await sdk_provider.evaluate({"state": True}, QUESTIONS, "m", None)
-    finally:
-        await sdk_provider.aclose()
-
-    assert evaluation.provider == "typesafe"
-    assert len(requested) == 2
-    assert fast_retries == [0.75]
 
 
 @pytest.mark.parametrize("status", [429, 503])

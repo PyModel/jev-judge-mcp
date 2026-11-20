@@ -7,11 +7,12 @@ import pytest
 from jev_judge_mcp.limits import SCORE
 from jev_judge_mcp.tools import TOOLS
 from jev_judge_mcp.tools.score import DEFINITION
+from jev_judge_mcp.validation import validate_rubric_answer
 from tests.support.jev import call_tool
 
 pytestmark = pytest.mark.anyio
 
-GOOD = {"score": 0.5, "probabilities": {"0": 0.4, "1": 0.35, "2": 0.25}, "confidence": 0.9}
+GOOD = {"score": 0.5, "probabilities": {"0": 0.6, "1": 0.3, "2": 0.1}, "confidence": 0.9}
 
 
 @pytest.fixture
@@ -31,8 +32,8 @@ async def test_happy_path_projects_score_distribution_and_nearest() -> None:
     assert payload["provider"] == "compatible"
     assert payload["usage"] == {"input_tokens": 1, "output_tokens": 1}
     assert payload["score"] == 0.5
-    assert payload["nearest_level"] == 0  # 0.4 at level 0 beats 0.35 at level 1
-    assert payload["probabilities"] == {"0": 0.4, "1": 0.35, "2": 0.25}
+    assert payload["nearest_level"] == 0
+    assert payload["probabilities"] == {"0": 0.6, "1": 0.3, "2": 0.1}
     assert payload["confidence"] == 0.9
     assert payload["status"] == "ok"
     assert payload["levels"] == ["minor", "moderate", "severe"]
@@ -95,21 +96,58 @@ async def test_a_score_above_two_on_a_five_level_rubric_is_valid() -> None:
     Regression: the shared [0, 2] bound cut every answer of level 3 or higher on any rubric
     longer than three levels, so a 4+ level rubric could never return its top half.
     """
-    probabilities = {"0": 0.05, "1": 0.05, "2": 0.1, "3": 0.6, "4": 0.2}
+    # Score and probabilities recorded from the provider on 2026-11-19.
+    probabilities = {"0": 0, "1": 0.02, "2": 0.02, "3": 0.19, "4": 0.77}
     levels = ["none", "low", "medium", "high", "critical"]
     outcome = await call_tool(
         "jev_score",
         {"subject": "SQL built by concatenating a public form field", "levels": levels},
-        {"grade": {"score": 3.05, "probabilities": probabilities, "confidence": 0.86}},
+        {"grade": {"score": 3.71, "probabilities": probabilities, "confidence": 0.86}},
     )
     assert not outcome.is_error, outcome.text
     payload = outcome.payload
     assert payload["status"] == "ok"
-    assert payload["score"] == 3.05
-    assert payload["nearest_level"] == 3
+    assert payload["score"] == 3.71
+    assert payload["nearest_level"] == 4
     assert payload["probabilities"] == probabilities
     assert payload["confidence"] == 0.86
     assert payload["levels"] == levels
+
+
+@pytest.mark.parametrize(
+    ("score", "distribution"),
+    [
+        (3.71, (0, 0.02, 0.02, 0.19, 0.77)),
+        (8.43, (0, 0, 0, 0, 0, 0, 0.01, 0.09, 0.35, 0.55)),
+        (1.04, (0.13, 0.72, 0.14, 0.01, 0, 0, 0, 0, 0, 0)),
+        (1.74, (0.04, 0.35, 0.48, 0.12, 0.01, 0, 0, 0, 0, 0)),
+    ],
+)
+async def test_score_accepts_recorded_live_answers(score: float, distribution: tuple[float, ...]) -> None:
+    """Replay the score and probabilities recorded live through this server on 2026-11-19."""
+    probabilities = {str(index): probability for index, probability in enumerate(distribution)}
+    raw = {"score": score, "probabilities": probabilities}
+    levels = [f"level {index}" for index in range(len(distribution))]
+    outcome = await call_tool("jev_score", {"subject": "Severity", "levels": levels}, {"grade": raw})
+
+    answer = validate_rubric_answer(raw, len(levels))
+    assert answer is not None
+    assert answer.score == score and answer.probabilities == probabilities
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["status"] == "ok"
+    assert outcome.payload["score"] == score
+    assert outcome.payload["probabilities"] == probabilities
+
+
+@pytest.mark.parametrize(("score", "status"), [(0.229999, "ok"), (0.230001, "invalid_response")])
+async def test_score_uses_the_ten_level_rounding_bound(score: float, status: str) -> None:
+    outcome = await call_tool(
+        "jev_score",
+        {"subject": "Severity", "levels": [f"level {index}" for index in range(10)]},
+        {"grade": {"score": score, "probabilities": {str(index): int(index == 0) for index in range(10)}}},
+    )
+    assert not outcome.is_error
+    assert outcome.payload["status"] == status
 
 
 async def test_a_score_above_the_rubric_top_is_invalid_on_five_levels() -> None:

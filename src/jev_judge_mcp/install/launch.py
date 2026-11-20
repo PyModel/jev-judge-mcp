@@ -6,7 +6,6 @@ package's `Requires-Python` (ADR-0053), so `uvx` cannot resolve the package agai
 interpreter it refuses.
 """
 
-import json
 import re
 import stat
 import subprocess
@@ -18,10 +17,10 @@ from pathlib import Path
 
 from packaging.version import VERSION_PATTERN
 
-from jev_judge_mcp.domain import is_json_object
+from jev_judge_mcp.domain import decode_json, is_json_object
 from jev_judge_mcp.install.errors import InstallError
 from jev_judge_mcp.install.redact import is_reference
-from jev_judge_mcp.tools import TOOLS
+from jev_judge_mcp.registry import TOOL_NAMES
 
 PACKAGE = "jev-judge-mcp"
 SERVER_NAME = "jev-mcp"
@@ -29,7 +28,6 @@ REFERENCE = "${TYPESAFE_API_KEY}"
 OPENCODE_REFERENCE = "{env:TYPESAFE_API_KEY}"
 # Cursor expands only `${env:NAME}` in mcp.json; a bare `${NAME}` reaches the server verbatim.
 CURSOR_REFERENCE = "${env:TYPESAFE_API_KEY}"
-EXTRA = "typesafe"
 # pi-mcp-adapter resourceNameToToolName("jev-mcp/SKILL.md") with a get_ prefix.
 PI_SKILL_TOOL = "get_jev_mcp_skill_md"
 # uvx honors tool.uv.cache-keys for its cached environments from uv 0.10.10 (astral-sh/uv#18396).
@@ -62,7 +60,7 @@ def require_checkout_uvx(uvx: str) -> None:
 
 def pi_direct_tools() -> list[str]:
     """Published tools plus the routing skill. Other packaged files stay resources, not Pi tools."""
-    return [*(tool.name for tool in TOOLS), PI_SKILL_TOOL]
+    return [*TOOL_NAMES, PI_SKILL_TOOL]
 
 
 @dataclass(frozen=True)
@@ -83,21 +81,21 @@ class Launch:
 
 
 def pypi_launch(uvx: str) -> Launch:
-    """The running package pinned on PyPI: `jev-judge-mcp[typesafe]==<installed version>`.
+    """The running package pinned on PyPI: `jev-judge-mcp==<installed version>`.
 
     Needs no source checkout, so a wheel install can run the installer, and no written entry
     depends on a checkout that may later move or disappear (ADR-0051). In real use the first
     launch of a not-yet-cached version may download the package from PyPI.
     """
-    return Launch(uvx=uvx, spec=f"{PACKAGE}[{EXTRA}]=={installed_version()}", python=requires_python())
+    return Launch(uvx=uvx, spec=f"{PACKAGE}=={installed_version()}", python=requires_python())
 
 
 def checkout_launch(uvx: str, package_root: Path | None = None) -> Launch:
-    """This checkout: `<absolute checkout>[typesafe]`, found the way ADR-0033 found it."""
+    """This checkout: `<absolute checkout>`, found the way ADR-0033 found it."""
     root = package_root if package_root is not None else find_package_root()
     if not root.is_absolute():
         root = root.resolve()
-    return Launch(uvx=uvx, spec=f"{root}[{EXTRA}]", python=requires_python())
+    return Launch(uvx=uvx, spec=f"{root}", python=requires_python())
 
 
 def installed_version() -> str:
@@ -135,20 +133,15 @@ def local_install_warning() -> str | None:
     """
     try:
         raw = distribution(PACKAGE).read_text("direct_url.json")
-    except PackageNotFoundError:
-        return None
-    if not raw:
-        return None
-    try:
-        parsed: object = json.loads(raw)
-    except json.JSONDecodeError:
+        parsed = decode_json(raw) if raw else None
+    except (PackageNotFoundError, ValueError):
         return None
     url = parsed.get("url") if is_json_object(parsed) else None
     if not isinstance(url, str) or not url.startswith("file://"):
         return None
     return (
         "note: this installer runs from a local checkout, so the pinned PyPI build "
-        f"{PACKAGE}[{EXTRA}]=={installed_version()} does not include your local changes; "
+        f"{PACKAGE}=={installed_version()} does not include your local changes; "
         "pass --from-checkout to install this tree instead"
     )
 
@@ -184,11 +177,10 @@ def supported_spec(spec: str) -> bool:
     """Exactly the two shapes this installer writes (ADR-0051): the version-pinned PyPI spec and
     the checkout spec. Anything else — the bare package name, another project, a relative path —
     is refused before any config is written."""
-    pin = f"{PACKAGE}[{EXTRA}]=="
+    pin = f"{PACKAGE}=="
     if spec.startswith(pin):
         return re.fullmatch(VERSION_PATTERN, spec.removeprefix(pin), re.VERBOSE | re.IGNORECASE) is not None
-    extra = f"[{EXTRA}]"
-    return spec.endswith(extra) and "\x00" not in spec and Path(spec.removesuffix(extra)).is_absolute()
+    return "\x00" not in spec and Path(spec).is_absolute()
 
 
 def claude_code_entry(launch: Launch) -> dict[str, object]:

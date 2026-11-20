@@ -62,7 +62,7 @@ class _AbandonableLines(anyio.AsyncFile[str]):
 @contextlib.asynccontextmanager
 async def stdio_streams() -> AsyncGenerator[Streams]:
     """Read and write streams for `Server.run` over the process's stdin and stdout."""
-    stdin = _AbandonableLines(TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace"))
+    stdin = _AbandonableLines(TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace", newline="\n"))
     with _claim_stdout() as wire:
         stdout = anyio.wrap_file(TextIOWrapper(wire, encoding="utf-8"))
         read_writer, read_stream = anyio.create_memory_object_stream[SessionMessage | Exception](0)

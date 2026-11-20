@@ -1,10 +1,10 @@
-"""Startup refuses a non-POSIX platform before signals or the extract worker pool (ADR-0032)."""
+"""Package entry point routing and the POSIX startup gate (ADR-0032)."""
 
 import sys
 
 import pytest
 
-from jev_judge_mcp.server import main, require_posix
+from jev_judge_mcp.__main__ import main, require_posix
 
 
 def test_this_platform_is_posix() -> None:
@@ -41,3 +41,32 @@ def test_win32_exits_before_signal_or_worker_setup(monkeypatch: pytest.MonkeyPat
         "unsupported platform win32: jev-judge-mcp is POSIX-only; "
         "Windows is unsupported until Windows-specific behavior is implemented and tested"
     )
+
+
+@pytest.mark.parametrize("command", ["install", "setup", "doctor", "hook", "calibrate"])
+def test_subcommand_routes_to_its_own_usage(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], command: str
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", command, "--help"])
+    with pytest.raises(SystemExit) as caught:
+        main()
+    captured = capsys.readouterr()
+    if command == "hook":
+        assert caught.value.code == 2
+        assert "usage: jev-judge-mcp hook gate" in captured.err
+    else:
+        assert caught.value.code == 0
+        assert f"usage: jev-judge-mcp {command}" in captured.out
+
+
+@pytest.mark.parametrize("args", [[], ["unknown"], ["--unknown", "install"]])
+def test_no_subcommand_routes_to_the_server(monkeypatch: pytest.MonkeyPatch, args: list[str]) -> None:
+    monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", *args])
+
+    def serve() -> None:
+        raise SystemExit(73)
+
+    monkeypatch.setattr("jev_judge_mcp.server.main", serve)
+    with pytest.raises(SystemExit) as caught:
+        main()
+    assert caught.value.code == 73

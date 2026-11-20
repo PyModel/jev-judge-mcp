@@ -3,6 +3,8 @@ status: accepted
 ---
 # The hook gate asks guard questions, not one bare allow
 
+> Partially superseded. The command-hook guard amendment in ADR-0002 supersedes the threshold location. `policy/guard.py` owns the questions, confidence floors and decision.
+
 `hook gate` judged every event with one generic allow/deny Choice. That flattened two different
 judgments into one: what a shell command would do to the working directory, and whether a written
 file carries material that must never leave the machine. One question also had to carry both the
@@ -42,7 +44,7 @@ observation and the verdict, so its reason could only say "denied" without namin
   budget to its single provider call.
 - **Credential literals are evidence; code is not.** A false positive denies a normal write
   with no recourse, so the scan is strict and high precision by construction: the detector in
-  `src/jev_judge_mcp/credential_literal.py` hits only well-known token formats (AWS access key
+  `src/jev_judge_mcp/redaction/literals.py` hits only well-known token formats (AWS access key
   ids, GitHub and Slack tokens, OpenAI/Anthropic-style `sk-` keys with twenty mixed-case
   characters and a digit after the prefix so a CSS class name never matches, PEM private-key
   blocks, JWTs) and a quoted literal that is long, whitespace-free, and carries lower case,

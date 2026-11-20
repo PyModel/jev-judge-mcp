@@ -6,7 +6,7 @@ failures and invalid answers never reach here. The tool projects the decision in
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, get_args
 
 from jev_judge_mcp.policy.actions import Action, classification_decision, worst_action
 
@@ -16,13 +16,7 @@ type ExtractReasonCode = Literal[
     "no_regex_matches", "matches_too_long", "candidate_limit", "none_matched", "none_matched_ambiguous"
 ]
 
-EXTRACT_REASON_CODES: tuple[ExtractReasonCode, ...] = (
-    "no_regex_matches",
-    "matches_too_long",
-    "candidate_limit",
-    "none_matched",
-    "none_matched_ambiguous",
-)
+EXTRACT_REASON_CODES: tuple[ExtractReasonCode, ...] = get_args(ExtractReasonCode.__value__)
 
 
 @dataclass(frozen=True, slots=True)

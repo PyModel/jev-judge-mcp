@@ -1,4 +1,4 @@
-"""Extract-worker census for the private process group created by StdioServer."""
+"""Process queries scoped to test-owned PIDs and process groups."""
 
 import os
 import re
@@ -29,3 +29,15 @@ def alive(pid: int) -> bool:
     except ProcessLookupError:
         return False
     return True
+
+
+def gone_or_zombie(pid: int) -> bool:
+    """A child that exited need not have been reaped by its final parent yet."""
+    if pid <= 0:
+        raise ValueError("a test process PID must be positive")
+    if not alive(pid):
+        return True
+    state = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=5, check=False
+    ).stdout.strip()
+    return not state or state.startswith("Z")

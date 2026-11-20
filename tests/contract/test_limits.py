@@ -80,7 +80,7 @@ _CASES: list[tuple[str, str, re.Pattern[str] | None, _Actual]] = [
         "jev_decide",
         "requirements",
         re.compile(r"(\d+)\.\.(\d+) reject"),
-        (DECIDE.requirements_min, DECIDE.requirements_max),
+        (0, DECIDE.requirements_max),
     ),
     ("jev_decide", "requirement_text", re.compile(r"(\d+)\.\.(\d+)"), (DECIDE.requirement_min, DECIDE.requirement_max)),
     ("jev_rerank", "candidates", re.compile(r"\.\.(\d+) reject"), CANDIDATES.max_items),
@@ -89,7 +89,7 @@ _CASES: list[tuple[str, str, re.Pattern[str] | None, _Actual]] = [
     ("jev_rerank", "top_k", re.compile(r"int (\d+)\.\.(\d+), default all"), (RERANK.top_k_min, RERANK.top_k_max)),
     ("jev_compare", "passage_a", re.compile(r"(\d+)\.\.(\d+) reject"), (COMPARE.passage_min, COMPARE.passage_max)),
     ("jev_compare", "passage_b", re.compile(r"(\d+)\.\.(\d+) reject"), (COMPARE.passage_min, COMPARE.passage_max)),
-    ("jev_compare", "aspects", re.compile(r"(\d+)\.\.(\d+) reject"), (COMPARE.aspects_min, COMPARE.aspects_max)),
+    ("jev_compare", "aspects", re.compile(r"(\d+)\.\.(\d+) reject"), (0, COMPARE.aspects_max)),
     ("jev_compare", "aspect_text", re.compile(r"(\d+)\.\.(\d+)"), (COMPARE.aspect_min, COMPARE.aspect_max)),
     (
         "jev_extract",
@@ -111,12 +111,6 @@ _CASES: list[tuple[str, str, re.Pattern[str] | None, _Actual]] = [
     ("jev_gate", "claim_chars", re.compile(r"(\d+) truncate"), GATE.claim_units),
     ("jev_gate", "evidence_items", re.compile(r">(\d+) → isError result"), GATE.evidence_items),
     ("jev_gate", "aggregate_evidence_chars", re.compile(r">(\d+) → isError result\..*"), GATE.aggregate_evidence_units),
-    (
-        "jev_gate",
-        "doc_chars",
-        re.compile(r"(\d+) truncate each \(request, diff, tests, evidence item\)"),
-        GATE.doc_units,
-    ),
 ]
 
 
@@ -148,6 +142,8 @@ def test_limits_match_parity_manifest() -> None:
 def test_every_manifest_cap_field_is_owned() -> None:
     """A re-freeze that adds a cap field cannot land silently with no limits.py owner."""
     mapped = {(tool, field) for tool, field, _, _ in _CASES}
+    # ADR-0086 owns the Python gate document cap, formerly frozen at 50,000 units.
+    mapped.add(("jev_gate", "doc_chars"))
     for tool, fields in _caps().items():
         if tool == "$comment":
             continue

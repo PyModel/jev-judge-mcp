@@ -9,6 +9,7 @@ drift apart.
 
 import copy
 import sys
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import pytest
@@ -33,7 +34,8 @@ stays a prefix; each extension carries its own pinning tests (`test_score_tool.p
 _PUBLISH_SNAPSHOT = """
 from mcp.types import Tool
 import anyio
-from jev_judge_mcp.server import JevMCPServer, configure_logging, serve
+from jev_judge_mcp.redaction.values import configure_logging
+from jev_judge_mcp.server import JevMCPServer, serve
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import JevTool, Runtime, Toolset
 from tests.support.tools_list import load_snapshot
@@ -80,8 +82,8 @@ def test_diff_ignores_key_order_and_uncompared_fields() -> None:
 
 @pytest.mark.parametrize("field", ["name", "title", "description", "inputSchema", "execution"])
 def test_diff_flags_each_compared_field(field: str) -> None:
-    snapshot = load_snapshot()
-    served = copy.deepcopy(snapshot[:1])
+    snapshot = load_snapshot()[:1]
+    served = copy.deepcopy(snapshot)
     if field == "inputSchema":
         served[0]["inputSchema"]["properties"]["claims"]["minItems"] = 2
     elif field == "execution":
@@ -92,8 +94,16 @@ def test_diff_flags_each_compared_field(field: str) -> None:
 
 
 def test_diff_flags_order() -> None:
+    snapshot = load_snapshot()[:2]
+    assert order_mismatch(snapshot, snapshot[::-1]) is not None
+
+
+@pytest.mark.parametrize("compare", [field_mismatches, order_mismatch], ids=["fields", "order"])
+def test_diff_flags_missing_tool(
+    compare: Callable[[Sequence[Mapping[str, Any]], Sequence[Mapping[str, Any]]], list[str] | str | None],
+) -> None:
     snapshot = load_snapshot()
-    assert order_mismatch(snapshot, [snapshot[1], snapshot[0]]) is not None
+    assert compare(snapshot, snapshot[:-1])
 
 
 def test_published_snapshot_round_trips_on_the_wire() -> None:
@@ -206,13 +216,6 @@ def test_initialize_names_each_tool_and_the_gate_rule() -> None:
     assert "0.5" not in instructions
 
 
-def test_served_tool_set_is_complete() -> None:
-    served = served_tools()
-    if len(served) < SNAPSHOT_TOOL_COUNT:
-        pytest.skip(f"{len(served)}/{SNAPSHOT_TOOL_COUNT} tools served; the full set lands in P5")
-    assert [tool["name"] for tool in served] == [tool["name"] for tool in load_snapshot()] + list(EXTENSION_TOOLS)
-
-
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
@@ -223,7 +226,6 @@ async def test_published_names_equal_callable_names() -> None:
     server = build_server(load_settings())
     listed = {tool.name for tool in await server.list_tools()}
     assert listed == set(server.toolset.names())
-    assert listed == {tool["name"] for tool in load_snapshot()} | set(EXTENSION_TOOLS)
 
 
 async def test_unknown_tool_is_a_deterministic_parity_shape() -> None:

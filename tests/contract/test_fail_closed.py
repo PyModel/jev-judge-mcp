@@ -154,6 +154,7 @@ def rubric_mutations() -> dict[str, Mutation]:
         "score_inf": lambda answer: {**answer, "score": math.inf},
         "score_negative": lambda answer: {**answer, "score": -0.1},
         "score_above_rubric": lambda answer: {**answer, "score": 1.5},
+        "score_contradicts_distribution": lambda answer: {**answer, "score": 1},
         "probabilities_missing": lambda answer: {k: v for k, v in answer.items() if k != "probabilities"},
         "probabilities_not_object": lambda answer: {
             **answer,
@@ -227,6 +228,10 @@ GOOD_REVIEW: dict[str, Any] = {
 REVIEW_TARGETS: dict[str, Mapping[str, Mutation]] = {
     **{rubric: {**noul_mutations("score"), **CONFIDENCE_MUTATIONS} for rubric in list(GOOD_REVIEW)[:4]},
     "safe_to_apply": noul_mutations(),
+}
+REVIEW_TARGETS["correctness"] = {
+    **REVIEW_TARGETS["correctness"],
+    "score_contradicts_distribution": lambda answer: {**answer, "probabilities": {"0": 1, "1": 0, "2": 0}},
 }
 
 CASES: list[Case] = [

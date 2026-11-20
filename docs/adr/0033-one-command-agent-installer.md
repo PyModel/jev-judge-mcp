@@ -4,6 +4,8 @@ status: accepted
 
 # One command installs the `jev` MCP entry into local agent configs
 
+> Partially superseded. ADR-0051 supersedes the pre-publication checkout-only pin. ADR-0084 removes the TypeSafe extra from generated launches.
+
 Agents each keep their own MCP config, and several of those files are shared with a desktop app. A hand-edited snippet drifts, and a rewriter that parses and dumps TOML drops comments in `~/.codex/config.toml`. The installer is a subcommand of the existing console script so that running `jev-judge-mcp` with no arguments stays the stdio server.
 
 ## Decision
@@ -62,3 +64,25 @@ Agents each keep their own MCP config, and several of those files are shared wit
 - Installer state and backups use the shared private-directory checks. After a successful
   config write, the installer retains the three newest backups for that target. Pi adapter
   detection uses the same 16 MiB regular-file limit and BOM-tolerant decoding as config reads.
+
+## Amendment (2026-11-19): Installer specs use the base package
+
+ADR-0084 removes the provider extra. The installer writes a bare pinned distribution or
+absolute checkout path and migrates owned entries written with the previous extra suffix.
+
+## Amendment (2026-11-19): Installer JSON uses the shared decoder
+
+Agent config, Pi settings, and installer state reject nonstandard constants (`NaN`,
+`Infinity`, and `-Infinity`) and excessive nesting through the shared decoder. Agent JSON
+and JSONC retain UTF-8 BOM support and JSONC retains comments and trailing commas. A bad
+agent config, including invalid UTF-8, stays untouched and gets a one-line parse diagnostic.
+Unreadable or malformed Pi settings are treated as adapter unavailable and keep the
+existing adapter hint. Unreadable or malformed installer state blocks writes.
+
+## Amendment (2026-11-19): one entry point for subcommands and help
+
+The console script and `python -m jev_judge_mcp` both enter `__main__.main`. One ordered
+table maps each command spelling to its lazy handler and help text. Only the fallback loads
+the MCP server. Missing and unrecognized commands take that path, as before. The POSIX check
+precedes dispatch, and the logging and failure policies for judgments and hooks run before
+their handlers. Calibration calls `calibrate.main` directly.

@@ -6,18 +6,14 @@ high-entropy literal assigned to a secret-named key. A bare identifier, a type
 annotation, a function name, or a reference such as ``os.environ[...]``,
 ``settings.x``, or an f-string placeholder is never a hit.
 
-This is not :mod:`jev_judge_mcp.redact_action`: that module redacts shell commands,
-where credential-shaped substrings are the risk, and it rewrites ordinary code. Here the
-judged text is file content, and mangling it would misjudge the write.
+The file-content rules preserve ordinary code. Shell command patterns live in
+:mod:`jev_judge_mcp.redaction.action`.
 """
 
 import re
 from collections.abc import Callable, Iterator
 
-from jev_judge_mcp.errors import Redactor
-
-REDACTED = "[redacted]"
-"""The same harness-facing marker ``redact_action`` uses; defined here so this module stays separate."""
+from jev_judge_mcp.redaction.values import REDACTED
 
 
 def _mixed_case_with_digit(match: re.Match[str]) -> bool:
@@ -117,7 +113,7 @@ def has_credential_field(name: str, value: str) -> bool:
     return _SECRET_FIELD.search(name) is not None and _high_entropy(value)
 
 
-def redact_credential_literals(text: str, redact: Redactor | None = None) -> str:
+def redact_credential_literals(text: str) -> str:
     """The text with every credential literal replaced by ``REDACTED``.
 
     On text without a literal this is the identity, so written code reads naturally to the
@@ -134,5 +130,4 @@ def redact_credential_literals(text: str, redact: Redactor | None = None) -> str
         out.append(REDACTED)
         cursor = stop
     out.append(text[cursor:])
-    masked = "".join(out)
-    return redact(masked) if redact is not None else masked
+    return "".join(out)

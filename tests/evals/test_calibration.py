@@ -3,14 +3,17 @@
 import math
 import subprocess
 import sys
+from collections.abc import Iterator
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from evals.calibration.flips import flip_rate, is_borderline
 from evals.calibration.split import split_by_family
-from jev_judge_mcp.calibration.bounds import Bound, clopper_pearson_upper, upper_error_bound, wilson_upper
+from jev_judge_mcp.calibration.bounds import Bound, binomial_cdf, clopper_pearson_upper, upper_error_bound, wilson_upper
 from jev_judge_mcp.calibration.targets import PRECISION_TARGETS, error_budget
-from jev_judge_mcp.calibration.threshold import certify, select_threshold
+from jev_judge_mcp.calibration.threshold import OperatingPoint, certify, select_threshold
 
 # Upper ends of two-sided 95% intervals (= one-sided 0.975) for k errors in 10.
 PUBLISHED_UPPER = [(0, 0.3085, 0.2775), (1, 0.4450, 0.4042), (5, 0.8129, 0.7634)]
@@ -85,6 +88,58 @@ def test_threshold_prefers_the_most_coverage_among_feasible_points() -> None:
 
 def test_threshold_with_no_rows_is_none() -> None:
     assert select_threshold([], max_error=0.5) is None
+
+
+def exhaustive_upper_bound(errors: int, total: int, bound: Bound, confidence: float) -> float:
+    if bound == "wilson":
+        return wilson_upper(errors, total, confidence)
+    if errors == total:
+        return 1.0
+    low, high = errors / total, 1.0
+    for _ in range(200):
+        mid = (low + high) / 2
+        if binomial_cdf(errors, total, mid) > 1 - confidence:
+            low = mid
+        else:
+            high = mid
+    return high
+
+
+@given(
+    st.lists(st.tuples(st.integers(0, 10), st.booleans()), max_size=35),
+    st.integers(0, 100),
+    st.sampled_from(("wilson", "clopper_pearson")),
+    st.sampled_from((0.5, 0.9, 0.95, 0.99)),
+)
+def test_threshold_matches_exhaustive_search(
+    samples: list[tuple[int, bool]], budget_percent: int, bound: Bound, confidence: float
+) -> None:
+    rows = [(score / 10, correct) for score, correct in samples]
+    budget = budget_percent / 100
+    expected = None
+    for score in sorted({score for score, _ in rows}, reverse=True):
+        auto = [correct for value, correct in rows if value >= score]
+        errors = auto.count(False)
+        upper = exhaustive_upper_bound(errors, len(auto), bound, confidence)
+        if upper <= budget:
+            expected = OperatingPoint(score, len(auto), errors, len(auto) / len(rows), upper)
+    assert select_threshold(rows, budget, bound, confidence) == expected
+
+
+def test_threshold_sweeps_4000_rows_without_rescanning() -> None:
+    class CountingRows(list[tuple[float, bool]]):
+        visits = 0
+
+        def __iter__(self) -> Iterator[tuple[float, bool]]:
+            for row in super().__iter__():
+                self.visits += 1
+                yield row
+
+    size = 4000
+    rows = CountingRows((i / size, i >= size // 2) for i in range(size))
+    point = select_threshold(rows, max_error=0.01)
+    assert point is not None and point.errors > 0 and point.auto == size // 2 + point.errors
+    assert rows.visits <= 4 * size
 
 
 def test_certify_reports_the_held_out_rows_bound() -> None:

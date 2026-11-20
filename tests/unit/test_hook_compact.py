@@ -8,11 +8,10 @@ from typing import ClassVar, override
 
 import pytest
 
+from jev_judge_mcp.__main__ import main as cli_main
 from jev_judge_mcp.domain import JsonValue, Question, Usage
 from jev_judge_mcp.domain.questions import ChoiceQuestion
-from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.hook import PROVIDER_TIMEOUT_SECONDS
-from jev_judge_mcp.hook_compact import (
+from jev_judge_mcp.hook.compact import (
     TRANSCRIPT_TAIL_BYTES,
     TURN_UNITS_MAX,
     TURNS_MAX,
@@ -24,7 +23,7 @@ from jev_judge_mcp.hook_compact import (
 )
 from jev_judge_mcp.providers import NO_RETRIES, Evaluation, JevProvider, ProviderError, ProviderTimeoutError
 from jev_judge_mcp.providers.base import ProviderName
-from jev_judge_mcp.server import main as server_main
+from jev_judge_mcp.redaction.values import Redactor
 from jev_judge_mcp.text import length
 
 _TURN = "live work turn"
@@ -206,7 +205,9 @@ def test_confident_pick_emits_one_line_naming_a_real_turn(capsys: pytest.Capture
         }
     }
     assert provider.closed
-    assert provider.timeout == PROVIDER_TIMEOUT_SECONDS
+    fragment = Path(__file__).resolve().parents[2] / "docs" / "harness" / "compact.hooks.json"
+    timeout = json.loads(fragment.read_text())["hooks"]["SessionStart"][0]["hooks"][0]["timeout"]
+    assert provider.timeout is not None and 0 < provider.timeout < timeout
     assert provider.questions is not None
     question = provider.questions["cut"]
     assert isinstance(question, ChoiceQuestion)
@@ -352,11 +353,11 @@ def test_server_dispatches_hook_compact_cut(monkeypatch: pytest.MonkeyPatch) -> 
         return 0
 
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook", "compact-cut"])
-    monkeypatch.setattr("jev_judge_mcp.server.load_settings", _refuse_server)
+    monkeypatch.setattr("jev_judge_mcp.__main__.load_settings", _refuse_server)
     monkeypatch.setattr("jev_judge_mcp.server.build_server", _refuse_server)
-    monkeypatch.setattr("jev_judge_mcp.hook_compact.compact_cut_main", fake)
+    monkeypatch.setattr("jev_judge_mcp.hook.compact.compact_cut_main", fake)
     with pytest.raises(SystemExit) as caught:
-        server_main()
+        cli_main()
     assert caught.value.code == 0
     assert seen == [["compact-cut"]]
 
@@ -376,13 +377,17 @@ def test_window_keeps_transcript_order() -> None:
 
 
 def test_provider_bound_text_is_redacted_and_the_line_is_not(
-    capsys: pytest.CaptureFixture[str], tmp_path: Path
+    capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The state and the choice descriptions cross to the provider redacted; the fold-in
     line is the session's own words going back into the same session, so it is verbatim."""
+    marker = "fixture-http-authorization-value"
+    monkeypatch.setenv("JEV_MCP_HTTP_TOKEN", marker)
     _sk = "sk-FAKE000000000000"
     provider = ScriptedProvider(_answer("t1", 0.9, identifiers=("t1", "t2")))
-    transcript = _write_transcript(tmp_path, _transcript(("t1", f"deploy with token {_sk} now"), ("t2", "other")))
+    transcript = _write_transcript(
+        tmp_path, _transcript(("t1", f"deploy with token {_sk} now {marker}"), ("t2", "other"))
+    )
     code = compact_cut_main(["compact-cut"], text=_event(transcript), provider=provider)
     assert code == 0
     captured = capsys.readouterr()
@@ -394,6 +399,7 @@ def test_provider_bound_text_is_redacted_and_the_line_is_not(
     question = provider.questions["cut"]
     assert isinstance(question, ChoiceQuestion)
     assert _sk not in str(question.criteria["t1"])
+    assert marker not in state and marker not in str(question.criteria["t1"])
     decision = json.loads(captured.out)
     line = decision["hookSpecificOutput"]["additionalContext"]
     assert _sk in line

@@ -65,7 +65,7 @@ The rule that a missing, malformed, or out-of-bounds answer produces `invalid_re
 _Avoid_: fallback, graceful degradation
 
 **Truncated Context**:
-A document the judgment is made over (a doc, diff, claim, or evidence item) that exceeded a cap and was cut before reaching Jev. A judgment over truncated context can never be `auto`. Cut item text (a jev_find or jev_rerank candidate, a jev_classify item or class description) is not Truncated Context: it is reported to telemetry only and does not change the action. jev_extract's capped candidate universe is a separate rule of its own field decision.
+A document the judgment is made over (a doc, diff, claim, or evidence item) that exceeded a cap and was cut before reaching Jev. A judgment over truncated context can never be `auto`. Gate inputs are subject to raw input caps. A file-list gate reports partial coverage and holds a file for local review when its patch exceeds the raw file cap or the provider rejects its claims group for context size. Cut item text (a jev_find or jev_rerank candidate, a jev_classify item or class description) is not Truncated Context: it is reported to telemetry only and does not change the action. jev_extract's capped candidate universe is a separate rule of its own field decision.
 _Avoid_: partial input, clipped
 
 **File judgment**:
@@ -121,7 +121,7 @@ _Avoid_: strict validation, schema enforcement (the schema advertises stricter t
 ### Providers and parity
 
 **Provider**:
-A transport that delivers questions to Jev and returns answers: TypeSafe direct, OpenRouter, Cloudflare, Vercel, or a Jev-compatible endpoint.
+A transport that delivers questions to Jev and returns answers: TypeSafe direct, OpenRouter, Cloudflare, or a Jev-compatible endpoint. The resolver reserves the Vercel slot and returns a configuration error if selected (ADR-0007).
 _Avoid_: backend, adapter, client
 
 **Envelope**:

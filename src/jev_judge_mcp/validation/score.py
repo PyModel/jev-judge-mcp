@@ -1,61 +1,49 @@
-"""Score answer validation (`validateScoreAnswer`, `index.ts:1159-1168`)."""
+"""Score answer validation (`validateScoreAnswer`, `index.ts:1159-1168`, and ADR-0048)."""
 
 import math
 
 from jev_judge_mcp.domain.answers import RUBRIC_SCORE_MAX, RawAnswer, RubricAnswer, ScoreAnswer
 from jev_judge_mcp.domain.json import as_number, is_json_object
-from jev_judge_mcp.serialize import js_key_order
 from jev_judge_mcp.validation.choice import PROBABILITY_SUM_TOLERANCE
-from jev_judge_mcp.validation.numbers import confidence_of
+from jev_judge_mcp.validation.numbers import confidence_of, validate_distribution
 
 MAX_SCORE = RUBRIC_SCORE_MAX
-"""Hardcoded in `validateScoreAnswer` (`index.ts:1161`), independent of the question's rubric length;
-the number is the domain's `RUBRIC_SCORE_MAX`."""
+"""The domain's upper bound for a fixed three-level review rubric."""
+
+SCORE_ROUNDING_HALF_UNIT = 0.005
+"""The provider rounds the score and each probability to hundredths. Their maximum
+combined rounding error is half a hundredth times one plus the sum of the level indices.
+"""
 
 
 def validate_score(answer: RawAnswer) -> ScoreAnswer | None:
-    """The answer if `score` is a finite number in [0, 2], else `None`. A bad confidence becomes `None`."""
+    """Validate a fixed three-level score. A supplied distribution must agree with the score."""
     if not is_json_object(answer):
         return None
+    if "probabilities" in answer:
+        rubric = validate_rubric_answer(answer, MAX_SCORE + 1)
+        return None if rubric is None else ScoreAnswer(score=rubric.score, confidence=rubric.confidence)
     score = as_number(answer.get("score"))
-    if score is None or not math.isfinite(score) or score < 0 or score > MAX_SCORE:
+    if score is None or not 0 <= score <= MAX_SCORE:
         return None
     return ScoreAnswer(score=score, confidence=confidence_of(answer))
 
 
 def validate_rubric_answer(answer: RawAnswer, level_count: int) -> RubricAnswer | None:
-    """The answer if it is a well-formed Score on a rubric of `level_count` levels, else `None`.
-
-    Well-formed: `score` is a finite number inside the rubric (`0..n-1`, the bound ADR-0048 owns —
-    not `validate_score`'s `[0, 2]` window, which only covers the fixed three-level rubrics), and
-    `probabilities` has exactly the keys `"0".."n-1"`, each a finite number in [0, 1], summing to 1
-    within `PROBABILITY_SUM_TOLERANCE` in JS key order. A malformed component rejects the whole
-    answer: the extension tool has no partial-answer shape to project (ADR-0048).
-    """
+    """Validate the score, its level distribution, and agreement with that distribution's weighted mean."""
     if not is_json_object(answer):
         return None
     score = as_number(answer.get("score"))
-    if score is None or not math.isfinite(score) or score < 0 or score > level_count - 1:
+    if score is None or not 0 <= score <= level_count - 1:
         return None
-    confidence = confidence_of(answer)
-    raw = answer.get("probabilities")
-    if not is_json_object(raw):
+    levels = range(level_count)
+    probabilities = validate_distribution(
+        answer.get("probabilities"), {str(index) for index in levels}, PROBABILITY_SUM_TOLERANCE
+    )
+    if probabilities is None:
         return None
-    expected = {str(index) for index in range(level_count)}
-    keys = list(raw)
-    if len(keys) != level_count or any(key not in expected for key in keys):
+    expected_score = math.fsum(index * probabilities[str(index)] for index in levels)
+    tolerance = SCORE_ROUNDING_HALF_UNIT * (1 + sum(levels))
+    if abs(score - expected_score) > tolerance + 1e-12:
         return None
-    probabilities: dict[str, float] = {}
-    for key in keys:
-        value = as_number(raw[key])
-        if value is None or not math.isfinite(value) or value < 0 or value > 1:
-            return None
-        probabilities[key] = value
-    # JS sums Object.values left to right in JS property order, one float64 add at a time (ADR: JS
-    # float semantics); Python's sum() compensates float error since 3.12, so fold by hand.
-    total = 0.0
-    for key in js_key_order(keys):
-        total += probabilities[key]
-    if abs(total - 1) > PROBABILITY_SUM_TOLERANCE:
-        return None
-    return RubricAnswer(score=score, probabilities=probabilities, confidence=confidence)
+    return RubricAnswer(score=score, probabilities=probabilities, confidence=confidence_of(answer))

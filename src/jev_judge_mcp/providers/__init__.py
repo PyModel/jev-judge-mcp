@@ -1,6 +1,6 @@
 """Provider transports; they validate only the envelope (ADR-0003).
 
-`typesafe-sdk` is imported only when the TypeSafe provider sends its first request. A provider owns
+A provider owns
 an HTTP client: whoever resolves one closes it with `aclose()`.
 """
 

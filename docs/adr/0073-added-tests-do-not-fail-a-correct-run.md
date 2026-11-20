@@ -21,4 +21,20 @@ This is an eval-harness decision. It does not change an MCP tool, a schema, a th
 
 - A correct fix plus `test_day_30_after_delivery_is_on_time` added to `tests/test_refunds.py` grades as correct. The same tree fails `old_rule_success`.
 - `success` on records written after this ADR includes the decision match. Records written before it keep the old grader's bit; the report says so.
+
+## Amendment 2026-11-19: isolate code under test from trusted assertions
+
+The trusted collector runs the hidden acceptance and pristine snapshot tests. Imports of task
+modules resolve to proxies. Each proxy loads and calls its module in a separate isolated
+Python interpreter rooted in a disposable copy of the agent tree. The collector is
+non-dumpable on Linux where supported. The worker sends replies over a dedicated pipe.
+
+The tagged JSON codec carries plain scalars, lists, string-keyed dictionaries, tuples, dates,
+datetimes, and decimals. Builtin exceptions cross by exact type identity and message. Other
+agent exceptions become `AgentError`. An unsupported value, missed deadline, crash, or invalid
+reply fails the affected test, even when an assertion catches the transport error. Tests
+whose module cannot import fail by comparison against the reference solution's passing IDs.
+
+Agent-added tests execute against the agent's own tree as before. The protected-file and
+pre-existing-test edit rules still apply.
 - The run cap is the grid: eleven tasks, two arms, three repeats. The dollar cap stays $25.

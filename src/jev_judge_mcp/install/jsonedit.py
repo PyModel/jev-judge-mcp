@@ -8,6 +8,7 @@ module does not recognise raises, and the caller writes nothing.
 import json
 import re
 
+from jev_judge_mcp.domain import decode_json
 from jev_judge_mcp.install.errors import ConfigParseError, ConfigShapeError
 
 _INDENT = re.compile(r"\n([ \t]+)\S")
@@ -73,12 +74,9 @@ def loads(text: str) -> object:
     if not text.strip():
         return dict[str, object]()
     try:
-        parsed: object = json.loads(_mask_trailing_commas(mask_comments(text)))
-    except json.JSONDecodeError as exc:
-        raise ConfigParseError(exc.msg) from exc
-    except RecursionError as exc:
-        raise ConfigParseError("JSON is too deeply nested") from exc
-    return parsed
+        return decode_json(_mask_trailing_commas(mask_comments(text)))
+    except ValueError as exc:
+        raise ConfigParseError(str(exc)) from exc
 
 
 def detect_indent(text: str) -> str | None:
@@ -255,9 +253,9 @@ def _container_span(masked: str, index: int) -> tuple[int, int]:
 def _string_span(masked: str, index: int) -> tuple[str, int, int]:
     end = _end_of_string(masked, index)
     try:
-        loaded = json.loads(masked[index:end])
-    except json.JSONDecodeError as exc:
-        raise ConfigParseError(exc.msg) from exc
+        loaded = decode_json(masked[index:end])
+    except ValueError as exc:
+        raise ConfigParseError(str(exc)) from exc
     if not isinstance(loaded, str):
         raise ConfigParseError("expected a string")
     return loaded, index, end

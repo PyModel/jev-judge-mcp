@@ -42,7 +42,7 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(case_sensitive=True, extra="ignore", frozen=True)
+    model_config = SettingsConfigDict(case_sensitive=True, env_ignore_empty=True, extra="ignore", frozen=True)
 
     # Provider selection and model (reference names; resolved in P4).
     jev_provider: str = Field(default="auto", validation_alias="JEV_PROVIDER")
@@ -68,6 +68,8 @@ class Settings(BaseSettings):
     cache_ttl_seconds: float = Field(default=604800.0, ge=0.0, validation_alias="JEV_MCP_CACHE_TTL_SECONDS")
     # The key file `jev-judge-mcp setup` writes (ADR-0046); env wins over the file at resolution.
     key_file: Path | None = Field(default=None, validation_alias="JEV_MCP_KEY_FILE")
+    xdg_cache_home: Path | None = Field(default=None, validation_alias="XDG_CACHE_HOME")
+    xdg_config_home: Path | None = Field(default=None, validation_alias="XDG_CONFIG_HOME")
 
     # Python-only process settings; the reference is stdio-only.
     transport: Transport = Field(default="stdio", validation_alias="JEV_MCP_TRANSPORT")
@@ -78,11 +80,30 @@ class Settings(BaseSettings):
     log_level: LogLevel = Field(default="INFO", validation_alias="JEV_MCP_LOG_LEVEL")
     # Debug only: let telemetry spans record payload text (arguments, results, patterns). Off by default.
     telemetry_payloads: bool = Field(default=False, validation_alias="JEV_MCP_TELEMETRY_PAYLOADS")
+    study_usage_provenance: bool = Field(default=False, validation_alias="JEV_STUDY_USAGE_PROVENANCE")
     # Opt-in cap on concurrent provider requests per process (ADR-0069): 0 (the default) is no cap.
     max_inflight: int = Field(default=0, ge=0, validation_alias="JEV_MCP_MAX_INFLIGHT")
     # jev_ask command execution (ADR-0077): off unless JEV_ASK_COMMANDS is truthy. Without it, a
     # `command` argument is the typed `command_disabled` refusal — the server runs nothing.
     ask_commands: bool = Field(default=False, validation_alias="JEV_ASK_COMMANDS")
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _uppercase_log_level(cls, value: object) -> object:
+        return value.upper() if isinstance(value, str) else value
+
+    @field_validator("cache_dir", "key_file", "xdg_cache_home", "xdg_config_home")
+    @classmethod
+    def _expand_home(cls, value: Path | None) -> Path | None:
+        try:
+            return value.expanduser() if value is not None else None
+        except RuntimeError:
+            raise ValueError("use a path with a resolvable home directory") from None
+
+    @field_validator("study_usage_provenance", mode="before")
+    @classmethod
+    def _study_provenance_opt_in(cls, value: object) -> object:
+        return value == "1" if isinstance(value, str) else value
 
     @field_validator(*_UNSET_WHEN_UNEXPANDED, mode="before")
     @classmethod

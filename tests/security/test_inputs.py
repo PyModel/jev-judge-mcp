@@ -7,6 +7,7 @@ moves the probes with the caps. Lengths are UTF-16 units (ADR-0005): padding is 
 import json
 import time
 from collections.abc import Iterator
+from pathlib import Path as FilePath
 from typing import Any, cast
 
 import pytest
@@ -22,6 +23,32 @@ from tests.support.jev import Outcome, call_tool
 pytestmark = pytest.mark.anyio
 
 SCHEMA_REJECT = "MCP error -32602"
+
+
+@pytest.mark.parametrize(
+    "tool", ["jev_review", "jev_verify", "jev_screen", "jev_ask", "jev_file_judge", "jev_files_judge"]
+)
+async def test_raw_input_under_tool_caps_reaches_provider_even_over_the_byte_estimate(
+    tool: str, tmp_path: FilePath, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Under every raw UTF-16 cap. Escaped control characters cost six bytes on the wire.
+    large = "\x01" * 5_100
+    (tmp_path / "large.txt").write_text(large)
+    monkeypatch.chdir(tmp_path)
+    noul: dict[str, object] = {"instructions": "Does the state have a marker?", "criteria": {}}
+    args: dict[str, dict[str, object]] = {
+        "jev_review": {"request": "fix", "diff": large},
+        "jev_verify": {"claims": ["a marker exists"], "evidence": large},
+        "jev_screen": {"text": large},
+        "jev_ask": {"state": large, "questions": {"marker": {"type": "noul", **noul}}},
+        "jev_file_judge": {"path": "large.txt", "kind": "noul", **noul},
+        "jev_files_judge": {"paths": ["large.txt"], "kind": "noul", **noul},
+    }
+    outcome = await call_tool(tool, args[tool], {})
+    assert not outcome.is_error, outcome.text
+    ((state, _),) = outcome.requests
+    assert json.dumps(large) in json.dumps(state)
+
 
 UNICODE = [
     "😀a😀",  # astral beside BMP
@@ -136,16 +163,13 @@ async def test_truncated_input_is_never_auto(tool: str, field: str) -> None:
     case = BY_TOOL[tool]
     cap = REVIEW.doc_units if tool == "jev_review" else GATE.doc_units
     at_cap = await call_tool(tool, with_value(case.arguments, (field,), pad(cap)), case.permissive)
-    if tool == "jev_gate":
-        assert at_cap.code == "input_too_large" and not at_cap.requests and "30000" in at_cap.text
-    else:
-        assert case.acts(at_cap.payload), at_cap.text
+    assert at_cap.requests and case.acts(at_cap.payload), at_cap.text
     over = await call_tool(tool, with_value(case.arguments, (field,), pad(cap + 1)), case.permissive)
     if tool == "jev_gate":
         assert over.code == "input_too_large" and not over.requests and field in over.text
         assert "action" not in over.payload
     else:
-        assert not case.acts(over.payload), over.text
+        assert over.requests and over.payload["truncated"] and not case.acts(over.payload), over.text
 
 
 async def test_gate_evidence_budgets_are_errors_not_truncation() -> None:
@@ -255,32 +279,24 @@ async def test_astral_fuzz_invariants(document: str, pattern: str) -> None:
     assert result["value"] is None or result["value"] in texts
 
 
-async def test_duplicate_ids_are_renamed_and_answers_follow_the_rename() -> None:
-    """jev_find renames collisions (`a`, `a_1`, `a_1_1`) and ranks the candidate the answer named."""
+async def test_find_refuses_duplicate_ids_before_answers_can_be_misattributed() -> None:
     arguments = {
         "query": "q",
         "candidates": [{"id": "a", "text": "1"}, {"id": "a", "text": "2"}, {"id": "a_1", "text": "3"}],
     }
-    answers = {
-        "best": {"choice": "a_1", "probabilities": {"a": 0.02, "a_1": 0.97, "a_1_1": 0.01}},
-        "exists": {"noul": 0.9},
-    }
-    outcome = await call_tool("jev_find", arguments, answers)
-    assert [(entry["id"], entry["text"]) for entry in outcome.payload["top"]] == [
-        ("a_1", "2"),
-        ("a", "1"),
-        ("a_1_1", "3"),
-    ]
+    outcome = await call_tool("jev_find", arguments, {})
+    assert outcome.is_error and outcome.code == "invalid_arguments"
+    assert outcome.text == "IDs 'a' and 'a' both sanitize to 'a'."
+    assert outcome.requests == []
 
 
-async def test_ids_longer_than_64_are_cut_then_deduplicated() -> None:
-    """Two 70-char ids with a shared 64-char head: sanitize cuts to 64, the collision gets `_1`."""
+async def test_ids_longer_than_64_are_cut_before_collision_check() -> None:
     long = "x" * 70
     arguments = {"query": "q", "candidates": [{"id": f"{long}1", "text": "1"}, {"id": f"{long}2", "text": "2"}]}
     outcome = await call_tool("jev_find", arguments, {})
-    questions: Any = outcome.requests[0][1]
-    keys: list[str] = list(questions["best"]["criteria"])
-    assert keys == ["x" * 64, "x" * 64 + "_1"]
+    assert outcome.is_error and outcome.code == "invalid_arguments"
+    assert outcome.text == f"IDs '{long}1' and '{long}2' both sanitize to '{long[:64]}'."
+    assert outcome.requests == []
 
 
 @pytest.mark.parametrize(
@@ -289,7 +305,7 @@ async def test_ids_longer_than_64_are_cut_then_deduplicated() -> None:
         (
             "jev_rerank",
             {"query": "q", "candidates": [{"id": "a", "text": "1"}, {"id": "a", "text": "2"}]},
-            "Duplicate candidate id: a",
+            "IDs 'a' and 'a' both sanitize to 'a'.",
         ),
         (
             "jev_classify",
@@ -297,7 +313,7 @@ async def test_ids_longer_than_64_are_cut_then_deduplicated() -> None:
                 "items": [{"id": "i", "text": "t"}, {"id": "i", "text": "u"}],
                 "classes": [{"description": "a"}, {"description": "b"}],
             },
-            "Duplicate item id: i",
+            "IDs 'i' and 'i' both sanitize to 'i'.",
         ),
         (
             "jev_decide",
@@ -307,7 +323,7 @@ async def test_ids_longer_than_64_are_cut_then_deduplicated() -> None:
                 "priorities": "p",
                 "candidates": [{"id": "a", "description": "x"}, {"id": "a", "description": "y"}],
             },
-            "Duplicate candidate id: a",
+            "IDs 'a' and 'a' both sanitize to 'a'.",
         ),
         (
             "jev_extract",
@@ -318,21 +334,23 @@ async def test_ids_longer_than_64_are_cut_then_deduplicated() -> None:
                     {"id": "f", "pattern": "b", "description": "d"},
                 ],
             },
-            "Duplicate field id: f",
+            "IDs 'f' and 'f' both sanitize to 'f'.",
         ),
     ],
     ids=["rerank", "classify", "decide", "extract"],
 )
 async def test_duplicate_caller_ids_are_refused_before_any_request(tool: str, arguments: Any, error: str) -> None:
     outcome = await call_tool(tool, arguments, {})
-    assert outcome.is_error
+    assert outcome.is_error and outcome.code == "invalid_arguments"
     assert outcome.text == error
     assert outcome.requests == []
 
 
-async def test_long_verbatim_ids_round_trip() -> None:
-    """jev_rerank keeps caller ids verbatim at any length; the answer maps to the right one."""
-    first, second = "z" * 100, "z" * 99
+async def test_long_distinct_ids_round_trip_in_canonical_form() -> None:
+    first, second = "z" * 100, "y" * 99
     arguments = {"query": "q", "candidates": [{"id": first, "text": "1"}, {"id": second, "text": "2"}]}
     outcome = await call_tool("jev_rerank", arguments, {"rel_0": {"noul": 0.1}, "rel_1": {"noul": 0.9}})
-    assert [(entry["id"], entry["text"]) for entry in outcome.payload["ranked"]] == [(second, "2"), (first, "1")]
+    assert [(entry["id"], entry["text"]) for entry in outcome.payload["ranked"]] == [
+        (second[:64], "2"),
+        (first[:64], "1"),
+    ]

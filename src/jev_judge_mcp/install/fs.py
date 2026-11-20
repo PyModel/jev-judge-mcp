@@ -49,7 +49,7 @@ def mode_is_loose(mode: int) -> bool:
 
 def read_bytes(path: Path) -> bytes | None:
     try:
-        return read_bounded(path, max_bytes=INSTALL_FILE_BYTES_MAX, follow_symlinks=True)
+        return read_bounded(path, max_bytes=INSTALL_FILE_BYTES_MAX, follow=True)
     except FileNotFoundError:
         return None
 
@@ -212,9 +212,9 @@ def _is_record(record: object) -> TypeGuard[dict[str, object]]:
 
 def load_targets(path: Path, *, recover: bool) -> dict[str, dict[str, object]]:
     try:
-        parsed: object = json.loads(
-            read_bounded(path, max_bytes=INSTALL_FILE_BYTES_MAX, follow_symlinks=True).decode("utf-8")
-        )
+        from jev_judge_mcp.domain import decode_json
+
+        parsed = decode_json(read_bounded(path, max_bytes=INSTALL_FILE_BYTES_MAX, follow=True).decode("utf-8"))
     except FileNotFoundError:
         if path.is_symlink():
             raise InstallError("installer state is a broken symlink") from None

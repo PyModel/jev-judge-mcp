@@ -3,15 +3,14 @@
 import ast
 import hashlib
 import json
-import os
 import sys
 import urllib.request
 from pathlib import Path
 
 import httpx
-import httpx2
 import pytest
 
+from jev_judge_mcp.__main__ import main as cli_main
 from jev_judge_mcp.doctor import ALLOW_RULES, main
 from jev_judge_mcp.policy.thresholds import (
     DEFAULT_AUTO_ACCEPT,
@@ -26,9 +25,6 @@ from jev_judge_mcp.policy.thresholds import (
     SCREEN_RELEVANCE_SKIP_BELOW,
     SCREEN_SUBSTANCE_SKIP_BELOW,
 )
-from jev_judge_mcp.server import doctor_requested, hook_requested, installer_requested
-from jev_judge_mcp.server import main as server_main
-from tests.support.stdio import server_env
 
 _DOCTOR = Path(__file__).resolve().parents[2] / "src" / "jev_judge_mcp" / "doctor.py"
 MARKER = "marker-doctor-8f3c1a9e-do-not-print"
@@ -45,16 +41,6 @@ _POLICY = (
     ("EXISTS_FOUND_AT", EXISTS_FOUND_AT),
     ("EXISTS_ABSENT_BELOW", EXISTS_ABSENT_BELOW),
 )
-
-
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    kept = server_env()
-    for key in list(os.environ):
-        if key not in kept:
-            monkeypatch.delenv(key)
-    # No test may resolve a key file the developer's machine happens to carry (ADR-0046).
-    monkeypatch.setenv("JEV_MCP_KEY_FILE", "/nonexistent/jev-mcp-key")
 
 
 def _field(text: str, label: str) -> str:
@@ -77,10 +63,6 @@ def _spy(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     monkeypatch.setattr(httpx.AsyncClient, "send", fail)
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", fail)
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", fail)
-    monkeypatch.setattr(httpx2.Client, "send", fail)
-    monkeypatch.setattr(httpx2.AsyncClient, "send", fail)
-    monkeypatch.setattr(httpx2.HTTPTransport, "handle_request", fail)
-    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", fail)
     monkeypatch.setattr(urllib.request, "urlopen", fail)
     return calls
 
@@ -90,15 +72,6 @@ def _assert_marker_absent(out: str, err: str) -> None:
     assert MARKER not in err
     assert "[redacted]" not in out
     assert "[redacted]" not in err
-
-
-def test_doctor_subcommand_is_only_doctor() -> None:
-    assert doctor_requested(["jev-judge-mcp"]) is False
-    assert doctor_requested(["jev-judge-mcp", "doctor"]) is True
-    assert doctor_requested(["jev-judge-mcp", "install"]) is False
-    assert doctor_requested(["jev-judge-mcp", "hook"]) is False
-    assert installer_requested(["jev-judge-mcp", "doctor"]) is False
-    assert hook_requested(["jev-judge-mcp", "doctor"]) is False
 
 
 def test_extra_arguments_are_usage(capsys: pytest.CaptureFixture[str]) -> None:
@@ -185,23 +158,6 @@ def test_key_file_line_reports_presence_without_the_value(
     out = capsys.readouterr().out
     assert _field(out, "key file") == f"present at {present} (env wins)"
     assert "sk-stored-doctor" not in out  # the stored value is never printed
-    assert calls == []
-
-
-def test_sdk_line_reports_importability_without_calling_anything(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """ADR-0075's failure class is doctor-visible: one line, both arms, no HTTP, no exit on it."""
-    calls = _spy(monkeypatch)
-    monkeypatch.setenv("TYPESAFE_API_KEY", MARKER)
-    assert main([]) == 0
-    out = capsys.readouterr().out
-    assert _field(out, "sdk") == "typesafe-sdk importable"
-
-    monkeypatch.setattr("jev_judge_mcp.doctor.sdk_importable", lambda: False)
-    assert main([]) == 0, "doctor reports a missing SDK; it never exits on it"
-    out = capsys.readouterr().out
-    assert _field(out, "sdk") == "typesafe-sdk missing (install jev-judge-mcp[typesafe])"
     assert calls == []
 
 
@@ -312,7 +268,7 @@ def test_server_dispatches_doctor_and_does_not_start(
     monkeypatch.setattr("jev_judge_mcp.server.load_settings", started)
     monkeypatch.setattr("jev_judge_mcp.server.serve", started)
     with pytest.raises(SystemExit) as caught:
-        server_main()
+        cli_main()
     captured = capsys.readouterr()
     assert caught.value.code == 0
     assert calls == []
@@ -354,10 +310,19 @@ def test_a_stored_key_filling_an_unset_variable_is_reported_as_the_source(
 
 
 def test_an_unexpanded_reference_is_named_without_its_value(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], isolated_key_file: Path
 ) -> None:
     monkeypatch.setenv("TYPESAFE_API_KEY", "${TYPESAFE_API_KEY}")
     assert main([]) == 1
     out = capsys.readouterr().out
     assert _field(out, "warning") == "TYPESAFE_API_KEY holds an unexpanded reference and counts as unset"
-    assert _field(out, "key file") == "absent at /nonexistent/jev-mcp-key"
+    assert _field(out, "key file") == f"absent at {isolated_key_file}"
+
+
+def test_oversized_claude_settings_are_ignored(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    content = json.dumps({"permissions": {"allow": ["mcp__jev"]}})
+    (claude / "settings.json").write_text(" " * (2 * 1024 * 1024) + content)
+    assert main([], home=tmp_path, cwd=tmp_path) == 1
+    assert "no allow rules" in _field(capsys.readouterr().out, "claude")

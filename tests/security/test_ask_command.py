@@ -4,16 +4,17 @@ import os
 import shutil
 import subprocess
 import time
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import Mock
 
 import pytest
 
-from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
+from jev_judge_mcp.policy.guard import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from jev_judge_mcp.tools.ask_state import run_command
-from tests.support.jev import FakeProvider
+from tests.support.jev import TEST_GUARD, FakeProvider
 
 pytestmark = pytest.mark.anyio
 
@@ -139,7 +140,9 @@ async def test_the_child_env_lacks_configured_secrets_and_output_redacts_them(tm
     a secret value that still reaches the output is redacted on the way to the provider."""
     key = "configured-fixture-secret"
     monkeypatch.setenv("JEV_API_KEY", key)
-    (tmp_path / "notes.txt").write_text(f"literal={key}\n")
+    url_fixture = "opaque-fixture-password"
+    monkeypatch.setenv("TYPESAFE_BASE_URL", f"https://username:{url_fixture}@fixture.invalid")
+    (tmp_path / "notes.txt").write_text(f"literal={key}\npassword={url_fixture}\n")
     spawn = Mock(wraps=subprocess.Popen)
     monkeypatch.setattr(subprocess, "Popen", spawn)
     provider = FakeProvider({"q0": {"noul": 0.9}})
@@ -149,6 +152,7 @@ async def test_the_child_env_lacks_configured_secrets_and_output_redacts_them(tm
     output = str(provider.requests[0][0])
     assert key not in output
     assert "literal=[redacted]" in output
+    assert url_fixture not in output and "password=[redacted]" in output
 
 
 async def test_a_flooding_command_is_killed_at_the_cap(tmp_path: Any, monkeypatch: Any) -> None:
@@ -159,7 +163,7 @@ async def test_a_flooding_command_is_killed_at_the_cap(tmp_path: Any, monkeypatc
     head = shutil.which("head")
     assert head is not None
     with pytest.raises(Exception) as raised:
-        run_command([head, "-n", "100000", str(flood)], timeout_seconds=15, output_units_max=100)
+        run_command([head, "-n", "100000", str(flood)], timeout_seconds=15, output_units_max=100, guard=TEST_GUARD)
     assert getattr(raised.value, "code", "") == "output_too_large"
     assert "killed" in str(raised.value)
     assert time.monotonic() - started < 10  # the pipes never buffer a flood
@@ -194,6 +198,18 @@ async def test_named_store_is_refused_before_review_and_execution(
     assert "known secret store" in outcome.text
     assert not provider.requests
     runner.assert_not_called()
+
+
+async def test_long_literal_search_with_a_configured_key_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    pattern = "a" * (os.pathconf(tmp_path, "PC_NAME_MAX") + 1)
+    (tmp_path / "records.txt").write_text(pattern + "\n")
+    store = tmp_path / "key-store"
+    store.touch()
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(store))
+    provider = FakeProvider({"q0": {"noul": 0.95}})
+    outcome = await _run(provider, f"grep -F {pattern} records.txt", tmp_path, monkeypatch)
+    assert not outcome.is_error, outcome.text
+    assert pattern in cast(dict[str, str], provider.requests[0][0])["command output"]
 
 
 async def test_command_pem_is_masked_before_the_provider_call(tmp_path: Any, monkeypatch: Any) -> None:
@@ -369,22 +385,26 @@ async def test_git_does_not_run_repository_fsmonitor_or_diff_drivers(tmp_path: A
     _git("config", "diff.fixture.command", f"./{script.name}", cwd=tmp_path)
     _git("config", "diff.fixture.textconv", f"./{script.name}", cwd=tmp_path)
 
-    for command, expected in (
-        ("git status --short", "M notes.txt"),
-        ("git status --porcelain=v1", "M notes.txt"),
-        ("git diff", "+after"),
-        ("git diff -U0 -- notes.txt", "+after"),
-        ("git log -n1 --oneline", "initial"),
-        ("git log --max-count 1 --format=%s", "initial"),
-        ("git show HEAD -- notes.txt", "+before"),
-        ("git show --pretty oneline -n1 -- notes.txt", "+before"),
-    ):
-        provider = FakeProvider({"q0": {"noul": 0.9}})
-        outcome = await _run(provider, command, tmp_path, monkeypatch)
-        assert not outcome.is_error, outcome.text
-        assert not marker.exists(), command
-        assert expected in str(provider.requests[-1][0])
-        assert len(provider.requests) == 1
+    foreign = tmp_path / "foreign"
+    _git("init", str(foreign), cwd=tmp_path)
+    with monkeypatch.context() as isolated:
+        isolated.setenv("GIT_DIR", str(foreign / ".git"))
+        for command, expected in (
+            ("git status --short", "M notes.txt"),
+            ("git status --porcelain=v1", "M notes.txt"),
+            ("git diff", "+after"),
+            ("git diff -U0 -- notes.txt", "+after"),
+            ("git log -n1 --oneline", "initial"),
+            ("git log --max-count 1 --format=%s", "initial"),
+            ("git show HEAD -- notes.txt", "+before"),
+            ("git show --pretty oneline -n1 -- notes.txt", "+before"),
+        ):
+            provider = FakeProvider({"q0": {"noul": 0.9}})
+            outcome = await _run(provider, command, tmp_path, monkeypatch)
+            assert not outcome.is_error, outcome.text
+            assert not marker.exists(), command
+            assert expected in str(provider.requests[-1][0])
+            assert len(provider.requests) == 1
 
     _git("config", "filter.fixture.clean", f"./{script.name}", cwd=tmp_path)
     (tmp_path / ".gitattributes").write_text("notes.txt diff=fixture filter=fixture\n")

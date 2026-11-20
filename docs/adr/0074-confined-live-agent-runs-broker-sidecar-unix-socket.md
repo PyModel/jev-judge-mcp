@@ -241,10 +241,26 @@ only through the offline bench dry run. A live bench will require `run_confined`
 A/B startup uses the confined provider probe. The host agent-prompt preflight and wheel-installed
 host interpreter are removed. Confined Pi runs use the adapter packaged in the agent image.
 
-## Amendment 2026-11-19: build the image with the locked TypeSafe runtime
+## Amendment 2026-11-19: build the image with the locked runtime
 
 `make confinement-image` creates a temporary Docker context with one wheel from the current
-checkout and a hashed export of the TypeSafe runtime from `uv.lock`. The image requires a
+checkout and a hashed export of the runtime dependencies from `uv.lock`. The image requires a
 single wheel, installs the exported runtime with hash enforcement, and installs the wheel
 with dependency resolution disabled. This ties the installed dependency versions to the lock
 used for the build.
+
+## Amendment 2026-11-19: confine grading workers and retain TypeSafe receipts
+
+- The grading container runs the collector from ADR-0073. Harness code and fixtures mount
+  read-only. Linux Landlock restricts agent code to writes within its disposable tree, including
+  when running agent-added tests. Acceptance workers can read their own tree and Python's runtime
+  files. They cannot access the harness fixtures or grade output. If Landlock cannot enforce the
+  policy, confined grading fails closed.
+- The TypeSafe broker journals each authorized outbound request before sending it and records
+  upstream usage before releasing the response. The journal contains sequence numbers and usage
+  only. Its host file is bound into the broker alone, outside the agent's workdir, scratch,
+  socket volume, and grant mount.
+- After the agent is removed, the launcher revokes its grant, stops the broker to seal the
+  journal, and archives the receipts before removing the sidecar. A missing seal or settlement
+  leaves the recorded usage incomplete. Relay artifacts must be host-owned, singly linked regular
+  files. The study records a metering issue for unsafe relay evidence.

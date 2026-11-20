@@ -16,15 +16,14 @@ from typing import Any, cast
 import anyio
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question, ScoreQuestion
-from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import ASK, FILE_JUDGE, SANITIZE_ID_UNITS
+from jev_judge_mcp.providers import ProviderError
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.ask_state import (
     Part,
     command_disabled_refusal,
     file_parts,
-    git_command,
+    named_state,
     own_part,
     prepare_command,
     question_units,
@@ -32,7 +31,7 @@ from jev_judge_mcp.tools.ask_state import (
     scrubbed_environment,
     split_refusal,
 )
-from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
+from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, code_of, define, frame
 from jev_judge_mcp.tools.file_judge import INVALID, build_question, project_answer
 
 KINDS = ("noul", "choice", "score")
@@ -182,25 +181,35 @@ def _expected(question: Question) -> tuple[str, ...]:
     return ()
 
 
+def _check_unit_cap(parts: list[Part], questions: dict[str, Question], units: int) -> None:
+    state_units = sum(part.units for part in parts)
+    if state_units + units > ASK.request_units_max:
+        split_refusal(
+            parts,
+            questions,
+            f"The composed request is {state_units:,} units of state plus {units:,} units of questions, "
+            f"over the {ASK.request_units_max:,}-unit cap.",
+        )
+
+
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     questions = _build_questions(args["questions"])
     command = args.get("command")
     prepared: tuple[str, list[str]] | None = None
     env = scrubbed_environment(runtime.settings)
-    key_path = stored_key_path(runtime.settings)
+    guard = await runtime.security_guard()
     if command is not None:
         if not runtime.settings.ask_commands:
             raise ToolError(command_disabled_refusal(), code="command_disabled")
-        prepared = await anyio.to_thread.run_sync(prepare_command, command, env, key_path)
-    secrets = await anyio.to_thread.run_sync(redaction_values, runtime.settings)
-    redact = Redactor(secrets)
-    own = own_part(args.get("state", ""), redact)
+        prepared = await anyio.to_thread.run_sync(prepare_command, command, env, guard)
+    own = own_part(args.get("state", ""), guard)
     parts: list[Part] = [own] if own is not None else []
-    file_result, skipped = await anyio.to_thread.run_sync(file_parts, args.get("paths", []), key_path, redact)
+    file_result, skipped = await anyio.to_thread.run_sync(file_parts, args.get("paths", []), guard)
     parts.extend(file_result)
     units = question_units(questions)
-    if units + sum(part.units for part in parts) > ASK.request_units_max:
-        split_refusal(parts, units)
+    wire_keys = {identifier: f"q{index}" for index, identifier in enumerate(questions)}
+    wire_questions = {wire_keys[name]: question for name, question in questions.items()}
+    _check_unit_cap(parts, wire_questions, units)
     if not parts and command is None:
         raise ToolError(
             "no state: give `state`, at least one readable `paths` entry, or a `command`.",
@@ -209,18 +218,17 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     output: Part | None = None
     if prepared is not None:
         program, argv = prepared
-        if program == "git":
-            argv = await anyio.to_thread.run_sync(git_command, argv, env)
         output = await anyio.to_thread.run_sync(
-            run_command, argv, ASK.command_timeout_seconds, ASK.command_output_units_max, env, secrets
+            run_command, argv, ASK.command_timeout_seconds, ASK.command_output_units_max, guard, env, program == "git"
         )
         parts.append(output)
-        if units + sum(part.units for part in parts) > ASK.request_units_max:
-            split_refusal(parts, units)
-    wire_keys = {identifier: f"q{index}" for index, identifier in enumerate(questions)}
-    evaluation = await runtime.ask(
-        _named_state(parts), {wire_keys[name]: question for name, question in questions.items()}
-    )
+        _check_unit_cap(parts, wire_questions, units)
+    try:
+        evaluation = await runtime.ask(named_state(parts), wire_questions)
+    except ProviderError as error:
+        if code_of(error) == "input_too_large":
+            split_refusal(parts, wire_questions, "Provider context limit reached. Split or trim the input.")
+        raise
     answers: dict[str, Any] = {}
     statuses: list[str] = []
     for identifier, question in questions.items():
@@ -241,24 +249,6 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         },
     }
     return ToolResult(frame("jev_ask", evaluation, body))
-
-
-def _named_state(parts: list[Part]) -> dict[str, str]:
-    """The parts as named state fields; a name already taken gets a `_2`-style suffix.
-
-    File parts are named by the caller's path, so a file literally called `state` must not
-    silently replace the caller's own framing part, and the suffix itself is never trusted
-    free: the loop re-checks until the name is fresh.
-    """
-    state: dict[str, str] = {}
-    for part in parts:
-        name = part.name
-        counter = 1
-        while name in state:
-            counter += 1
-            name = f"{part.name}_{counter}"
-        state[name] = part.text
-    return state
 
 
 TOOL = JevTool(DEFINITION, handle)
