@@ -131,6 +131,7 @@ def test_stdio_serves_the_allowlist_and_names_both_skills() -> None:
     capabilities = cast(dict[str, Any], raw_capabilities)
     assert set(capabilities) == _CAPABILITIES
     assert "mcp__" not in instructions
+    assert "tests_path" in instructions and "`tests`" in instructions
 
     resources = _records(_result(listed)["resources"])
     served = {str(item["uri"]) for item in resources}

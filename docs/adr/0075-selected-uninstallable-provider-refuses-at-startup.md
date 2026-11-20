@@ -10,6 +10,8 @@ call typed `provider` with "install jev-judge-mcp[typesafe]". The server looked 
 useless for its purpose; the refusal arrived per call, after the client had connected and the
 agent had committed to the tool.
 
+> ADR-0084 retires the SDK startup probe. Provider configuration errors still surface per call.
+
 ## Decision
 
 - `server.ensure_provider_runnable` runs in `main()` with the other startup gates, after

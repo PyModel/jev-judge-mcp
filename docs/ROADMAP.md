@@ -1,6 +1,6 @@
 # Roadmap — jev-judge-mcp
 
-Behavior-compatible Python rewrite of the TypeScript reference server 0.5.0. Vocabulary: [CONTEXT.md](CONTEXT.md). Decisions: [docs/adr/](adr/). Frozen spec: [parity-manifest.json](reference/parity-manifest.json) + [ts-0.5.0-tools-list.json](reference/ts-0.5.0-tools-list.json). Every divergence from the reference — fixture-visible or not — is registered in [divergences.json](reference/divergences.json) (ADR-0020); the parity claim is stated per surface, never as one boolean. Transports are tiered by ADR-0021: stdio is the product (Tier A), `streamable-http` is experimental (Tier B).
+Behavior-compatible Python rewrite of the TypeScript reference server 0.5.0. Vocabulary: [CONTEXT.md](CONTEXT.md). Decisions: [decision index](adr/README.md). Frozen spec: [parity-manifest.json](reference/parity-manifest.json) + [ts-0.5.0-tools-list.json](reference/ts-0.5.0-tools-list.json). Every divergence from the reference — fixture-visible or not — is registered in [divergences.json](reference/divergences.json) (ADR-0020); the parity claim is stated per surface, never as one boolean. Transports are tiered by ADR-0021: stdio is the product (Tier A), `streamable-http` is experimental (Tier B).
 
 ## Headline release metrics
 
@@ -16,24 +16,24 @@ MCP ─▶ tool input validation ─▶ state + questions ─▶ Provider (envel
 ```
 
 ```
-src/jev_judge_mcp/
-  server.py settings.py limits.py errors.py text.py ids.py serialize.py telemetry.py
-  stdio.py doctor.py cache.py keyfile.py setup.py fsutil.py redaction/
-  hook/       gate.py screen.py compact.py render.py runtime.py
-  domain/     questions.py answers.py usage.py json.py
-  providers/  base.py resolver.py typesafe.py compatible.py openrouter.py cloudflare.py
-  validation/ choice.py noul.py score.py extract.py numbers.py caps.py
-  policy/     thresholds.py actions.py review.py claims.py ranking.py screen.py extract.py guard.py
-  extract/    dialect.py worker.py candidates.py executor.py   # ADR-0004
-  install/    engine.py layout.py launch.py verify.py …        # ADR-0033
-  tools/      observed.py verify.py screen.py find.py classify.py rerank.py compare.py
-              decide.py extract.py review.py gate.py score.py file_state.py file_judge.py
-              files_judge.py toolset.py arguments.py
+src/jev_judge_mcp/                  # selected modules
+  __main__.py  server.py  registry.py  instructions.py  settings.py  limits.py
+  cli.py  stdio.py  doctor.py  cache.py  keyfile.py  setup.py  fsutil.py  git.py
+  security.py  redaction/  hook/  install/  skills/  calibration/
+  domain/       questions.py answers.py usage.py json.py
+  providers/    base.py retry.py resolver.py typesafe.py compatible.py openrouter.py cloudflare.py
+  validation/   choice.py noul.py score.py extract.py numbers.py caps.py
+  policy/       thresholds.py actions.py review.py claims.py ranking.py screen.py extract.py guard.py
+  extract/      dialect.py worker.py candidates.py executor.py
+  tools/        toolset.py arguments.py review_half.py file_state.py ask_state.py
+                verify.py screen.py find.py classify.py decide.py rerank.py compare.py extract.py
+                review.py gate.py score.py file_judge.py ask.py files_judge.py gate_range.py
+                gate_budget.py gate_diagnostics.py gate_evidence.py
 tests/  unit/ contract/ parity/ property/ security/ integration/ evals/ load/
 evals/  datasets/ manifests/ scorers/ runners/ baselines/ calibration/ reports/ ab/ bench/
 ```
 
-Changes from the pasted plan: `validation/` split from `policy/` (validation rejects, policy decides); `serialize.py` (ADR-0006); `extract/` package (ADR-0004); no `vercel.py` (ADR-0007); `text.py` owns UTF-16 length/truncate (ADR-0005); `install/`, `hook.py`, `doctor.py`, `cache.py`/`keyfile.py`/`setup.py` (ADR-0033/0046/0047), and `tools/score.py` (ADR-0048) arrived with their phases.
+`__main__.py` dispatches CLI commands and help. `server.py` serves MCP, and `registry.py` owns publication order. `policy/guard.py` owns command-hook questions and decisions. `hook/` handles events, provider calls and rendering.
 
 ## Dependencies
 
@@ -185,25 +185,31 @@ A mock parity 100% → B shadow (TS authoritative, Python non-authoritative; mea
 
 ---
 
-### P11 — Coding-agent helper extensions [PY-17] ○ planned (ADR-0077)
+### P11 — Coding-agent helper extensions [PY-17] ✅ shipped (ADR-0077)
 
-The extension family that makes the server a first-class coding-agent helper; the snapshot order stays a frozen prefix (ADR-0048) and every surface below appends with its own divergence entry, caps, and pinning tests. Tool descriptions carry the on-demand rule verbatim; deterministic pre-checks (path scope, binary sniff, size caps, the command gate) always run in code before any provider call.
+The extension tools append to the frozen reference tool order (ADR-0048). The server validates local paths, read sizes and command options before sending the resulting evidence to a provider.
 
-| Surface | Posture | Ships when |
+| Surface | Posture | Shipped contract |
 |---|---|---|
 | `jev_file_judge` | extension tool: one kind-discriminated judgment over a server-read file; typed zero-call refusals; the file's bytes never reach the payload | ADR-0077 caps in `limits.py`, schema pinning, refusal matrix |
-| `jev_files_judge` | extension tool: prune before any call, one call per surviving file under the ADR-0069 in-flight cap, per-path answers and skipped-with-reason | follows `jev_file_judge`; usage sums across calls |
-| `jev_ask` | extension tool: caller-written questions as a typed Noul/Choice/Score union, own state, server-read files, and optional output from an allowlisted read-only command. Overflow refuses with a Split suggestion | allowlisted commands and options run as argv when enabled. Refusals use zero provider calls, and an accepted ask uses one |
+| `jev_files_judge` | extension tool: prune before any call, one call per surviving file under the ADR-0069 in-flight cap, per-path answers and skipped-with-reason | usage sums across calls |
+| `jev_ask` | extension tool: caller-written questions as a typed Noul/Choice/Score union, own state, server-read files, and optional output from an allowlisted read-only command. Overflow refuses with a Split suggestion | allowlisted commands and options run as argv when enabled. Local validation refusals use zero provider calls. An accepted ask sends its questions together |
 | `hook screen` | opt-in Claude Code PostToolUse annotator, default off, never blocks, other hosts unverified | abstain-on-error pinned; no `JEV_HOOK_REQUIRED` arm |
 | `hook compact-cut` | opt-in Claude Code SessionStart(`compact`) cut point returning one additionalContext line (PreCompact cannot inject instructions, ADR-0077), default off; no turn-end advisor | abstains on a non-compact source, below two turns, or without a usable transcript |
+| `jev_gate_range` | completion over a server-read Git range | withheld paths hold the result for local review (ADR-0080) |
 
-**Accept:** each surface lands with its ADR-0077 caps moved into `limits.py` (the page's machine check starts covering it), its pinning and fail-closed tests at the owning boundary, and the dogfood gate (load in Claude Code, exercise the surface end to end) before any release. Until L3 datasets exist, release cards say "no recorded live eval"; calibration follows the P7 protocol as a fast-follow.
+The shipped extensions have offline contract and refusal tests. Live release verification and calibration are tracked separately below.
 
----
+### Decisions after the file-tool extensions
+
+- ADR-0080 adds `jev_gate_range`; its amendments define Git range origins, binary and secret handling, and one hardened Git runner.
+- ADR-0081 adds sibling context and gate diagnostics. ADR-0082 adds evidence for escalation. ADR-0083 tightens validation and records the source of evidence and judgments.
+- ADR-0084 moves TypeSafe onto `HttpProvider`. ADR-0085 unifies caller ID validation and allocation.
+- ADR-0086 packs gate claims by estimated request size; the provider enforces its token window. ADR-0087 centralizes per-call redaction, scoped reads and private writes.
 
 ## CI
 
-`ruff → pyright → unit → property → contract → parity (Node 24 for fixture replay + differential tests) → security → build → MCP smoke`. Live evals are separate (cost, provider availability, model drift) and pin the exact Jev model; production may still default to `jev-latest`.
+`make ci` runs `sync`, `lint`, `typecheck`, `unit`, `property`, `policy-coverage`, `contract`, `parity`, `policy-replay`, `security`, `build`, `smoke`, `eval`, `load_canary`, in that order. Paid targets run separately.
 
 ## 1.0 release gates
 

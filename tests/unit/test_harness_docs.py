@@ -47,6 +47,7 @@ def test_harness_tree_has_no_home_path_or_key_marker() -> None:
         "claude.md",
         "codex.md",
         "pi.md",
+        "hooks.md",
         "gate.hooks.json",
         "completion.hooks.json",
         "screen.hooks.json",
@@ -61,26 +62,34 @@ def test_harness_tree_has_no_home_path_or_key_marker() -> None:
 def test_each_harness_page_keeps_the_hook_contract() -> None:
     for name in PAGES:
         text = (HARNESS / name).read_text(encoding="utf-8")
-        assert "opt-in" in text
-        assert "never allow" in text
-        assert "JEV_GATE_STATE" in text
+        assert "(hooks.md" in text
+        assert "JEV_GATE_STATE" not in text
+        assert "uv run --directory" not in text
         assert "JEV_GATE_THRESHOLD" not in text
-        assert "does not merge" in text
-        assert "does not enable" in text
-        assert "The command hook is not the `jev_gate` MCP tool, which stays the completion gate (ADR-0035)." in text
+    contract = (HARNESS / "hooks.md").read_text(encoding="utf-8")
+    for marker in ("opt-in", "never allow", "JEV_GATE_STATE", "does not merge", "does not enable", "ADR-0035"):
+        assert marker in contract
+    assert "The command hook is not the `jev_gate` MCP tool, which stays the completion gate (ADR-0035)." in contract
+    assert "JEV_GATE_THRESHOLD" not in contract
+    assert contract.count("uv run --directory") == 1
 
 
 def test_each_harness_page_states_the_duplicate_id_rule() -> None:
-    """Every harness states the shared refusal and describes safe caller IDs."""
+    """Each client links to the published ID rules at their common owner."""
     for name in PAGES:
         text = (HARNESS / name).read_text(encoding="utf-8")
-        assert "Collisions after sanitization return `invalid_arguments`" in text
-        assert "unique IDs using ASCII letters, digits, dots, hyphens, and underscores" in text
+        assert "(../tools.md#caller-ids)" in text
+        assert "Collisions after sanitization return" not in text
+    rules = (ROOT / "docs/tools.md").read_text().split("## Caller IDs", 1)[1].split("\n## ", 1)[0]
+    assert "invalid_arguments" in rules
+    assert "ASCII letters, digits, dots, hyphens, and underscores" in rules
+    assert "Two supplied IDs with the same sanitized value" in rules
 
 
 def test_readme_links_harness_docs() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert readme.count("docs/harness/") == 1
+    for name in PAGES:
+        assert f"docs/harness/{name})" in readme
 
 
 def test_shipped_hook_fragments_do_not_change_directory() -> None:

@@ -101,8 +101,8 @@ the last extension, with its own pinning tests, and nothing in a frozen tool cha
 ## Amendment (2026-10-19): git refusals name the server's working directory
 
 The repository is the one containing the server's working directory, and the harness, not the
-caller, picks that directory. An entry launched with `uv run --directory <checkout>` therefore
-reads the checkout from every project, and the caller saw only `refusing that git range`. The
+caller, picks that directory. An entry [launched in the checkout](../harness/hooks.md#working-directory) therefore
+reads that checkout from every project, and the caller saw only `refusing that git range`. The
 tool's git refusals (`invalid_arguments`) now end with `(server working directory: <path>)`, so
 the caller can tell a wrong range from a server started outside its project. The CLI omits
 that suffix because it runs in the operator's own shell.

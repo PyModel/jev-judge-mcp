@@ -4,6 +4,8 @@ status: accepted
 
 # Caller-written questions and server-read files: the ask and file-judgment extensions
 
+> Partially superseded. ADR-0083 revises batch provenance and fan-out. The ADR-0086 amendment distinguishes UTF-16 input caps from byte estimates for packing. ADR-0087 centralizes scoped reads and per-call redaction.
+
 Every frozen tool fixes its questions server-side: this server designs the questions and turns
 answers into actions. A coding agent's most frequent judgments — is this test failure a real
 regression, does this file contain a credential, is this plan safe to run — do not always fit a
@@ -137,8 +139,7 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
   `tool_schema`, same fields as `score-tool-extension`), the CONTEXT terms (*Ask tool*,
   *File judgment*, *Split suggestion*; *Guard question* waits for the slice that designs one),
   and the caps blocks on `docs/reference/limits.md`. Every new tool description carries the
-  on-demand rule verbatim — "Jev is invoked when an unresolved judgment earns a model decision.
-  Deterministic evidence takes precedence; Jev is not a mandatory ceremony." — plus its not-for
+  [on-demand rule](../agent-rules.md) plus its not-for
   line (exact lookups, counting, math, grep-answerable questions), and the deterministic
   pre-checks (path resolution, binary sniff, size caps, command gate) always run in code before
   any provider call.

@@ -3,6 +3,8 @@ status: accepted
 ---
 # Additive response fields stay beside the old keys
 
+> Partially superseded. ADR-0083 revises `stands`, source validation and gate diagnostics. ADR-0085 supersedes the caller-ID rename amendments below.
+
 Gate and verify summaries counted verdicts and actions in overlapping buckets. Claim rows omitted whether the row stands, and gate rows omitted the id and source pointer verify already had. Review scores are 0..2 and the payload did not say so. Reason codes did not say what to do next. Errors were prose only.
 
 ## Decision

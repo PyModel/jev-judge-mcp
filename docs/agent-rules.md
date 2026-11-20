@@ -1,8 +1,5 @@
-<!-- Source of truth: jev-judge-mcp docs/agent-rules.md. The README copy and every cap below are
-     pinned by tests/contract/test_docs_alignment.py. Depth: docs/skills/jev-mcp/SKILL.md
-     (which tool fits which step) and docs/guidance.md (how to shape the call).
-     the packaged jev skill (resource jev-skill://jev/SKILL.md) is the other skill:
-     building an app on the Jev API, not these tools. -->
+<!-- Source: https://github.com/PyModel/jev-judge-mcp/blob/main/docs/agent-rules.md
+     Caller guide: https://github.com/PyModel/jev-judge-mcp/blob/main/docs/guidance.md -->
 
 ### Fast judgment checks — and when to skip them
 
@@ -11,10 +8,10 @@ evidence plus a question with a fixed answer set and return typed probabilities,
 `jev_*` tool (`mcp__jev__*` in Claude Code) when a step judges material you already have — a
 bounded check, a pick-one, a rank, a match-the-claim — and an independent typed judgment is worth
 an extra tool turn. Skip it on steps you can settle by reading what is already on screen, or that
-your tests already cover: the extra turn costs agent wall time, and the recorded studies measured
-agents slower with Jev, never faster. The 2026-09-27 agent study solved 5/9 with Jev
-and 9/9 without, median 38.9 s versus 22.6 s, and 140,032 versus 36,328 tokens per
-solved task.
+your tests already cover. On 2026-09-27, both arms passed 39/39 hidden acceptance checks. The
+four apparent with-Jev failures came from grading added tests as failures. Over all nine runs
+per arm, median wall time was 38.9 s with Jev versus 22.6 s without, and total tokens were
+700,161 versus 326,948. [Study](https://github.com/PyModel/jev-judge-mcp/blob/main/evals/reports/agent-study-2026-09-27.md) · [Grading correction](https://github.com/PyModel/jev-judge-mcp/blob/main/docs/adr/0073-added-tests-do-not-fail-a-correct-run.md)
 
 Jev is invoked when an unresolved judgment earns a model decision.
 Deterministic evidence takes precedence; Jev is not a mandatory ceremony.
@@ -29,19 +26,19 @@ enumerated into bounded options; or when the same unchanged decision was already
 |------|-----------|--------|
 | `jev_verify` | Check claims against evidence → verified / contradicted / unsupported. Subagent or research reports, PR descriptions, your own "done" claims | no length bound on claims or evidence |
 | `jev_gate` | Before declaring done: the patch plus its completion claims checked against diff and test-log evidence → auto / review / escalate | ≤16 claims, ≤16 evidence items; 50,000 units per document; ≤64 files, 200,000 units of patches in aggregate |
-| `jev_gate_range` | `jev_gate` for a change already in git: name the range (`main..HEAD`) and the server reads the diff itself, so the whole patch is reviewed, never an excerpt you typed; optional server-read test log | `jev_gate`'s caps: ≤16 claims, ≤16 evidence items, ≤64 files |
+| `jev_gate_range` | `jev_gate` for a change already in git: name the range (`main..HEAD`) and the server reads eligible patches and an optional test log. Any withheld file holds the range for local review | `jev_gate`'s caps: ≤16 claims, ≤16 evidence items, ≤64 files |
 | `jev_review` | Score a diff against the request: correctness, spec match, test gap, blast radius, `safe_to_apply` | 50,000 units per document, truncated |
 | `jev_screen` | Screen fetched or pasted external text for prompt injection and relevance **before** reading it → pass / review / block / skip | no length bound |
 | `jev_compare` | Two passages: same_fact / contradicts / different_facts, optional per-aspect checks. Docs vs code drift, changelog vs diff | 20,000 units per passage, ≤10 aspects |
 | `jev_find` | Which of up to 250 candidates (files, notes, hits) answers the question, plus whether any candidate matches at all | ≤250 candidates, 2,000 units per candidate |
 | `jev_rerank` | A relevance score for every candidate, full ordering. Triage search hits and grep results | ≤250 candidates |
 | `jev_classify` | Bucket items into a shared class catalog: triage, routing, labeling | ≤64 items, ≤250 classes |
-| `jev_decide` | One bounded choice among 2–6 options with evidence and priorities; escape hatches `ask_user` / `investigate` / `none` | 2–6 options |
+| `jev_decide` | One bounded choice among 2–6 options with evidence and priorities; optional escape hatches `ask_user` / `investigate` / `none` | 2–6 options |
 | `jev_extract` | Your regex proposes candidates, Jev picks, the value comes back verbatim (versions, prices, dates, IDs) | 50,000 units per document, ≤32 fields |
 | `jev_score` | Grade severity or risk on your own ordered rubric; threshold the level, never interpolate a magnitude between levels | 2–10 levels |
 | `jev_file_judge` | Judge a file without reading it: the server reads the path as state, you get the typed answer, the bytes never enter your context | 100,000 units per file read, refused over |
 | `jev_ask` | Your own questions (noul, choice, score) over one composed state: framing text, server-read files, or redacted output from an opt-in read-only command with allowlisted options. One provider call returns typed answers keyed by your ids; overflow refuses with a split suggestion | 1–20 questions, ≤20 paths, 120,000 units for state and questions, 30,000 units of command output |
-| `jev_files_judge` | The same judgment over many files: glob patterns, directories, and paths in, one call per surviving file, skips reported with reasons | ≤64 files, ≤32 path entries |
+| `jev_files_judge` | The same judgment over many files: glob patterns, directories, and paths in, one call per surviving file, skips reported with reasons | ≤64 files, ≤32 path entries, 100,000 units per file read |
 
 The table uses UTF-16 code units. Jev accepts 64k tokens per request and 32k for state plus its longest question. The provider enforces that window. On `input_too_large`, split the input. A string gate sends the diff and test log twice. A file-list gate estimates sizes to pack claims requests, sends larger patches alone, and holds files for local review when their claims group exceeds the provider window (ADR-0079, ADR-0086).
 
@@ -73,6 +70,6 @@ Rules:
   you report.
 - **Failures are one line.** Tool error or missing key (`TYPESAFE_API_KEY`): say so in one line,
   then fall back to normal checks.
-- **Two skills.** `docs/skills/jev-mcp/SKILL.md` says which tool fits a step. The packaged jev skill
+- **Two skills.** Resource `jev-skill://jev-mcp/SKILL.md` says which tool fits a step. The packaged jev skill
   (resource `jev-skill://jev/SKILL.md`) is for building an app that calls the Jev API. Do not copy
   that skill's cookbook thresholds onto these tools. The on-demand rule above applies to both.

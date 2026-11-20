@@ -148,7 +148,7 @@ workflow `release.yml`, environment `pypi`.
 
 ## License
 
-The copyright holder is elkaix.
+The copyright holder is PyModel LLC.
 
 By contributing, you agree that your contributions are licensed under the MIT
 License in `LICENSE`.

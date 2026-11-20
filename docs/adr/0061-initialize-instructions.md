@@ -5,6 +5,8 @@ status: accepted
 
 A client that defers tool schemas never sees `tools/list`. The MCP `initialize` result is the text it does load. This server used to send no `instructions`.
 
+> ADR-0071 amends the initialize instructions with the on-demand rule and the packaged skill resource names.
+
 ## Decision
 
 - `JevMCPServer` passes one `instructions` string, built from the tool registry so each published name appears once.

@@ -3,6 +3,8 @@ status: accepted
 ---
 # A file list is reviewed per file, not silently cut
 
+> Partially superseded. ADR-0081 supersedes the original sibling/evidence context and oversized-patch handling. ADR-0083 qualifies source and defect judgments; ADR-0085 reserves file evidence IDs. The ADR-0086 amendment replaces the single claims pass with packed groups and leaves window refusals to the provider.
+
 A string `diff` over the document cap is truncated and cannot be `auto`. That inherited rule stays for a string. A caller who has the bytes per file should not have to hope the join fits.
 
 ## Decision

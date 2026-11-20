@@ -3,6 +3,8 @@ status: accepted
 ---
 # Action-pattern redaction sits beside the configured-secret redactor
 
+> Partially superseded. ADR-0087 gives each call one security guard for configured secrets and credential literals.
+
 ADR-0017 redacts configured secret values (`Settings.secret_values()`, `Redactor` in `src/jev_judge_mcp/errors.py`) from error text and logs. A gated action is other text. A later command hook will hand the judge a command the caller did not write, and that command can carry a credential that is not in Settings. jev-use strips those values in `src/redact.ts` and sends caller-written state as it was written.
 
 ## Decision
