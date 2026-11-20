@@ -53,3 +53,16 @@ The server compares the current commit and package source file metadata against 
 values, or compares installed versions for a wheel. A changed or unreadable installation sets
 `restart_needed` and appends a short text notice after the normal content on each result.
 Existing sessions need one restart to acquire this reporting behavior.
+
+## Amendment (2026-11-20) — Refresh on tool calls
+
+The server observes the installation at startup. A tool call starts a background refresh if
+none is running. If a source read failed, the next eligible call can retry one second after
+that failure. The server schedules no refreshes between calls.
+
+Each response uses the newest completed observation at assembly, starting with the startup
+observation. Responses never wait for a refresh. A source change shows up on results assembled
+after the refresh that observes it completes. The cannot-verify notice requires a completed
+observation that could not verify the installation.
+A refresh that fails unexpectedly is logged and counts as such an observation, so the server keeps
+serving.

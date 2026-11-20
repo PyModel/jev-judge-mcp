@@ -87,7 +87,12 @@ def resolve_scoped(path: str, scope: Path | None = None) -> Path:
     targets that resolve outside the scope are refused. There is no caller override: a caller who
     wants another tree launches the server there.
     """
-    root = (scope if scope is not None else Path.cwd()).resolve()
+    root = scope.resolve() if scope is not None else Path.cwd()
+    return resolve_under(path, root)
+
+
+def resolve_under(path: str, root: Path) -> Path:
+    """Resolve a candidate within an already canonical root."""
     try:
         resolved = (root / path).resolve()
     except (ValueError, OSError, RuntimeError):

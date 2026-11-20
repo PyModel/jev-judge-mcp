@@ -35,7 +35,7 @@ from jev_judge_mcp.tools.file_judge import (
     build_question,
     project_answer,
 )
-from jev_judge_mcp.tools.file_state import pinned_directory, read_state, resolve_scoped
+from jev_judge_mcp.tools.file_state import pinned_directory, read_state, resolve_under
 
 logger = logging.getLogger(__name__)
 
@@ -264,7 +264,7 @@ def _glob_files(
                         if _has_glob_magic(segment):
                             continue
                         try:
-                            target = resolve_scoped(str(child), root)
+                            target = resolve_under(str(child), root)
                         except ToolError:
                             budget.failures += 1
                             outside(display / child.name)
@@ -318,7 +318,7 @@ def plan(
     is part of an aggregate, never a judgment.
     """
     started = time.monotonic()
-    root = (scope if scope is not None else Path.cwd()).resolve()
+    root = scope.resolve() if scope is not None else Path.cwd()
     skipped: list[dict[str, str]] = []
     overflow: dict[str, int] = {}
     overflow_first: dict[str, list[str]] = {}
@@ -348,7 +348,7 @@ def plan(
         """One discovered file, deduplicated by its resolved name; False when discovery is full.
 
         A traversed file (a directory walk or a glob match) faces the skip list and the scope check;
-        a directly named file was already scoped by `resolve_scoped` and bypasses the skip list —
+        a directly named file was already scoped by `resolve_under` and bypasses the skip list —
         the skip list governs traversal, not an explicit name. `text` is the caller's entry for a
         directly named file and the scope-relative posix path for everything discovered, so the
         payload always names a file the way the caller could have.
@@ -359,11 +359,13 @@ def plan(
             if len(discovery_first) < _FIRST_SHOWN:
                 discovery_first.append(text)
             return False
-        try:
-            resolved = resolve_scoped(str(path), root)
-        except ToolError:
-            skip(text, "outside_scope")
-            return True
+        resolved = path
+        if traversed:
+            try:
+                resolved = resolve_under(str(path), root)
+            except ToolError:
+                skip(text, "outside_scope")
+                return True
         if resolved in seen:
             return True
         if traversed and any(part in SKIP_DIRECTORIES for part in resolved.relative_to(root).parts):
@@ -390,7 +392,7 @@ def plan(
                 matched_any = True
                 if match.is_dir():
                     try:
-                        directory = resolve_scoped(match.relative_to(root).as_posix(), scope=root)
+                        directory = resolve_under(match.relative_to(root).as_posix(), root)
                     except ToolError:
                         skip(match.relative_to(root).as_posix(), "outside_scope")
                         continue
@@ -410,7 +412,7 @@ def plan(
                 skip(entry, "not_found")
             continue
         try:
-            resolved = resolve_scoped(entry, scope=root)
+            resolved = resolve_under(entry, root)
         except (ToolError, ValueError):
             skip(entry, "outside_scope")
             continue

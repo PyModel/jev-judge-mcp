@@ -14,11 +14,12 @@ import signal
 import socket
 import sys
 import time
-from collections.abc import Callable, Generator
+from collections.abc import AsyncGenerator, Callable, Generator
 from typing import Any, override
 
 import anyio
 import uvicorn
+from anyio.abc import TaskGroup
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.shared.exceptions import MCPError
 from mcp.types import INTERNAL_ERROR, CallToolResult, CancelledNotificationParams, NotificationParams, TextContent, Tool
@@ -52,7 +53,7 @@ NULL_ARGUMENTS = stringify(
 """The TS SDK's text for `"arguments": null`: its request schema's zod issues, as a -32603."""
 
 
-class JevMCPServer(MCPServer):
+class JevMCPServer(MCPServer[TaskGroup]):
     """`MCPServer` whose `tools/list` and `tools/call` both go through one `Toolset` (ADR-0013).
 
     The decorator path derives schemas from Python signatures: it adds `title` keys, an
@@ -67,6 +68,7 @@ class JevMCPServer(MCPServer):
             version=reported_version(),
             instructions=server_instructions(toolset.names()),
             log_level=log_level,
+            lifespan=self._version_lifespan,
         )
         self.code_version = ServerVersion()
         self.toolset = toolset
@@ -80,13 +82,21 @@ class JevMCPServer(MCPServer):
             "notifications/initialized", NotificationParams, _already_handled
         )
 
+    @contextlib.asynccontextmanager
+    async def _version_lifespan(self, _: MCPServer[TaskGroup]) -> AsyncGenerator[TaskGroup]:
+        async with anyio.create_task_group() as tasks:
+            try:
+                yield tasks
+            finally:
+                tasks.cancel_scope.cancel()
+
     @override
     async def list_tools(self) -> list[Tool]:
         return self.toolset.definitions()
 
     @override
     async def call_tool(
-        self, name: str, arguments: dict[str, Any], context: Context[Any, Any] | None = None
+        self, name: str, arguments: dict[str, Any], context: Context[TaskGroup, Any] | None = None
     ) -> CallToolResult:
         # The SDK hands a missing or null `arguments` over as `{}`. The raw params tell them apart:
         # the reference validates a missing one as `undefined`, which reports the root instead of each
@@ -94,9 +104,11 @@ class JevMCPServer(MCPServer):
         params = {} if context is None else context.request_context.params or {}
         if "arguments" in params and params["arguments"] is None:
             raise MCPError(code=INTERNAL_ERROR, message=NULL_ARGUMENTS)
+        if context is not None:
+            self.code_version.refresh(context.request_context.lifespan_context)
         sent = context is None or "arguments" in params
         result = await self.toolset.call(name, arguments if sent else None)
-        version = await self.code_version.field()
+        version = self.code_version.field()
         result.meta = {**(result.meta or {}), "jev/version": version}
         if notice := version.get("notice"):
             result.content.append(TextContent(type="text", text=str(notice)))

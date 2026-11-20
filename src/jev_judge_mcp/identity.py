@@ -7,20 +7,24 @@ the tag `v<version>`. Any other checkout of this distribution reports the PEP 44
 Git peels annotated tag objects. Session metadata records startup dirtiness and detects source drift.
 """
 
+import logging
 import os
 import re
 import subprocess
-import time
 import tomllib
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from time import monotonic
 
 import anyio
+from anyio.abc import TaskGroup
 
 from jev_judge_mcp import git
 from jev_judge_mcp.domain import is_json_object
 from jev_judge_mcp.process import OutputTooLarge
+
+logger = logging.getLogger(__name__)
 
 DISTRIBUTION = "jev-judge-mcp"
 """The distribution whose installed version is the plain identity (ADR-0049)."""
@@ -228,16 +232,16 @@ def _dirty(root: Path) -> bool | None:
 
 
 class ServerVersion:
-    """Loaded identity and fresh disk observations. Concurrent completions share a scan."""
+    """Loaded identity and bounded observations of the current installation."""
 
     def __init__(self) -> None:
         self.root = _source_root(Path(__file__))
         self.dirs = _git_dirs(self.root) if self.root else None
         self.loaded = self._observe()
         self.dirty = _dirty(self.root) if self.root and self.dirs else None
-        self.lock = anyio.Lock()
-        self.current = self.loaded
-        self.retry_at = time.monotonic() + 1 if self.dirs and self.current.source is None else 0.0
+        self._current = self.loaded
+        self._refreshing = False
+        self._retry_at = monotonic() + 1 if self.dirs and self.loaded.source is None else 0.0
 
     def _observe(self) -> DiskVersion:
         if self.root and self.dirs:
@@ -248,17 +252,30 @@ class ServerVersion:
                 return DiskVersion(None, commit)
         try:
             return DiskVersion(version(DISTRIBUTION))
-        except PackageNotFoundError:
+        except (PackageNotFoundError, OSError, UnicodeError):
             return DiskVersion(None)
 
-    async def field(self) -> dict[str, object]:
-        previous = self.current
-        async with self.lock:
-            if previous is self.current and time.monotonic() >= self.retry_at:
-                self.current = await anyio.to_thread.run_sync(self._observe)
-                if self.dirs and self.current.source is None:
-                    self.retry_at = time.monotonic() + 1
-            current = self.current
+    def refresh(self, tasks: TaskGroup) -> None:
+        if self._refreshing or monotonic() < self._retry_at:
+            return
+        self._refreshing = True
+        tasks.start_soon(self._refresh)
+
+    async def _refresh(self) -> None:
+        try:
+            self._current = await anyio.to_thread.run_sync(self._observe)
+        except Exception:
+            # The refresh runs in the server's task group, so an unexpected error reports the
+            # installation unverifiable instead of ending every session.
+            logger.warning("installation observation failed", exc_info=True)
+            self._current = DiskVersion(None)
+        finally:
+            self._refreshing = False
+        if self.dirs and self._current.source is None:
+            self._retry_at = monotonic() + 1
+
+    def field(self) -> dict[str, object]:
+        current = self._current
         loaded = self.loaded
         unavailable = (current.commit is None or current.source is None) if self.dirs else current.package is None
         stale = loaded != current or unavailable

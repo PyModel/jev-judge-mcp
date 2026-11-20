@@ -401,6 +401,9 @@ Other operator facts:
   report the same build. A wheel, and a checkout whose HEAD is the tag `v<version>`, report that
   version. Any other git checkout reports `<version>+g<short sha>` (ADR-0054). The wire name stays
   `jev-mcp` (ADR-0049).
+- Each tool result carries `_meta["jev/version"]` from the latest completed observation. Tool calls
+  trigger a background refresh. Once a refresh detects a changed or unreadable installation,
+  subsequent results set `restart_needed` and append a notice (ADR-0054).
 - `jev_rerank` returns every candidate in `ranked`, highest `relevance` first. `relevance` is that
   candidate's probability, to four decimal places. The response has no spread field. A flat band of
   low values means the candidates were not distinguishable: treat the order as weak, and read
