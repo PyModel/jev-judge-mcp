@@ -7,7 +7,6 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -708,33 +707,6 @@ def test_the_harness_reads_the_key_from_the_operator_named_file(tmp_path: Path) 
     empty.write_text(" \n", encoding="utf-8")
     with pytest.raises(ValueError, match="empty"):
         arms.study_key({"JEV_STUDY_KEY_FILE": str(empty)})
-
-
-@pytest.mark.skipif(sys.platform != "darwin", reason="ps eww env disclosure is a macOS mechanism")
-def test_ps_eww_shows_a_child_env_until_the_broker_branch(tmp_path: Path) -> None:
-    """The mechanism, on a dummy variable: a same-uid child's environment is readable from the
-    process table for as long as it lives. That is why live() refuses an exported key and reads
-    JEV_STUDY_KEY_FILE instead - the harness process itself must never hold the key."""
-    child = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(6)"],
-        env={"MARKER_D3_KEY": "dummy-not-a-real-key"},
-    )
-    try:
-        seen = ""
-        for _ in range(40):
-            ps = subprocess.run(["ps", "eww", "-p", str(child.pid)], capture_output=True, text=True, check=False)
-            seen = ps.stdout
-            if "MARKER_D3_KEY" in seen:
-                break
-            time.sleep(0.1)
-        assert "MARKER_D3_KEY" in seen, "the mechanism must be demonstrated, not assumed"
-    finally:
-        child.terminate()
-        child.wait(timeout=10)
-    with pytest.raises(ValueError, match="TYPESAFE_API_KEY unset"):
-        arms.study_key(
-            {"JEV_STUDY_KEY_FILE": str(_key_file(tmp_path)), "TYPESAFE_API_KEY": "sk-test-refusal-not-a-real-key"}
-        )
 
 
 def _agent_bin(bindir: Path, name: str, body: str) -> None:

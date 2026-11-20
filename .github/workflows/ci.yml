@@ -2,7 +2,12 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -12,11 +17,15 @@ permissions:
 jobs:
   ruff:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           version: "0.12.19"
+          checksum: "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
       # The workflow check in `make lint` requires actionlint and the runner's ShellCheck.
       # The pin is the CI image's — scripts/ci/install_actionlint.sh and the Dockerfile are one
       # pin in two places, held equal by tests/unit/test_ci_prepush_coverage.py.
@@ -26,31 +35,43 @@ jobs:
 
   pyright:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           version: "0.12.19"
+          checksum: "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
       - run: uv sync --locked --all-extras
       - run: make typecheck
 
   unit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           version: "0.12.19"
+          checksum: "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
       - run: uv sync --locked --all-extras
       - run: make unit
 
   property:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           version: "0.12.19"
+          checksum: "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
       - run: uv sync --locked --all-extras
       - run: make property
       - run: make policy-coverage
@@ -59,22 +80,30 @@ jobs:
   contract:
     needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           version: "0.12.19"
+          checksum: "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
       - run: uv sync --locked --all-extras
       - run: make contract
 
   parity:
     needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           version: "0.12.19"
+          checksum: "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
       # Pinned to the parity oracle's Node (Makefile NODE, tests/parity/harness/reference.sh);
       # a floating 24.x can drift ICU rendering.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -82,15 +111,20 @@ jobs:
           node-version: "24.19.0"
       - run: uv sync --locked --all-extras
       - run: make parity
+      - run: make policy-replay
 
   security:
     needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           version: "0.12.19"
+          checksum: "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
       - run: uv sync --locked --all-extras
       - run: make security
 
@@ -101,8 +135,11 @@ jobs:
   security-one-cpu:
     needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: security stage under a one-CPU quota, non-root
         run: |
           # ghcr.io/astral-sh/uv:0.12.19-python3.12-trixie-slim, pinned by digest (multi-arch index).
@@ -118,11 +155,15 @@ jobs:
   build:
     needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           version: "0.12.19"
+          checksum: "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
       - run: make build
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -132,11 +173,15 @@ jobs:
   smoke:
     needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           version: "0.12.19"
+          checksum: "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
       - run: uv sync --locked --all-extras
       - run: make smoke
       # ADR-0053 guard: an installer-written entry must start when the first Python on PATH is
@@ -151,11 +196,15 @@ jobs:
   eval:
     needs: [ruff, pyright, unit, property]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
         with:
           version: "0.12.19"
+          checksum: "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
       - run: uv sync --locked --all-extras
       - run: make eval
       # Cheap guard for the load stub: concurrency 1 and 4, no timing budget. The full timing run is

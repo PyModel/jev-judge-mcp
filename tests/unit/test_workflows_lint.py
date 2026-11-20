@@ -11,6 +11,7 @@ subprocess and PATH — with a stub actionlint that decides what it reports:
 - a copy of the script with no .github/workflows above it fails rather than passing vacuously.
 """
 
+import re
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,7 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "check_workflows.py"
+WORKFLOWS = SCRIPT.parents[1] / ".github/workflows"
 
 
 def stubbed(tmp_path: Path, body: str, *, version: str = "1.7.13") -> dict[str, str]:
@@ -130,14 +132,81 @@ def test_scout_034_real_workflows_have_immutable_actions(tmp_path: Path) -> None
     assert run(SCRIPT, stubbed(tmp_path, "exit 0\n")).returncode == 0
 
 
+def workflow_jobs(filename: str) -> dict[str, str]:
+    workflow = (WORKFLOWS / filename).read_text()
+    pairs = re.split(r"^  ([\w-]+):\n", workflow.split("\njobs:\n", 1)[1], flags=re.M)
+    return dict(zip(pairs[1::2], pairs[2::2], strict=True))
+
+
+@pytest.mark.parametrize(("filename", "minutes"), [("ci.yml", 15), ("release.yml", 20), ("deps-latest.yml", 30)])
+def test_each_job_has_the_workflow_timeout(filename: str, minutes: int) -> None:
+    jobs = workflow_jobs(filename)
+    assert jobs
+    for name, job in jobs.items():
+        assert re.search(rf"^    timeout-minutes: {minutes}\s*$", job, re.M), f"{filename}/{name}: expected {minutes}m"
+
+
+def action_inputs(job: str, action: str) -> list[str]:
+    return [
+        step.split("\n", 1)[1] if "\n" in step else ""
+        for step in re.split(r"^      - ", job, flags=re.M)[1:]
+        if re.search(rf"^(?:        )?uses: {re.escape(action)}@", step, re.M)
+    ]
+
+
+@pytest.mark.parametrize("filename", ["ci.yml", "release.yml", "deps-latest.yml"])
+def test_checkout_never_persists_credentials(filename: str) -> None:
+    jobs = workflow_jobs(filename)
+    checkouts = [inputs for job in jobs.values() for inputs in action_inputs(job, "actions/checkout")]
+    assert checkouts
+    for inputs in checkouts:
+        assert re.search(r"^          persist-credentials: false\s*$", inputs, re.M), filename
+
+
+def test_setup_uv_uses_the_same_verified_pin_in_every_workflow() -> None:
+    release = workflow_jobs("release.yml")
+    (reference,) = action_inputs(release["build"], "astral-sh/setup-uv")
+    pin = re.findall(r'^          (?:version|checksum): "([^"\n]+)"', reference, re.M)
+    assert len(pin) == 2
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        installs = [
+            inputs for job in workflow_jobs(path.name).values() for inputs in action_inputs(job, "astral-sh/setup-uv")
+        ]
+        assert installs
+        for inputs in installs:
+            assert re.findall(r'^          (?:version|checksum): "([^"\n]+)"', inputs, re.M) == pin, path.name
+
+
+def test_ci_runs_on_main_pushes_and_cancels_only_superseded_pr_runs() -> None:
+    workflow = (WORKFLOWS / "ci.yml").read_text()
+    triggers = workflow.split("\non:\n", 1)[1].split("\n\n", 1)[0]
+    assert triggers == "  push:\n    branches: [main]\n  pull_request:"
+    assert "group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}" in workflow
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow
+
+
+def test_release_build_attests_both_distributions_after_checksums() -> None:
+    build = workflow_jobs("release.yml")["build"]
+    (inputs,) = action_inputs(build, "actions/attest-build-provenance")
+    subjects = inputs.split("subject-path: |\n", 1)[1].split("      - ", 1)[0].splitlines()
+    assert {line.strip() for line in subjects if line.strip()} == {
+        "${{ runner.temp }}/assets/*.whl",
+        "${{ runner.temp }}/assets/*.tar.gz",
+    }
+    assert build.index("sha256sum -- *.whl *.tar.gz") < build.index("uses: actions/attest-build-provenance@")
+
+
 def test_scout_006_both_publish_paths_share_verified_input() -> None:
     release = (SCRIPT.parents[1] / ".github/workflows/release.yml").read_text()
     before_pypi, pypi = release.split("\n  pypi:\n")
     build, post_build = before_pypi.split("\n  verify:\n")
     verify, post_verify = post_build.split("\n  publish:\n")
     publish, prepare = post_verify.split("\n  prepare_pypi:\n")
-    assert release.count("id-token: write") == release.count("uv publish ") == 1
-    assert ": write" not in build.split("\n  build:\n")[1]
+    jobs = workflow_jobs("release.yml")
+    assert {name for name, job in jobs.items() if "id-token: write" in job} == {"build", "pypi"}
+    assert {name for name, job in jobs.items() if "attestations: write" in job} == {"build"}
+    assert release.count("uv publish ") == 1
+    assert set(re.findall(r"^      (\S+): write", build.split("\n  build:\n")[1], re.M)) == {"id-token", "attestations"}
     assert ": write" not in verify
     assert "uv pip install " in verify
     assert "uses: actions/upload-artifact@" not in verify

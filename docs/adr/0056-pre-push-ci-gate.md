@@ -83,9 +83,8 @@ red run after the fact. This ADR puts the whole workflow in front of every push.
   and every make stage the workflow's jobs run, plus the smoke job's old-Python entry guard
   (`scripts/ci_old_python_entry.py`) with a managed Python 3.10 first on PATH, found with
   `uv python find --no-project 3.10` — inside the project, a project-scoped find resolves the
-  project's 3.12. `CI=true` enables no network or paid path GitHub CI does not have: its only
-  two consumers are the HTTP auth suite's loopback-only relaxation (a local bind, not a
-  network call) and the Node differential tests' skip-becomes-fail. No paid stage
+  project's 3.12. `CI=true` matches the hosted HTTP auth suite's local bind behavior and
+  makes missing Node or a missing eval wheel a failure. No paid stage
   (`security-live`, `eval-live`, `ab`, `load`, benches) is in any leg and no live flag is set;
   `tests/unit/test_ci_prepush_coverage.py` holds that line.
 - **Runner fidelity, learned the hard way.** The image ships Node 24.19.0 exactly (the
@@ -132,3 +131,10 @@ red run after the fact. This ADR puts the whole workflow in front of every push.
 - Renaming or moving a clone breaks its next `make` with the one-line repair (`make
   hooks`) instead of silently disabling the pre-push gate. The guard costs one
   `git config` read per make invocation and nothing on a fresh clone.
+
+## Amendment 2026-11-19: run policy replay once and share one watchdog
+
+No offline eval test installs a built wheel since the host study interpreter was removed, so
+hosted eval needs no `dist` artifact. The parity stage excludes `test_policy_replay.py`, which runs through `make policy-replay`
+in hosted CI and in both gate legs. The native stages and the one-CPU Docker stage share
+a watchdog that sends the timeout signal to the stage's process group.

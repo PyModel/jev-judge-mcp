@@ -1,12 +1,13 @@
-"""Fail when a tracked file hides text: invisible format characters, bidi controls, or bytes that are not UTF-8.
+"""Check tracked files and symlink targets for hidden characters and require UTF-8 filenames and content.
 
     check_hidden_chars.py
 
-Stdlib only. Exit 0 clean, 1 on a hit, 2 when git cannot list the tree. Every tracked regular
-file is scanned; nothing is skipped as binary. A binary file joins BINARY by path when one is
-first tracked.
+Stdlib only. Exit 0 clean, 1 on a hit, 2 when the tree cannot be listed or read. Scanned content
+includes invisible format characters, bidi controls, and C0 controls except tab, LF, and CR.
+Tracked binary files are exempt by path in BINARY.
 """
 
+import os
 import subprocess
 import sys
 import unicodedata
@@ -22,7 +23,7 @@ BIDI_CONTROLS = frozenset(range(0x202A, 0x202F)) | frozenset(range(0x2066, 0x206
 JOINERS = frozenset({0x200C, 0x200D})
 DIRECTION_MARKS = frozenset({0x200E, 0x200F, 0x061C})
 EMOJI_SELECTORS = frozenset({0xFE0E, 0xFE0F})
-FILLERS = frozenset({0x0000, 0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0})
+FILLERS = frozenset({0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0})
 SELECTOR_SUPPLEMENT = range(0xE0100, 0xE01F0)
 
 
@@ -33,6 +34,8 @@ def _shaping_neighbour(char: str) -> bool:
 def _hidden(text: str, index: int) -> bool:
     char = text[index]
     code = ord(char)
+    if code < 0x20:
+        return char not in "\t\n\r"
     if code == 0xFEFF:
         return index != 0  # a leading BOM is an encoding mark, not content
     if code in BIDI_CONTROLS or code in FILLERS or code in SELECTOR_SUPPLEMENT:
@@ -78,17 +81,24 @@ def scan(files: Iterable[tuple[str, bytes]]) -> list[str]:
     return errors
 
 
-def tracked(root: Path) -> list[tuple[str, bytes]]:
+def tracked(root: Path) -> tuple[list[tuple[str, bytes]], list[str]]:
     listed = subprocess.run(["git", "ls-files", "-z"], cwd=root, check=True, capture_output=True)  # noqa: S607
     files: list[tuple[str, bytes]] = []
+    errors: list[str] = []
     for raw in listed.stdout.split(b"\0"):
         if not raw:
             continue
-        path = raw.decode("utf-8")
+        try:
+            path = raw.decode("utf-8")
+        except UnicodeDecodeError as error:
+            errors.append(f"tracked filename {raw!r}: not UTF-8 at byte {error.start}")
+            continue
         file = root / path
-        if file.is_file() and not file.is_symlink():
+        if file.is_symlink():
+            files.append((f"{path} (symlink target)", os.readlink(os.fsencode(file))))
+        elif file.is_file():
             files.append((path, file.read_bytes()))
-    return files
+    return files, errors
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -102,11 +112,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             capture_output=True,
             text=True,
         )
-        files = tracked(Path(top.stdout.strip()))
+        files, errors = tracked(Path(top.stdout.strip()))
     except (OSError, subprocess.CalledProcessError) as error:
         print(f"hidden character check could not list the tree: {error}", file=sys.stderr)
         return 2
-    errors = scan(files)
+    errors.extend(scan(files))
     if errors:
         print("hidden character check failed:", file=sys.stderr)
         print("\n".join(errors), file=sys.stderr)
