@@ -391,21 +391,27 @@ and read the result; `command` is for output you want judged, not output you wan
 ## jev_gate_range — did the work finish, read from git
 
 **Use when** the change is in git and you would otherwise paste its diff into `jev_gate`. Name the
-range (`main..HEAD`, or `HEAD` for uncommitted work against the last commit); each end must name a
-commit or a tree. The server reads `git diff <range> -- .` in its working directory, so nothing
-outside that directory is sent, and runs jev_gate's
-handler on the file list, so the review sees the whole patch, never an excerpt you typed
-(ADR-0080).
+range (`main..HEAD`, or `HEAD` for tracked changes since the last commit). A single revision or
+two-dot range also accepts a subtree named by its commit and repository path (such as `HEAD:pkg`)
+or the empty tree ID. A bare nonempty tree ID has no repository path and is refused. Three-dot
+ranges require commits. The server reads `git diff <range> -- .` in its working directory and
+checks each file's repository path on both sides before passing its patch to jev_gate (ADR-0080).
 
 **Measured.** No recorded live eval; the judgment is jev_gate's.
 
-**Weak spots.** Everything on the jev_gate card applies: the same caps, thresholds, fail-closed
-paths, and payload; only `tool` names this tool. A secret store in the range (`.env`, keys) is
-never sent and is listed in `skipped` as `secret_file`; credential literals in other patches are
-redacted. A range of only secret stores refuses `secret_file`; a bad range, an empty diff, no
-repository, or headers git quoted so they do not split refuse `invalid_arguments`; a diff past the
-gate's aggregate budget is killed mid-read and refuses `input_too_large`; all before any provider
-call. `tests_path` is read under jev_file_judge's path rules and is not self-reported. The working
+**Weak spots.** The jev_gate caps and thresholds apply. The server withholds a whole file if either
+side is a secret store or contains a PEM private-key delimiter, even outside the changed hunk.
+It also withholds a file whose name contains a recognized credential and redacts the displayed
+name. It redacts credential literals in the patches it sends. For a mixed range, the tool
+reviews the remaining patches, lists withheld files in `skipped` as `secret_file`, and holds the
+range for local review. If every file is withheld, it refuses with `secret_file`. The
+`jev-judge-mcp gate` CLI checks the range from the repository root and refuses the entire range
+with `secret_file` (exit 2) if it withholds even one file.
+
+A bad or empty range, a missing repository, or a patch whose origin cannot be verified yields
+`invalid_arguments`. If either the ordinary diff or its full-file context exceeds the read
+budget, the tool returns `input_too_large`. These refusals precede any provider call.
+`tests_path` is read under jev_file_judge's path rules and is not self-reported. The working
 directory is wherever the harness started the server: an entry that moves it
 (`uv run --directory <checkout>`) reads that checkout from every project, so a range from your
 project refuses; launch a checkout with `uv run --project <checkout>`, which keeps the working
