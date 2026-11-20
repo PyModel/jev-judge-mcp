@@ -211,7 +211,7 @@ The shipped extensions have offline contract and refusal tests. Live release ver
 
 ## CI
 
-`make ci` runs `sync`, `lint`, `typecheck`, `unit`, `property`, `policy-coverage`, `contract`, `parity`, `policy-replay`, `security`, `build`, `smoke`, `eval`, `load_canary`, in that order. Paid targets run separately.
+`make ci` runs `sync`, `lint`, `typecheck`, `unit`, `property`, `contract`, `parity`, `policy-replay`, `security`, `build`, `smoke`, `eval`, `load_canary`, in that order. Paid targets run separately.
 
 ## 1.0 release gates
 

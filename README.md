@@ -476,7 +476,7 @@ uv sync --locked --all-extras
 make ci
 ```
 
-CI stages in order: `sync`, `lint`, `typecheck`, `unit`, `property`, `policy-coverage`, `contract`, `parity`, `policy-replay`, `security`, `build`, `smoke`, `eval`, `load_canary`.
+CI stages in order: `sync`, `lint`, `typecheck`, `unit`, `property`, `contract`, `parity`, `policy-replay`, `security`, `build`, `smoke`, `eval`, `load_canary`.
 
 `make eval-live`, `make security-live`, and `JEV_AB_LIVE=1 make ab` call paid services and stay off CI. Contribution notes are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
