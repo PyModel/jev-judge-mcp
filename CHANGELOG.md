@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.10.0...v0.11.0) (2026-11-20)
+
+
+### Bug Fixes
+
+* enforce file-state limits and preserve key-path refusals ([bd60f86](https://github.com/PyModel/jev-judge-mcp/commit/bd60f86a477dd81f3ae13f76f67ed6c3ff4d62d9))
+
 ## [0.10.0](https://github.com/PyModel/jev-judge-mcp/compare/v0.9.2...v0.10.0) (2026-11-20)
 
 
