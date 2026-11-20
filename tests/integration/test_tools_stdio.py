@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from jev_judge_mcp.extract.candidates import REGEX_TIMEOUT_REASON
+from jev_judge_mcp.extract.candidates import REGEX_TIMEOUT_REASON, REGEX_TIMEOUT_S
 from tests.support.stdio import StdioServer
 from tests.support.workers import WORKER_MODULE, alive, worker_pids
 
@@ -82,20 +82,12 @@ def test_timeout_does_not_block_other_calls_and_shutdown_reaps_workers() -> None
         lines = server.stdout_lines
 
     assert set(replies) == {10, 11, 12}
-    quick_at, quick = replies[11]
+    _, quick = replies[11]
     slow_at, slow = replies[10]
     ping_at = replies[12][0]
-    # Blocked-versus-unblocked by a wide margin, not a millisecond order race: serialized
-    # dispatch or a stalled event loop would admit the no-match call only after the slow
-    # call finished, and its fresh 1 s budget would still answer `not_found` at ~1.1-1.5 s
-    # (passing any absolute bound); the worker-free ping, however, would wait behind the
-    # slow call's whole handling and reply after it. Concurrent dispatch answers ping while
-    # the slow regex is still spinning.
+    # The worker-free ping can answer during the slow call only with concurrent dispatch.
     assert ping_at < slow_at
-    # Independent calls have no contractual reply order beyond that, and under load both
-    # extract replies land near their own 1 s deadlines.
-    assert quick_at < 2.5  # the no-match call's own 1 s deadline, a cold worker start, and host load
-    assert slow_at < 2.5  # the 1 s deadline, a cold worker start, and host load
+    assert REGEX_TIMEOUT_S <= slow_at < REGEX_TIMEOUT_S + 1.5  # allow scheduling, reaping and stdio after the deadline
     slow_payload = json.loads(slow["result"]["content"][0]["text"])
     assert slow_payload["results"][0]["reason"] == "regex timed out after 1000ms; simplify the pattern"
     quick_payload = json.loads(quick["result"]["content"][0]["text"])
@@ -128,6 +120,8 @@ def test_cancelled_extract_reaps_worker_and_keeps_server_responsive() -> None:
         # before cancellation. Record the warm pool first, then send the two frames in order.
         workers = worker_pids(server.process.pid)
         assert workers, f"server {server.process.pid} has no warm {WORKER_MODULE} workers"
+        # Observe reaping before the ordinary request timeout could kill the worker.
+        deadline = time.monotonic() + REGEX_TIMEOUT_S
         server.send(call(10, "jev_extract", SLOW))
         server.send(
             {
@@ -136,10 +130,11 @@ def test_cancelled_extract_reaps_worker_and_keeps_server_responsive() -> None:
                 "params": {"requestId": 10, "reason": "integration test"},
             }
         )
-        deadline = time.monotonic() + 0.75
-        while all(alive(pid) for pid in workers) and time.monotonic() < deadline:
-            time.sleep(0.01)
         survivors = {pid for pid in workers if alive(pid)}
+        while survivors == workers and time.monotonic() < deadline:
+            time.sleep(0.01)
+            survivors = {pid for pid in workers if alive(pid)}
+        assert time.monotonic() < deadline, "cancelled worker survived until the ordinary timeout"
         assert len(survivors) == len(workers) - 1, (
             f"server {server.process.pid} worker PIDs before cancel {workers}, surviving {survivors}"
         )

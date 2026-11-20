@@ -5,7 +5,6 @@ from typing import ClassVar
 import httpx
 
 from jev_judge_mcp.domain import JsonValue, is_json_object
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.providers.base import (
     ERROR_BYTES_MAX,
     Evaluation,
@@ -16,6 +15,7 @@ from jev_judge_mcp.providers.base import (
     parse_envelope,
 )
 from jev_judge_mcp.providers.retry import RetryPolicy, retry_after_seconds
+from jev_judge_mcp.redaction.values import Redactor
 from jev_judge_mcp.serialize import stringify_compact
 
 

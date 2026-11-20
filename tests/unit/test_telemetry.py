@@ -3,7 +3,6 @@
 import ast
 import inspect
 import logging
-import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, get_args, override
@@ -11,9 +10,9 @@ from typing import Any, get_args, override
 import pytest
 
 from jev_judge_mcp import validation
-from jev_judge_mcp.domain import JsonValue
+from jev_judge_mcp.domain import JsonValue, Usage
 from jev_judge_mcp.providers import Evaluation, ProviderError
-from jev_judge_mcp.server import configure_logging
+from jev_judge_mcp.redaction.values import configure_logging
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.telemetry import CAP_SCOPES, Span, Telemetry, describe, span
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
@@ -22,7 +21,6 @@ from jev_judge_mcp.validation.caps import CapScope
 from tests.security.tools import CASES, choice
 from tests.support.jev import FakeProvider
 from tests.support.secrets import secret_env
-from tests.support.stdio import server_env
 
 pytestmark = pytest.mark.anyio
 
@@ -34,13 +32,6 @@ ALLOWED_ATTRIBUTE_TYPES = (bool, int, float, str)
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
-
-
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    kept = server_env()
-    for key in [key for key in os.environ if key not in kept]:
-        monkeypatch.delenv(key)
 
 
 class FailingProvider(FakeProvider):
@@ -134,6 +125,29 @@ async def test_metrics_count_calls_errors_fail_closed_actions_tokens_and_truncat
     assert metrics['duration_ms_bucket{span="mcp.tool",le="+Inf"}'] == 5
 
 
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("reported", [False, True])
+async def test_token_metrics_distinguish_unreported_usage_and_measured_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cached: bool, reported: bool
+) -> None:
+    if cached:
+        monkeypatch.setenv("JEV_MCP_CACHE", "1")
+        monkeypatch.setenv("JEV_MCP_CACHE_DIR", str(tmp_path / "cache"))
+
+    class ZeroTokenProvider(FakeProvider):
+        @override
+        async def _send(
+            self, state: JsonValue, questions: dict[str, JsonValue], model: str, timeout: float | None
+        ) -> Evaluation:
+            return Evaluation(self.answers, Usage(reported=reported), self.name, model)
+
+    case = CASE["jev_verify"]
+    telemetry = await run([(case.tool, case.arguments, case.permissive)], ZeroTokenProvider)
+    metrics = telemetry.metrics.snapshot()
+    assert metrics.get('tokens{direction="input"}') == (0 if reported else None)
+    assert metrics.get('tokens{direction="output"}') == (0 if reported else None)
+
+
 async def test_an_unasked_source_question_is_not_fail_closed() -> None:
     """`source_*` is asked only when more than one evidence item was sent.
 
@@ -193,8 +207,7 @@ async def test_item_truncation_is_recorded_at_cap_plus_one_without_changing_the_
 
 
 async def test_inputs_the_schema_bounds_are_never_counted_as_cut() -> None:
-    """jev_compare's passages and jev_extract's document go through the ledger, but the schema rejects
-    anything over their cap first, so a call at the cap records no cut."""
+    """Inputs at the schema cap are admitted and record no cut."""
     compare = {**CASE["jev_compare"].arguments, "passage_a": "x" * 20_000}
     extract = {**CASE["jev_extract"].arguments, "document": CASE["jev_extract"].arguments["document"].ljust(50_000)}
     telemetry = await run(

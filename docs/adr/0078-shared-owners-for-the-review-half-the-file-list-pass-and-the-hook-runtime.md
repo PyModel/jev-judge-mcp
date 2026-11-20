@@ -3,6 +3,8 @@ status: accepted
 ---
 # Shared owners for the review half, the file-list pass, and the hook runtime
 
+> Partially superseded. The hook-package amendment in ADR-0077 moves shared hook wiring to `hook/runtime.py`. ADR-0087 makes the per-call guard part of preparation.
+
 The 2026-10-01 architecture review found three behaviours written twice or three times, each
 copy drifting on its own: the per-file loop of a `[{path, patch}]` diff in `tools/review.py` and
 `tools/gate.py` (two of the day's fixes — the file-count bound and the truncation flag — had to
@@ -43,3 +45,8 @@ fixed three times.
   unchanged over the shared runtime.
 - `make policy-coverage` keeps 100% branches over the moved decisions; `tests/unit/test_policy.py`
   carries one test per branch.
+
+## Amendment (2026-11-19): callers import the review half directly
+
+`tools/review_half.py` is the import surface for the review half. `tools/review.py` uses it
+to implement jev_review.

@@ -1,91 +1,26 @@
-"""TypeSafe direct through `typesafe-sdk` (`provider.ts:108-124`), the optional `typesafe` extra.
+"""TypeSafe's direct System One endpoint (`provider.ts:108-124`, ADR-0084)."""
 
-The SDK is imported on first use, so the server runs without it when another provider is configured.
-The SDK itself never retries (`RetryPolicy(max_retries=0)`): one retry owner (ADR-0057) drives every
-provider, so the SDK's attempts can never multiply jev's. Its typed response model is bypassed: the
-raw body goes through the uniform envelope rules (ADR-0003) and answers stay raw for the tools to
-validate.
-"""
-
-from collections.abc import Mapping
-from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, ClassVar, Self, cast, override
+from typing import ClassVar
 
 import httpx
-from pydantic import RootModel
 
 from jev_judge_mcp.domain import JsonValue
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.providers.base import (
     Evaluation,
-    JevProvider,
-    ProviderConnectionError,
-    ProviderDeliveryError,
+    HttpProvider,
     ProviderError,
     ProviderName,
-    bounded_response_hook,
     decode_body,
-    origin_of,
     parse_envelope,
-    pre_send_timeout,
-    refuse_credentials_in_url,
 )
-from jev_judge_mcp.providers.retry import RetryPolicy, retry_after_seconds
-from jev_judge_mcp.serialize import stringify_compact
+from jev_judge_mcp.providers.retry import RetryPolicy
+from jev_judge_mcp.redaction.values import Redactor
 
-if TYPE_CHECKING:
-    import httpx2
-    from typesafe_sdk import AsyncTypeSafeClient
-
-
-_response_headers: ContextVar[Mapping[str, str] | None] = ContextVar("typesafe_response_headers", default=None)
+DEFAULT_BASE_URL = "https://api.typesafe.ai"
+SYSTEM_ONE_PATH = "/v1/systemone"
 
 
-def sdk_importable() -> bool:
-    """Whether the `typesafe` extra's imports resolve in this process.
-
-    The startup gate (`server.ensure_provider_runnable`) probes a *selected* typesafe provider
-    with this before serving, so a bare install without the extra refuses at startup instead of
-    failing every judgment call. It imports the SDK entry points `_sdk_client` constructs its
-    client from (`AsyncTypeSafeClient`, `RetryPolicy`) plus their `httpx2` transport, so a pass
-    here holds there — the request path's later error-type imports come from the same package.
-    Another provider selected leaves both untouched.
-    """
-    try:
-        import httpx2
-        from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy
-
-        del httpx2, AsyncTypeSafeClient, RetryPolicy
-    except ImportError:
-        return False
-    return True
-
-
-async def _remember_headers(response: "httpx2.Response") -> None:
-    """The SDK returns the body only. Keep its headers for envelope parsing."""
-    _response_headers.set(response.headers)
-
-
-class _RawBody(RootModel[object]):
-    """The response body as `JSON.parse` would read it: `None` when it is not JSON, NaN never a number."""
-
-    @override
-    @classmethod
-    def model_validate_json(
-        cls,
-        json_data: str | bytes | bytearray,
-        *,
-        strict: bool | None = None,
-        extra: Any = None,
-        context: Any | None = None,
-        by_alias: bool | None = None,
-        by_name: bool | None = None,
-    ) -> Self:
-        content = json_data.encode() if isinstance(json_data, str) else bytes(json_data)
-        return cls.model_construct(decode_body(content))
-
-
-class TypeSafeProvider(JevProvider):
+class TypeSafeProvider(HttpProvider):
     name: ClassVar[ProviderName] = "typesafe"
     label: ClassVar[str] = "TypeSafe API"
 
@@ -95,128 +30,28 @@ class TypeSafeProvider(JevProvider):
         *,
         api_key: str,
         base_url: str | None,
-        transport: "httpx2.AsyncBaseTransport | None" = None,
+        client: httpx.AsyncClient | None = None,
         retry: RetryPolicy | None = None,
     ) -> None:
-        super().__init__(redact, retry=retry, cache_scope=base_url or "")
-        self._api_key = api_key
-        self._base_url = base_url
-        self._transport = transport
-        self._client: AsyncTypeSafeClient | None = None
-        self._wrapper: httpx2.AsyncClient | None = None
-        # The allowed origin is fixed per instance: it comes from process config (ADR-0008), so the
-        # lazy first-request assignment races only with itself, writing the same value.
-        self._origin: tuple[str, str, int] | None = None
-
-    async def _reject_cross_origin(self, request: "httpx2.Request") -> None:
-        """ADR-0023 for the SDK transport too: a redirect may never leave the first request's origin.
-
-        httpx2 does not follow redirects by default, so this hook is the guard for the day that
-        default (or an injected `http_client`) changes: it refuses the hop before it is sent,
-        exactly as `HttpProvider`'s event hook does for the raw providers.
-        """
-        origin = origin_of(str(request.url))
-        if self._origin is None:
-            self._origin = origin
-        elif origin != self._origin:
-            raise ProviderError(f"{self.label} request failed: a redirect left the configured origin and was blocked")
-
-    def _sdk_client(self) -> "AsyncTypeSafeClient":
-        if self._client is None:
-            try:
-                import httpx2
-                from typesafe_sdk import AsyncTypeSafeClient
-                from typesafe_sdk import RetryPolicy as SdkRetryPolicy
-            except ImportError:
-                raise ProviderError(
-                    "The typesafe provider needs the typesafe-sdk package: install jev-judge-mcp[typesafe]."
-                ) from None
-            # The gate rides the wrapper the SDK will use, so an injected transport is gated too.
-            self._wrapper = httpx2.AsyncClient(
-                timeout=None,
-                transport=self._transport,
-                headers={"Accept-Encoding": "identity"},
-                event_hooks={
-                    "request": [self._reject_cross_origin],
-                    "response": [bounded_response_hook(httpx2.AsyncByteStream), _remember_headers],
-                },
-            )
-            self._client = AsyncTypeSafeClient(
-                api_key=self._api_key,
-                base_url=self._base_url,
-                # The SDK never retries (ADR-0057): jev's policy is the one retry owner.
-                retry=SdkRetryPolicy(max_retries=0),
-                http_client=self._wrapper,
-            )
-        return self._client
+        super().__init__(redact, client, retry=retry, cache_scope=base_url or "")
+        self._api_key = api_key.strip()
+        self._base_url = DEFAULT_BASE_URL if base_url is None else base_url
 
     async def _send(
         self, state: JsonValue, questions: dict[str, JsonValue], model: str, timeout: float | None
     ) -> Evaluation:
-        if self._base_url is not None:
-            refuse_credentials_in_url(self._base_url, self.label)
-        client = self._sdk_client()
-        import httpx2
-        from typesafe_sdk import TypeSafeAPIConnectionError, TypeSafeAPIError
-
-        before_send = pre_send_timeout(timeout)
-        token = _response_headers.set(None)
-        try:
-            try:
-                # The SDK's recursive JSON alias is partly unknown to pyright and narrower than JsonValue;
-                # the wire is the same.
-                response = await client.system_one(  # pyright: ignore[reportUnknownMemberType]
-                    cast(Any, state),
-                    cast(Any, questions),
-                    model=model,
-                    timeout=httpx2.Timeout(timeout, connect=before_send, pool=before_send),
-                    response_model=_RawBody,
-                )
-            except TypeSafeAPIError as error:
-                raise self._status_error(
-                    error.status,
-                    _body_text(error.body),
-                    retry_after=retry_after_seconds(error.headers),
-                ) from None
-            except TypeSafeAPIConnectionError as error:
-                # The SDK writes `Connection error: {cause}`; a reset's cause has an empty message.
-                cause = error.__cause__
-                if isinstance(cause, httpx2.ConnectTimeout):
-                    raise httpx.ConnectTimeout(str(cause)) from None
-                if isinstance(cause, httpx2.PoolTimeout):
-                    raise httpx.PoolTimeout(str(cause)) from None
-                if isinstance(cause, httpx2.ConnectError):
-                    raise ProviderConnectionError(f"{self.label} request failed: {error}") from None
-                if isinstance(error, TimeoutError):
-                    raise
-                detail = str(error) if cause is None or str(cause) else f"{error}{type(cause).__name__}"
-                raise ProviderDeliveryError(f"{self.label} request failed: {detail}") from None
-            headers = _response_headers.get()
-        finally:
-            _response_headers.reset(token)
-        envelope = parse_envelope(response.root, self.label, headers)
-        # The reference reports the requested model, never one from the body (`provider.ts:122`).
-        return Evaluation(
-            envelope.answers,
-            envelope.usage,
-            self.name,
-            model,
-            request_id=envelope.request_id,
+        if not self._api_key or not self._api_key.isascii() or not self._api_key.isprintable() or " " in self._api_key:
+            raise ProviderError(
+                f"{self.label} request failed: API key must contain only printable ASCII without spaces."
+            )
+        response = await self._post(
+            self._base_url.rstrip("/") + SYSTEM_ONE_PATH,
+            {"Authorization": f"Bearer {self._api_key}", "Accept": "application/json"},
+            {"state": state, "model": model, "questions": questions},
+            timeout,
         )
-
-    @override
-    async def aclose(self) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-        if self._wrapper is not None:
-            # The SDK may have closed it already; a second close is a no-op.
-            await self._wrapper.aclose()
-
-
-def _body_text(body: object) -> str:
-    """The SDK hands over the error body parsed: text as text, JSON re-serialized, nothing as nothing."""
-    if body is None:
-        return ""
-    if isinstance(body, str):
-        return body
-    return stringify_compact(body)
+        if not response.is_success:
+            raise self._error(response)
+        envelope = parse_envelope(decode_body(response.content), self.label, response.headers)
+        # The reference reports the requested model (`provider.ts:122`).
+        return Evaluation(envelope.answers, envelope.usage, self.name, model, request_id=envelope.request_id)

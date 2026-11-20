@@ -3,7 +3,7 @@
 Without it, a toolset `logger.exception` in these short-lived processes reached stderr through
 logging's lastResort handler, which has no `RedactingFilter`: error text carrying a configured
 secret would print verbatim. `judge`, `gate`, and `completion-hook` configure logging in the
-`server.main` dispatch before the subcommand runs. `hook gate` configures it inside its own
+`__main__.main` dispatch before the subcommand runs. `hook gate` configures it inside its own
 `main`, after the usage and stdin fail-open gates, so a misconfigured environment still gets
 their one-line answers; the completion hook keeps its own stdout/stderr swap.
 """
@@ -16,9 +16,9 @@ from typing import Any
 
 import pytest
 
-from jev_judge_mcp.errors import RedactingFilter
+from jev_judge_mcp.__main__ import main
 from jev_judge_mcp.providers import ProviderConfigError
-from jev_judge_mcp.server import main
+from jev_judge_mcp.redaction.values import RedactingFilter
 
 _CONFIGURED = "subcommand-fixture-secret-1"
 
@@ -77,7 +77,7 @@ def test_hook_gate_configures_redacting_logging_before_the_provider_leg(
         raise ProviderConfigError("no credentials in this test")
 
     event = json.dumps({"tool_name": "Bash", "tool_input": {"command": "echo hi"}})
-    monkeypatch.setattr("jev_judge_mcp.hook.resolve_provider", fake_resolve_provider)
+    monkeypatch.setattr("jev_judge_mcp.hook.gate.resolve_provider", fake_resolve_provider)
     monkeypatch.setenv("JEV_MCP_HTTP_TOKEN", _CONFIGURED)  # a configured secret for the filter to hold
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook", "gate"])
     monkeypatch.setattr(sys, "stdin", io.StringIO(event))

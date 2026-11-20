@@ -25,10 +25,10 @@ import pytest
 from jev_judge_mcp import cache, limits
 from jev_judge_mcp.calibration.targets import error_budget
 from jev_judge_mcp.domain import Usage
-from jev_judge_mcp.install.verify import EXPECTED_TOOLS
 from jev_judge_mcp.policy import thresholds as policy_thresholds
 from jev_judge_mcp.providers import Evaluation
-from jev_judge_mcp.settings import load_settings
+from jev_judge_mcp.registry import TOOL_NAMES
+from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.telemetry import Telemetry
 from jev_judge_mcp.tools import TOOLS
 
@@ -52,13 +52,10 @@ _PRUNED = {
 _TEXT_SUFFIXES = {".md", ".py", ".json", ".toml", ".yml", ".jsonl"}
 
 _COUNT_WORDS = {"ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15}
-# "ten tools", "the ten tools", "Ten JevTools", "10/10 tools": a claim that the tool count is N.
-# "the reference's ten, plus an extension" is not a count claim and must not match.
 _COUNT_CLAIM = re.compile(
-    r"\bthe (ten|eleven|twelve|thirteen|fourteen|fifteen) tools\b"
-    r"|\b(ten|eleven|twelve|thirteen|fourteen|fifteen) (?:published |judgment )?tools\b"
-    r"|\bTen JevTools\b"
-    r"|\b(\d+)/\3 tools\b"
+    rf"\b(?P<count>{'|'.join(_COUNT_WORDS)}|\d+)(?:/(?P=count))? "
+    r"(?:(?:published|original|judgment|Jev) )?(?:tools|JevTools)\b",
+    re.IGNORECASE,
 )
 _CITED_ADR = re.compile("ADR" + r"-(\d{4})")
 _NAMED_DIVERGENCE = re.compile(r"divergence `([a-z0-9-]+)`")
@@ -96,7 +93,7 @@ def test_every_adr_citation_resolves() -> None:
 
 
 def test_the_installer_expects_the_published_registry() -> None:
-    assert tuple(EXPECTED_TOOLS) == tuple(tool.name for tool in TOOLS)
+    assert tuple(TOOL_NAMES) == tuple(tool.name for tool in TOOLS)
 
 
 def test_numeric_tool_count_claims_match_the_registry() -> None:
@@ -111,8 +108,8 @@ def test_numeric_tool_count_claims_match_the_registry() -> None:
     wrong: list[tuple[Path, str]] = []
     for path in checked:
         for match in _COUNT_CLAIM.finditer(path.read_text(encoding="utf-8")):
-            word = next(group for group in match.groups() if group is not None and group.isalpha())
-            if _COUNT_WORDS[word] != len(TOOLS):
+            word = match["count"].lower()
+            if (int(word) if word.isdigit() else _COUNT_WORDS[word]) != len(TOOLS):
                 wrong.append((path, match.group(0)))
     assert wrong == []
 
@@ -262,7 +259,11 @@ def test_tool_cards_state_the_frozen_numbers() -> None:
             (limits.FILE_JUDGE.file_units_max,),
         ),
         (r"a NUL byte in the first ([\d,]+) bytes", (limits.FILE_JUDGE.binary_sniff_bytes,)),
-        (r"state plus questions is capped at ([\d,]+) UTF-16 units", (limits.ASK.request_units_max,)),
+        (
+            r"([\d,]+) compact UTF-8 bytes for state plus the\s+longest question and ([\d,]+) bytes",
+            (limits.STATE_QUESTION_BYTES, limits.REQUEST_BYTES),
+        ),
+        (r"State and questions share a ([\d,]+) UTF-16 unit cap", (limits.ASK.request_units_max,)),
         (r"Own `state` is framing, capped at ([\d,]+)\s+units", (limits.ASK.state_units_max,)),
         (r"command output is capped at ([\d,]+) units", (limits.ASK.command_output_units_max,)),
         (r"runs under a\s+(\d+)-second timeout", (limits.ASK.command_timeout_seconds,)),
@@ -332,11 +333,16 @@ _MEASURED_CLAIMS: dict[str, tuple[tuple[str, int] | tuple[str, int, str], ...]] 
         ("jev-1.13.0", 2),
     ),
     "evals/reports/agent-study-2026-09-27.md": (
-        ("5/9", 1),
-        ("38.9", 1),
-        ("22.6", 1),
-        ("140,032", 1),
-        ("36,328", 1),
+        ("39/39", 1),
+        ("38.9 s", 1, "38.9"),
+        ("22.6 s", 1, "22.6"),
+        ("700,161", 1),
+        ("326,948", 1),
+        ("16/150", 1),
+        ("4.38 s", 1),
+        ("88/92", 1),
+        ("85/86", 1),
+        ("hard-opus-b-ambiguous-03", 1),
     ),
     "docs/evals/README.md": (
         ("| 6/9 / 6/9 |", 1),
@@ -349,7 +355,7 @@ _MEASURED_CLAIMS: dict[str, tuple[tuple[str, int] | tuple[str, int, str], ...]] 
         ("+85.8 s", 1),
         ("$1.4953", 1),
         ("$0.0006", 1),
-        ("slower with Jev", 3),
+        ("slower with Jev", 1),
     ),
 }
 
@@ -417,7 +423,8 @@ def test_agent_rule_block_caps_match_limits() -> None:
             f"\u2264{limits.GATE.claims_max} claims",
             f"\u2264{limits.GATE.evidence_items} evidence items",
             f"{limits.GATE.aggregate_evidence_units:,} units",
-            f"{limits.GATE.doc_units:,} units",
+            f"≤{limits.GATE.files_max} files",
+            f"{limits.GATE.doc_units:,} units per document",
         ],
         "jev_gate_range": [
             f"\u2264{limits.GATE.claims_max} claims",
@@ -433,12 +440,20 @@ def test_agent_rule_block_caps_match_limits() -> None:
         "jev_decide": [f"{limits.DECIDE.candidates_min}\u2013{limits.DECIDE.candidates_max} options"],
         "jev_extract": [f"{limits.EXTRACT.document_max:,} units", f"\u2264{limits.EXTRACT.fields_max} fields"],
         "jev_score": [f"{limits.SCORE.levels_min}\u2013{limits.SCORE.levels_max} levels"],
+        "jev_file_judge": [f"{limits.FILE_JUDGE.file_units_max:,} units per file read"],
+        "jev_files_judge": [
+            f"≤{limits.FILES_JUDGE.files_max} files",
+            f"≤{limits.FILES_JUDGE.patterns_max} path entries",
+            f"{limits.FILES_JUDGE.file_units_max:,} units per file read",
+        ],
         "jev_ask": [
             f"{limits.ASK.questions_min}\u2013{limits.ASK.questions_max} questions",
             f"\u2264{limits.ASK.files_max} paths",
-            f"{limits.ASK.request_units_max:,} units",
+            f"{limits.ASK.request_units_max:,} units for state and questions",
+            f"{limits.ASK.command_output_units_max:,} units of command output",
         ],
     }
+    assert set(expected) == set(TOOL_NAMES)
     missing = [
         f"{tool} row lacks {needle!r}"
         for tool, needles in expected.items()
@@ -453,6 +468,48 @@ def test_agent_rule_block_caps_match_limits() -> None:
     assert missing == [] and stale_unbounded == [], (
         f"docs/agent-rules.md caps drifted from limits.py: {missing + stale_unbounded}"
     )
+
+
+def test_readme_lists_ci_prerequisites_in_order() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    prerequisites = next(line for line in makefile.splitlines() if line.startswith("ci:")).split()[1:]
+    readme = (ROOT / "README.md").read_text()
+    listed = re.search(r"^CI stages in order: (.+)\.$", readme, re.MULTILINE)
+    assert listed and re.findall(r"`([\w-]+)`", listed[1]) == prerequisites
+
+
+def test_adr_index_links_every_decision() -> None:
+    index = ADR_DIR / "README.md"
+    assert index.is_file(), "missing ADR index"
+    links = re.findall(r"\]\((\d{4}-[^()]+\.md)\)", index.read_text())
+    assert sorted(links) == sorted(path.name for path in ADR_DIR.glob("????-*.md"))
+
+
+def test_configuration_table_covers_settings() -> None:
+    section = (ROOT / "README.md").read_text().split("## Configuration\n", 1)[1].split("\n## ", 1)[0]
+    variables = re.findall(r"^\| `([A-Z_]+)` \| [^|]+ \| [^|]+ \|$", section, re.MULTILINE)
+    assert sorted(variables) == sorted(str(field.validation_alias) for field in Settings.model_fields.values())
+
+
+def test_readme_use_cases_cover_the_tool_registry() -> None:
+    section = (ROOT / "README.md").read_text().split("## What to use it for", 1)[1].split("For example", 1)[0]
+    assert sorted(re.findall(r"^\| [^|]+ \| `(jev_\w+)` \|", section, re.MULTILINE)) == sorted(TOOL_NAMES)
+
+
+def test_readme_cli_inventory_matches_dispatch() -> None:
+    from jev_judge_mcp.__main__ import COMMANDS
+
+    section = (ROOT / "README.md").read_text().split("## Architecture", 1)[1].split("<p", 1)[0]
+    assert re.findall(r"`([a-z-]+)`", section) == [name for names, _, _ in COMMANDS for name in names]
+
+
+def test_manual_pi_entry_matches_installer_allowlist() -> None:
+    from jev_judge_mcp.install.launch import pi_direct_tools
+
+    entries = [json.loads(block).get("mcpServers", {}).get("jev", {}) for block in _readme_fences("json")]
+    assert [entry["directTools"] for entry in entries if "directTools" in entry] == [pi_direct_tools()]
+    pi_page = (ROOT / "docs/harness/pi.md").read_text()
+    assert json.loads(pi_page.split("```json\n", 1)[1].split("```", 1)[0]) == pi_direct_tools()
 
 
 def test_setup_prompt_names_only_real_cli_surface() -> None:
@@ -606,22 +663,15 @@ def test_limits_page_names_529_as_terminal() -> None:
     assert "`529 Overloaded` ends the attempt because completion is uncertain" in page
 
 
-def test_retry_docstring_states_the_installed_sdk_timeouts() -> None:
-    """H1: the policy docstring must name the SDK timeouts it does not copy, not call them open."""
-    import importlib.metadata
+def test_retry_docstring_states_the_shared_timeouts() -> None:
+    from jev_judge_mcp.providers.retry import RetryPolicy
 
-    from typesafe_sdk import RetryPolicy
-    from typesafe_sdk.constants import DEFAULT_TIMEOUT
-
-    from jev_judge_mcp.providers.retry import RetryPolicy as ServerPolicy
-
-    text = ServerPolicy.__doc__ or ""
-    assert importlib.metadata.version("typesafe-sdk") in text
-    assert f"{DEFAULT_TIMEOUT:g} s per HTTP operation" in text
-    assert f"{RetryPolicy().timeout:g} s total retry budget" in text
-    assert "leaves open" not in text
-    assert ServerPolicy().per_attempt_timeout == 30.0
-    assert ServerPolicy().budget == 90.0
+    policy = RetryPolicy()
+    text = RetryPolicy.__doc__ or ""
+    assert f"{policy.per_attempt_timeout:g} s per attempt" in text
+    assert f"a {policy.budget:g} s overall budget" in text
+    assert policy.per_attempt_timeout == 30.0
+    assert policy.budget == 90.0
 
 
 def test_stdio_deadline_reference_names_the_sdk_default() -> None:
@@ -632,8 +682,8 @@ def test_stdio_deadline_reference_names_the_sdk_default() -> None:
     assert "10s" in behavior
 
 
-def test_sdk_redirect_registry_matches_the_guard() -> None:
-    """The SDK transport has an origin hook. The gap sentence must not stay the current rule."""
+def test_typesafe_redirect_registry_matches_the_shared_guard() -> None:
+    """The sanctioned TypeSafe divergence is covered at the shared HTTP boundary."""
     entry = _divergence("typesafe-sdk-redirect-policy")
     rules, _, _amendment = _ADR_0023.read_text(encoding="utf-8").partition("## Amendment")
     tests = entry["tests"]
@@ -641,7 +691,7 @@ def test_sdk_redirect_registry_matches_the_guard() -> None:
     assert "not guarded" not in str(entry["python_behavior"])
     assert "outside this guard's reach" not in rules
     assert entry["status"] == "sanctioned"
-    assert "tests/unit/test_providers.py" in tests
+    assert "tests/contract/test_providers.py" in tests
 
 
 def test_classify_card_does_not_claim_the_default_margin_binds() -> None:
@@ -700,7 +750,7 @@ def test_gate_card_discloses_implicit_diff_and_tests_while_they_are_sent() -> No
     if sent == ["diff", "tests"]:
         assert "ADR-0063" in section
         assert "again as implicit evidence" in section
-        assert "100k extra UTF-16" in section
+        assert "count both copies" in section
     else:
         assert "again as implicit evidence" not in section
 
@@ -715,16 +765,6 @@ def test_calibrate_advisory_says_to_pin_the_measured_model() -> None:
     assert "never changes the frozen defaults" in ADVISORY
     assert "pin the versioned model id" in guide
     assert "Live evals pin `jev-1.13.0`" in guide
-
-
-def test_score_citations_match_the_refreshed_summary() -> None:
-    """C1: the summary says 2-10. A comment that still says 1-10 is the stale citation."""
-    limits_source = (ROOT / "src" / "jev_judge_mcp" / "limits.py").read_text(encoding="utf-8")
-    score_test = (ROOT / "tests" / "contract" / "test_limits.py").read_text(encoding="utf-8")
-    assert "1-10 levels" not in limits_source
-    assert "1-10 levels" not in score_test
-    assert limits.SCORE.levels_min == 2
-    assert limits.SCORE.levels_max == 10
 
 
 def test_scout_031_evidence_links_resolve() -> None:

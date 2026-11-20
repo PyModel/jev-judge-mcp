@@ -9,3 +9,7 @@ The PyPI name `jev-mcp` is already taken by an unrelated third-party project (0.
 
 - Migration docs swap the TypeScript reference server command for `uvx jev-mcp-python`.
 - Renaming after 1.0 would break every user's MCP config, so this is effectively permanent.
+
+## Amendment (2026-11-19): TypeSafe uses the shared HTTP transport
+
+ADR-0084 removes the `typesafe-sdk` dependency. TypeSafe is available in the base package.

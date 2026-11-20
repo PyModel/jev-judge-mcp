@@ -202,7 +202,7 @@ async def test_gate_defect_kind_question_cannot_clear_review(kind: str) -> None:
 async def test_string_gate_cites_the_implicit_diff_and_hunk_changes(
     patch: str, selected: str, target: dict[str, object]
 ) -> None:
-    args = {**ARGS, "diff": patch, "evidence": [{"id": "diff", "text": "Caller item."}]}
+    args = {**ARGS, "diff": patch, "evidence": [{"id": "caller", "text": "Caller item."}]}
     answers = {
         **REVIEW,
         "claim_0": choice("verified", *VERDICTS),
@@ -212,7 +212,7 @@ async def test_string_gate_cites_the_implicit_diff_and_hunk_changes(
     body = (await call_tool("jev_gate", args, answers)).payload
     blocker = next((row for row in body["blockers"] if row["code"] == "wrong_result"), None)
     assert blocker is not None, body["blockers"]
-    assert blocker["evidence_line"] == {"source": "diff_1", **target}
+    assert blocker["evidence_line"] == {"source": "diff", **target}
 
 
 async def test_protocol_blocker_has_one_shape_and_only_real_refusal_sets_flag() -> None:

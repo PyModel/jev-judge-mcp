@@ -1,5 +1,6 @@
 """Installer fixtures use a throwaway home. They never read or write the real user config."""
 
+import errno
 import json
 import os
 import signal
@@ -10,7 +11,7 @@ import tomllib
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import replace
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError, PathDistribution, version
 from pathlib import Path
 from shutil import which
 
@@ -32,6 +33,8 @@ from jev_judge_mcp.install.launch import (
     PACKAGE,
     Launch,
     checkout_launch,
+    claude_code_entry,
+    claude_desktop_entry,
     find_package_root,
     local_install_warning,
     pi_direct_tools,
@@ -42,19 +45,21 @@ from jev_judge_mcp.install.launch import (
 )
 from jev_judge_mcp.install.layout import Layout
 from jev_judge_mcp.install.redact import redact_text
-from jev_judge_mcp.install.verify import EXPECTED_TOOLS, VerifyError, verify_command
-from jev_judge_mcp.server import installer_requested
+from jev_judge_mcp.install.verify import VerifyError, verify_command
+from jev_judge_mcp.registry import TOOL_NAMES
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS
 from tests.support.secrets import secret_env
 
 UVX = "/opt/uv/uvx"
-SPEC = "/work/jev-mcp[typesafe]"
-PIN = f"{PACKAGE}[typesafe]=={version(PACKAGE)}"
+SPEC = "/work/jev-mcp"
+PIN = f"{PACKAGE}=={version(PACKAGE)}"
 LAUNCH = Launch(uvx=UVX, spec=SPEC)
 PYPI_LAUNCH = pypi_launch(UVX)
 MARKER = "synthetic-secret-value"
 TARGETS = ("claude-code", "claude-desktop", "codex", "cursor", "opencode", "pi", "omp", "pythinker")
+DEEP_JSON = b"[" * 10_000 + b"0" + b"]" * 10_000
+LATIN_1_JSON_STRING = b'"caf\xe9"'
 
 
 def layout(home: Path) -> Layout:
@@ -81,7 +86,6 @@ def execute(
     dry_run: bool = False,
     remove: bool = False,
     force: bool = False,
-    before_write: Callable[[Path], None] | None = None,
     launch: Launch = LAUNCH,
     verify: Callable[[list[str]], None] | None = None,
 ) -> tuple[int, str]:
@@ -98,7 +102,6 @@ def execute(
             dry_run=dry_run,
             remove=remove,
             force=force,
-            before_write=before_write,
             verify=verify,
         )
     )
@@ -117,19 +120,12 @@ def assert_secret_absent(path: Path) -> None:
         raise AssertionError("a state file contains a secret")
 
 
-def test_no_arguments_stay_on_the_stdio_server() -> None:
-    assert installer_requested(["jev-judge-mcp"]) is False
-    assert installer_requested(["jev-judge-mcp", "install"]) is True
-    assert installer_requested(["jev-judge-mcp", "--help"]) is False
-
-
 def test_launch_uses_the_local_path_and_the_distribution_name() -> None:
     launch = checkout_launch(UVX)
     args = launch.args()
     assert args[-1] == PACKAGE
     assert args[0] == "--python"  # the installed metadata declares Requires-Python (ADR-0053)
-    assert launch.spec.endswith("[typesafe]")
-    assert Path(launch.spec.removesuffix("[typesafe]")).is_absolute()
+    assert Path(launch.spec).is_absolute()
     assert not any(part == "jev-mcp" or part.startswith("jev-mcp==") or part.startswith("jev-mcp[") for part in args)
 
 
@@ -215,21 +211,20 @@ def test_find_package_root_without_a_checkout_names_the_flag() -> None:
 
 def test_specs_accept_exactly_the_two_supported_shapes() -> None:
     assert supported_spec(PIN)
-    assert supported_spec("jev-judge-mcp[typesafe]==0.1.1rc1")
-    assert supported_spec("jev-judge-mcp[typesafe]==1!2.3rc1.post2.dev3+local.4")
+    assert supported_spec("jev-judge-mcp==0.1.1rc1")
+    assert supported_spec("jev-judge-mcp==1!2.3rc1.post2.dev3+local.4")
     assert supported_spec(SPEC)
-    assert supported_spec("/home/me/jev-judge-mcp[typesafe]")
+    assert supported_spec("/home/me/jev-judge-mcp")
     for wrong in (
         PACKAGE,
-        f"{PACKAGE}[typesafe]",
-        "jev-mcp[typesafe]",
-        f"{PACKAGE}==0.1.1",
-        f"{PACKAGE}[typesafe]==",
-        f"{PACKAGE}[typesafe]==0.1.1 more",
-        f"{PACKAGE}[typesafe]==0.1.*",
-        f"{PACKAGE}[typesafe]==1,!=2",
-        f"{PACKAGE}[typesafe]==latest",
-        "work/jev-mcp[typesafe]",
+        "jev-mcp",
+        f"{PACKAGE}[typesafe]==0.1.1",
+        f"{PACKAGE}==",
+        f"{PACKAGE}==0.1.1 more",
+        f"{PACKAGE}==0.1.*",
+        f"{PACKAGE}==1,!=2",
+        f"{PACKAGE}==latest",
+        "work/jev-mcp",
         "",
     ):
         assert not supported_spec(wrong), wrong
@@ -237,7 +232,7 @@ def test_specs_accept_exactly_the_two_supported_shapes() -> None:
 
 def test_engine_refuses_an_unsupported_spec(tmp_path: Path) -> None:
     with pytest.raises(InstallError, match="unsupported launch spec"):
-        execute(tmp_path, agents=("claude-code",), launch=Launch(uvx=UVX, spec="jev-mcp[typesafe]"))
+        execute(tmp_path, agents=("claude-code",), launch=Launch(uvx=UVX, spec="jev-mcp"))
 
 
 # --- ADR-0051 launch identity, through the command line. Every test uses a throwaway HOME. ---
@@ -340,7 +335,7 @@ def test_checkout_flag_renders_the_checkout_spec(
     code = install_cli.main(["--dry-run", "-a", "claude-code", "--from-checkout"])
     assert code == 0
     out = capsys.readouterr().out
-    assert f"{checkout}[typesafe]" in out
+    assert f"{checkout}" in out
     assert f"=={version(PACKAGE)}" not in out
 
 
@@ -370,7 +365,7 @@ def test_install_from_a_local_checkout_warns_about_the_pypi_pin(
     assert code == 0, out
     assert "local checkout" in out
     assert "does not include your local changes" in out
-    assert f"{PACKAGE}[typesafe]=={version(PACKAGE)}" in out  # names the pinned version
+    assert f"{PACKAGE}=={version(PACKAGE)}" in out  # names the pinned version
     assert "--from-checkout" in out
     assert PIN in out  # the plan still shows the default pin
 
@@ -385,6 +380,27 @@ def test_install_from_a_pypi_wheel_prints_no_local_checkout_note(
     assert "local checkout" not in out
 
 
+@pytest.mark.parametrize("invalid_value", [DEEP_JSON, LATIN_1_JSON_STRING, b"NaN"], ids=["depth", "latin-1", "nan"])
+def test_install_ignores_invalid_direct_url_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], invalid_value: bytes
+) -> None:
+    _fake_home(monkeypatch, tmp_path)
+    metadata = tmp_path / "jev_judge_mcp.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text("Requires-Python: >=3.12\n", encoding="utf-8")
+    (metadata / "direct_url.json").write_bytes(b'{"url":"file:///checkout","extra":' + invalid_value + b"}")
+
+    def distribution(_name: str) -> PathDistribution:
+        return PathDistribution(metadata)
+
+    monkeypatch.setattr(launch_module, "distribution", distribution)
+    code = install_cli.main(["--dry-run", "-a", "claude-code"])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert PIN in out
+    assert "local checkout" not in out
+
+
 def test_from_checkout_prints_no_local_checkout_note(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -395,7 +411,7 @@ def test_from_checkout_prints_no_local_checkout_note(
     out = capsys.readouterr().out
     assert code == 0, out
     assert "local checkout" not in out
-    assert f"{find_package_root()}[typesafe]" in out
+    assert f"{find_package_root()}" in out
 
 
 def test_from_checkout_requires_uvx_that_honors_cache_keys(
@@ -418,7 +434,7 @@ def test_from_checkout_requires_uvx_that_honors_cache_keys(
     code = install_cli.main(["--from-checkout", "-y", "--dry-run", "-a", "claude-code"])
     out = capsys.readouterr().out
     assert code == 0, out
-    assert f"{find_package_root()}[typesafe]" in out
+    assert f"{find_package_root()}" in out
 
 
 @pytest.mark.usefixtures("wheel_layout")
@@ -633,23 +649,40 @@ def test_unknown_shapes_are_left_untouched(tmp_path: Path, package: str) -> None
         assert "left unchanged" in text
 
 
-def test_malformed_json_is_left_untouched(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("body", "diagnostic"),
+    [
+        (b"{", "left unchanged"),
+        (b'{"extra":' + DEEP_JSON + b"}", "JSON nesting is too deep"),
+        (b'{"extra":' + LATIN_1_JSON_STRING + b"}", "config is not valid UTF-8"),
+        (b'{"mcpServers":{"other":{"setting":NaN}}}', "NaN is not JSON"),
+        (b'{"mcpServers":{"other":{"setting":Infinity}}}', "Infinity is not JSON"),
+        (b'{"mcpServers":{"other":{"setting":-Infinity}}}', "-Infinity is not JSON"),
+    ],
+    ids=["syntax", "depth", "latin-1", "nan", "positive-infinity", "negative-infinity"],
+)
+def test_malformed_json_is_left_untouched(tmp_path: Path, body: bytes, diagnostic: str) -> None:
     path = tmp_path / ".claude.json"
-    path.write_text("{", encoding="utf-8")
+    path.write_bytes(body)
     before = path.read_bytes()
     code, text = execute(tmp_path, agents=("claude-code",))
     assert code == 1
     assert path.read_bytes() == before
     assert "left unchanged" in text
+    assert diagnostic in text
 
 
-def test_change_during_install_writes_nothing(tmp_path: Path) -> None:
+def test_change_during_install_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / ".claude.json"
+    link = os.link
 
-    def disturb(target: Path) -> None:
-        target.write_text("{}\n", encoding="utf-8")
+    def concurrent_creation(source: Path, destination: Path) -> None:
+        if destination == path:
+            path.write_text("{}\n", encoding="utf-8")
+        link(source, destination)
 
-    code, text = execute(tmp_path, agents=("claude-code",), before_write=disturb)
+    monkeypatch.setattr(os, "link", concurrent_creation)
+    code, text = execute(tmp_path, agents=("claude-code",))
     assert code == 1
     assert "changed during install, re-run" in text
     assert "jev" not in path.read_text(encoding="utf-8")
@@ -1021,7 +1054,7 @@ def test_nothing_detected_writes_nothing(tmp_path: Path) -> None:
 @pytest.mark.parametrize("descendant", [False, True], ids=["server-only", "server-with-helper"])
 def test_verify_handshake(tmp_path: Path, descendant: bool) -> None:
     script = tmp_path / "fake_server.py"
-    names = ", ".join(f'"{name}"' for name in EXPECTED_TOOLS)
+    names = ", ".join(f'"{name}"' for name in TOOL_NAMES)
     helper_pid = tmp_path / "helper.pid"
     pulse = tmp_path / "pulse"
     helper = "import pathlib,sys,time; p=pathlib.Path(sys.argv[1]); exec('while True:\\n p.touch(); time.sleep(0.01)')"
@@ -1084,15 +1117,24 @@ def test_verify_handshake(tmp_path: Path, descendant: bool) -> None:
         {"id": 1, "method": "server/request"},
         {"id": 1, "jsonrpc": "1.0"},
         {"id": 1, "error": None},
+        DEEP_JSON,
+        LATIN_1_JSON_STRING,
+        b"NaN",
     ],
-    ids=["bool-id", "float-id", "request", "version", "two-outcomes"],
+    ids=["bool-id", "float-id", "request", "version", "two-outcomes", "depth", "latin-1", "nan"],
 )
-def test_verify_ignores_frames_that_are_not_responses(bad_reply: dict[str, object]) -> None:
-    forged = {"jsonrpc": "2.0", "result": {"serverInfo": {"name": "forged"}}, **bad_reply}
+def test_verify_ignores_frames_that_are_not_responses(bad_reply: dict[str, object] | bytes) -> None:
+    forged: dict[str, object] = {"jsonrpc": "2.0", "result": {"serverInfo": {"name": "forged"}}}
+    if isinstance(bad_reply, bytes):
+        forged_line = json.dumps({**forged, "id": 1}).encode()[:-1] + b',"extra":' + bad_reply + b"}"
+    else:
+        forged_line = json.dumps({**forged, **bad_reply}).encode()
+    forged_line += b"\n"
     good = {"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "jev-mcp"}}}
-    tools = {"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": name} for name in EXPECTED_TOOLS]}}
+    tools = {"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": name} for name in TOOL_NAMES]}}
     child = (
-        f"import sys; sys.stdin.readline(); print({json.dumps(forged)!r}); "
+        f"import sys; sys.stdin.readline(); sys.stdout.buffer.write({forged_line!r}); "
+        "sys.stdout.buffer.flush(); "
         f"print({json.dumps(good)!r}); print({json.dumps(tools)!r}, flush=True); sys.stdin.read()"
     )
     verify_command([sys.executable, "-c", child], timeout=5)
@@ -1124,7 +1166,7 @@ def test_verify_drains_a_flooding_stderr_before_the_child_answers(tmp_path: Path
     concurrent drain the child blocks on write and this test dies at the timeout instead.
     """
     script = tmp_path / "flooding_server.py"
-    names = ", ".join(f'"{name}"' for name in EXPECTED_TOOLS)
+    names = ", ".join(f'"{name}"' for name in TOOL_NAMES)
     script.write_text(
         "import json,sys\n"
         "sys.stderr.write(('stderr noise ' * 40 + '\\n') * 2000)\n"
@@ -1151,7 +1193,7 @@ def test_verify_reads_a_reply_that_arrived_with_an_earlier_line(tmp_path: Path) 
     """Both replies in one chunk: `readline` buffers the second past the first, where a wait on
     the pipe would never see it. The line reader hands it over instead of timing out."""
     script = tmp_path / "eager_server.py"
-    names = ", ".join(f'"{name}"' for name in EXPECTED_TOOLS)
+    names = ", ".join(f'"{name}"' for name in TOOL_NAMES)
     script.write_text(
         "import json,sys\n"
         "init = json.loads(sys.stdin.readline())\n"
@@ -1192,13 +1234,24 @@ def test_verify_failure_text_is_redacted_like_every_summary_line(tmp_path: Path)
     assert "[redacted]" in text
 
 
+def test_installer_and_doctor_can_read_names_without_loading_handlers() -> None:
+    probe = "import sys; import jev_judge_mcp.install.launch, jev_judge_mcp.install.verify, jev_judge_mcp.doctor; "
+    result = subprocess.run(
+        [sys.executable, "-c", probe + "print('\\n'.join(sys.modules))"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert {tool.handler.__module__ for tool in TOOLS}.isdisjoint(result.stdout.splitlines())
+
+
 def test_reference_tool_list_matches_the_published_names() -> None:
     """The install handshake expects every published tool: the reference ten plus the extension (ADR-0048)."""
     document = json.loads(Path("docs/reference/ts-0.5.0-tools-list.json").read_text(encoding="utf-8"))
     reference_names = tuple(tool["name"] for tool in document["tools"])
     published = tuple(tool.name for tool in TOOLS)
-    assert EXPECTED_TOOLS == published
-    assert EXPECTED_TOOLS[: len(reference_names)] == reference_names
+    assert TOOL_NAMES == published
+    assert TOOL_NAMES[: len(reference_names)] == reference_names
 
 
 def test_remove_drops_both_spec_shapes(tmp_path: Path) -> None:
@@ -1289,12 +1342,25 @@ def test_all_targets_share_one_verification(tmp_path: Path, fails: bool) -> None
 
 
 @pytest.mark.parametrize("target", ["claude-code", "claude-desktop"])
-def test_reinstall_migrates_a_checkout_entry_to_the_pinned_spec(tmp_path: Path, target: str) -> None:
-    """The ADR-0051 migration: one plain re-run rewrites entries this installer owns."""
-    code, _ = execute(tmp_path, agents=(target,), desktop_key=MARKER, launch=LAUNCH)
-    assert code == 0
+@pytest.mark.parametrize(
+    "old_spec",
+    [SPEC, f"{SPEC}[typesafe]", f"{PACKAGE}[typesafe]==0.1.0"],
+    ids=["checkout", "checkout-extra", "pinned-extra"],
+)
+def test_reinstall_migrates_a_checkout_entry_to_the_pinned_spec(tmp_path: Path, target: str, old_spec: str) -> None:
+    """Reinstall updates every previously owned launch shape and preserves the desktop key."""
     path = layout(tmp_path).target_path(target)
-    assert SPEC in path.read_text(encoding="utf-8")
+    if old_spec == SPEC:
+        code, report = execute(tmp_path, agents=(target,), desktop_key=MARKER, launch=LAUNCH)
+        assert code == 0, report
+    else:
+        previous = Launch(uvx=UVX, spec=old_spec)
+        old = claude_desktop_entry(previous, MARKER) if target == "claude-desktop" else claude_code_entry(previous)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"mcpServers": {"jev": old}}), encoding="utf-8")
+        _record_entry(tmp_path, target, path, old)
+    assert old_spec in path.read_text(encoding="utf-8")
+
     code, text = execute(tmp_path, agents=(target,), launch=PYPI_LAUNCH)
     assert code == 0, text
     entry = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["jev"]
@@ -1500,23 +1566,43 @@ def test_scout_003_interrupted_state_commit_recovers(
     assert _state_targets(tmp_path) == {}
 
 
-def test_scout_003_overlapping_writers(tmp_path: Path) -> None:
-    def overlapping(_: Path) -> None:
-        try:
-            code, _text = execute(tmp_path, agents=("cursor",))
-        except InstallError as error:
-            assert "busy" in str(error)
-            return
-        assert code == 0
+def test_scout_003_overlapping_writers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = layout(tmp_path).claude_code_file()
+    link = os.link
+    attempted = False
 
-    assert execute(tmp_path, agents=("claude-code",), before_write=overlapping)[0] == 0
+    def publish(source: Path, destination: Path) -> None:
+        nonlocal attempted
+        if destination == path:
+            attempted = True
+            try:
+                code, _text = execute(tmp_path, agents=("cursor",))
+            except InstallError as error:
+                assert "busy" in str(error)
+            else:
+                assert code == 0
+        link(source, destination)
+
+    monkeypatch.setattr(os, "link", publish)
+    assert execute(tmp_path, agents=("claude-code",))[0] == 0
+    assert attempted
     expected = {"claude-code"}
     if layout(tmp_path).cursor_file().exists():
         expected.add("cursor")
     assert _state_targets(tmp_path).keys() == expected
 
 
-@pytest.mark.parametrize("broken", [b"{", b"{}", b'{"targets":{"cursor":{}}}', bytes([255])])
+@pytest.mark.parametrize(
+    "broken",
+    [
+        b"{",
+        b"{}",
+        b'{"targets":{"cursor":{}}}',
+        b'{"targets":{},"extra":' + LATIN_1_JSON_STRING + b"}",
+        b'{"targets":{},"extra":NaN}',
+    ],
+    ids=["syntax", "root-shape", "record-shape", "latin-1", "nan"],
+)
 def test_scout_003_invalid_state_blocks_writes(tmp_path: Path, broken: bytes) -> None:
     state = layout(tmp_path).state_file()
     state.parent.mkdir(parents=True, mode=0o700)
@@ -1527,15 +1613,10 @@ def test_scout_003_invalid_state_blocks_writes(tmp_path: Path, broken: bytes) ->
     assert not layout(tmp_path).cursor_file().exists()
 
 
-def test_deeply_nested_state_fails_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_deeply_nested_state_fails_cleanly(tmp_path: Path) -> None:
     state = layout(tmp_path).state_file()
     state.parent.mkdir(parents=True, mode=0o700)
-    state.write_text('{"targets":{}}')
-
-    def reject_nesting(*_args: object, **_kwargs: object) -> object:
-        raise RecursionError("JSON nesting limit")
-
-    monkeypatch.setattr(json, "loads", reject_nesting)
+    state.write_bytes(b'{"targets":{},"extra":' + DEEP_JSON + b"}")
     with pytest.raises(InstallError, match="state"):
         execute(tmp_path, agents=("cursor",))
     assert not layout(tmp_path).cursor_file().exists()
@@ -1598,8 +1679,8 @@ def test_scout_026_selection_order(tmp_path: Path, mode: str) -> None:
 
 @pytest.mark.parametrize("output", ["x" * 64, "{}\n" * 6])
 def test_scout_020_stdout_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, output: str) -> None:
-    monkeypatch.setattr(verify_module, "STDOUT_LINE_BYTES", 32, raising=False)
-    monkeypatch.setattr(verify_module, "STDOUT_MESSAGES", 4, raising=False)
+    monkeypatch.setattr(verify_module, "STDOUT_LINE_BYTES", 32)
+    monkeypatch.setattr(verify_module, "STDOUT_MESSAGES", 4)
     script = tmp_path / "local.py"
     script.write_text("import sys\nsys.stdin.readline()\nsys.stdout.write(" + repr(output) + ")\nsys.stdout.flush()\n")
     with pytest.raises(VerifyError, match="limit") as result:
@@ -1920,13 +2001,15 @@ def test_recovery_cleans_staging_without_touching_other_ownership(
     assert _state_targets(tmp_path) == {"cursor": records["cursor"]}
 
 
-def test_backup_retention_applies_only_after_a_successful_write(tmp_path: Path) -> None:
+def test_backup_retention_applies_only_after_a_successful_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     paths = layout(tmp_path)
     for target in ("cursor", "claude-code"):
         assert execute(tmp_path, agents=(target,))[0] == 0
         assert execute(tmp_path, agents=(target,), launch=PYPI_LAUNCH)[0] == 0
     for attempt in range(7):
-        launch = Launch(uvx=UVX, spec=f"jev-judge-mcp[typesafe]==1.{attempt}")
+        launch = Launch(uvx=UVX, spec=f"jev-judge-mcp==1.{attempt}")
         result = run(
             Request(
                 layout=paths, launch=launch, agents=("claude-code",), stamp=f"20990101T00000{attempt}Z", assume_yes=True
@@ -1945,26 +2028,35 @@ def test_backup_retention_applies_only_after_a_successful_write(tmp_path: Path) 
     config = paths.claude_code_file()
     previous = config.read_bytes()
 
-    def fail(_path: Path) -> None:
-        raise OSError("interrupted before publishing")
+    def fail(_staged: Path, _destination: Path) -> None:
+        raise OSError(errno.EIO, "interrupted before publishing")
 
-    code, text = execute(tmp_path, agents=("claude-code",), launch=LAUNCH, before_write=fail)
+    monkeypatch.setattr(install_fs, "_exchange_files", fail)
+    code, text = execute(tmp_path, agents=("claude-code",), launch=LAUNCH)
     assert code == 1, text
     assert config.read_bytes() == previous
     assert all(path.is_file() for path in retained)
     assert len(list(backups.glob("*/claude-code.json"))) == len(retained) + 1
 
 
-@pytest.mark.parametrize("bom", [True, False], ids=["bom", "oversize"])
-def test_pi_adapter_settings_use_a_bounded_bom_tolerant_read(tmp_path: Path, bom: bool) -> None:
+@pytest.mark.parametrize("case", ["bom", "oversize", "depth", "latin-1", "nan"])
+def test_pi_adapter_settings_use_a_bounded_bom_tolerant_read(tmp_path: Path, case: str) -> None:
     paths = layout(tmp_path)
     _pi_adapter(tmp_path, "npm:pi-mcp-adapter")
     original = paths.pi_settings().read_bytes()
-    data = b"\xef\xbb\xbf" + original if bom else original + b" " * (16 * 1024 * 1024)
+    if case == "bom":
+        data = b"\xef\xbb\xbf" + original
+    elif case == "oversize":
+        data = original + b" " * (16 * 1024 * 1024)
+    else:
+        extra = {"depth": DEEP_JSON, "latin-1": LATIN_1_JSON_STRING, "nan": b"NaN"}[case]
+        data = original.rstrip()[:-1] + b',"extra":' + extra + b"}"
     paths.pi_settings().write_bytes(data)
     code, text = execute(tmp_path, agents=("pi",))
-    assert code == (0 if bom else 1), text
-    assert paths.pi_file().exists() is bom
+    assert code == (0 if case == "bom" else 1), text
+    assert paths.pi_file().exists() is (case == "bom")
+    if case != "bom":
+        assert "pi install npm:pi-mcp-adapter" in text
 
 
 def test_missing_package_metadata_does_not_write_a_fake_installer_version(

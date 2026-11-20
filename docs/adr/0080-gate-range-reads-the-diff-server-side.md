@@ -21,7 +21,7 @@ the last extension, with its own pinning tests, and nothing in a frozen tool cha
   thresholds, and the fail-closed paths are jev_gate's. The result names `jev_gate_range` in
   its `tool` field and includes `skipped` when the reader withholds part of the range.
 - **One boundary reads git.** The MCP tool and the CLI call `gate_range.read_range`.
-  It uses `git_diff.py` to find the repository, pin the endpoints, read the diff and split its
+  It uses `git.py` to find the repository, pin the endpoints, read the diff and split its
   file headers. If the headers cannot be split, both callers refuse with `invalid_arguments`
   before sending any patch to the provider.
 - **Every git call is fixed argv, `git -C <dir>`, no shell, and bounded.** `GIT_TIMEOUT_SECONDS`
@@ -101,9 +101,22 @@ the last extension, with its own pinning tests, and nothing in a frozen tool cha
 ## Amendment (2026-10-19): git refusals name the server's working directory
 
 The repository is the one containing the server's working directory, and the harness, not the
-caller, picks that directory. An entry launched with `uv run --directory <checkout>` therefore
-reads the checkout from every project, and the caller saw only `refusing that git range`. The
+caller, picks that directory. An entry [launched in the checkout](../harness/hooks.md#working-directory) therefore
+reads that checkout from every project, and the caller saw only `refusing that git range`. The
 tool's git refusals (`invalid_arguments`) now end with `(server working directory: <path>)`, so
 the caller can tell a wrong range from a server started outside its project. The CLI omits
 that suffix because it runs in the operator's own shell.
 The path names the local process's directory and reaches only the client, never the provider.
+
+## Amendment (2026-11-19): canonical worktree diff and one Git runner
+
+Range reads, build identity and ask use the same bounded Git runner. It selects the repository
+via `-C`, drops all inherited `GIT_*` variables, disables paging, fsmonitor, hooks and replacement
+objects, and disables lazy fetch and transport protocols. Ask retains its own configuration and
+filter restrictions. The canonical patch pins three lines of context and zero inter-hunk context,
+disables renames, external diff and textconv, and uses fixed prefixes. The header parser accepts
+only the symmetric form those flags produce.
+
+A single revision compares to the worktree and includes staged and unstaged tracked changes.
+`jev_gate_range` holds non-ignored untracked paths for local review. Use `git add -N <path>` and
+recheck. Git binary markers, including markers produced by `-diff` attributes, also hold a file.

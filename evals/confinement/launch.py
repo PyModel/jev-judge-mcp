@@ -54,6 +54,7 @@ from evals.agent import (
 from evals.agent import (
     copy_regular_nofollow as copy_regular_nofollow,
 )
+from evals.confinement.receipts import MAX_RECEIPT_BYTES, RECEIPT_FILE
 from evals.spend import mark_agent_started
 
 BROKER_IMAGE = "python@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f"
@@ -73,6 +74,7 @@ CONTAINER_CODE = "/code"
 CONTAINER_GRANTS = "/grants"
 CONTAINER_SECRETS = "/secrets"
 CONTAINER_SOCKETS = "/sockets"
+CONTAINER_RECEIPTS = "/receipts.jsonl"
 CONTAINER_SOCKET = f"{CONTAINER_SOCKETS}/broker.sock"
 AGENT_SOCKET_MOUNT = "/broker/broker.sock"
 AGENT_GRANT_MOUNT = "/run/capability.json"
@@ -84,7 +86,7 @@ AGENT_CONFIG = f"{AGENT_SCRATCH}/agent-cfg/mcp.json"
 CONTAINER_ADAPTER = "/usr/local/lib/node_modules/pi-mcp-adapter/index.ts"
 """The adapter ships inside the image (F2), so the confined argv names this fixed path."""
 
-MODULES = ("protocol.py", "broker.py", "shim.py")
+MODULES = ("protocol.py", "broker.py", "shim.py", "receipts.py")
 """The stdlib-only confinement modules copied into both containers at run time."""
 
 CLOCK = time.time
@@ -291,6 +293,7 @@ def broker_argv(
     config_path: Path,
     code_dir: Path,
     credential_files: Mapping[str, Path],
+    receipt_file: Path | None = None,
 ) -> list[str]:
     """`docker run -d` for the broker sidecar. Credential files mount read-only, here only."""
     argv = [
@@ -319,6 +322,8 @@ def broker_argv(
     ]
     for upstream in spec.upstreams:
         argv += ["-v", f"{credential_files[upstream.name]}:{CONTAINER_SECRETS}/{upstream.name}.key:ro"]
+    if receipt_file is not None:
+        argv += ["-v", f"{receipt_file}:{CONTAINER_RECEIPTS}"]
     argv += [spec.broker_image, "python3", f"{CONTAINER_CODE}/broker.py", "/config.json"]
     return argv
 
@@ -618,6 +623,21 @@ def credential_files(spec: ConfinementSpec) -> dict[str, Path]:
     return {upstream.name: Path(upstream.credential_file) for upstream in spec.upstreams}
 
 
+def _archive_receipts(source: Path, run_dir: Path, broker_name: str) -> str | None:
+    issue = None
+    try:
+        stopped = docker_run(["docker", "stop", "-t", "2", broker_name], check=False, timeout=10)
+        if stopped.returncode:
+            issue = "broker receipts could not be finalized"
+    except (OSError, subprocess.TimeoutExpired):
+        issue = "broker receipts could not be finalized"
+    try:
+        copy_regular_nofollow(source, run_dir / RECEIPT_FILE, limit=MAX_RECEIPT_BYTES, owner_uid=os.getuid())
+    except OSError:
+        return "broker receipts unreadable"
+    return issue
+
+
 @contextmanager
 def run_confined(
     command: AgentCommand,
@@ -676,12 +696,17 @@ def run_confined(
         credentials = credential_files(spec)
         mounts = {upstream.name: f"{CONTAINER_SECRETS}/{upstream.name}.key" for upstream in spec.upstreams}
         config_path = root / "broker-config.json"
-        config_path.write_text(
-            json.dumps(
-                broker_config(spec.upstreams, secret_mounts=mounts, max_life_s=spec.timeout_s + BROKER_LIFE_MARGIN_S)
-            ),
-            encoding="utf-8",
+        config_data = broker_config(
+            spec.upstreams, secret_mounts=mounts, max_life_s=spec.timeout_s + BROKER_LIFE_MARGIN_S
         )
+        receipt_file = None
+        if "typesafe" in mounts:
+            receipt_file = root / RECEIPT_FILE
+            receipt_file.touch()
+            # The host parent is private. The sidecar user needs append access to the single bind mount.
+            receipt_file.chmod(0o622)
+            config_data["receipts_path"] = CONTAINER_RECEIPTS
+        config_path.write_text(json.dumps(config_data), encoding="utf-8")
         capability = mint_capability(grants, spec.timeout_s + CAPABILITY_MARGIN_S)
         resources.enter_context(_cleanup(lambda: secret_scrub(run_dir, capability.token)))
         (scratch / "entrypoint.sh").write_text(
@@ -703,6 +728,7 @@ def run_confined(
                 config_path=config_path,
                 code_dir=code,
                 credential_files=credentials,
+                receipt_file=receipt_file,
             )
         )
         wait_for_broker(broker_name)
@@ -712,12 +738,18 @@ def run_confined(
         box = container_boundary(dict(spec.env))
         mark_agent_started(run_dir)
         started = time.perf_counter()
-        stdout, stderr, returncode = capture_output(
-            argv, cwd=workdir, env=docker_env(), timeout_s=command.timeout_s, cap=STDOUT_CAP_BYTES
-        )
-        wall = time.perf_counter() - started
-        _remove_resource(["docker", "rm", "-f", agent_name])
-        copy_relay_logs(scratch, run_dir)
+        receipt_issue = None
+        try:
+            with _cleanup(lambda: _remove_resource(["docker", "rm", "-f", agent_name])):
+                stdout, stderr, returncode = capture_output(
+                    argv, cwd=workdir, env=docker_env(), timeout_s=command.timeout_s, cap=STDOUT_CAP_BYTES
+                )
+                wall = time.perf_counter() - started
+        finally:
+            capability.grant_path.unlink(missing_ok=True)
+            if receipt_file is not None:
+                receipt_issue = _archive_receipts(receipt_file, run_dir, broker_name)
+        relay_issue = copy_relay_logs(scratch, run_dir, owner_uid=os.getuid())
         raw_hits = write_run_logs(run_dir, stdout, stderr, secrets=secrets)
         trace = (parse or stream.parse)(stdout.splitlines())
         escape = escape_scan(stdout, box)
@@ -736,6 +768,8 @@ def run_confined(
             status=run_status(returncode, trace, command.timeout_s),
             escape=escape or None,
             exploration=exploration_paths(stdout, box),
+            relay_issue=relay_issue,
+            receipt_issue=receipt_issue,
         )
 
 
@@ -862,7 +896,7 @@ if status >= 400:
     raise SystemExit(1)
 """
 
-GRADE_CODE = ("__init__.py", "grade.py", "tasks.py")
+GRADE_CODE = ("__init__.py", "grade.py", "grade_runner.py", "tasks.py")
 """The grading slice of evals.ab, copied read-only into the grading container with the fixture."""
 
 
@@ -896,6 +930,10 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 sys.path.insert(0, "/code")
 from evals.ab import tasks
 from evals.ab.grade import grade, expected_ids, hardened_git
+from evals.ab.grade_runner import ISOLATED_GRADER, protect_parent
+
+protect_parent()
+os.environ[ISOLATED_GRADER] = "1"
 
 mode, argument = sys.argv[1], sys.argv[2]
 if mode == "reference":

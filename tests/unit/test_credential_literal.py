@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from jev_judge_mcp.credential_literal import has_credential_literal, redact_credential_literals
+from jev_judge_mcp.redaction.literals import has_credential_literal, redact_credential_literals
 
 ORDINARY_CODE = [
     'api_key = os.environ["API_KEY"]',

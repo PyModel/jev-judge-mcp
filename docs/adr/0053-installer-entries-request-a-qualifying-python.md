@@ -62,3 +62,19 @@ pin itself (ADR-0051) are unchanged.
   prompted values, and credential-literal detection to scrub stderr before truncation.
   The diagnostic keeps at most five lines of 200 bytes each. A line beyond the bounded
   capture limit is omitted altogether.
+
+## Amendment (2026-11-19): Strict JSON for launch metadata and replies
+
+The installer omits the optional local-checkout warning when `direct_url.json` has
+invalid UTF-8, excessive nesting, or invalid JSON. The verifier reads UTF-8 JSON-RPC
+lines, allowing a UTF-8 BOM. It skips malformed lines, including invalid UTF-8,
+excessive nesting, and nonstandard JSON constants, and still requires valid response
+envelopes to complete the check.
+
+## Amendment (2026-11-20): the guard's plain form sees only the old interpreter
+
+uv 0.12 re-resolves an extra-free tool requirement against another interpreter it can find or
+download, so with the `typesafe` extra gone (ADR-0084) the plain form started on the image's
+Python 3.12 and the guard's control step passed for the wrong reason. The plain form now runs
+with only the old interpreter's directory on PATH and `UV_PYTHON_DOWNLOADS=never`, and must
+fail with the F2 error itself (`does not satisfy Python`). The installer step is unchanged.

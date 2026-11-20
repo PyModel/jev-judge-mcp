@@ -14,10 +14,12 @@ Astral-plane characters (emoji, some CJK) count as two.
 
 These caps are not Jev's context window. The model accepts 64k tokens per request and 32k for
 `state` plus the longest question (https://docs.typesafe.ai/models.md). An input inside every cap
-on this page can still exceed that window. Before sending, jev_gate limits compact UTF-8 to 30,000 bytes for state plus the longest question and 60,000 bytes total. Split by file, hunk or claim. A string gate sends the diff and test log once in
-the review state and once as evidence (ADR-0063), so budget about twice their size. The server does
-not count tokens. When the API refuses a request as over its window (a 400 with `error_type`
-`max_tokens_exceeded`), the code is `input_too_large` and the remedy is to split the call (ADR-0079).
+on this page can still exceed that window. The provider enforces the window. When it returns 400
+with `detail.error_type: max_tokens_exceeded`, tools return `input_too_large` with split advice.
+File-list and range gates hold the files from rejected claims groups for local review.
+Claims packing and Ask split suggestions use an estimate of 30,000 compact UTF-8 bytes for state
+plus the longest question and 60,000 bytes total, including question IDs and criteria. A string
+gate sends the diff and test log in both review state and evidence (ADR-0063, ADR-0079, ADR-0086).
 
 ## The three behaviors at a bound
 
@@ -26,7 +28,7 @@ not count tokens. When the API refuses a request as over its window (a 400 with 
    code is `invalid_arguments`. Nothing is sent to the provider.
 2. **Truncate** — the text is cut to the cap, marked ` […truncated]`, and the result carries
    `truncated` scopes. Not an error. A cut over *context* (a document the judgment is made over:
-   review/gate inputs, gate claims and evidence, extract's candidate universe) keeps the action off
+   review inputs, extract's candidate universe) keeps the action off
    `auto`; a cut over *item* text (find/rerank candidates, classify items and class descriptions)
    is telemetry only and does not change the action ([`docs/CONTEXT.md`](../CONTEXT.md) "Truncated
    Context").
@@ -43,7 +45,7 @@ block (ADR-0062). The code is set from the exception type or at the return site.
 
 | Code | Produced by |
 | --- | --- |
-| `invalid_arguments` | a schema reject (every row marked reject below); an unknown tool; duplicate caller ids; a decide candidate id colliding with an escape hatch; a diff that is not the file-list shape; a broken `auto_accept`/`review_at` pair (the frozen text `Thresholds must satisfy 0 <= review_at <= auto_accept <= 1.`) |
+| `invalid_arguments` | a schema reject (every row marked reject below); an unknown tool; caller ID collisions after sanitization, including with reserved keys; a diff that is not the file-list shape; a broken `auto_accept`/`review_at` pair (the frozen text `Thresholds must satisfy 0 <= review_at <= auto_accept <= 1.`) |
 | `input_too_large` | every frozen budget refusal marked error below: the aggregate character budgets, jev_gate's item-count budget, and the file-list diff budget. `tests/contract/test_limits.py` pins each frozen budget text to this code. Also an upstream 400 whose body carries `error_type` `max_tokens_exceeded` (ADR-0079) |
 | `auth` | `ProviderConfigError` (no credentials, including an explicit provider with a missing or malformed key); an upstream 401 (`ProviderError.status`), which is code `auth` |
 | `timeout` | `ProviderTimeoutError` |
@@ -119,10 +121,11 @@ Every bound is a schema reject; nothing truncates.
 | `candidate_id_max` | 64 | above → reject (ids must match `^[a-z][a-z0-9_-]*$`) |
 | `candidate_description_min` | 1 | below → reject |
 | `candidate_description_max` | 2000 | above → reject |
-| `requirements_min` | 0 | below → reject |
 | `requirements_max` | 3 | above → reject |
 | `requirement_min` | 1 | below → reject |
 | `requirement_max` | 500 | above → reject |
+
+The requirements array may be empty.
 
 ### jev_rerank (`limits.RERANK`)
 
@@ -142,10 +145,11 @@ Candidate caps are the shared `CANDIDATES` table below.
 | --- | --- | --- |
 | `passage_min` | 1 | below → reject |
 | `passage_max` | 20000 | above → reject |
-| `aspects_min` | 0 | below → reject |
 | `aspects_max` | 10 | above → reject |
 | `aspect_min` | 1 | below → reject |
 | `aspect_max` | 200 | above → reject |
+
+The aspects array may be empty.
 
 ### jev_extract (`limits.EXTRACT`)
 
@@ -182,9 +186,14 @@ Candidate caps are the shared `CANDIDATES` table below.
 | `claims_max` | 16 | above → reject |
 | `claim_units` | 2000 | over → `input_too_large` before sending. Split into narrower claims with their evidence. |
 | `evidence_items` | 16 | over → budget error (`input_too_large`) |
-| `aggregate_evidence_units` | 200000 | over → budget error (`input_too_large`), rendered `200,000` |
-| `doc_units` | 50000 | over → `input_too_large` before sending for a request, string diff, test log, evidence item or individual file patch. Split by file or hunk and keep the supporting evidence with its claim. |
+| `aggregate_evidence_units` | 200000 | bounds the sum of file-list patches and provides a raw aggregate guard on caller evidence |
+| `doc_units` | 50000 | a string `request`, `diff`, or `tests` or one evidence item over the cap refuses `input_too_large`. Over-cap file-list patches are held for local review |
 | `files_max` | 64 | a file-list `diff` with more entries refuses `input_too_large` before any request, for `jev_gate` and `jev_review` alike: one review request runs per file (ADR-0066 amendment) |
+
+File-list gates pack patches by the byte estimate and send a patch in its own group when it
+cannot fit beside another patch. A provider context refusal for a claims group marks its files
+`oversize` and holds its claims for review. A string gate returns `input_too_large` on provider
+context refusal. Gate inputs are never cut and the result retains `"truncated": false`.
 
 ### jev_score (`limits.SCORE`, ADR-0048)
 
@@ -223,7 +232,8 @@ the instructions bound.
 ### jev_files_judge (`limits.FILES_JUDGE`, ADR-0077)
 
 A bound over the input entries rejects the call; a bound over one file skips that file with a
-reason, before the first provider call either way. The per-file units and the NUL sniff window are
+reason, before the first provider call either way. A provider context refusal for a surviving file
+returns `input_too_large` with split advice. The per-file units and the NUL sniff window are
 shared with `jev_file_judge` — one number to calibrate, both constants move together. The two shape
 bounds keep a real tree inside one call: discovery stops at the candidate bound (glob expansion
 never enters a skip-listed directory on the way), reading stops once the file cap's survivors
@@ -241,9 +251,9 @@ plus the first few paths — instead of one row per file.
 
 ### jev_ask (`limits.ASK`, ADR-0077)
 
-No part truncates: an over-budget call refuses typed, with each part's size and a Split
-suggestion. The question and path caps reject; the composed aggregate is a strict greater-than
-error, and the output cap and the timeout refuse after or around the run.
+No part truncates. Exceeding the composed UTF-16 cap or the provider context window returns
+`input_too_large` with each part's size and split advice. The question and path caps reject.
+The output cap and the timeout can refuse the run.
 
 | Cap | Value | Over the bound |
 | --- | --- | --- |
@@ -251,8 +261,8 @@ error, and the output cap and the timeout refuse after or around the run.
 | `questions_max` | 20 | above → reject |
 | `files_max` | 20 | above → reject |
 | `state_units_max` | 20000 | refuse before any call |
+| `request_units_max` | 120000 | aggregate state and question units above the cap refuse `input_too_large` before calling the provider |
 | `command_output_units_max` | 30000 | refuse `output_too_large` after the run |
-| `request_units_max` | 120000 | strict greater-than refuses with the Split suggestion |
 | `command_timeout_seconds` | 30 | the run is killed and the call refuses |
 
 ### shared caps
@@ -262,7 +272,7 @@ error, and the output cap and the timeout refuse after or around the run.
 | `min_items` | 1 | below → reject (jev_find, jev_rerank candidates) |
 | `max_items` | 250 | above → reject (jev_find, jev_rerank candidates) |
 | `text_units` | 2000 | truncate (item scope; jev_find, jev_rerank candidate text) |
-| `SANITIZE_ID_UNITS` | 64 | the reference truncates a sanitized id at 64 UTF-16 units — a Python-side cap the manifest does not record (`ids.py` imports it) |
+| `SANITIZE_ID_UNITS` | 64 | the reference sanitizer keeps the first 64 UTF-16 units. See the [caller ID rules](../tools.md#caller-ids) |
 
 ## Defaults and thresholds
 
@@ -287,7 +297,7 @@ and cannot be set per call.
 
 Other defaults, in prose: the model is `jev-latest` unless `JEV_MCP_MODEL` says otherwise (README
 § Configuration); `jev_find`'s `top_k` defaults to 5; `jev_rerank`'s omitted `top_k` returns every
-candidate; `jev_decide`'s escape hatches (`ask_user`, `investigate`, `none`) are always offered.
+candidate; `jev_decide`'s escape hatches (`ask_user`, `investigate`, `none`) are offered by default. Set `escape_hatches: false` to offer only the caller's options.
 Thresholding guidance — including raising your own bar before destructive steps — is in
 [`docs/guidance.md`](../guidance.md); what is certified on recorded traffic is in
 [`docs/EVIDENCE.md`](../EVIDENCE.md).

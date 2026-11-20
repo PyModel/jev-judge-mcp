@@ -422,7 +422,7 @@
     {
       "id": "git-diff",
       "type": "backend",
-      "label": "git_diff",
+      "label": "git",
       "sublabel": "range \u2192 file list",
       "pos": [
         520,
@@ -726,7 +726,7 @@
         "list_tools and call_tool share one Toolset",
         "fifteen tools: ten frozen, jev_score, and the ADR-0048 extensions",
         "jev_ask and the file tools read through one bounded file_state \u00b7 ask_state",
-        "the gate CLI and jev_gate_range read git through one git_diff (ADR-0080)"
+        "the gate CLI and jev_gate_range read Git through the shared git runner (ADR-0080, ADR-0086)"
       ]
     },
     {

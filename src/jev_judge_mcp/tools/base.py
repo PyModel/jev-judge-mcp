@@ -1,7 +1,7 @@
 """What every tool shares: its published definition, the runtime it asks Jev through, and its result shape.
 
 A tool validates its arguments against its published schema (`arguments.py`), builds state and
-questions, asks Jev once at most, validates each answer, applies policy, and returns a payload that
+questions, asks Jev, validates each answer, applies policy, and returns a payload that
 is serialized as `JSON.stringify(payload, null, 2)` (ADR-0006).
 """
 
@@ -17,9 +17,8 @@ from mcp.types import Tool
 
 from jev_judge_mcp import cache
 from jev_judge_mcp.domain import JsonValue, Question, Usage
-from jev_judge_mcp.extract.executor import RegexExecutor
 from jev_judge_mcp.extract.worker import ProcessRegexExecutor
-from jev_judge_mcp.policy import Action
+from jev_judge_mcp.policy import Action, worst_action
 from jev_judge_mcp.providers import (
     Evaluation,
     JevProvider,
@@ -29,10 +28,11 @@ from jev_judge_mcp.providers import (
     resolve_model,
     resolve_provider,
 )
+from jev_judge_mcp.redaction.values import register_log_secrets
+from jev_judge_mcp.security import SecurityGuard, build_guard
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.telemetry import ACTIONS, Span, Telemetry
 from jev_judge_mcp.tools.arguments import ArgumentsError, Refinement
-from jev_judge_mcp.tools.observed import worst_action
 from jev_judge_mcp.validation.caps import CapScope
 
 type Payload = Mapping[str, object]
@@ -163,11 +163,28 @@ def frame(
         "model": evaluation.model,
         "provider": evaluation.provider,
         **body,
-        "usage": evaluation.usage.to_wire(),
+        "usage": evaluation.usage,
     }
     if evaluation.request_id:
         framed["request_id"] = evaluation.request_id
     return framed
+
+
+def combined(evaluations: list[Evaluation]) -> Evaluation:
+    """One frame for per-file asks: usage summed across every call, request id kept when one sent it."""
+    first = evaluations[0]
+    request_id = next((item.request_id for item in evaluations if item.request_id), None)
+    return Evaluation(
+        {},
+        Usage(
+            sum(item.usage.input_tokens for item in evaluations),
+            sum(item.usage.output_tokens for item in evaluations),
+            reported=all(item.usage.reported for item in evaluations),
+        ),
+        first.provider,
+        first.model,
+        request_id=request_id,
+    )
 
 
 class _Pending:
@@ -205,7 +222,7 @@ class Runtime:
         self,
         settings: Settings,
         provider_factory: Callable[[Settings], JevProvider] = resolve_provider,
-        regex_executor: RegexExecutor | None = None,
+        regex_executor: ProcessRegexExecutor | None = None,
         *,
         tests_read_from_file: bool = False,
     ) -> None:
@@ -230,8 +247,7 @@ class Runtime:
         return self._provider.name if self._provider is not None else "none"
 
     @property
-    def regex_executor(self) -> RegexExecutor:
-        """Where jev_extract's patterns run: worker processes unless the server was built with another."""
+    def regex_executor(self) -> ProcessRegexExecutor:
         return self._regex_executor
 
     async def awarm(self) -> None:
@@ -240,12 +256,18 @@ class Runtime:
         here overlaps no demand, so live workers never exceed the pool's size. Best effort: a pool
         that cannot start workers now tries again on demand, so the server still comes up for the
         tools that need no pool."""
-        if not isinstance(self._regex_executor, ProcessRegexExecutor):
-            return
         try:
             await self._regex_executor.warm()
         except Exception:
             logger.warning("regex pool did not warm; workers will start on demand", exc_info=True)
+
+    async def security_guard(self) -> SecurityGuard:
+        try:
+            guard = await anyio.to_thread.run_sync(build_guard, self.settings)
+        except ValueError as error:
+            raise ProviderConfigError(str(error)) from None
+        register_log_secrets(guard.redact)
+        return guard
 
     async def ask(self, state: Payload, questions: Mapping[str, Question]) -> Evaluation:
         """Ask Jev `questions` about `state`. Raises `ProviderError` with redacted text.
@@ -268,8 +290,9 @@ class Runtime:
             if self.settings.jev_judge_mcp_cache:
                 return await self._cached(provider, wire_state, questions, span)
             evaluation = await self._evaluate_capped(provider, wire_state, questions)
-            span.attributes["input_tokens"] = evaluation.usage.input_tokens
-            span.attributes["output_tokens"] = evaluation.usage.output_tokens
+            if evaluation.usage.reported:
+                span.attributes["input_tokens"] = evaluation.usage.input_tokens
+                span.attributes["output_tokens"] = evaluation.usage.output_tokens
             return evaluation
 
     async def _cached(
@@ -300,7 +323,8 @@ class Runtime:
                 span.attributes["cache"] = "hit"
                 return cached
             evaluation = await self._evaluate_capped(provider, state, questions)
-            work.usage = evaluation.usage
+            if evaluation.usage.reported:
+                work.usage = evaluation.usage
             await cache.astore(self.settings, *identity, evaluation, digest=key)
             return evaluation
 

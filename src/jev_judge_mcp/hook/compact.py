@@ -10,23 +10,28 @@ PreCompact cannot inject compaction instructions (ADR-0077); this is the documen
 import os
 import sys
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
-from jev_judge_mcp.credential_literal import redact_credential_literals
+import anyio
+
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.domain.questions import ChoiceQuestion, Question
-from jev_judge_mcp.hook import ESTIMATED_CONFIDENCE_THRESHOLD, REPORTED_CONFIDENCE_THRESHOLD
-from jev_judge_mcp.hook_runtime import HookFailure, prepare
-from jev_judge_mcp.hook_runtime import judge as judge_once
+from jev_judge_mcp.fsutil import NotRegularFile, read_bounded
+from jev_judge_mcp.hook.runtime import HookFailure, prepare
+from jev_judge_mcp.hook.runtime import judge as judge_once
+from jev_judge_mcp.policy.guard import confidence_floor
 from jev_judge_mcp.providers import (
     JevProvider,
     resolve_provider,
 )
-from jev_judge_mcp.redact_action import redact_action
+from jev_judge_mcp.redaction.action import redact_action
+from jev_judge_mcp.security import SecurityGuard
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.text import head
-from jev_judge_mcp.validation.choice import margin, validate_choice
+from jev_judge_mcp.validation.choice import validate_choice
 
 TURNS_MAX = 20
 """User turns offered to the judgment: the newest ones only (ADR-0077)."""
@@ -101,8 +106,8 @@ def compact_cut_main(
     if isinstance(prepared, HookFailure):
         sys.stderr.write(f"jev-judge-mcp hook compact-cut: fail-open ({prepared.detail})\n")
         return 0
-    chosen, model = prepared
-    line, code = judge(chosen, turns, model)
+    chosen, model, guard = prepared
+    line, code = judge(chosen, turns, model, guard)
     if line is None:
         if code:
             sys.stderr.write(f"error.code={code}\n")
@@ -117,11 +122,16 @@ def read_tail(path: str) -> str:
     The seek lands mid-line whenever the file is longer than the window, and a half-line is
     not a transcript event, so that partial first line is dropped.
     """
-    with open(path, "rb") as handle:
-        handle.seek(0, os.SEEK_END)
-        size = handle.tell()
-        handle.seek(max(0, size - TRANSCRIPT_TAIL_BYTES))
-        data = handle.read()
+    size = 0
+
+    def inspect(info: os.stat_result) -> None:
+        nonlocal size
+        size = info.st_size
+
+    try:
+        data = read_bounded(Path(path), max_bytes=TRANSCRIPT_TAIL_BYTES, follow=True, tail=True, inspect=inspect)
+    except NotRegularFile:
+        return ""
     text = data.decode("utf-8", errors="replace")
     if size > TRANSCRIPT_TAIL_BYTES:
         newline = text.find("\n")
@@ -164,19 +174,6 @@ def window(turns: list[Turn]) -> list[Turn]:
     return [Turn(id=turn.id, text=head(turn.text, TURN_UNITS_MAX)) for turn in turns[-TURNS_MAX:]]
 
 
-def build_question(turns: list[Turn]) -> dict[str, Question]:
-    """One Choice keyed by the real turn ids; each option's description is the clipped turn."""
-    return {
-        _QUESTION_ID: ChoiceQuestion(instructions=_QUESTION, criteria={turn.id: _redacted(turn.text) for turn in turns})
-    }
-
-
-def build_state(turns: list[Turn]) -> str:
-    lines = [_STATE_INTRO]
-    lines.extend(f"[{turn.id}] {_redacted(turn.text)}" for turn in turns)
-    return "\n".join(lines) + "\n"
-
-
 def pick(answer: object, turns: list[Turn]) -> Turn | None:
     """The picked turn, or ``None`` when the answer does not earn a cut point.
 
@@ -187,8 +184,7 @@ def pick(answer: object, turns: list[Turn]) -> Turn | None:
     parsed = validate_choice(answer, identifiers)
     if parsed is None:
         return None
-    confidence = parsed.confidence if parsed.confidence is not None else margin(parsed.probabilities)
-    threshold = REPORTED_CONFIDENCE_THRESHOLD if parsed.confidence is not None else ESTIMATED_CONFIDENCE_THRESHOLD
+    confidence, threshold = confidence_floor(parsed)
     if confidence < threshold:
         return None
     for turn in turns:
@@ -212,18 +208,23 @@ def render_context(line: str) -> str:
     return stringify_compact(payload)
 
 
-def judge(provider: JevProvider, turns: list[Turn], model: str) -> tuple[str | None, str]:
+def judge(provider: JevProvider, turns: list[Turn], model: str, guard: SecurityGuard) -> tuple[str | None, str]:
     """One provider call: ``(line, code)``. Any provider failure is ``(None, code)`` — silence."""
-    evaluation = judge_once(provider, build_state(turns), build_question(turns), model)
+    turns = [turn for turn in turns if guard.scrub(turn.id) == turn.id]
+    if len({turn.id for turn in turns}) < 2:
+        with suppress(Exception):
+            anyio.run(provider.aclose)
+        return None, ""
+    criteria = {turn.id: redact_action(guard.scrub(turn.text)) for turn in turns}
+    state = guard.scrub(_STATE_INTRO) + "\n" + "".join(f"[{key}] {text}\n" for key, text in criteria.items())
+    questions: dict[str, Question] = {
+        _QUESTION_ID: ChoiceQuestion(instructions=guard.scrub(_QUESTION), criteria=criteria)
+    }
+    evaluation = judge_once(provider, state, questions, model)
     if isinstance(evaluation, HookFailure):
         return None, "timeout" if evaluation.kind == "timeout" else "provider"
     picked = pick(evaluation.answers.get(_QUESTION_ID), turns)
     return (None, "") if picked is None else (context_line(picked), "")
-
-
-def _redacted(text: str) -> str:
-    """Provider-bound text: pattern redaction plus credential-literal redaction."""
-    return redact_credential_literals(redact_action(text))
 
 
 def _turn_text(event: Mapping[str, object]) -> str:

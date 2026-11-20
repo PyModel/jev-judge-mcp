@@ -1,4 +1,4 @@
-"""The production `RegexExecutor`: a pool of killable worker processes (ADR-0004, ADR-0016).
+"""A pool of killable regex worker processes (ADR-0004, ADR-0016).
 
 A slot is one process (`python -m jev_judge_mcp.extract.worker`) running one pattern at a time, fed
 length-prefixed pickles over its stdin and stdout, never the server's stdout. The executor takes

@@ -56,3 +56,10 @@ as the probe, and hands the open sockets to uvicorn (`serve(sockets=...)`). A pr
 the port between the probe and the listen therefore hits this bind, which refuses with the same
 one `JEV_MCP_HTTP_PORT` line instead of uvicorn's own bind error and exit code. A host that does
 not resolve still binds nothing here and stays with the server, exactly as before.
+
+## Amendment (2026-11-19): one bind and a bounded TCP probe
+
+ADR-0050 supersedes the separate bind probe. Startup takes and holds the listening socket itself.
+On macOS and other non-Linux POSIX systems, the non-blocking TCP probe has up to 50 ms to finish.
+`ECONNREFUSED` permits the bind without a retry delay. `ECONNRESET` counts as a live listener and
+uses the same retry budget and one-line port-taken diagnostic as `EADDRINUSE`.

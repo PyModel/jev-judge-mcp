@@ -5,7 +5,7 @@
       "command": "/opt/uv/uvx",
       "args": [
         "--from",
-        "/work/jev-mcp[typesafe]",
+        "/work/jev-mcp",
         "jev-judge-mcp"
       ],
       "env": {

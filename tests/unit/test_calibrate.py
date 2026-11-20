@@ -74,25 +74,17 @@ def test_the_report_pairs_review_at_for_tools_that_have_one(tmp_path: Path, caps
     assert "pair with review_at: 0.5 (policy's own pairing of the pair)" in report
 
 
-def test_calibrate_is_a_subcommand_and_nothing_else_is() -> None:
-    """P3-5: the dispatch predicate matches the `setup` precedent (tests/unit/test_setup.py)."""
-    from jev_judge_mcp.server import calibrate_requested
-
-    assert calibrate_requested(["jev-judge-mcp", "calibrate"]) is True
-    assert calibrate_requested(["jev-judge-mcp"]) is False
-    assert calibrate_requested(["jev-judge-mcp", "install"]) is False
-    assert calibrate_requested(["jev-judge-mcp", "--help"]) is False
-
-
 def test_the_server_slices_calibrate_arguments_like_the_other_subcommands(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """server.main hands calibrate exactly argv[2:]: --help reaches the command, not the server."""
-    from jev_judge_mcp import server
+    """The package entry point forwards the remaining arguments to calibrate."""
+    import sys
 
-    monkeypatch.setattr(server.sys, "argv", ["jev-judge-mcp", "calibrate", "--help"])
+    from jev_judge_mcp.__main__ import main
+
+    monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "calibrate", "--help"])
     with pytest.raises(SystemExit) as caught:
-        server.main()
+        main()
     assert caught.value.code == 0
     out = capsys.readouterr().out
     assert "usage: jev-judge-mcp calibrate" in out
@@ -103,7 +95,7 @@ def test_the_server_slices_calibrate_arguments_like_the_other_subcommands(
     ("lines", "message"),
     [
         ([CLEAN, "{not json}"], "rows.jsonl:2: not one JSON object"),
-        ([CLEAN, '{"score": NaN, "correct": true}'], "rows.jsonl:2: not one JSON object (NaN is not a finite"),
+        ([CLEAN, '{"score": NaN, "correct": true}'], "rows.jsonl:2: not one JSON object (NaN is not JSON"),
         (['{"correct": true}'], "rows.jsonl:1: need score and correct"),
         (['{"score": true, "correct": true}'], "rows.jsonl:1: score must be a finite number"),
         (['{"score": 1.5, "correct": true}'], "rows.jsonl:1: score 1.5 is outside [0, 1]"),
@@ -228,6 +220,9 @@ def test_pathological_rows_files_exit_two_instead_of_crashing(
     huge = rows_file(tmp_path, ['{"score": 1' + "0" * 400 + ', "correct": true}'])
     assert calibrate.main([str(huge), "--max-error", "0.3"]) == 2
     assert "finite" in capsys.readouterr().err
+    many_digits = rows_file(tmp_path, ['{"score": 1' + "0" * 5000 + ', "correct": true}'])
+    assert calibrate.main([str(many_digits), "--max-error", "0.3"]) == 2
+    assert "score must be a finite number" in capsys.readouterr().err
     deep = rows_file(tmp_path, ["[" * 100_000])
     assert calibrate.main([str(deep), "--max-error", "0.3"]) == 2
     assert "not one JSON object" in capsys.readouterr().err

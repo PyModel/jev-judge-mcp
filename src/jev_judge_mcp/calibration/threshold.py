@@ -7,6 +7,9 @@ Sanctioned Divergence and needs an ADR).
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from itertools import groupby
+from math import isnan
+from operator import itemgetter
 from typing import Final
 
 from jev_judge_mcp.calibration.bounds import Bound, clopper_pearson_upper, upper_error_bound
@@ -36,19 +39,27 @@ def select_threshold(
 ) -> OperatingPoint | None:
     """`rows` are `(score, correct)`. Returns the feasible point with the most AUTO rows, else `None`.
 
-    Every distinct score is a candidate threshold. Feasibility is not monotone in the threshold, so all
-    candidates are checked; `None` means no threshold meets the budget — never a fallback threshold.
+    Sweep tied scores in ascending order, removing a group after testing its threshold. The first
+    feasible threshold has the largest AUTO population even when feasibility is non-monotone.
     """
     if not rows:
         return None
-    best: OperatingPoint | None = None
-    for threshold in sorted({score for score, _ in rows}, reverse=True):
-        auto = [correct for score, correct in rows if score >= threshold]
-        errors = auto.count(False)
-        upper = upper_error_bound(errors, len(auto), bound, confidence)
-        if upper <= max_error and (best is None or len(auto) > best.auto):
-            best = OperatingPoint(threshold, len(auto), errors, len(auto) / len(rows), upper)
-    return best
+    ordered = sorted((row for row in rows if not isnan(row[0])), key=itemgetter(0))
+    auto = len(ordered)
+    errors = sum(not correct for _, correct in ordered)
+    if not ordered:
+        upper = upper_error_bound(0, 0, bound, confidence)
+        return OperatingPoint(rows[0][0], 0, 0, 0.0, upper) if upper <= max_error else None
+    for threshold, tied in groupby(ordered, key=itemgetter(0)):
+        # The exact interval starts at the observed error rate.
+        if bound == "wilson" or not 0 < confidence < 1 or errors / auto <= max_error:
+            upper = upper_error_bound(errors, auto, bound, confidence)
+            if upper <= max_error:
+                return OperatingPoint(threshold, auto, errors, auto / len(rows), upper)
+        for _, correct in tied:
+            auto -= 1
+            errors -= not correct
+    return None
 
 
 @dataclass(frozen=True, slots=True)

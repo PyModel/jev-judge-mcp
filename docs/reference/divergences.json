@@ -79,14 +79,46 @@
       "surface": "provider",
       "tier": "both",
       "status": "sanctioned",
-      "adr": "docs/adr/0008-provider-endpoints-and-credentials-are-process-config-only.md",
+      "adr": "docs/adr/0050-http-access-control-refuses-unauthenticated-start.md",
       "tests": [
         "tests/contract/test_providers.py",
-        "tests/security/test_inputs.py"
+        "tests/security/test_inputs.py",
+        "tests/unit/test_http_auth.py",
+        "tests/unit/test_resolver.py"
       ],
       "fixtures": [],
       "reference_behavior": "Redacts only JEV_API_KEY, and only on the compatible provider's error body (quirk Q9).",
-      "python_behavior": "Every configured secret is redacted on every provider, on every error path and log line, with URL-userinfo variants covered."
+      "python_behavior": "Every provider redacts configured secrets and covered URL-userinfo variants from errors and logs. Validation checks every replaced spelling. A stored key joins provider and log redaction when resolved."
+    },
+    {
+      "id": "per-call-local-state-guard",
+      "surface": "request",
+      "tier": "tier_b",
+      "status": "sanctioned",
+      "adr": "docs/adr/0087-per-call-security-guard-and-local-file-boundaries.md",
+      "tests": [
+        "tests/unit/test_ask.py",
+        "tests/unit/test_file_state.py",
+        "tests/unit/test_hook.py",
+        "tests/unit/test_hook_compact.py",
+        "tests/unit/test_hook_screen.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The frozen TypeScript MCP tools have no local file or hook State builders.",
+      "python_behavior": "A required guard protects the current key store and scrubs exact configuration values and credential literals from local evidence, ask State and hook State."
+    },
+    {
+      "id": "cli-evidence-and-completion-target",
+      "surface": "result",
+      "tier": "tier_b",
+      "status": "sanctioned",
+      "adr": "docs/adr/0064-cli-judge-and-gate.md",
+      "tests": [
+        "tests/unit/test_cli_gate.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The frozen TypeScript MCP server has no standalone CLI evidence reader or command-targeted completion hook.",
+      "python_behavior": "CLI gate evidence shares the file judgment reader and its typed refusals. The completion hook resolves the command's repository and uses a PR base independently of the push upstream."
     },
     {
       "id": "cancellation-propagates",
@@ -206,7 +238,7 @@
       ],
       "fixtures": [],
       "reference_behavior": "The reference is stdio-only; no HTTP transport exists to compare against.",
-      "python_behavior": "streamable-http is an experimental Tier B extension for 1.0: localhost by default, no reliability contract of its own (provider attempts are bounded per ADR-0057, but there is no admission control and no load-tested limits), promotion requires P9 evidence. A bind outside 127.0.0.1/localhost/::1 additionally requires a bearer token (http-bearer-token-required)."
+      "python_behavior": "streamable-http is an experimental Tier B extension for 1.0: localhost by default, no reliability contract of its own (provider attempts are bounded per ADR-0057, but there is no admission control and no load-tested limits), promotion requires P9 evidence. Every bind requires a bearer token (http-bearer-token-required)."
     },
     {
       "id": "http-bearer-token-required",
@@ -220,7 +252,7 @@
       ],
       "fixtures": [],
       "reference_behavior": "The reference is stdio-only; no HTTP transport exists to compare against.",
-      "python_behavior": "streamable-http refuses to start without JEV_MCP_HTTP_TOKEN on any host the SDK does not protect (exactly 127.0.0.1, localhost, ::1 get Host/Origin validation; every other host, including other loopback spellings, requires the token); with a token set, every request must carry Authorization: Bearer or get 401 with WWW-Authenticate: Bearer before any MCP handling."
+      "python_behavior": "streamable-http requires an expanded JEV_MCP_HTTP_TOKEN of at least 32 characters on all bind addresses including loopback. Every request must carry Authorization: Bearer or get 401 with WWW-Authenticate: Bearer before any MCP handling."
     },
     {
       "id": "same-origin-redirects-only",
@@ -242,12 +274,11 @@
       "status": "sanctioned",
       "adr": "docs/adr/0023-same-origin-redirects-only.md",
       "tests": [
-        "tests/contract/test_providers.py",
-        "tests/unit/test_providers.py"
+        "tests/contract/test_providers.py"
       ],
       "fixtures": [],
       "reference_behavior": "Node fetch follows redirects, including cross-origin, with the request body.",
-      "python_behavior": "The typesafe-sdk transport uses an httpx2 client this server constructs; a request hook refuses a cross-origin hop before it is sent. httpx2 does not follow redirects by default, so the hook is the guard if that default or an injected client changes."
+      "python_behavior": "TypeSafe uses the shared HttpProvider request hook. It refuses a cross-origin redirect before the next request is sent, including with an injected client."
     },
     {
       "id": "initialize-capabilities-unverified",
@@ -318,7 +349,7 @@
         "ADR-0031"
       ],
       "reference_behavior": "An omitted classify id becomes {kind}{index} with no check against supplied ids, so a later entry with that id overwrites the earlier one and both rows report the same id at auto (quirk Q11).",
-      "python_behavior": "A generated id that equals an id already used for that items or classes list raises Duplicate {kind} id before any provider request."
+      "python_behavior": "Supplied IDs keep their canonical keys. An omitted item or class ID whose positional key is taken gets the first available overflow key under ADR-0085."
     },
     {
       "id": "posix-only",
@@ -377,7 +408,7 @@
       ],
       "fixtures": [],
       "reference_behavior": "Every tool call sends a provider request; nothing is replayed from disk, so there is no cache to bound or expire.",
-      "python_behavior": "When JEV_MCP_CACHE is on, the cache is bounded and non-blocking (ADR-0047 amendment): the key serialization and the file IO run in a worker thread off the event loop, an entry older than JEV_MCP_CACHE_TTL_SECONDS (default seven days, 0 disables) is a miss and is deleted, and a store past JEV_MCP_CACHE_MAX_ENTRIES (default 4096, 0 disables) evicts oldest-mtime entries first. Replay of a live entry stays verbatim (response-cache)."
+      "python_behavior": "When JEV_MCP_CACHE is on, the cache is bounded and non-blocking (ADR-0047 amendment): the key serialization and file IO run off the event loop, replay reads only the versioned records directory, an entry older than JEV_MCP_CACHE_TTL_SECONDS (default seven days, 0 disables) is a miss, and a store past JEV_MCP_CACHE_MAX_ENTRIES (default 4096, 0 disables) evicts oldest-mtime entries first. Replay of a live entry stays verbatim (response-cache)."
     },
     {
       "id": "provider-inflight-cap",
@@ -406,6 +437,34 @@
       "fixtures": [],
       "reference_behavior": "The reference publishes exactly ten tools; no tool exposes a caller-supplied score rubric.",
       "python_behavior": "jev_score is published after the snapshot ten (the snapshot stays a byte-identical prefix of tools/list): one score question over a caller rubric of 2-10 levels, strict whole-answer validation (validate_rubric_answer), ADR-owned caps in limits.SCORE, and no policy thresholds."
+    },
+    {
+      "id": "score-distribution-consistency",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0048-extension-tools-after-the-frozen-ten.md",
+      "tests": [
+        "tests/contract/test_fail_closed.py",
+        "tests/contract/test_score_tool.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "Fixed review rubrics validate the score and ignore a supplied level distribution. The recorded review answers omit distributions.",
+      "python_behavior": "A score with a supplied distribution is invalid if the distribution is malformed or its weighted mean differs from the score by more than 0.005 times one plus the sum of the level indices, with float64 slack. Fixed review rubrics still accept a score without a distribution."
+    },
+    {
+      "id": "empty-model-uses-default",
+      "surface": "request",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0008-provider-endpoints-and-credentials-are-process-config-only.md",
+      "tests": [
+        "tests/unit/test_resolver.py",
+        "tests/unit/test_settings.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "An explicit empty JEV_MCP_MODEL is sent as an empty model.",
+      "python_behavior": "An empty JEV_MCP_MODEL selects jev-latest. All settings treat an empty environment value as unset."
     },
     {
       "id": "gate-range-tool-extension",
@@ -668,8 +727,37 @@
         "ADR-0007",
         "ADR-0062"
       ],
-      "reference_behavior": "Gate, verify, review, and find return the reference payload. Claim questions tell the model not to use diff and tests. Verify questions have no anti-injection sentence. A sanitized or de-duplicated id is not mapped back to the id the caller sent.",
-      "python_behavior": "Additive fields are appended. Gate sends diff and tests as implicit evidence and drops the ignore-them sentence. Verify questions gain the role sentence and the anti-injection sentence. Find, verify, and gate append renamed_ids (sent id -> returned id) when id sanitization or de-duplication changed a caller id. Old keys stay. See also ADR-0063, ADR-0067, and ADR-0068."
+      "reference_behavior": "Gate, verify, review, and find return the reference payload. Claim questions tell the model not to use diff and tests. Verify questions have no anti-injection sentence.",
+      "python_behavior": "Additive fields are appended. Gate sends diff and tests as implicit evidence and drops the ignore-them sentence. Verify questions gain the role sentence and the anti-injection sentence. See also ADR-0063, ADR-0067, and ADR-0068."
+    },
+    {
+      "id": "caller-id-policy",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0085-shared-caller-id-policy.md",
+      "tests": [
+        "tests/contract/test_caller_ids.py",
+        "tests/parity/test_tool_fixtures.py"
+      ],
+      "fixtures": [
+        "contradicted/gate-contradicted-below-auto-accept#0",
+        "duplicate-id/classify-duplicate-class-id#0",
+        "duplicate-id/classify-duplicate-item-id#0",
+        "duplicate-id/decide-candidate-collides-with-escape-hatch#0",
+        "duplicate-id/decide-duplicate-candidate-id#0",
+        "duplicate-id/extract-duplicate-field-id#0",
+        "duplicate-id/find-ids-sanitized-and-suffixed#0",
+        "duplicate-id/rerank-duplicate-id#0",
+        "duplicate-id/rerank-fallback-avoids-supplied-ids#0",
+        "duplicate-id/verify-duplicate-evidence-ids-suffixed#0",
+        "low-confidence/gate-claim-confidence-tiers#0",
+        "normal/gate-accepted#0",
+        "unicode-astral/classify-astral-ids-preserved#0",
+        "unsupported/gate-unsupported-confident#0"
+      ],
+      "reference_behavior": "The reference suffixes some duplicate IDs, preserves some IDs verbatim, and uses tool-specific refusal messages and generated keys.",
+      "python_behavior": "Each caller ID namespace uses the reference sanitizer, refuses collisions with supplied or reserved IDs before requests, and gives missing IDs an unoccupied positional or overflow key. Existing opaque provider keys are retained."
     },
     {
       "id": "initialize-instructions",
@@ -773,11 +861,12 @@
       "status": "sanctioned",
       "adr": "docs/adr/0079-upstream-context-overflow-is-input-too-large.md",
       "tests": [
-        "tests/unit/test_providers.py"
+        "tests/unit/test_providers.py",
+        "tests/contract/test_providers.py"
       ],
       "fixtures": [],
       "reference_behavior": "The reference has no typed error code. A 400 the model returns for a request over its context window is the same error text as any other HTTP failure.",
-      "python_behavior": "An isError from a provider 400 whose JSON body carries detail.error_type max_tokens_exceeded carries code input_too_large, so the caller splits the call. Another error_type, a body that only names the token as a string, or another status stays provider. The error text is unchanged (ADR-0079)."
+      "python_behavior": "An isError from a provider 400 whose JSON body carries detail.error_type max_tokens_exceeded carries code input_too_large, so the caller splits the call. Another error_type, a body that only names the token as a string, or another status stays provider. The tool result includes split advice. File-list and range gates hold the affected files on claims-group context overflow (ADR-0086)."
     },
     {
       "id": "gate-diagnostics-and-file-context",
@@ -903,7 +992,21 @@
         "ADR-0062"
       ],
       "reference_behavior": "Oversized primary documents are clipped and sent.",
-      "python_behavior": "The gate refuses oversized input before any review or verification. The response gives the bound and a split suggestion."
+      "python_behavior": "String gates refuse oversized input before any review or verification. The raw gate document guard is 50,000 UTF-16 units."
+    },
+    {
+      "id": "gate-packed-claims",
+      "surface": "result",
+      "tier": "tier_a",
+      "status": "sanctioned",
+      "adr": "docs/adr/0086-shared-provider-window-and-gate-packing.md",
+      "tests": [
+        "tests/unit/test_file_diff.py",
+        "tests/contract/test_gate_range.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The reference supports string diffs and has no server-read range gate.",
+      "python_behavior": "File-list and server-read range gates use first-fit claim groups and send patches above the estimate alone. Provider context overflow holds that group’s files as oversize and caps the claims at review. Raw input caps, binary patches, and untracked paths can also trigger a local hold."
     }
   ]
 }

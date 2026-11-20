@@ -11,9 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from jev_judge_mcp.redact_action import REDACTED, redact_action
+from jev_judge_mcp.redaction.action import redact_action
+from jev_judge_mcp.redaction.values import REDACTED
 
-_MODULE = Path(__file__).resolve().parents[2] / "src" / "jev_judge_mcp" / "redact_action.py"
+_MODULE = Path(__file__).resolve().parents[2] / "src" / "jev_judge_mcp" / "redaction" / "action.py"
 
 # 16, 20, 10, 16, and 30 are the source patterns' minimum lengths.
 _SK = "sk-FAKE000000000000"
@@ -186,11 +187,16 @@ def test_imports_nothing_from_providers_or_tools() -> None:
         assert not name.startswith(("jev_judge_mcp.providers", "jev_judge_mcp.tools"))
 
 
-def test_action_redaction_stays_linear_on_long_word_runs() -> None:
+@pytest.mark.parametrize(
+    ("prefix", "seconds"),
+    [("word " * 50_000, 5.0), ("a." * 100_000, 0.1)],
+    ids=["words", "dots"],
+)
+def test_action_redaction_stays_linear_on_long_word_runs(prefix: str, seconds: float) -> None:
     """Same scan anchor as the credential-literal detector: a long command or output block of word
     characters redacts in seconds, not minutes (jev_ask redacts every command's output, ADR-0077)."""
-    text = "word " * 50_000 + "token="
+    text = prefix + "token="
     started = time.monotonic()
     redacted = redact_action(text)
-    assert time.monotonic() - started < 5
+    assert time.monotonic() - started < seconds
     assert "token=" in redacted

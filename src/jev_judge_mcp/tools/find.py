@@ -5,11 +5,11 @@ from typing import Any
 from jev_judge_mcp.domain import ChoiceQuestion, NoulCriteria, NoulQuestion
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import CANDIDATES, FIND
-from jev_judge_mcp.responses import caller_renames, renamed_ids_field
+from jev_judge_mcp.policy import exists_verdict, fail_closed, rank_candidates
 from jev_judge_mcp.serialize import to_fixed
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, define, frame
 from jev_judge_mcp.tools.common import candidates_schema
-from jev_judge_mcp.tools.observed import exists_verdict, fail_closed, rank_candidates, validate_choice, validate_noul
+from jev_judge_mcp.tools.observed import validate_choice, validate_noul
 from jev_judge_mcp.validation.caps import CapLedger
 
 EXISTS_CRITERIA = NoulCriteria(
@@ -54,15 +54,12 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     query: str = args["query"]
     top_k = int(args.get("top_k", FIND.top_k_default))
     ledger = CapLedger()
-    candidates = ensure_unique_ids(
-        [
-            {"id": c.get("id", ""), "text": ledger.text(c["text"], CANDIDATES.text_units, "item")}
-            for c in args["candidates"]
-        ],
-        "candidate",
-    ).items
-    ids = [str(c["id"]) for c in candidates]
-    renamed = caller_renames(args["candidates"], candidates)
+    identified = ensure_unique_ids(args["candidates"], "candidate")
+    candidates = [
+        {"id": candidate["id"], "text": ledger.text(str(candidate["text"]), CANDIDATES.text_units, "item")}
+        for candidate in identified.items
+    ]
+    ids = identified.ids
 
     questions = {
         "best": ChoiceQuestion(f'Which candidate contains the best answer to: "{query}"?', dict.fromkeys(ids)),
@@ -86,7 +83,6 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
                     "exists_verdict": None,
                     "top": [],
                     "reason": "missing or malformed best or exists answer; cannot rank safely",
-                    **renamed_ids_field(renamed),
                 },
             ),
             truncated=ledger.scopes,
@@ -109,7 +105,6 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
                     }
                     for c in ranked
                 ],
-                **renamed_ids_field(renamed),
             },
         ),
         truncated=ledger.scopes,

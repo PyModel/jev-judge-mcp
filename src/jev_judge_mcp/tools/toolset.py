@@ -14,12 +14,9 @@ import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from anyio import to_thread
 from mcp.types import CallToolResult, TextContent, Tool
 
-from jev_judge_mcp.credential_literal import redact_credential_literals
-from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.keyfile import redaction_values
+from jev_judge_mcp.domain import Usage
 from jev_judge_mcp.policy.actions import Action
 from jev_judge_mcp.providers import ProviderConfigError, ProviderError
 from jev_judge_mcp.serialize import stringify, stringify_compact
@@ -113,9 +110,15 @@ class Toolset:
                 logger.exception("tool %s raised", name)
             code = code_of(error)
             message = str(error)
+            if isinstance(error, ProviderError) and code == "input_too_large":
+                message += " Split the call into smaller inputs."
             if code == "internal":
-                secrets = await to_thread.run_sync(redaction_values, self.runtime.settings)
-                message = redact_credential_literals(message, Redactor(secrets))
+                try:
+                    guard = await self.runtime.security_guard()
+                except ProviderConfigError:
+                    message = "Internal tool error"
+                else:
+                    message = guard.scrub(message)
             return _error_outcome(message, code)
         span.attributes["outcome"] = "error_payload" if result.is_error else "ok"
         for scope in CAP_SCOPES:
@@ -124,7 +127,7 @@ class Toolset:
             span.attributes["action"] = result.action
         for action in ACTIONS:
             span.attributes[f"item_actions.{action}"] = result.item_actions.count(action)
-        return _from_result(result)
+        return _from_result(result, include_reported=self.runtime.settings.study_usage_provenance)
 
     async def aclose(self) -> None:
         logger.debug("metrics %s", self.runtime.telemetry.metrics.snapshot())
@@ -168,10 +171,14 @@ def _error_outcome(text: str, code: str) -> ToolOutcome:
     return ToolOutcome(payload=None, text=text, is_error=True, action=None, error_code=code)
 
 
-def _from_result(result: ToolResult) -> ToolOutcome:
+def _from_result(result: ToolResult, *, include_reported: bool) -> ToolOutcome:
+    payload = result.payload
+    usage = payload.get("usage")
+    if isinstance(usage, Usage):
+        payload = {**payload, "usage": usage.to_wire(include_reported=include_reported)}
     return ToolOutcome(
-        payload=result.payload,
-        text=stringify(result.payload),
+        payload=payload,
+        text=stringify(payload),
         is_error=result.is_error,
         action=result.decision_action,
         error_code=(result.error_code or "internal") if result.is_error else None,

@@ -22,7 +22,7 @@ from jev_judge_mcp.providers import Evaluation, ProviderConfigError, ProviderErr
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from jev_judge_mcp.tools.files_judge import plan
-from tests.support.jev import FakeProvider
+from tests.support.jev import TEST_GUARD, FakeProvider
 
 PERMISSIVE = {"file": {"score": 0.2, "probabilities": {"0": 0.8, "1": 0.2}, "confidence": 0.95}}
 
@@ -37,12 +37,12 @@ def make(path: Path, data: bytes | str = "content") -> Path:
 
 
 def survivors_of(paths: list[str], scope: Path, **kwargs: Any) -> list[str]:
-    survivors, _ = plan(paths, scope, **kwargs)
+    survivors, _ = plan(paths, scope, guard=TEST_GUARD, **kwargs)
     return [text for text, _ in survivors]
 
 
 def skips_of(paths: list[str], scope: Path, **kwargs: Any) -> dict[str, str]:
-    _, skipped = plan(paths, scope, **kwargs)
+    _, skipped = plan(paths, scope, guard=TEST_GUARD, **kwargs)
     return {record["path"]: record["reason"] for record in skipped}
 
 
@@ -68,7 +68,7 @@ def test_a_glob_matches_files_and_directories_are_walked_per_the_flag(tmp_path: 
 
 def test_the_same_file_reached_twice_is_judged_once(tmp_path: Path) -> None:
     make(tmp_path / "src/a.py")
-    survivors, skipped = plan(["src/a.py", "src", "src/*.py"], tmp_path)
+    survivors, skipped = plan(["src/a.py", "src", "src/*.py"], tmp_path, guard=TEST_GUARD)
     assert [text for text, _ in survivors] == ["src/a.py"]
     assert skipped == []
 
@@ -125,7 +125,7 @@ def test_the_prune_reasons_are_stable_and_the_order_is_expansion_then_read(tmp_p
 def test_the_hard_cap_skips_survivors_past_files_max_in_input_order(tmp_path: Path) -> None:
     for index in range(FILES_JUDGE.files_max + 2):
         make(tmp_path / f"f{index:02d}.txt")
-    survivors, skipped = plan(["*.txt"], tmp_path)
+    survivors, skipped = plan(["*.txt"], tmp_path, guard=TEST_GUARD)
     assert [text for text, _ in survivors] == [f"f{index:02d}.txt" for index in range(FILES_JUDGE.files_max)]
     # One aggregate row for the overflow — count plus the first few paths — not one row per file.
     assert skipped == [
@@ -139,7 +139,7 @@ def test_the_hard_cap_skips_survivors_past_files_max_in_input_order(tmp_path: Pa
 def test_the_content_a_survivor_carries_is_the_redacted_text(tmp_path: Path) -> None:
     literal = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
     make(tmp_path / "notes.txt", f"token: {literal}")
-    survivors, _ = plan(["notes.txt"], tmp_path)
+    survivors, _ = plan(["notes.txt"], tmp_path, guard=TEST_GUARD)
     _, content = survivors[0]
     assert literal not in content and "[redacted]" in content
 
@@ -150,7 +150,7 @@ def test_reading_stops_at_files_max_even_when_the_tree_is_huge(tmp_path: Path, m
     for index in range(500):
         make(tmp_path / f"src/f{index:03d}.txt")
     calls = monkeypatch_read_counter(monkeypatch)
-    survivors, skipped = plan(["."], tmp_path, recursive=True)
+    survivors, skipped = plan(["."], tmp_path, recursive=True, guard=TEST_GUARD)
     assert len(survivors) == FILES_JUDGE.files_max
     assert calls() == FILES_JUDGE.files_max  # nothing past the cap is read
     assert skipped == [
@@ -168,7 +168,7 @@ def test_a_glob_never_traverses_a_skip_listed_directory(tmp_path: Path, monkeypa
         make(tmp_path / f"node_modules/pkg/f{index:03d}.js")
     make(tmp_path / "keep.py")
     reads = monkeypatch_read_counter(monkeypatch)
-    survivors, skipped = plan(["**/*.py", "**/*.js"], tmp_path)
+    survivors, skipped = plan(["**/*.py", "**/*.js"], tmp_path, guard=TEST_GUARD)
     assert [text for text, _ in survivors] == ["keep.py"]
     assert reads() == 1
     # The *.js glob matched nothing it may enter: not_found for the pattern, never a scan report.
@@ -181,7 +181,7 @@ def test_discovery_stops_at_its_bound_and_reports_one_aggregate(
     for index in range(FILES_JUDGE.discovery_max + 40):
         make(tmp_path / f"f{index:04d}.txt")
     reads = monkeypatch_read_counter(monkeypatch)
-    survivors, skipped = plan(["*"], tmp_path)
+    survivors, skipped = plan(["*"], tmp_path, guard=TEST_GUARD)
     assert len(survivors) == FILES_JUDGE.files_max
     assert reads() == FILES_JUDGE.files_max
     assert skipped[-1] == {
@@ -199,7 +199,7 @@ def test_skip_rows_collapse_into_one_aggregate_row_per_reason(tmp_path: Path, mo
         make(tmp_path / f"b{index:03d}.bin", b"ok\x00 binary")
     make(tmp_path / "good.txt")
     reads = monkeypatch_read_counter(monkeypatch)
-    survivors, skipped = plan(["*.bin", "good.txt"], tmp_path)
+    survivors, skipped = plan(["*.bin", "good.txt"], tmp_path, guard=TEST_GUARD)
     assert [text for text, _ in survivors] == ["good.txt"]
     individuals = [row for row in skipped if not row["path"].startswith("+")]
     aggregates = [row for row in skipped if row["path"].startswith("+")]
@@ -220,9 +220,9 @@ def monkeypatch_read_counter(monkeypatch: pytest.MonkeyPatch) -> Any:
     calls = {"n": 0}
     real = module.read_state
 
-    def counting(path: Any, caps: Any = None, **kwargs: Any) -> str:
+    def counting(path: Any, *args: Any, **kwargs: Any) -> str:
         calls["n"] += 1
-        return real(path, **kwargs, **({} if caps is None else {"caps": caps}))
+        return real(path, *args, **kwargs)
 
     monkeypatch.setattr(module, "read_state", counting)
     return lambda: calls["n"]
@@ -349,7 +349,7 @@ def test_scout_015_limits_nonmatching_directory_entries(tmp_path: Path, monkeypa
     monkeypatch.setattr(files_judge, "FILES_JUDGE", replace(FILES_JUDGE, discovery_max=2))
     for i in range(20):
         (tmp_path / f"file{i}").touch()
-    kept, skipped = plan(["*.py"], scope=tmp_path)
+    kept, skipped = plan(["*.py"], scope=tmp_path, guard=TEST_GUARD)
     assert not kept
     assert any(row["reason"] == "over_the_file_cap" for row in skipped)
 
@@ -387,7 +387,7 @@ def test_scout_015_counts_scans_of_empty_directories(tmp_path: Path, monkeypatch
     from jev_judge_mcp.tools import files_judge
 
     monkeypatch.setattr(files_judge, "FILES_JUDGE", replace(FILES_JUDGE, discovery_max=2))
-    kept, skipped = plan(["**/**/**/**/**/notes.txt"], scope=tmp_path)
+    kept, skipped = plan(["**/**/**/**/**/notes.txt"], scope=tmp_path, guard=TEST_GUARD)
     assert not kept
     assert [row["reason"] for row in skipped] == ["over_the_file_cap"]
 
@@ -395,7 +395,7 @@ def test_scout_015_counts_scans_of_empty_directories(tmp_path: Path, monkeypatch
 def test_scout_015_glob_walks_ordinary_in_scope_directory_link(tmp_path: Path) -> None:
     make(tmp_path / "docs/notes.txt")
     (tmp_path / "linked").symlink_to(tmp_path / "docs", target_is_directory=True)
-    assert plan(["link*"], scope=tmp_path) == ([("linked/notes.txt", "content")], [])
+    assert plan(["link*"], scope=tmp_path, guard=TEST_GUARD) == ([("linked/notes.txt", "content")], [])
 
 
 def test_scout_015_reports_unreadable_directories(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -404,7 +404,7 @@ def test_scout_015_reports_unreadable_directories(tmp_path: Path, monkeypatch: p
     from jev_judge_mcp.tools import files_judge
 
     monkeypatch.setattr(files_judge, "pinned_directory", Mock(side_effect=PermissionError))
-    kept, skipped = plan(["*.txt"], scope=tmp_path)
+    kept, skipped = plan(["*.txt"], scope=tmp_path, guard=TEST_GUARD)
     assert kept == [] and skipped == [{"path": ".", "reason": "unreadable_directory"}]
 
 
@@ -414,7 +414,7 @@ def test_scout_015_worker_checks_cancellation_before_reading(tmp_path: Path) -> 
 
     make(tmp_path / "sample.txt")
     with pytest.raises(asyncio.CancelledError):
-        plan(["*.txt"], scope=tmp_path, check_cancelled=cancel)
+        plan(["*.txt"], scope=tmp_path, check_cancelled=cancel, guard=TEST_GUARD)
 
 
 def test_scout_015_discovery_diagnostics_use_only_counts_and_duration(
@@ -424,7 +424,7 @@ def test_scout_015_discovery_diagnostics_use_only_counts_and_duration(
 
     make(tmp_path / "fixture-name.txt")
     with caplog.at_level(logging.DEBUG, logger="jev_judge_mcp.tools.files_judge"):
-        plan(["*.txt"], scope=tmp_path)
+        plan(["*.txt"], scope=tmp_path, guard=TEST_GUARD)
     records = [record.getMessage() for record in caplog.records if record.name == "jev_judge_mcp.tools.files_judge"]
     assert len(records) == 1 and "examined=2" in records[0] and "truncated=0" in records[0]
     assert "duration_ms=" in records[0] and "fixture-name" not in records[0]
@@ -433,7 +433,7 @@ def test_scout_015_discovery_diagnostics_use_only_counts_and_duration(
 def test_literal_and_glob_follow_the_same_named_directory_alias(tmp_path: Path) -> None:
     make(tmp_path / "real/a.py")
     (tmp_path / "alias").symlink_to("real")
-    assert plan(["alias/*.py"], tmp_path) == plan(["alias/a.py"], tmp_path)
+    assert plan(["alias/*.py"], tmp_path, guard=TEST_GUARD) == plan(["alias/a.py"], tmp_path, guard=TEST_GUARD)
 
 
 def test_recursive_glob_charges_each_directory_listing_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -444,4 +444,4 @@ def test_recursive_glob_charges_each_directory_listing_once(tmp_path: Path, monk
     monkeypatch.setattr(files_judge, "FILES_JUDGE", replace(FILES_JUDGE, discovery_max=3))
     for name in ("a.md", "b.py", "c.md", "d.md", "e.md"):
         make(tmp_path / name)
-    assert plan(["**/*.py"], tmp_path) == ([("b.py", "content")], [])
+    assert plan(["**/*.py"], tmp_path, guard=TEST_GUARD) == ([("b.py", "content")], [])

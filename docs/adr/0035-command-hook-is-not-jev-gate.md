@@ -3,6 +3,8 @@ status: accepted
 ---
 # The command hook is not jev_gate
 
+> Partially superseded. The command-hook guard amendment in ADR-0002 moves the questions, thresholds and decision policy to `policy/guard.py`.
+
 `jev_gate` is one of the ten MCP tools. It checks whether a piece of work finished. A proposed shell action is a different judgment, made before the action runs, and printing `allow` for it would loosen the harness that called the hook. The hook is an opt-in subprocess, `jev-judge-mcp hook gate`. It is not registered as a tool, and nothing named `jev_gate` implements it.
 
 ## Decision

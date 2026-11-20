@@ -8,35 +8,43 @@ log from the repo and calls ``jev_gate``. Neither path branches on a harness.
 from __future__ import annotations
 
 import os
+import re
 import shlex
-import stat
 import subprocess
 import sys
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+import time
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
 import anyio
+from pydantic import ValidationError
 
-from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain.json import decode_json, is_json_object
-from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.git_diff import GitDiffError, GitDiffTooLarge, repo_root
-from jev_judge_mcp.hook import fail_open_or_ask, hook_required
-from jev_judge_mcp.hook_render import render_decision
+from jev_judge_mcp.git import GitDiffError, GitDiffTooLarge, range_has_changes, repo_root, run
+from jev_judge_mcp.hook.render import fail_open_or_ask, hook_required, render_decision
 from jev_judge_mcp.identity import reported_version
-from jev_judge_mcp.keyfile import redaction_values, stored_key_path
-from jev_judge_mcp.limits import GATE
+from jev_judge_mcp.limits import FILE_JUDGE, GATE
 from jev_judge_mcp.policy import POLICY_VERSION
+from jev_judge_mcp.process import OutputTooLarge
 from jev_judge_mcp.providers import JevProvider
+from jev_judge_mcp.redaction.action import redact_action
+from jev_judge_mcp.redaction.values import register_log_secrets
+from jev_judge_mcp.security import SecurityGuard, build_guard
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import load_settings
-from jev_judge_mcp.text import length
-from jev_judge_mcp.tools import TOOLS, Runtime, Toolset, gate_range
-from jev_judge_mcp.tools.base import ToolError, code_of
-from jev_judge_mcp.tools.file_state import is_secret_store, pinned_directory, resolve_scoped
+from jev_judge_mcp.tools import TOOLS, Runtime, Toolset, gate, gate_range
+from jev_judge_mcp.tools.base import JevTool, ToolError, code_of
+from jev_judge_mcp.tools.file_state import read_state, resolve_scoped
 from jev_judge_mcp.tools.toolset import ToolOutcome
+
+COMPLETION_HARNESS_TIMEOUT_SECONDS = 90.0
+"""Command timeout in the shipped completion hook fragment."""
+
+COMPLETION_PROCESS_MARGIN_SECONDS = 10.0
+"""Time reserved for interpreter startup, cleanup, and emitting the hook response."""
 
 SCHEMA_VERSION = 1
 _USAGE_JUDGE = "jev-judge-mcp judge: usage: jev-judge-mcp judge <tool>\n"
@@ -87,30 +95,40 @@ def gate_main(argv: Sequence[str], *, provider: JevProvider | None = None) -> in
     return _emit(run_gate(argv, provider=provider))
 
 
-def run_gate(argv: Sequence[str], *, provider: JevProvider | None = None) -> Decision:
+def run_gate(
+    argv: Sequence[str],
+    *,
+    provider: JevProvider | None = None,
+    deadline: float | None = None,
+    repo: Path | None = None,
+    shell_cwd: Path | None = None,
+) -> Decision:
     """In-process gate. Does not write stdout. The completion hook reads this; `gate_main` emits it."""
     try:
         options = _gate_options(argv)
     except CliError as error:
         return Decision(error.exit_code, stderr=f"jev-judge-mcp gate: {error}\n")
     try:
-        arguments = _gate_arguments(options)
+        guard = build_guard(load_settings())
+    except ValidationError:
+        return _failure("invalid_arguments", "invalid settings", tool="jev_gate")
+    except ValueError as error:
+        return _failure("auth", str(error), tool="jev_gate")
+    register_log_secrets(guard.redact)
+    if repo is not None and "request" in options:
+        options["request"] = redact_action(guard.scrub(options["request"]))
+    try:
+        arguments, held = _gate_arguments(options, repo, Path.cwd() if shell_cwd is None else shell_cwd, guard)
     except CliError as error:
         return _failure(error.code, str(error), tool="jev_gate", exit_code=error.exit_code)
-    return _run_tool("jev_gate", arguments, provider=provider, tests_read_from_file=True)
-
-
-def calibrate_main(argv: Sequence[str]) -> int:
-    """Advisory threshold fitting on the caller's labeled rows (ADR-0070); offline, no provider."""
-    from jev_judge_mcp import calibrate
-
-    return calibrate.main(argv)
+    # Held files reach the judgment as unreviewed, as in jev_gate_range.
+    judged = replace(gate.TOOL, handler=partial(gate.handle, withheld=held))
+    return _run_tool(
+        "jev_gate", arguments, provider=provider, tests_read_from_file=True, deadline=deadline, tools=(judged,)
+    )
 
 
 def _gate_options(argv: Sequence[str]) -> dict[str, str]:
-    if not argv or (argv[0].startswith("-") and argv[0] not in ("--diff", "--claims", "--tests", "--request")):
-        if argv and argv[0] in ("-h", "--help"):
-            raise CliError("invalid_arguments", _USAGE_GATE.strip(), exit_code=2)
     options: dict[str, str] = {}
     index = 0
     flags = {"--diff", "--claims", "--tests", "--request"}
@@ -126,81 +144,42 @@ def _gate_options(argv: Sequence[str]) -> dict[str, str]:
     return options
 
 
-def _gate_arguments(options: Mapping[str, str]) -> dict[str, object]:
-    repo = _repo_root()
-    settings = load_settings()
-    key = stored_key_path(settings)
-    redact = Redactor(redaction_values(settings))
+def _gate_arguments(
+    options: Mapping[str, str], repo: Path | None, shell_cwd: Path, guard: SecurityGuard
+) -> tuple[dict[str, object], list[dict[str, str]]]:
     try:
-        claims_text = _read_evidence(options["claims"], repo, key, GATE.aggregate_evidence_units)
-        tests_text = _read_evidence(options["tests"], repo, key, GATE.doc_units)
+        if repo is None:
+            repo = repo_root(shell_cwd)
+        claims_text = read_state(
+            resolve_scoped(str(shell_cwd / options["claims"]), repo),
+            guard,
+            caps=replace(FILE_JUDGE, file_units_max=GATE.aggregate_evidence_units),
+        )
+        tests_text = read_state(
+            resolve_scoped(str(shell_cwd / options["tests"]), repo),
+            guard,
+            caps=replace(FILE_JUDGE, file_units_max=GATE.doc_units),
+        )
         request, claims = _claims(claims_text, options.get("request"))
-        diff, skipped = gate_range.read_range(options["diff"], key, redact, cwd=repo)
-        if skipped:
-            raise CliError("secret_file", "range includes a withheld file; review it locally", exit_code=2)
+        diff, held = gate_range.read_range(options["diff"], guard, cwd=repo)
+        if any(item["reason"] == "secret_file" for item in held):
+            raise CliError("secret_file", "range includes a secret store; review it locally", exit_code=2)
+        if not diff:
+            paths = ", ".join(item["path"] for item in held)
+            raise CliError("binary_file", f"range holds only binary files ({paths}); review them locally", exit_code=2)
     except ToolError as error:
-        raise CliError(
-            error.code if error.code == "secret_file" else "invalid_arguments", str(error), exit_code=2
-        ) from error
+        raise CliError(error.code, str(error), exit_code=2) from error
     except GitDiffTooLarge as error:
         raise CliError("input_too_large", str(error), exit_code=2) from error
     except GitDiffError as error:
         raise CliError("invalid_arguments", str(error), exit_code=2) from error
-    # The hash is set here because this reader read the file (ADR-0067). The MCP tool does not hash
-    # a string the caller typed.
-    tests_text = redact(redact_credential_literals(tests_text))
     return {
-        "request": redact(redact_credential_literals(request)),
+        "request": guard.scrub(request),
         "diff": diff,
-        "claims": [redact(redact_credential_literals(claim)) for claim in claims],
+        "claims": [guard.scrub(claim) for claim in claims],
         "evidence": [{"id": "cli", "text": "Read by jev-judge-mcp gate from the local repo."}],
         "tests": tests_text,
-    }
-
-
-def _repo_root() -> Path:
-    try:
-        return repo_root(Path.cwd())
-    except GitDiffError as error:
-        raise CliError("invalid_arguments", str(error), exit_code=2) from error
-
-
-def _read_evidence(name: str, repo: Path, key: Path, units: int) -> str:
-    """CLI evidence is strict UTF-8. Validate and read the same bounded file descriptor."""
-    path = resolve_scoped(name, repo)
-    if is_secret_store(path, key):
-        raise CliError("secret_file", "refusing a credential store", exit_code=2)
-    ceiling = 3 * units  # maximum UTF-8 bytes per UTF-16 unit
-    try:
-        with pinned_directory(path.parent) as directory:
-            fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-        try:
-            info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode):
-                raise CliError("invalid_arguments", "expected a regular evidence file", exit_code=2)
-            try:
-                key_info = key.stat()
-            except FileNotFoundError:
-                pass
-            else:
-                if os.path.samestat(info, key_info):
-                    raise CliError("secret_file", "refusing the active key store", exit_code=2)
-            if info.st_size > ceiling:
-                raise CliError("input_too_large", f"evidence exceeds {units:,} units", exit_code=2)
-            with os.fdopen(fd, "rb", closefd=False) as handle:
-                data = handle.read(ceiling + 1)
-        finally:
-            os.close(fd)
-        if len(data) > ceiling:
-            raise CliError("input_too_large", f"evidence exceeds {units:,} units", exit_code=2)
-        content = data.decode("utf-8")
-    except (OSError, UnicodeDecodeError) as error:
-        raise CliError("invalid_arguments", "could not read a UTF-8 evidence file", exit_code=2) from error
-    if length(content) > units:
-        raise CliError("input_too_large", f"evidence exceeds {units:,} units", exit_code=2)
-    if "\x00" in content:
-        raise CliError("invalid_arguments", "binary evidence file", exit_code=2)
-    return content
+    }, held
 
 
 def _claims(text: str, request: str | None) -> tuple[str, list[str]]:
@@ -227,13 +206,19 @@ def _claims(text: str, request: str | None) -> tuple[str, list[str]]:
 
 
 def _run_tool(
-    name: str, arguments: Mapping[str, object], *, provider: JevProvider | None, tests_read_from_file: bool = False
+    name: str,
+    arguments: Mapping[str, object],
+    *,
+    provider: JevProvider | None,
+    tests_read_from_file: bool = False,
+    deadline: float | None = None,
+    tools: Sequence[JevTool] = TOOLS,
 ) -> Decision:
-    known = {tool.name for tool in TOOLS}
+    known = {tool.name for tool in tools}
     if name not in known:
         return _failure("invalid_arguments", f"unknown tool {name}", tool=name, exit_code=2)
     try:
-        outcome = anyio.run(_execute, name, dict(arguments), provider, tests_read_from_file)
+        outcome = anyio.run(_execute, name, dict(arguments), provider, tests_read_from_file, deadline, tools)
     except Exception as error:
         return _failure(code_of(error), str(error), tool=name)
     if outcome.is_error:
@@ -253,11 +238,19 @@ def _run_tool(
 
 
 async def _execute(
-    name: str, arguments: dict[str, Any], provider: JevProvider | None, tests_read_from_file: bool
+    name: str,
+    arguments: dict[str, Any],
+    provider: JevProvider | None,
+    tests_read_from_file: bool,
+    deadline: float | None,
+    tools: Sequence[JevTool],
 ) -> ToolOutcome:
-    toolset = Toolset(_runtime(provider, tests_read_from_file=tests_read_from_file), TOOLS)
+    toolset = Toolset(_runtime(provider, tests_read_from_file=tests_read_from_file), tools)
     try:
-        return await toolset.execute(name, arguments)
+        remaining = None if deadline is None else max(0, deadline - time.monotonic())
+        with anyio.move_on_after(remaining):
+            return await toolset.execute(name, arguments)
+        raise ToolError("completion hook judgment deadline expired", code="timeout")
     finally:
         await toolset.aclose()
 
@@ -267,6 +260,11 @@ def _runtime(provider: JevProvider | None, *, tests_read_from_file: bool) -> Run
     if provider is None:
         return Runtime(settings, tests_read_from_file=tests_read_from_file)
     return Runtime(settings, provider_factory=lambda _settings: provider, tests_read_from_file=tests_read_from_file)
+
+
+def emit_configuration_failure(tool: str, code: str, message: str) -> int:
+    sys.stderr.write(message + "\n")
+    return _emit(_failure(code, message, tool=tool))
 
 
 def _emit(decision: Decision) -> int:
@@ -381,88 +379,157 @@ def _version() -> str:
         return "unknown"
 
 
-_COMPLETION_COMMANDS: tuple[tuple[str, ...], ...] = (
-    ("git", "push"),
-    ("gh", "pr", "create"),
-    ("gh", "pr", "merge"),
-)
-"""The argv prefixes the completion hook judges, tokenized the way the shell reads the command."""
-
-
-_SHELL_OPERATORS = frozenset({"&&", "||", ";", ";;", "|", "&"})
-"""The operators that end one simple command and start the next, as `shlex` with punctuation reads them."""
-
+_SHELL_BOUNDARIES = re.compile(r"""'[^']*'|"(?:\\.|[^"\\])*"|\\[\s\S]|(?:^|[ \t])\#[^\n]*|&&|\|\||[&|;\n()]""")
+_ASSIGNMENT = re.compile(r"[a-zA-Z_][a-zA-Z_0-9]*=")
 _GIT_OPTIONS_WITH_VALUE = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"})
 _GIT_FLAGS = frozenset(
     {"-p", "--paginate", "-P", "--no-pager", "--bare", "--no-replace-objects", "--literal-pathspecs"}
 )
-"""Git's global options, which sit between `git` and its subcommand (`git -C repo push`)."""
+_MERGE_FLAGS = frozenset({"--squash", "--merge", "--rebase", "--auto", "--delete-branch", "-s", "-m", "-r", "-d"})
 
 
-def completion_matches(command: str) -> bool:
-    """True only when some simple command on the line is a completion command. Not a general shell match.
-
-    The line is read as the shell reads it (ADR-0064 amendment): `cd repo && git push` is two
-    commands and the second matches, `git  push` (extra whitespace) matches, `git pushback` does
-    not, and git's global options before the subcommand (`git -C repo push`) are skipped. A line
-    that does not tokenize abstains: the shell could not run it either, so there is nothing to gate.
-    """
-    try:
-        tokens = list(shlex.shlex(command, posix=True, punctuation_chars=True))
-    except ValueError:
-        return False
-    argv: list[str] = []
-    for token in [*tokens, ";"]:
-        if token in _SHELL_OPERATORS or all(character in "&|;" for character in token):
-            if argv and _is_completion_command(tuple(argv)):
-                return True
-            argv = []
-        else:
-            argv.append(token)
-    return False
+@dataclass(frozen=True, slots=True)
+class _CompletionTarget:
+    shell_cwd: Path | None
+    git_cwd: Path | None
+    kind: str
+    args: tuple[str, ...]
 
 
-def _is_completion_command(argv: tuple[str, ...]) -> bool:
-    if argv[0] == "git":
-        argv = ("git", *_after_git_options(argv[1:]))
-    return any(argv[: len(prefix)] == prefix for prefix in _COMPLETION_COMMANDS)
+def _commands(command: str) -> Iterator[tuple[list[str], str]]:
+    """Split simple commands at unquoted shell boundaries."""
+    start = 0
+    for match in _SHELL_BOUNDARIES.finditer(command):
+        boundary = match.group()
+        if boundary[0] in "'\"\\":
+            continue
+        yield shlex.split(command[start : match.start()]), boundary
+        start = match.end()
+    yield shlex.split(command[start:]), ""
 
 
-def _after_git_options(rest: tuple[str, ...]) -> tuple[str, ...]:
-    index = 0
-    while index < len(rest):
-        token = rest[index]
-        if token in _GIT_OPTIONS_WITH_VALUE:
-            index += 2
-        elif token in _GIT_FLAGS or (token.startswith("--") and "=" in token):
-            index += 1
+def _static_path(cwd: Path | None, word: str) -> Path | None:
+    if cwd is None or not word or word == "-" or any(char in word for char in "$`*?[]{}~"):
+        return None
+    return cwd / word
+
+
+def _git_target(argv: list[str], cwd: Path | None) -> _CompletionTarget | None:
+    git_cwd = cwd
+    i = 1
+    while i < len(argv):
+        word = argv[i]
+        if word in _GIT_OPTIONS_WITH_VALUE and i + 1 < len(argv):
+            if word == "-C":
+                if argv[i + 1]:
+                    git_cwd = _static_path(git_cwd, argv[i + 1])
+            elif word != "-c" or argv[i + 1].partition("=")[0] != "core.hooksPath":
+                git_cwd = None
+            i += 2
+        elif word in _GIT_FLAGS or (word.startswith("--") and "=" in word):
+            if word == "--bare" or word not in _GIT_FLAGS:
+                git_cwd = None
+            i += 1
         else:
             break
-    return rest[index:]
+    if argv[i : i + 1] == ["push"]:
+        return _CompletionTarget(cwd, git_cwd, "push", tuple(argv[i + 1 :]))
+    return None
 
 
-def completion_range(
-    env: Mapping[str, str], run: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run
-) -> str | None:
-    """The range the completion gate judges: `JEV_COMPLETION_DIFF` when set, else what a push sends.
+def completion_targets(command: str, cwd: Path) -> list[_CompletionTarget]:
+    matches: list[_CompletionTarget] = []
+    shell_cwd: Path | None = cwd
+    previous = ""
+    try:
+        for words, boundary in _commands(command):
+            if previous in ("(", ")", "|", "||", "&"):
+                shell_cwd = None
+            previous = boundary
+            i = 0
+            override = False
+            while i < len(words):
+                word = words[i]
+                if word in ("then", "time", "command", "if", "do", "else"):
+                    i += 1
+                elif _ASSIGNMENT.match(word):
+                    override |= word.startswith(("GIT_", "GH_"))
+                    i += 1
+                else:
+                    break
+            argv = words[i:]
+            if not argv:
+                continue
+            executable = argv[0] if "/" not in argv[0] else Path(argv[0]).name if argv[0].startswith("/") else ""
+            if executable == "cd":
+                shell_cwd = (
+                    _static_path(shell_cwd, argv[1]) if len(argv) == 2 and boundary in ("&&", ";", "\n") else None
+                )
+            elif executable == "git":
+                target = _git_target(argv, None if override else shell_cwd)
+                if target is not None:
+                    matches.append(target)
+            elif executable == "gh" and argv[1:2] == ["pr"] and argv[2:3] in (["create"], ["merge"]):
+                matches.append(_CompletionTarget(shell_cwd, None if override else shell_cwd, argv[2], tuple(argv[3:])))
+    except ValueError:
+        return []
+    return matches
 
-    Without the variable, the first range git resolves is used: the commits ahead of the upstream
-    (`@{upstream}..HEAD`), else the last commit (`HEAD~1..HEAD`), else the working tree against a
-    root commit (`HEAD`). A range that resolves and is empty means nothing is being pushed, so
-    there is nothing to gate: `None`. When none resolves, `HEAD` is returned and the gate reports
-    what git says (ADR-0064 amendment).
-    """
-    explicit = env.get("JEV_COMPLETION_DIFF")
-    if explicit:
-        return explicit
-    for candidate in ("@{upstream}..HEAD", "HEAD~1..HEAD", "HEAD"):
-        # `--quiet`: exit 1 when the range has differences, 0 when it is empty, 128 when it does not resolve.
-        result = run(["git", "diff", "--quiet", candidate], check=False, capture_output=True)
-        if result.returncode == 1:
-            return candidate
+
+def _pr_base(repo: Path, target: _CompletionTarget) -> str:
+    base = ""
+    if target.kind == "merge":
+        if any(arg not in _MERGE_FLAGS for arg in target.args):
+            raise GitDiffError("the current branch's PR could not be determined")
+    else:
+        for i, arg in enumerate(target.args):
+            name, equals, value = arg.partition("=")
+            if name in ("--head", "-H", "--repo", "-R") or arg.startswith(("-H", "-R")):
+                raise GitDiffError("the current branch's PR could not be determined")
+            if name == "--base" or arg.startswith("-B"):
+                if arg.startswith("-B") and name != "-B":
+                    base = arg[2:]
+                else:
+                    base = value if equals else target.args[i + 1] if i + 1 < len(target.args) else ""
+                if not base or base.startswith("-"):
+                    raise GitDiffError("PR base could not be determined")
+    branch = _current_branch(repo)
+    if not base:
+        result = run(repo, "config", "--get", "branch." + branch + ".gh-merge-base")
         if result.returncode == 0:
-            return None
-    return "HEAD"
+            base = result.stdout.decode().strip()
+    ref = f"refs/remotes/origin/{base or 'HEAD'}"
+    if run(repo, "check-ref-format", ref).returncode:
+        raise GitDiffError("PR base could not be determined")
+    return ref
+
+
+def _current_branch(repo: Path) -> str:
+    branch = run(repo, "symbolic-ref", "--quiet", "--short", "HEAD")
+    if branch.returncode:
+        raise GitDiffError("a PR must have a current branch")
+    return branch.stdout.decode().strip()
+
+
+def completion_range(env: Mapping[str, str], repo: Path, target: _CompletionTarget | None = None) -> str | None:
+    """Use the push's tracking range or the current branch's PR merge base, entirely offline."""
+    if explicit := env.get("JEV_COMPLETION_DIFF"):
+        return explicit
+    if target is not None and target.kind != "push":
+        candidate = f"{_pr_base(repo, target)}...HEAD"
+        changes = range_has_changes(repo, candidate)
+        if changes is None:
+            raise GitDiffError("PR base could not be determined")
+        return candidate if changes else None
+    for candidate in ("@{upstream}..HEAD", "HEAD~1..HEAD"):
+        if (changes := range_has_changes(repo, candidate)) is not None:
+            return candidate if changes else None
+    empty = run(repo, "hash-object", "-t", "tree", "--stdin")
+    if empty.returncode == 0:
+        candidate = f"{empty.stdout.decode().strip()}..HEAD"
+        if (changes := range_has_changes(repo, candidate)) is not None:
+            return candidate if changes else None
+    raise GitDiffError("push range could not be determined")
 
 
 def command_from_hook_event(event: Mapping[str, object]) -> str:
@@ -530,6 +597,7 @@ def completion_hook_main(
     if list(argv):
         sys.stderr.write("jev-judge-mcp completion-hook: usage: jev-judge-mcp completion-hook\n")
         return 2
+    deadline = time.monotonic() + COMPLETION_HARNESS_TIMEOUT_SECONDS - COMPLETION_PROCESS_MARGIN_SECONDS
     body = sys.stdin.read() if text is None else text
     env = os.environ if environ is None else environ
     required = hook_required(env)
@@ -539,19 +607,34 @@ def completion_hook_main(
         return fail_open_or_ask(required, "error.code=invalid_arguments\n", "stdin was not hook-event JSON")
     if not is_json_object(parsed):
         return fail_open_or_ask(required, "", "stdin was not hook-event JSON")
-    if not completion_matches(command_from_hook_event(parsed)):
+    command = command_from_hook_event(parsed)
+    origin = parsed.get("cwd")
+    cwd = Path(origin) if isinstance(origin, str) and Path(origin).is_absolute() else Path.cwd()
+    matches = completion_targets(command, cwd)
+    if not matches:
         return 0
     claims = env.get("JEV_COMPLETION_CLAIMS")
     tests = env.get("JEV_COMPLETION_TESTS")
     if not claims or not tests:
         return fail_open_or_ask(required, "error.code=invalid_arguments\n", "invalid_arguments")
-    diff = completion_range(env)
+    try:
+        if len(matches) != 1 or (target := matches[0]).git_cwd is None or target.shell_cwd is None:
+            raise GitDiffError("completion repository could not be resolved")
+        repo = repo_root(target.git_cwd)
+        diff = completion_range(env, repo, target)
+    except (GitDiffError, OSError, ValueError, subprocess.TimeoutExpired, OutputTooLarge):
+        return fail_open_or_ask(required, "error.code=invalid_arguments\n", "invalid_arguments")
     if diff is None:
-        # The push sends no commits: there is no completion to judge, under either flag setting.
-        sys.stderr.write("jev-judge-mcp completion-hook: nothing to gate; the push sends no commits\n")
+        sys.stderr.write("jev-judge-mcp completion-hook: nothing to gate; the selected range is empty\n")
         return 0
     try:
-        decision = run_gate(["--diff", diff, "--claims", claims, "--tests", tests], provider=provider)
+        decision = run_gate(
+            ["--diff", diff, "--claims", claims, "--tests", tests, "--request", command],
+            provider=provider,
+            deadline=deadline,
+            repo=repo,
+            shell_cwd=target.shell_cwd,
+        )
     except Exception:
         return fail_open_or_ask(required, "error.code=provider\n", "provider")
     if decision.exit_code != 0:

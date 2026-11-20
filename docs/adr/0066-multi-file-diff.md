@@ -3,6 +3,8 @@ status: accepted
 ---
 # A file list is reviewed per file, not silently cut
 
+> Partially superseded. ADR-0081 supersedes the original sibling/evidence context and oversized-patch handling. ADR-0083 qualifies source and defect judgments; ADR-0085 reserves file evidence IDs. The ADR-0086 amendment replaces the single claims pass with packed groups and leaves window refusals to the provider.
+
 A string `diff` over the document cap is truncated and cannot be `auto`. That inherited rule stays for a string. A caller who has the bytes per file should not have to hope the join fits.
 
 ## Decision
@@ -36,8 +38,7 @@ The split path now asks two kinds of request and frames one reply over all of th
   the `claim_i` and `source_i` questions, asked once. The fitting files join the evidence as one
   implicit `diff` item per file (`id "diff:<path>"`, sanitized like any id), so a claim can rest
   on a file's patch the way a claim rests on the string diff. The `verification` block is this
-  one request's rows — canonical by construction — and `renamed_ids` covers this request's
-  evidence pass.
+  one request's rows.
 
 The call's action is the worst of the review files' worst action and the verification action,
 and `usage` is the sum over every provider call with a request id kept, through the same
@@ -105,3 +106,26 @@ were even asked.
 - No recorded parity fixture carries a file list (the shape is an extension), so request order is
   not pinned by replay; `tests/unit/test_file_diff.py` pins the overlap, the fan-out bound, the process cap, the input order,
   and the cancel-on-failure arm.
+
+## Amendment (2026-11-19): reserve file evidence IDs
+
+[ADR-0085](0085-shared-caller-id-policy.md) reserves the generated `diff:<path>` evidence keys in
+the caller's evidence namespace. A collision fails before the per-file reviews begin. The
+verification result uses canonical evidence IDs and has no `renamed_ids` field.
+
+
+## Amendment (2026-11-19): pack claim verification by provider window
+
+Each fitting file still has one review request. First-fit grouping in input order packs whole
+patches into as few groups as the heuristic finds under the shared provider limits. Each group asks
+every claim with the same caller evidence and test log. Grounded contradiction at the automatic
+threshold takes precedence over verification. One confident verification can stand when there is
+no such contradiction. An invalid required answer holds that claim for review. A patch that cannot
+fit a group and its mandatory review state is withheld as `oversize`. See ADR-0086.
+
+## Amendment (2026-11-19): let the provider judge a larger patch
+
+The byte budget packs claims groups. A patch above the estimate is sent in its own group.
+A claims group rejected for provider context size puts its files on local hold as `oversize`
+and caps the claims at review. The raw per-document, aggregate and file-count guards still apply.
+See the [ADR-0086 amendment](0086-shared-provider-window-and-gate-packing.md#amendment-2026-11-19-the-byte-budget-packs-the-provider-refuses).

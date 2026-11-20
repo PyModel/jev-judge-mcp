@@ -3,6 +3,8 @@ status: accepted
 ---
 # Evidence may name its kind, role, and whether tests were hashed
 
+> Partially superseded. ADR-0083 removes `tests_format` and `tests_sha256` from public inputs. Caller-supplied logs are self-reported; the CLI and range tool identify server-read logs internally.
+
 Every evidence item used to be raw text. A caller note verified a claim. A before/after blob had no role. A test log was a string with no hash.
 
 ## Decision

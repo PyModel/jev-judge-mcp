@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from jev_judge_mcp.server import MIN_SECRET_LENGTH
+from jev_judge_mcp.security import MIN_SECRET_LENGTH
 
 type Json = dict[str, "Json"] | list["Json"] | str | int | float | bool | None
 """What `json.loads` can return; keeps the fixture walk type-safe without `Any`."""

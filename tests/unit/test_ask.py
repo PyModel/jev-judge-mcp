@@ -13,14 +13,12 @@ from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from jev_judge_mcp.tools.ask_state import (
-    Part,
     file_parts,
     own_part,
     question_units,
     run_command,
-    split_refusal,
 )
-from tests.support.jev import FakeProvider, call_tool
+from tests.support.jev import TEST_GUARD, FakeProvider, call_tool
 
 pytestmark = pytest.mark.anyio
 
@@ -49,7 +47,7 @@ def allow_args(**extra: Any) -> dict[str, Any]:
 
 
 def test_own_state_is_redacted_and_measured_but_never_stripped() -> None:
-    part = own_part(f"token: {TOKEN}\n\n")
+    part = own_part(f"token: {TOKEN}\n\n", TEST_GUARD)
     assert part is not None
     assert TOKEN not in part.text and "[redacted]" in part.text
     assert part.text.endswith("\n\n")
@@ -58,19 +56,19 @@ def test_own_state_is_redacted_and_measured_but_never_stripped() -> None:
 
 def test_own_state_over_the_cap_refuses_typed() -> None:
     with pytest.raises(Exception) as raised:
-        own_part("a" * (ASK.state_units_max + 1))
+        own_part("a" * (ASK.state_units_max + 1), TEST_GUARD)
     assert getattr(raised.value, "code", "") == "input_too_large"
 
 
 def test_whitespace_only_own_state_is_no_part() -> None:
-    assert own_part("   \n\t ") is None
+    assert own_part("   \n\t ", TEST_GUARD) is None
 
 
 def test_file_parts_skip_refused_paths_typed_and_read_duplicates_once(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "a.txt").write_text("alpha", encoding="utf-8")
     (tmp_path / "b.bin").write_bytes(b"ok\x00")
-    parts, skipped = file_parts(["a.txt", "missing.txt", "b.bin", ".env", "a.txt"])
+    parts, skipped = file_parts(["a.txt", "missing.txt", "b.bin", ".env", "a.txt"], TEST_GUARD)
     assert [part.name for part in parts] == ["a.txt"]
     assert [(skip.path, skip.reason) for skip in skipped] == [
         ("missing.txt", "not_found"),
@@ -84,7 +82,7 @@ def test_file_parts_skip_refused_paths_typed_and_read_duplicates_once(tmp_path: 
 
 def test_command_output_is_redacted_and_carries_exit_status_and_stderr() -> None:
     script = f'import sys; print("done"); print("token:{TOKEN}", file=sys.stderr)'
-    part = run_command([sys.executable, "-c", script], timeout_seconds=10, output_units_max=1_000)
+    part = run_command([sys.executable, "-c", script], timeout_seconds=10, output_units_max=1_000, guard=TEST_GUARD)
     assert TOKEN not in part.text and "[redacted]" in part.text
     assert "exit status: 0" in part.text
     assert "--- stderr ---" in part.text and "token:[redacted]" in part.text
@@ -92,14 +90,19 @@ def test_command_output_is_redacted_and_carries_exit_status_and_stderr() -> None
 
 def test_command_timeout_kills_the_run_and_refuses_typed() -> None:
     with pytest.raises(Exception) as raised:
-        run_command([sys.executable, "-c", "import time; time.sleep(5)"], timeout_seconds=1, output_units_max=1_000)
+        run_command(
+            [sys.executable, "-c", "import time; time.sleep(5)"],
+            timeout_seconds=1,
+            output_units_max=1_000,
+            guard=TEST_GUARD,
+        )
     assert getattr(raised.value, "code", "") == "command_timeout"
     assert "1-second timeout" in str(raised.value)
 
 
 def test_command_output_over_the_cap_refuses_after_the_run() -> None:
     with pytest.raises(Exception) as raised:
-        run_command([sys.executable, "-c", "print('hello')"], timeout_seconds=10, output_units_max=1)
+        run_command([sys.executable, "-c", "print('hello')"], timeout_seconds=10, output_units_max=1, guard=TEST_GUARD)
     assert getattr(raised.value, "code", "") == "output_too_large"
 
 
@@ -109,7 +112,7 @@ def test_a_background_child_never_holds_the_output_open_or_outlives_the_run() ->
         "import subprocess, sys; print('first'); "
         "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); print('second')"
     )
-    part = run_command([sys.executable, "-c", script], timeout_seconds=10, output_units_max=1_000)
+    part = run_command([sys.executable, "-c", script], timeout_seconds=10, output_units_max=1_000, guard=TEST_GUARD)
     assert "first" in part.text and "second" in part.text  # the parent's output is never lost
     assert time.monotonic() - started < 5  # the stray child dies with the run; no join backstop fires
 
@@ -125,46 +128,72 @@ def test_question_units_count_ids_instructions_and_criteria() -> None:
     assert question_units(questions) == 33
 
 
-def test_split_refusal_names_every_part_and_the_first_fit_calls() -> None:
-    parts = [Part("state", "s" * 3_000, 3_000), Part("a.md", "a" * 45_000, 45_000), Part("b.md", "b" * 80_000, 80_000)]
-    with pytest.raises(Exception) as raised:
-        split_refusal(parts, questions_units=800)
-    text = str(raised.value)
-    assert "state 3,000" in text and "a.md 45,000" in text and "b.md 80,000" in text
-    assert "call 1: state, a.md" in text and "call 2: b.md" in text
-    assert "Re-ask the same questions on every call" in text
+async def test_split_refusal_names_every_part_and_the_first_fit_calls(tmp_path: Any, monkeypatch: Any) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "a.md").write_text("a" * 23_000)
+    (tmp_path / "b.md").write_text("b" * 9_000)
+    bulk_paths = ["c.md", "d.md", "e.md"]
+    for path in bulk_paths:
+        (tmp_path / path).write_text("x" * 27_000)
+    args = {key: value for key, value in allow_args(state="s" * 9_000).items() if key != "command"}
+    answers = {"q0": {"noul": 0.5}}
+    over = await call_tool("jev_ask", {**args, "paths": ["a.md", "b.md", *bulk_paths]}, answers)
+    assert over.is_error and over.code == "input_too_large" and not over.requests
+    assert all(part in over.text for part in ("state 9,000", "a.md 23,000", "b.md 9,000", "e.md 27,000"))
+    assert "call 1: state, b.md" in over.text and "call 2: a.md" in over.text
+    assert "Re-ask the same questions on every call" in over.text
+    first = await call_tool("jev_ask", {**args, "paths": ["b.md"]}, answers)
+    second = await call_tool("jev_ask", {"questions": args["questions"], "paths": ["a.md"]}, answers)
+    assert not first.is_error and not second.is_error
 
 
-def test_split_refusal_says_what_to_trim_when_the_questions_alone_are_over() -> None:
-    with pytest.raises(Exception) as raised:
-        split_refusal([Part("state", "s", 1)], questions_units=ASK.request_units_max + 1)
-    assert "trim the question set" in str(raised.value)
+async def test_split_refusal_says_what_to_trim_when_the_questions_alone_are_over() -> None:
+    questions = {
+        f"q{i}": {
+            "type": "choice",
+            "instructions": "i" * 1_999,
+            "criteria": {f"option{j}": "a" * 1_900 for j in range(8)},
+        }
+        for i in range(8)
+    }
+    result = await call_tool("jev_ask", {"state": "s", "questions": questions}, {})
+    assert result.is_error and result.code == "input_too_large" and not result.requests
+    assert "120,000-unit cap" in result.text and "trim the question set" in result.text.lower()
 
 
-def test_split_refusal_names_a_part_that_cannot_fit_beside_the_questions() -> None:
-    parts = [Part("big.log", "b" * 100_000, 100_000)]
-    with pytest.raises(Exception) as raised:
-        split_refusal(parts, questions_units=50_000)
-    assert "cannot fit beside the questions" in str(raised.value)
+async def test_split_refusal_names_a_part_that_cannot_fit_beside_the_questions(tmp_path: Any, monkeypatch: Any) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "big.log").write_text("b" * 29_500)
+    for path in ("a.log", "b.log", "c.log", "d.log"):
+        (tmp_path / path).write_text("a" * 23_000)
+    result = await call_tool(
+        "jev_ask",
+        {
+            "paths": ["big.log", "a.log", "b.log", "c.log", "d.log"],
+            "questions": {"q1": {"type": "noul", "instructions": "i" * 1_000, "criteria": {}}},
+        },
+        {},
+    )
+    assert result.is_error and result.code == "input_too_large" and not result.requests
+    assert "big.log cannot fit beside the questions" in result.text
 
 
 async def test_the_composed_request_cap_is_a_strict_greater_than(tmp_path: Any, monkeypatch: Any) -> None:
-    """A 20-unit question set over two files: exactly 120,000 units asks; one unit over refuses split."""
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "a.txt").write_text("a" * 59_990, encoding="utf-8")
-    (tmp_path / "b.txt").write_text("b" * 59_990, encoding="utf-8")
-    args: dict[str, Any] = {
-        "questions": {"q1": {"type": "noul", "instructions": "abcdefghij", "criteria": {}}},
+    (tmp_path / "a.txt").write_text("a" * 60_000, encoding="utf-8")
+    args: dict[str, object] = {
+        "questions": {"q1": {"type": "noul", "instructions": "abcdefghij", "criteria": {"true": "yes", "false": "no"}}},
         "paths": ["a.txt", "b.txt"],
     }
-    at_cap = await call_tool("jev_ask", args, {"q0": {"noul": 0.5}})
-    assert not at_cap.is_error, at_cap.text
-    assert at_cap.payload["state_summary"]["units"] == ASK.request_units_max
-    (tmp_path / "b.txt").write_text("b" * 59_991, encoding="utf-8")
-    over = await call_tool("jev_ask", args, {"q0": {"noul": 0.5}})
-    assert over.is_error and over.code == "input_too_large"
-    assert "a.txt 59,990" in over.text and "b.txt 59,991" in over.text
-    assert over.requests == []
+    answers = {"q0": {"noul": 0.5}}
+    remaining = 120_000 - 60_000 - len("q1") - len("abcdefghij") - len("yes") - len("no")
+    (tmp_path / "b.txt").write_text("b" * remaining, encoding="utf-8")
+    at_cap = await call_tool("jev_ask", args, answers)
+    assert not at_cap.is_error and len(at_cap.requests) == 1, at_cap.text
+    (tmp_path / "b.txt").write_text("b" * (remaining + 1), encoding="utf-8")
+    over = await call_tool("jev_ask", args, answers)
+    assert over.is_error and over.code == "input_too_large" and over.requests == []
+    assert "120,000-unit cap" in over.text
 
 
 # --- deterministic refusal ordering through the real toolset ------------------------------------------
@@ -207,5 +236,5 @@ def test_scout_012_command_receives_only_operating_environment(monkeypatch: pyte
     assert "BENIGN_PARENT_MARKER" not in env
     assert env["LANG"] == "C" and env["PATH"]
     with patch("subprocess.Popen", side_effect=OSError("fixture")) as spawn, pytest.raises(ToolError):
-        run_command([os.path.abspath(sys.executable)], 1, 100)
+        run_command([os.path.abspath(sys.executable)], 1, 100, guard=TEST_GUARD)
     assert spawn.call_args.kwargs["env"] == env

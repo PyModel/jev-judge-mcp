@@ -21,9 +21,10 @@ The compatible and Cloudflare providers report a valid body `model` when availab
 report the model sent. All providers prefer a valid body request ID, then check the response
 headers, and omit `request_id` if neither supplies one. Upstream metadata strings must be
 nonempty, at most 1,024 characters, and printable ASCII (ADR-0057). A `jev-latest` caller on
-TypeSafe cannot see which version answered (ADR-0001 parity). UTF-16 caps below are not Jev's context
-window (64k tokens per request, 32k for state plus the longest question). An input inside every cap
-can still exceed that window and come back as `input_too_large` (ADR-0079): split the call.
+TypeSafe cannot see which version answered (ADR-0001 parity). UTF-16 caps below govern tool
+admission. The provider enforces its context window of 64k tokens per request and 32k for state
+plus the longest question. A provider context refusal returns `input_too_large` with split advice.
+File-list and range gates hold any files from a rejected claims group for review (ADR-0079, ADR-0086).
 
 Every tool's schema advertises `additionalProperties: false`; the runtime keeps the reference's
 zod strip: unknown keys are stripped, not refused — a missing or ill-typed declared key is refused
@@ -37,6 +38,22 @@ provider contact and makes a required completion hook ask.
 
 ---
 
+## Caller IDs
+
+Find, rerank, classify, decide, extract, verify, gate, and gate range use canonical caller IDs.
+The sanitizer replaces each run outside ASCII letters, digits, dots, hyphens, and underscores
+with `_`, trims edge underscores, and keeps the first 64 characters. A supplied value that
+sanitizes to empty gets a generated ID. Two supplied IDs with the same sanitized value, including
+an empty value, or a supplied ID that matches a reserved key return `invalid_arguments` before
+any provider request. The error names the original IDs and the shared or reserved key.
+
+Where IDs are optional, an omitted ID gets its usual positional ID, such as `candidate0`, when
+available. If that key is taken, the tool picks the next free index starting at the list length.
+Supplied IDs take precedence in either order. Results that include caller IDs use canonical IDs.
+For exact round trips, send unique IDs that already follow the sanitizer's character and length
+rules and have no leading or trailing underscores.
+See [ADR-0085](adr/0085-shared-caller-id-policy.md).
+
 ## jev_verify — claims against evidence
 
 **Use when** you hold claims (a summary, a PR description, an agent's "done" list) and the evidence
@@ -44,7 +61,8 @@ they cite, and want verified / contradicted / unsupported per claim. Act on an `
 An `auto` contradiction is confidently false. `stands` is true only for a verified claim at
 `auto`. A sole caller note counts as the policy source without filling `supporting_evidence`.
 A caller note alone cannot earn `auto`. If a source was requested, a missing or malformed source
-answer holds the claim for review.
+answer holds the claim for review. [Caller evidence IDs](#caller-ids) reserve `none` when
+multiple evidence items are sent.
 
 **Measured.** L3 live run, 2026-09-23: n=5 claims, contradiction_recall 1.000, macro_f1 1.000,
 brier 0.00004, ece 0.002, selective_accuracy 1.000, auto_coverage 1.000, invalid 0. Five synthetic
@@ -95,9 +113,9 @@ routing, clutter/article), and you want one call.
 the margin over the runner-up clears `minimum_margin` (0.5). At those defaults the margin does not bind: two options whose probabilities sum to at most 1.01 already force a margin of at least 0.69
 when the top is 0.85, so a close split cannot also clear `auto_accept`. The margin binds only if
 you lower `auto_accept` below 0.755 or raise `minimum_margin` above 0.69. The same pair is the
-default for compare and extract. Conflicting caller ids are
-rejected before any provider request (ADR-0031). Item text cut at the cap is reported to telemetry
-only and does not change the action (CONTEXT.md "Truncated Context" draws this line).
+default for compare and extract. Items and classes each have their own [caller ID](#caller-ids)
+namespace. Item text cut at the cap is reported to telemetry only and does not change the action
+(CONTEXT.md "Truncated Context" draws this line).
 
 **Not for** labels you cannot enumerate, or when one item needs its own question — that is a batch
 of noul or choice questions, not a catalog.
@@ -109,10 +127,10 @@ of noul or choice questions, not a catalog.
 **Measured.** No recorded live eval. The scorer's primary metric is `overdecision_rate` (picking a
 candidate when it should have escaped), with escape-hatch accuracy and requirement-check F1.
 
-**Weak spots.** The escape hatches (`ask_user`, `investigate`, `none`) are always offered; a
-candidate id that collides with one is refused. Requirements are capped at 3, each up to 500 UTF-16
-units — a decision with a longer rulebook does not fit and belongs in code (ADR-0002), not in the
-question.
+**Weak spots.** Escape hatches (`ask_user`, `investigate`, `none`) are enabled by default and
+reserve those keys while enabled. Set `escape_hatches: false` to remove them and release the keys. Every candidate requires a [caller ID](#caller-ids).
+Requirements are capped at 3, each up to 500 UTF-16 units — a decision with a longer rulebook
+does not fit and belongs in code (ADR-0002), not in the question.
 
 **Not for** open-ended planning, ranking, or anything with more than six options.
 
@@ -127,7 +145,7 @@ accuracy.
 **Weak spots.** The exists verdict thresholds (answered at ≥ 0.7, absent below 0.35, else
 `partial`) are frozen parity defaults, not call arguments. The semantic-find cookbook uses the same
 numbers as examples to tune; this server does not (ADR-0001, `docs/reference/parity-manifest.json`). Candidate text is truncated at the cap
-(telemetry only). `top_k` defaults to 5.
+(telemetry only). `top_k` defaults to 5. Candidate IDs are [optional](#caller-ids).
 
 **Not for** discovering candidates — it only ranks what you pass, unlike a search engine.
 
@@ -142,7 +160,7 @@ order; an embeddings baseline is an open gap, not implemented (`evals/README.md`
 **Weak spots.** A flat band of low `relevance` values means the candidates were not
 distinguishable; treat the order as weak (README § Operator notes). `ranked[].relevance` is the
 probability at a fixed precision; there is no spread field. Aggregate candidate text over 100,000
-UTF-16 units refuses with an `input_too_large` error.
+UTF-16 units refuses with an `input_too_large` error. Candidate IDs are [optional](#caller-ids).
 
 **Not for** deciding whether anything is relevant at all — that is `jev_find`'s exists question.
 
@@ -164,7 +182,7 @@ difference.
 ## jev_extract — a value your regex proposes
 
 **Use when** a value (version, date, price) sits in a document and your regex can propose the
-candidates; Jev picks among them or returns null.
+candidates; Jev picks among them or returns null. Every field requires a [caller ID](#caller-ids).
 
 **Measured.** No recorded live eval. Scorer: exact match, hallucinated values (must be 0),
 not-found precision/recall.
@@ -187,7 +205,8 @@ severe-defect recall.
 **Weak spots.** A confidence below `review_at` (default 0.5) requires review. Escalation requires a
 named defect or safety refusal grounded in a changed line, or an invalid required judgment. A
 malformed or missing answer to a requested defect-category question prevents `auto`. The rubrics are fixed
-(correctness, spec_match, test_gap, blast_radius); callers cannot add one. A string `diff` over
+(correctness, spec_match, test_gap, blast_radius); callers cannot add one. Review checks any
+supplied score distribution against the score. A string `diff` over
 the cap is truncated and judgment over cut context never stands `auto`; a file-list `diff` is
 reviewed per file instead — one oversized or unreviewable file lists in `unreviewed_files`, marks
 the call `partial`, and keeps it off `auto` (ADR-0066).
@@ -211,12 +230,26 @@ Clopper-Pearson upper bound, not a point estimate (ROADMAP headline metrics); ce
 target needs roughly 600 error-free held-out rows per run, and that corpus is not recorded yet
 (`evals/README.md` § Open gaps).
 
-A confident contradiction with a cited counterexample escalates. A file list gets one review per file and one verification
-for all claims. A range with withheld files names them and requires local review. Evidence is
-capped at 16 items and 200,000 aggregate UTF-16 units. Before sending, the gate checks primary
-documents and both byte budgets. The string gate sends the diff and tests again as implicit evidence
-(ADR-0063). At the document caps this would add about 100k extra UTF-16 units and the gate
-would refuse. Split by file or hunk and send each claim with the evidence it needs.
+A confident contradiction with a cited counterexample escalates. A file list gets one review per
+fitting file. First-fit grouping in file order packs patches into claim requests, each with all
+claims, caller evidence, and tests. A confident cited contradiction takes precedence over
+verification in any group. A confident verification in any group can stand if no group
+contradicts it, and any invalid or missing answer holds that claim for review. A patch above
+the packing estimate is sent in its own group. If the provider rejects a claims group for context
+size, all files in that group appear in `skipped` as `oversize` and its claims require review.
+Multi-group results and results with context rejections include `calls`, counting each review and
+claim request. Usage sums the calls that report usage.
+
+Evidence is capped at 16 items and 200,000 aggregate UTF-16 units. File lists allow up to 64 entries
+and 200,000 UTF-16 units of patches in aggregate. The raw cap is 50,000 UTF-16 units per document
+or file patch. Over-cap file patches are held for local review. Claims packing targets
+30,000 compact UTF-8 bytes for state plus the longest question and 60,000 bytes total.
+A string gate includes the diff and tests in review state and again as implicit evidence
+(ADR-0063). The provider's token limits count both copies. Pass a file list when the string gate
+exceeds the provider window.
+[Caller evidence IDs](#caller-ids) reserve `none` for source selection and `diff` for patch
+citations. They also reserve sanitized `diff:<path>` keys for file patches and `tests` when a log
+is supplied.
 
 **Reading a held gate.** Use `blockers` for file-by-file and claim-by-claim comparisons. For
 example, `spec_match_confidence_below_review_at` can report a favorable level, confidence 0.49
@@ -227,13 +260,14 @@ caller evidence items and sibling patches share a supplemental UTF-16 budget. Wh
 are omitted, `jev_review.context_omissions` or the gate’s `review.context_omissions` lists each
 target path and index, required and allowed units, and omitted entries. This field is informational
 on every action, including auto. Coverage flags and decisions still follow the primary inputs and
-judgments. Claims are verified once against the canonical evidence. See [ADR-0081](adr/0081-gate-diagnostics-and-file-context.md).
+judgments. See [ADR-0081](adr/0081-gate-diagnostics-and-file-context.md) and [ADR-0086](adr/0086-shared-provider-window-and-gate-packing.md).
 
 Read `rollup.action` for the whole change. `rollup.reason_counts` counts each detailed blocker
 by code across files, withheld paths and claims. Accepted changes have an empty count map.
 `review.file_rows` is ordered by input position and preserves repeated paths. The existing
 `action`, `review.file_actions`, `score_file`, `reason_codes`, and numeric scores remain available.
-`next_checks` contains one prioritized action. Every other held comparison keeps its own check in
+`next_checks` starts with a prioritized action and also lists intent-to-add commands for untracked
+files. Every other held comparison keeps its own check in
 `blockers`. When a rubric needs review and a changed line is available, the suggested check
 names a patch line to inspect. An omitted input on a held file is identified by path or evidence ID.
 The source and defect category questions hold otherwise-auto decisions for review when their answers
@@ -241,8 +275,8 @@ are missing or malformed. Plain summaries require actual diff structure before t
 
 A named defect or explicit safety rejection cites a changed line. A confirmed claim contradiction
 cites a counterexample and sets the claim excerpt to that line. The line number is one-based within
-the submitted patch or evidence item. The source uses the ID sent to the provider, including any
-renamed implicit diff. Changed code remains citable even when it resembles a diff header.
+the submitted patch or evidence item. The source uses the canonical evidence ID sent to the
+provider. Changed code remains citable even when it resembles a diff header.
 `evidence_line` is always `{source, line, text}`. Invalid answers identify the provider question
 in `invalid_answer`. Only a cited safety refusal sets `safety_refusal`. Invalid required answers
 explicitly refuse a decision. Low confidence alone requires review. A provider
@@ -250,11 +284,12 @@ contradiction without sufficient corroboration yields `unsupported` and `reporte
 contradicted`. Its probabilities still describe the provider's original judgment.
 `citation_coverage` reports the number of eligible and offered lines. A held change can be split
 by hunk to expose more lines. Aggregated token counts sum the reported usage across calls.
-In study provenance mode, `usage.reported` is false if any contributing call omitted its usage.
+With `JEV_STUDY_USAGE_PROVENANCE=1` at startup, `usage.reported` is false if any contributing call
+omitted its usage.
 See [ADR-0082](adr/0082-actionable-gate-escalation.md).
 
 From another git worktree run `jev-judge-mcp gate --diff BASE..HEAD --claims claims.txt
---tests test.log --request "requirement"` in that worktree. A range over the aggregate input budget returns `input_too_large` before a judgment. The same admission caps apply.
+--tests test.log --request "requirement"` in that worktree. A range over the aggregate input budget returns `input_too_large` before a judgment. The same admission caps apply. The CLI reads claims and tests relative to the shell directory within the selected repository. Evidence uses the file judgment reader with gate unit caps, UTF-8 replacement, and typed refusal codes such as `path_outside_scope`, `not_found`, and `file_too_large`.
 For changes exceeding the caps, separate concern-level decisions require an independent
 cross-file review.
 
@@ -272,7 +307,10 @@ nearest-level accuracy, level MAE, within-one rate.
 **Weak spots.** Positions between levels are weakly calibrated: `score` is a probability-weighted
 position, not a magnitude — threshold it against levels, do not interpolate (README tool table).
 Levels and text bounds are owned by ADR-0048, not by a parity-manifest block. One call, one rubric:
-several scales are several questions.
+several scales are several questions. A score that differs from the weighted mean of its reported
+level probabilities by more than the combined rounding allowance returns `invalid_response`.
+The allowance is half a hundredth times one plus the sum of the level indices, with floating-point
+slack. The same check applies to score questions in `jev_file_judge`, `jev_files_judge`, and `jev_ask`.
 
 **Not for** continuous magnitudes, or when you need an explanation — the answer is a distribution,
 never text.
@@ -308,7 +346,7 @@ is this generated module, does any file in the diff root still name the old flag
 files, directories, or glob patterns — plus the same one question `jev_file_judge` takes, and the
 server expands, prunes, and makes one provider call per surviving file. The payload reports
 `{path, answer, status}` per judged file and `{path, reason}` per skipped one — a directory not
-entered (`skipped_directory`), a secret store (`secret_file`), a binary or empty read, an over-cap
+entered (`skipped_directory`), a secret store (`secret_file`), a missing, unreadable or non-regular file, unmatched path or empty directory (`not_found`), a binary or empty read, an over-cap
 file (`too_large`), the hard cap (`over_the_file_cap`), a failed call (`call_failed:<code>`) — and
 no file's bytes enter your context. Directories are walked to the leaves only with `recursive:
 true`; dependency, build, cache, and VCS-internal directories are never entered either way. Picking
@@ -317,10 +355,10 @@ among the answers is `jev_find` fed those answers as candidates.
 **Measured.** No recorded live eval, and no bench corpus yet (extension tool, ADR-0077).
 
 **Weak spots.** The hard caps bound a call before the first provider call — at most 64 surviving
-files from at most 32 path entries, each file at the `jev_file_judge` 100,000-unit cap — and the
-prune is deterministic: the same tree and the same paths always skip the same files. A per-file
-call failure is a skipped path, never a batch error, so a batch is only as good as its surviving
-files: read `skipped` before trusting `results`. File judgments and file-list reviews share a
+files from at most 32 path entries, each file at the `jev_file_judge` 100,000-unit read cap. The
+same tree and paths always produce the same local skips. A provider context refusal fails the
+batch with `input_too_large` and split advice. Other per-file call failures appear in `skipped`.
+Read `skipped` before trusting `results`. File judgments and file-list reviews share a
 runtime cap of eight simultaneous file judgments. With zero calls, the batch reports the requested
 model and `provider: none`. If every call fails, the batch identifies the attempted provider.
 
@@ -373,13 +411,17 @@ to refuse.
 
 **Measured.** No recorded live eval, and no bench corpus yet (extension tool, ADR-0077).
 
-**Weak spots.** Nothing truncates. The total state plus questions is capped at 120,000 UTF-16 units,
-including choice option keys. An over-budget call refuses with every part's size and a first-fit
-split suggestion naming which parts go to which call. Re-ask the same questions on each.
+**Weak spots.** Nothing truncates. State and questions share a 120,000 UTF-16 unit cap.
+Exceeding that cap or the provider's context window returns `input_too_large` with each part's
+size and split advice. The split estimate includes JSON framing and question criteria.
+Re-ask the same questions on each proposed call.
 Own `state` is framing, capped at 20,000
 units; command output is capped at 30,000 units and an over-cap run is killed and refused; the
-command runs under a 30-second timeout, in the working directory, with closed stdin and a scrubbed
-environment. Both output streams are redacted. Commands read with the server account's filesystem
+command runs under a 30-second timeout, in the working directory, with closed stdin. The child inherits only present values of `PATH`, `TZ`, `LANG`,
+`LANGUAGE`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `LC_NUMERIC`, `LC_TIME`, `LC_COLLATE`, and
+`LC_MONETARY`, excluding configured secret variable names. Values pass through verbatim.
+Git also gets `GIT_NO_LAZY_FETCH=1`, an empty `GIT_ALLOW_PROTOCOL`, and both `GIT_CONFIG_SYSTEM`
+and `GIT_CONFIG_GLOBAL` set to `/dev/null`. Both output streams are redacted. Commands read with the server account's filesystem
 permissions, including when traversing directories. 1 to 20 questions
 per call, at most 20 paths. Choice option IDs use the same 1 to 64 UTF-16 unit limit as
 `jev_file_judge`. Questions in one request cannot see each other's answers. Every
@@ -391,30 +433,33 @@ and read the result; `command` is for output you want judged, not output you wan
 ## jev_gate_range — did the work finish, read from git
 
 **Use when** the change is in git and you would otherwise paste its diff into `jev_gate`. Name the
-range (`main..HEAD`, or `HEAD` for tracked changes since the last commit). A single revision or
-two-dot range also accepts a subtree named by its commit and repository path (such as `HEAD:pkg`)
-or the empty tree ID. A bare nonempty tree ID has no repository path and is refused. Three-dot
-ranges require commits. The server reads `git diff <range> -- .` in its working directory and
-checks each file's repository path on both sides before passing its patch to jev_gate (ADR-0080).
+range (`main..HEAD`, or `HEAD` for staged and unstaged tracked changes since the last commit). For a
+single revision or either end of a two-dot range, use a commit, a subtree named by its commit
+and repository path (such as `HEAD:pkg`), or the empty tree ID. A bare nonempty tree ID has no repository path and is
+refused. Three-dot ranges require commits. An omitted range endpoint defaults to `HEAD`. The server reads `git diff <range> -- .` in its working
+directory and checks each file's repository path on both sides before passing its patch to
+jev_gate (ADR-0080).
 
 **Measured.** No recorded live eval; the judgment is jev_gate's.
 
-**Weak spots.** The jev_gate caps and thresholds apply. The server withholds a whole file if either
-side is a secret store or contains a PEM private-key delimiter, even outside the changed hunk.
-It also withholds a file whose name contains a recognized credential and redacts the displayed
-name. It redacts credential literals in the patches it sends. For a mixed range, the tool
-reviews the remaining patches, lists withheld files in `skipped` as `secret_file`, and holds the
-range for local review. If every file is withheld, it refuses with `secret_file`. The
-`jev-judge-mcp gate` CLI checks the range from the repository root and refuses the entire range
-with `secret_file` (exit 2) if it withholds even one file.
+**Weak spots.** The jev_gate caps, thresholds and [caller evidence ID policy](#caller-ids) apply.
+The server withholds a whole file if either side is a secret store or contains a PEM private-key
+delimiter, even outside the changed hunk. It also withholds a file whose name contains a
+recognized credential and redacts the displayed name. It redacts credential literals in the
+patches it sends. Binary patches (including text marked `-diff`) are withheld as `binary`. A single
+revision also lists non-ignored untracked files as `untracked`; for each one, run
+`git add -N <path>` and recheck. For a mixed range, the tool reviews the remaining patches, lists
+withheld files in `skipped`, and holds the range for local review. If every file is withheld as a
+secret store, it refuses with `secret_file`. The `jev-judge-mcp gate` CLI checks the range from the
+repository root and refuses the entire range with `secret_file` (exit 2) if it withholds a secret
+store. It holds a binary file as the tool does: the other files are reviewed, the binary is listed
+in `skipped`, and the action is not `auto`. A range of only binary files refuses with `binary_file`
+(exit 2).
 
 A bad or empty range, a missing repository, or a patch whose origin cannot be verified yields
-`invalid_arguments`. If either the ordinary diff or its full-file context exceeds the read
-budget, the tool returns `input_too_large`. These refusals precede any provider call.
-`tests_path` is read under jev_file_judge's path rules and is not self-reported. The working
-directory is wherever the harness started the server: an entry that moves it
-(`uv run --directory <checkout>`) reads that checkout from every project, so a range from your
-project refuses; launch a checkout with `uv run --project <checkout>`, which keeps the working
-directory. Git refusals name the server's working directory so the mismatch shows.
+`invalid_arguments`. If either the ordinary diff or its full-file context exceeds the Git capture
+limit, git is stopped mid-read and the tool returns `input_too_large`. These refusals precede any
+provider call.
+`tests_path` is read under jev_file_judge's path rules and is not self-reported. The range is relative to the [server working directory](harness/hooks.md#working-directory). Git refusals name the server's working directory so the mismatch shows.
 
 **Not for** a patch that is not in the working tree or its history — use jev_gate.

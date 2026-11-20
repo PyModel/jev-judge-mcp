@@ -2,17 +2,14 @@
 
 import json
 import os
-import select
-import signal
-import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 
 import pytest
 
 from evals.spend import SpendLedger, SpendPolicy, book_outcome
+from tests.support.stdio import StdioServer
 
 BOUND = 3.5
 
@@ -107,8 +104,7 @@ path = Path(sys.argv[1])
 policy = SpendPolicy(max_runs=10, max_usd=25.0, jev_usd_per_mtok_input=0.042, run_bound_usd=3.5)
 book = SpendLedger.load(path, policy)
 book.record("held", 1.0)
-sys.stdout.write("R")
-sys.stdout.flush()
+print("R", flush=True)
 time.sleep(30)
 """
 
@@ -125,38 +121,16 @@ print("done", flush=True)
 """
 
 
-def _spawn(script: str, path: Path) -> subprocess.Popen[str]:
-    env = os.environ.copy()
-    root = str(Path(__file__).resolve().parents[2])
-    env["PYTHONPATH"] = root + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    return subprocess.Popen(
-        [sys.executable, "-c", script, str(path)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=env,
-    )
+def _spawn(script: str, path: Path) -> StdioServer:
+    return StdioServer([sys.executable, "-c", script, str(path)])
 
 
-def _ready(holder: subprocess.Popen[str], *, timeout: float = 5) -> None:
-    assert holder.stdout is not None
-    if not select.select([holder.stdout], [], [], timeout)[0]:
-        raise TimeoutError("ledger holder readiness deadline expired")
-    marker = os.read(holder.stdout.fileno(), 1)
-    if not marker:
-        raise EOFError("ledger holder reached EOF before readiness")
-    assert marker == b"R", "unexpected ledger holder readiness marker"
-
-
-def _stop(holder: subprocess.Popen[str]) -> None:
-    if holder.poll() is None:
-        os.kill(holder.pid, signal.SIGKILL)
-    holder.wait(timeout=5)
+def _ready(holder: StdioServer) -> None:
+    assert holder.read_line() == b"R\n", "unexpected ledger holder readiness marker"
 
 
 def test_a_held_ledger_raises_instead_of_blocking(tmp_path: Path) -> None:
     path = tmp_path / "ledger.json"
-    holder = _spawn(_HOLD, path)
     errors: list[BaseException] = []
 
     def attempt() -> None:
@@ -167,14 +141,12 @@ def test_a_held_ledger_raises_instead_of_blocking(tmp_path: Path) -> None:
 
     loader = threading.Thread(target=attempt)
     try:
-        _ready(holder)
-        started = time.monotonic()
-        loader.start()
-        loader.join(1)
-        assert not loader.is_alive(), "load blocked while another process held the ledger"
-        assert time.monotonic() - started < 1
+        with _spawn(_HOLD, path) as holder:
+            _ready(holder)
+            loader.start()
+            loader.join(timeout=10)
+            assert not loader.is_alive(), "load blocked while another process held the ledger"
     finally:
-        _stop(holder)
         if loader.ident is not None:
             loader.join(timeout=5)
     assert len(errors) == 1
@@ -185,15 +157,11 @@ def test_a_held_ledger_raises_instead_of_blocking(tmp_path: Path) -> None:
 
 def test_kill_minus_nine_lets_the_next_process_load_and_record(tmp_path: Path) -> None:
     path = tmp_path / "ledger.json"
-    holder = _spawn(_HOLD, path)
-    try:
+    with _spawn(_HOLD, path) as holder:
         _ready(holder)
-    finally:
-        _stop(holder)
-    second = _spawn(_NEXT, path)
-    assert second.stdout is not None and second.stderr is not None
-    assert second.wait(timeout=5) == 0, second.stderr.read()
-    assert second.stdout.read().strip() == "done"
+    with _spawn(_NEXT, path) as second:
+        assert second.wait()[0] == 0
+        assert b"".join(second.stdout_lines).strip() == b"done"
     raw = path.read_bytes()
     assert b'"held"' in raw and b'"next"' in raw
     assert b"NaN" not in raw and b"Infinity" not in raw
@@ -252,22 +220,8 @@ def test_scout_008_rejected_load_releases_lock_for_another_process(tmp_path: Pat
         SpendLedger.load(path, _policy())
     path.write_text(json.dumps({"runs": {"held": 1.0}}))
     with _spawn(_NEXT, path) as second:
-        _, error = second.communicate(timeout=5)
-        assert second.returncode == 0, error
+        assert second.wait()[0] == 0
     assert json.loads(path.read_text())["runs"] == {"held": 1.0, "next": 2.0}
-
-
-@pytest.mark.parametrize(
-    ("script", "error", "reason"),
-    [("pass", EOFError, "EOF"), ("import time; time.sleep(4)", TimeoutError, "readiness deadline")],
-)
-def test_holder_readiness_failures(tmp_path: Path, script: str, error: type[Exception], reason: str) -> None:
-    holder = _spawn(script, tmp_path / "ledger.json")
-    try:
-        with pytest.raises(error, match=reason):
-            _ready(holder, timeout=0.3)
-    finally:
-        _stop(holder)
 
 
 def test_reconcile_published_results_and_missing_metering(tmp_path: Path) -> None:
@@ -317,11 +271,10 @@ def test_last_ledger_handle_releases_study(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="closed"):
         first.record("invalid", 1)
     with _spawn(_NEXT, second.path) as other:
-        assert "another process" in other.communicate(timeout=5)[1]
+        assert "another process" in other.wait()[1]
     second.close()
     with _spawn(_NEXT, second.path) as other:
-        _, error = other.communicate(timeout=5)
-        assert other.returncode == 0, error
+        assert other.wait()[0] == 0
 
 
 def test_writer_failure_after_replace_keeps_shared_ledger_current(

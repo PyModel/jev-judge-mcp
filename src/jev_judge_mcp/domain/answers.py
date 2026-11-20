@@ -24,19 +24,14 @@ class ChoiceAnswer:
     """Every expected label, in the provider's key order."""
     confidence: float | None
     """Wire number. `None` for absent and malformed. Unknown never satisfies a threshold."""
-    confidence_kind: ConfidenceKind = "absent"
-    """Which of the three confidence states `confidence` came from. A bare float is a number."""
+    confidence_kind: ConfidenceKind
+    """Which of the three confidence states `confidence` came from."""
 
     def __post_init__(self) -> None:
-        # A caller that only has the wire number (extract) cannot say malformed. A float is a number.
-        if self.confidence is not None:
-            if self.confidence_kind == "malformed":
-                raise ValueError("A malformed confidence has no number.")
-            if self.confidence_kind == "absent":
-                object.__setattr__(self, "confidence_kind", "number")
-            return
-        if self.confidence_kind == "number":
+        if self.confidence is None and self.confidence_kind == "number":
             raise ValueError("A number confidence needs a value.")
+        if self.confidence is not None and self.confidence_kind != "number":
+            raise ValueError(f"Confidence marked {self.confidence_kind} has no number.")
 
 
 @dataclass(frozen=True, slots=True)

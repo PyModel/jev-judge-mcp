@@ -1,7 +1,7 @@
 """Deterministic grading: completion, regressions, and test pass rate all come from one unittest run.
 
-The agent's tree is copied, its `tests/` is replaced by the pristine snapshot tests plus the hidden
-acceptance tests, and every test id is recorded. The expected ids come from grading the task's
+The copied agent tree supplies proxy modules to a trusted suite outside that tree. The suite runs
+the pristine snapshot tests and hidden acceptance tests. Expected ids come from grading the task's
 reference solution, so a module that fails to import counts all of its tests as failed.
 
 Task correctness is separate from test-file edits (ADR-0073). Adding a test function, or a new test
@@ -21,12 +21,12 @@ import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
 from evals.ab.tasks import SNAPSHOT, Task, protected_files
 
 ACCEPTANCE_MODULE = "test_acceptance"
 GRADE_TIMEOUT_S = 120
+_RUNNER = str(Path(__file__).with_name("grade_runner.py").resolve())
 
 
 def hardened_git(workdir: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -48,22 +48,6 @@ def hardened_git(workdir: Path, *args: str) -> subprocess.CompletedProcess[str]:
         check=False,
         timeout=15,
     )
-
-
-_RUNNER = """
-import json, sys, unittest
-out = {}
-class Result(unittest.TestResult):
-    def addSuccess(self, test): out.setdefault(test.id(), "pass")
-    def addFailure(self, test, err): out[test.id()] = "fail"
-    def addError(self, test, err): out[test.id()] = "error"
-    def addSubTest(self, test, subtest, err):
-        if err is not None: out[test.id()] = "fail"
-    def addSkip(self, test, reason): out[test.id()] = "skip"
-sys.path.append(".")  # stdlib first: a root-level module must not shadow it
-unittest.defaultTestLoader.discover("tests", top_level_dir=".").run(Result())
-sys.stdout.write(json.dumps(out))
-"""
 
 
 @dataclass(frozen=True)
@@ -141,12 +125,13 @@ def run_tests(tree: Path, task: Task, python: str) -> dict[str, str]:
     with tempfile.TemporaryDirectory(prefix="jev-ab-grade-") as scratch:
         work = Path(scratch) / "tree"
         shutil.copytree(tree, work, symlinks=True, ignore=shutil.ignore_patterns(".git", "__pycache__"))
-        shutil.rmtree(work / "tests", ignore_errors=True)
-        shutil.copytree(SNAPSHOT / "tests", work / "tests", ignore=shutil.ignore_patterns("__pycache__"))
-        shutil.copyfile(task.acceptance, work / "tests" / f"{ACCEPTANCE_MODULE}.py")
+        trusted = Path(scratch) / "tests"
+        shutil.copytree(SNAPSHOT / "tests", trusted, ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copyfile(task.acceptance, trusted / f"{ACCEPTANCE_MODULE}.py")
+        modules = {path.stem for path in SNAPSHOT.glob("*.py")} | {task.target_module}
         try:
             done = subprocess.run(
-                [python, "-I", "-c", _RUNNER],
+                [python, "-I", "-S", "-B", _RUNNER, "collect", str(trusted), *sorted(modules)],
                 cwd=work,
                 capture_output=True,
                 text=True,
@@ -157,6 +142,8 @@ def run_tests(tree: Path, task: Task, python: str) -> dict[str, str]:
             # A hung suite is an outcome of the agent's tree, not a harness exception: every
             # expected id then counts as not passed, so the run is a measured failure.
             return {"<grading>": "timeout"}
+    if done.returncode != 0:
+        return {}
     try:
         outcomes: dict[str, str] = json.loads(done.stdout)
     except json.JSONDecodeError:
@@ -258,7 +245,8 @@ def _junit_outcomes(tree: Path, work: Path, python: str) -> dict[str, str] | Non
             [
                 python,
                 "-I",
-                "-m",
+                _RUNNER,
+                "added",
                 "pytest",
                 "-q",
                 "-p",
@@ -306,7 +294,7 @@ def _unittest_outcomes(work: Path, python: str) -> dict[str, str] | None:
     """The unittest fallback for a grader interpreter without pytest: id-keyed outcomes."""
     try:
         done = subprocess.run(
-            [python, "-I", "-c", _RUNNER],
+            [python, "-I", _RUNNER, "added", "unittest"],
             cwd=work,
             capture_output=True,
             text=True,
@@ -316,7 +304,8 @@ def _unittest_outcomes(work: Path, python: str) -> dict[str, str] | None:
     except subprocess.TimeoutExpired:
         return None
     try:
-        return dict(cast(dict[str, str], json.loads(done.stdout)))
+        outcomes: dict[str, str] = json.loads(done.stdout)
+        return outcomes
     except json.JSONDecodeError:
         return {}
 

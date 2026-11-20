@@ -26,7 +26,7 @@ def test_frame_puts_the_evaluation_head_first_and_usage_last() -> None:
     assert payload["tool"] == "jev_verify"
     assert payload["model"] == "jev-1.13.0"
     assert payload["provider"] == "typesafe"
-    assert payload["usage"] == evaluation.usage.to_wire()
+    assert payload["usage"] == evaluation.usage
 
 
 def test_frame_returns_request_id_only_when_the_provider_sent_one() -> None:

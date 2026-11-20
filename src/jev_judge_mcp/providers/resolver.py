@@ -12,13 +12,14 @@ from typing import Final, Literal
 from pydantic import SecretStr
 
 from jev_judge_mcp import keyfile
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.providers.base import JevProvider, ProviderConfigError, ProviderName
 from jev_judge_mcp.providers.cloudflare import CloudflareProvider
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.openrouter import OpenRouterProvider
 from jev_judge_mcp.providers.retry import RetryPolicy
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+from jev_judge_mcp.redaction.values import register_log_secrets
+from jev_judge_mcp.security import checked_redactor
 from jev_judge_mcp.settings import Settings
 
 DEFAULT_MODEL = "jev-latest"
@@ -70,17 +71,22 @@ def select_provider(
     settings: Settings, *, retry: RetryPolicy | None = None
 ) -> tuple[ProviderName, Callable[[], JevProvider]]:
     """The provider `settings` select — its name and a builder — or `ProviderConfigError` with the
-    reference's text. Selection builds no client, so a startup gate can ask which provider would
-    run without opening a connection pool it never closes.
+    reference's text. Selection builds no client, so doctor can report the provider without opening
+    a connection pool.
 
     A key stored by `jev-judge-mcp setup` stands in for `TYPESAFE_API_KEY` when the variable is
     unset (ADR-0046); the variable always wins. The stored value joins the redaction set for this
     resolver's providers, so it is covered exactly like a configured secret (ADR-0017). `retry`
     injects the provider retry policy (ADR-0057); `None` means the default.
     """
-    redact = Redactor(keyfile.redaction_values(settings))
+    stored = keyfile.stored_key(settings)
+    try:
+        redact = checked_redactor(settings, stored)
+    except ValueError as error:
+        raise ProviderConfigError(str(error)) from None
+    register_log_secrets(redact)
     explicit = settings.jev_provider.lower()
-    typesafe_key_value, _ = typesafe_key(settings)
+    typesafe_key_value = _value(settings.typesafe_api_key) or stored
     openrouter_key = _value(settings.openrouter_api_key)
     has_openrouter = openrouter_key.startswith("sk-or-")
     cloudflare_token = _value(settings.jev_cloudflare_api_token) or _value(settings.cloudflare_api_token)

@@ -224,7 +224,7 @@
       "gate_claims": "claim_{i}"
     },
     "duplicate_caller_ids_rejected_in": [
-      "jev_classify (supplied item ids and supplied class ids; a generated fallback that equals a supplied id is quirk Q11, diverged in ADR-0031)",
+      "jev_classify (supplied item ids and supplied class ids; a generated fallback that equals a supplied id is quirk Q11, handled by ADR-0085)",
       "jev_decide (candidates; also escape-hatch collision)",
       "jev_rerank",
       "jev_extract (field ids)"
@@ -303,7 +303,7 @@
     "Q8_utf16_truncation": "truncate() slices UTF-16 code units and can split a surrogate pair, emitting a lone surrogate. Python drops the dangling unit on truncate only (ADR-0005). A one-unit regex match is kept and JSON-escaped (ADR-0004, ADR-0006). Source: lib.ts:47-49.",
     "Q9_cloudflare_error_unredacted": "Cloudflare and OpenRouter error bodies are not passed through secret redaction. The reference redacts only JEV_API_KEY, and only on the compatible error body. Python redacts every configured secret (ADR-0008). Source: provider.ts:145-146, provider.ts:169-172, provider.ts:246-247.",
     "Q10_no_cancellation": "index.ts askJev() never passes an AbortSignal, so MCP client cancellation does not abort the provider request even though provider.ts supports it. Python: diverge (ADR-0011). Source: index.ts:81-83, provider.ts:104.",
-    "Q11_classify_omitted_id_collides": "jev_classify assigns an omitted id `{kind}{index}` and does not check it against supplied ids, so an omitted item beside `{id: item0}` returns two results with id item0 and the class probabilities object keeps one key (recorded in duplicate-id/classify-omitted-ids-get-positional-fallbacks). Supplied duplicates are still rejected (index.ts:441, index.ts:450). jev_rerank checks its fallback (index.ts:711-722). Python: diverge, reject before any provider request (ADR-0031). Source: index.ts:398-526."
+    "Q11_classify_omitted_id_collides": "jev_classify assigns an omitted id `{kind}{index}` and does not check it against supplied ids, so an omitted item beside `{id: item0}` returns two results with id item0 and the class probabilities object keeps one key (recorded in duplicate-id/classify-omitted-ids-get-positional-fallbacks). Supplied duplicates are still rejected (index.ts:441, index.ts:450). jev_rerank checks its fallback (index.ts:711-722). Python: preserve the supplied ID and allocate a free generated ID (ADR-0085 supersedes ADR-0031). Source: index.ts:398-526."
   },
   "conditional_questions": {
     "jev_verify": "source_{id} only when evidence has >1 item; its absence never invalidates relation_{id}",

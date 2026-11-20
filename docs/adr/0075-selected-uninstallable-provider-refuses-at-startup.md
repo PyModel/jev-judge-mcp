@@ -10,6 +10,8 @@ call typed `provider` with "install jev-judge-mcp[typesafe]". The server looked 
 useless for its purpose; the refusal arrived per call, after the client had connected and the
 agent had committed to the tool.
 
+> ADR-0084 retires the SDK startup probe. Provider configuration errors still surface per call.
+
 ## Decision
 
 - `server.ensure_provider_runnable` runs in `main()` with the other startup gates, after
@@ -46,3 +48,8 @@ agent had committed to the tool.
 - `tests/unit/test_doctor.py` pins the doctor line's two arms.
 - A future provider with an optional transport package joins the same gate: probe next to the
   provider, refusal before serving, per-call text unchanged.
+
+## Amendment (2026-11-19): The provider startup probe is retired
+
+ADR-0084 makes TypeSafe runnable in the base package, so the SDK startup probe and the
+doctor importability line are removed. Provider configuration errors remain per-call.

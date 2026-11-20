@@ -1,6 +1,10 @@
 # Parity fixtures
 
-Recorded behavior of the TypeScript reference server 0.5.0 at commit `69ffb4b` (tree `aa89f96`), run on Node v24.19.0. ROADMAP P0 and ADR-0001 define the target. A Python parity test replays each fixture and must produce the same `result`, byte for byte, unless the fixture lists a divergence.
+Recorded behavior of the TypeScript reference server 0.5.0 at commit `69ffb4b` (tree `aa89f96`), run
+on Node v24.19.0. ROADMAP P0 and ADR-0001 define the target. A Python parity test replays each
+fixture and must produce the same `result`, byte for byte, unless the call is listed in the
+[divergence registry](../../docs/reference/divergences.json). Recorder tags stay with the frozen
+fixtures. Later decisions can register projections for existing calls without changing the recordings.
 
 ```
 make parity-reference   # clone + build the reference into tests/parity/reference/ (gitignored; network once)
@@ -61,7 +65,7 @@ The server environment is exactly `env` plus the MCP SDK defaults (HOME, LOGNAME
 | `ADR-0004` | `invalid-pattern/*`. The reason text is V8's, or V8 accepts a pattern outside the Python subset (`u`, `m`, variable lookbehind, named groups). |
 | `ADR-0005` | `unicode-astral/*-splits-surrogate*`. `truncate()` leaves a lone high surrogate. |
 | `ADR-0007` | `resolver-error/explicit-vercel-unset` |
-| `ADR-0031` | `duplicate-id/classify-omitted-ids-get-positional-fallbacks`. The reference returns two rows with the same id. Python raises `Duplicate item id` and makes no provider request. |
+| `ADR-0031` | `duplicate-id/classify-omitted-ids-get-positional-fallbacks`. The reference returns two rows with the same id. The current Python projection gives omitted IDs unused keys (ADR-0085). |
 | `ADR-0062` | The recorder adds this tag to each fixture with a call listed under `program-response-fields` in the divergence registry. Existing case tags keep their order. |
 
 ## Notes from recording
@@ -69,6 +73,6 @@ The server environment is exactly `env` plus the MCP SDK defaults (HOME, LOGNAME
 - The manifest counts 60 mock tests. The pinned `test/mock.test.mjs` has 66 `test(` call sites: 59 top level and 7 inside loops. At runtime they expand to 152 cases, and all 152 are recorded.
 - The reference's TypeSafe, OpenRouter, and Cloudflare providers turn a missing or non-object `answers` into `{}` (`provider.ts:149`, `provider.ts:256`), and each tool then reports per-item `invalid_response`. `compatible` raises a transport error for the same input. The fake speaks only `compatible`, so the other providers' branch is not recorded. ADR-0003 applies the `compatible` rule to every Python provider, so no fixture here carries `divergence:ADR-0003`. P4's provider contract suite owns that case.
 - Handler errors (`throw new Error` in a tool handler) come back as `isError` with the bare message. Schema rejections come back as `isError` with the MCP SDK's text, `MCP error -32602: Input validation error: ...`. That text belongs to the TypeScript SDK and zod, not to the reference code.
-- The reference `jev_classify` does not check generated fallback ids against supplied ones. An item without an id next to an item with id `item0` produces two results with id `item0`, and colliding class ids merge in `probabilities` and `by_class` (`duplicate-id/classify-omitted-ids-get-positional-fallbacks`). `jev_rerank` does check them (`index.ts:711-722`). Python rejects that collision with `Duplicate {kind} id` before any provider request (ADR-0031). The fixture is tagged `ADR-0031`.
+- The reference `jev_classify` does not check generated fallback ids against supplied ones. An item without an id next to an item with id `item0` produces two results with id `item0`, and colliding class ids merge in `probabilities` and `by_class` (`duplicate-id/classify-omitted-ids-get-positional-fallbacks`). `jev_rerank` does check them (`index.ts:711-722`). Python gives omitted IDs unused keys under ADR-0085. The fixture retains its original `ADR-0031` tag.
 - ADR-0004 quotes the V8 invalid-group message as `/(?//:`. The reference always appends `g`, so the recorded text is `Invalid regular expression: /(?//g: Invalid group`.
 - Two budget-edge successes are not recorded: `jev_classify` at exactly 8,000 item-class pairs and `jev_rerank` at exactly 100,000 characters. Each would need a fixture of several hundred KB. The over-budget errors are recorded.

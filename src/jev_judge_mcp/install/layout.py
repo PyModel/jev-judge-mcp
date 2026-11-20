@@ -1,15 +1,13 @@
 """Config homes for the installer. Tests pass a throwaway home; nothing here reads a real one."""
 
-import json
 import plistlib
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from jev_judge_mcp.domain import is_json_object
+from jev_judge_mcp.domain import decode_json, is_json_array, is_json_object
 from jev_judge_mcp.install.fs import read_bytes
-from jev_judge_mcp.install.values import is_json_array
 
 PYTHINKER_DESKTOP_ID = "com.pythinker.desktop"
 PI_ADAPTER_HINT = "pi install npm:pi-mcp-adapter"
@@ -147,8 +145,8 @@ def pi_adapter_installed(settings_path: Path) -> bool:
         data = read_bytes(settings_path)
         if data is None:
             return False
-        parsed: object = json.loads(data.decode("utf-8-sig"))
-    except (OSError, ValueError, RecursionError):
+        parsed = decode_json(data.decode("utf-8-sig"))
+    except (OSError, ValueError):
         return False
     if not is_json_object(parsed):
         return False

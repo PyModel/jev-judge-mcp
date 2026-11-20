@@ -1,11 +1,18 @@
-"""Error types and handler error text, and secret redaction (ADR-0008)."""
+"""Exact-value redaction and process logging (ADR-0008, ADR-0050)."""
 
+import json
 import logging
+import re
+import sys
 from collections.abc import Iterable
+from threading import Lock
 from urllib.parse import urlsplit
+
+from jev_judge_mcp.settings import LogLevel, Settings, unexpanded_references
 
 REDACTED = "[redacted]"
 DEFAULT_PORTS = {"http": 80, "https": 443}
+_log_redaction_lock = Lock()
 
 
 class Redactor:
@@ -18,16 +25,18 @@ class Redactor:
     """
 
     def __init__(self, secrets: Iterable[str]) -> None:
-        values: set[str] = set()
-        for secret in secrets:
-            values.update(value for value in (secret, *_userinfo_parts(secret), _normalized_url(secret)) if value)
-        # Longest first, so a secret containing another is replaced whole.
-        self._secrets = sorted(values, key=len, reverse=True)
+        self.secrets = frozenset(secrets)
+        values = {value for secret in self.secrets for value in variants(secret)}
+        spellings = sorted(values, key=lambda value: (-len(value), value))
+        self._pattern = re.compile("|".join(map(re.escape, spellings))) if spellings else None
 
     def __call__(self, text: str) -> str:
-        for secret in self._secrets:
-            text = text.replace(secret, REDACTED)
-        return text
+        return self._pattern.sub(REDACTED, text) if self._pattern is not None else text
+
+
+def variants(secret: str) -> frozenset[str]:
+    values = {value for value in (secret, *_userinfo_parts(secret), _normalized_url(secret)) if value}
+    return frozenset(values | {json.dumps(value, ensure_ascii=False)[1:-1] for value in values})
 
 
 def _userinfo_parts(secret: str) -> tuple[str, ...]:
@@ -75,7 +84,13 @@ class RedactingFilter(logging.Filter):
         super().__init__()
         self._redact = redact
 
+    def extend(self, values: Iterable[str]) -> None:
+        new_values = self._redact.secrets.union(values)
+        if new_values != self._redact.secrets:
+            self._redact = Redactor(new_values)
+
     def filter(self, record: logging.LogRecord) -> bool:
+        redact = self._redact
         try:
             message = record.getMessage()
         except Exception:
@@ -83,14 +98,41 @@ class RedactingFilter(logging.Filter):
                 message = f"{record.msg!s} {record.args!r}"
             except Exception:
                 message = "<unformattable log message>"
-        record.msg = self._redact(message)
+        record.msg = redact(message)
         record.args = None
         if record.exc_info is not None:
             # Render the traceback now, redacted, so the formatter never sees the raw exception.
-            record.exc_text = self._redact(logging.Formatter().formatException(record.exc_info))
+            record.exc_text = redact(logging.Formatter().formatException(record.exc_info))
             record.exc_info = None
         elif record.exc_text:
-            record.exc_text = self._redact(record.exc_text)
+            record.exc_text = redact(record.exc_text)
         if record.stack_info:
-            record.stack_info = self._redact(record.stack_info)
+            record.stack_info = redact(record.stack_info)
         return True
+
+
+def configure_process_logging(settings: Settings, redact: Redactor) -> None:
+    configure_logging(settings.log_level, redact.secrets)
+    for variable in unexpanded_references():
+        logging.getLogger("jev_judge_mcp").warning("%s holds an unexpanded reference and counts as unset", variable)
+
+
+def configure_logging(level: LogLevel, secrets: Iterable[str] = ()) -> None:
+    """Log to stderr. Every record, from any logger, is redacted of `secrets` first (ADR-0008)."""
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    handler.addFilter(RedactingFilter(Redactor(secrets)))
+    root = logging.getLogger()
+    with _log_redaction_lock:
+        root.handlers[:] = [handler]
+        root.setLevel(level)
+
+
+def register_log_secrets(redact: Redactor) -> None:
+    """Extend the installed log filters before the newly resolved credential is used."""
+    with _log_redaction_lock:
+        for handler in logging.getLogger().handlers:
+            for log_filter in handler.filters:
+                if isinstance(log_filter, RedactingFilter):
+                    log_filter.extend(redact.secrets)

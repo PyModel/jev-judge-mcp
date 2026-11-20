@@ -78,7 +78,7 @@ def test_zero_score_confidence_is_known() -> None:
 
 
 RUBRIC_FIVE: dict[str, object] = {
-    "score": 3.25,
+    "score": 2.5,
     "probabilities": {"0": 0.1, "1": 0.1, "2": 0.1, "3": 0.6, "4": 0.1},
     "confidence": 0.9,
 }
@@ -87,7 +87,9 @@ RUBRIC_FIVE: dict[str, object] = {
 @pytest.mark.parametrize("score", [0, 2, 3, 3.5, 4])
 def test_rubric_answer_accepts_the_whole_rubric_window(score: float) -> None:
     """The rubric's own 0..n-1 bound governs (ADR-0048), not validate_score's [0, 2]."""
-    answer = validate_rubric_answer({**RUBRIC_FIVE, "score": score}, 5)
+    high = score / 4
+    probabilities = {"0": 1 - high, "1": 0, "2": 0, "3": 0, "4": high}
+    answer = validate_rubric_answer({**RUBRIC_FIVE, "score": score, "probabilities": probabilities}, 5)
     assert answer is not None
     assert answer.score == float(score)
     assert answer.confidence == 0.9

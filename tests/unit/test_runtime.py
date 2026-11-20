@@ -12,11 +12,10 @@ import anyio
 import pytest
 
 from jev_judge_mcp.domain import JsonValue, NoulCriteria, NoulQuestion, Question, Usage
-from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.extract.executor import InProcessRegexExecutor
 from jev_judge_mcp.extract.worker import ProcessRegexExecutor
 from jev_judge_mcp.providers import DEFAULT_RETRY_POLICY, Evaluation, JevProvider
 from jev_judge_mcp.providers.base import ProviderName
+from jev_judge_mcp.redaction.values import Redactor
 from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.tools.base import Runtime
 
@@ -69,11 +68,10 @@ async def test_ask_passes_no_whole_call_deadline() -> None:
 
 
 async def test_default_regex_executor_is_the_process_pool() -> None:
-    """jev_extract patterns run in killable workers by default; the in-process adapter is tests-only."""
+    """jev_extract patterns run in killable workers by default."""
     runtime = Runtime(Settings())
     try:
-        assert isinstance(runtime.regex_executor, ProcessRegexExecutor)
-        assert not isinstance(runtime.regex_executor, InProcessRegexExecutor)
+        assert type(runtime.regex_executor) is ProcessRegexExecutor
     finally:
         await runtime.aclose()
 
@@ -206,7 +204,7 @@ async def test_scout_023_provider_closes_after_regex_failure(monkeypatch: pytest
     from unittest.mock import AsyncMock
 
     provider = _RecordingProvider()
-    executor = InProcessRegexExecutor()
+    executor = ProcessRegexExecutor(size=1)
     closed = AsyncMock()
     monkeypatch.setattr(provider, "aclose", closed)
     monkeypatch.setattr(executor, "aclose", AsyncMock(side_effect=RuntimeError("regex failed")))
@@ -222,7 +220,7 @@ async def test_scout_023_independent_errors_and_retry(monkeypatch: pytest.Monkey
     from unittest.mock import AsyncMock
 
     provider = _RecordingProvider()
-    executor = InProcessRegexExecutor()
+    executor = ProcessRegexExecutor(size=1)
     regex = AsyncMock(side_effect=[ValueError("regex"), None] if regex_failure else [None])
     network = AsyncMock(side_effect=[RuntimeError("provider"), None])
     monkeypatch.setattr(executor, "aclose", regex)
@@ -246,7 +244,7 @@ async def test_scout_023_cancelled_shutdown_closes_both_resources(monkeypatch: p
     from unittest.mock import AsyncMock
 
     provider = _RecordingProvider()
-    executor = InProcessRegexExecutor()
+    executor = ProcessRegexExecutor(size=1)
     regex, network = AsyncMock(), AsyncMock()
     monkeypatch.setattr(executor, "aclose", regex)
     monkeypatch.setattr(provider, "aclose", network)

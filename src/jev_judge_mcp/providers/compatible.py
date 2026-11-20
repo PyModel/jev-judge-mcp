@@ -5,16 +5,15 @@ from typing import ClassVar
 import httpx
 
 from jev_judge_mcp.domain import JsonValue
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.providers.base import (
     Evaluation,
     HttpProvider,
     ProviderName,
     decode_body,
     parse_envelope,
-    refuse_credentials_in_url,
 )
 from jev_judge_mcp.providers.retry import RetryPolicy
+from jev_judge_mcp.redaction.values import Redactor
 
 
 class CompatibleProvider(HttpProvider):
@@ -37,7 +36,6 @@ class CompatibleProvider(HttpProvider):
     async def _send(
         self, state: JsonValue, questions: dict[str, JsonValue], model: str, timeout: float | None
     ) -> Evaluation:
-        refuse_credentials_in_url(self._base_url, self.label)
         response = await self._post(
             self._base_url,
             {"Authorization": f"Bearer {self._api_key}"},

@@ -183,13 +183,16 @@ n ≤ 10), correct solutions per hour (failed runs' time included), final tests 
 cycles and retries, tool calls and tokens per solved task, Jev calls, judge accuracy against gold, and paired
 counts and wall-time differences. With no measured pair it says "not measured" and prints no number and no
 difference. It never reports an item rate. Every run also records its cost, unsafe actions, and each Jev
-call's round trip. Older summaries can undercount `jev_gate_range` actions. Recount them only when the retained log records the decision.
+call's round trip. Confined runs book Jev input tokens from private broker receipts. An unusable
+receipt set reserves at least the run bound for Jev. Tampered relay logs and receipt disagreements
+are recorded as metering issues and exclude the pair from analysis. Older summaries can undercount
+`jev_gate_range` actions. Recount them only when the retained log records the decision.
 
 | Path | Role |
 |---|---|
 | `ab/arms.py` | The agent configuration both arms share (Claude CLI flags, model, budget), arm B's Jev sentence, and each arm's MCP config |
 | `ab/fixture/` | `snapshot/` (the throwaway repo with its policy docs, copied per run to a temp dir outside this repo) and `tasks/<id>/` (prompt, overlay, hidden acceptance tests, reference solution, one solution per wrong option under `distractors/`, and `task.json`: options, gold, Jev tool, wrong-branch signatures). Excluded from pyright: its imports resolve only inside a copy |
-| `ab/grade.py` | Pristine pre-existing tests + acceptance tests against the agent's tree: success, regressions, pass rate, protected-file changes |
+| `ab/grade.py`, `ab/grade_runner.py` | The trusted collector runs pristine and hidden acceptance tests. Isolated Python workers execute task modules through typed proxies |
 | `ab/outcomes.py` | Per-run measures and their definitions: reached the model, Jev called and used, test cycles, retries, wrong branches, decision, measurement |
 | `ab/proxy.py` | Recorder on `evals/relay.py`: per `tools/call` round-trip ms, isError, `usage.input_tokens`, action, headline Action, model. Never logs arguments, text, or error messages |
 | `ab/review_server.py` | `request_human_review`, in both arms |

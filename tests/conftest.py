@@ -54,6 +54,8 @@ from typing import Any, cast
 
 import pytest
 
+from tests.support.environment import SETTINGS_ENV
+
 _BLOCKED_ROOTS = frozenset(
     {
         root.resolve()
@@ -88,6 +90,17 @@ def _shared(path: Path) -> bool:
     if any(path == root or path.is_relative_to(root) for root in _SESSION_ROOTS):
         return False
     return any(path == root or path.is_relative_to(root) for root in _BLOCKED_ROOTS)
+
+
+@pytest.fixture(autouse=True)
+def isolated_key_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Give in-process settings clean defaults and test-owned key and cache paths."""
+    for name in SETTINGS_ENV:
+        monkeypatch.delenv(name, raising=False)
+    path = tmp_path / "config" / "key"
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(path))
+    monkeypatch.setenv("JEV_MCP_CACHE_DIR", str(tmp_path / "cache"))
+    return path
 
 
 @pytest.fixture(autouse=True)

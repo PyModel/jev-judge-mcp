@@ -6,7 +6,7 @@ surviving file under the ADR-0069 in-flight cap. The payload reports a typed ans
 and a stable reason per skipped one; no file's bytes ever enter the agent's context. This is the
 extension-tool path ADR-0048 opened (divergence `file-judge-tools`): the question building and the
 answer projection are `jev_file_judge`'s, the per-file read and its refusals are `file_state`'s, and
-the usage summing is the `tools/files.py` `combined()` precedent — this module owns only the
+the usage summing is the `tools/base.py` `combined()` precedent — this module owns only the
 expansion, the prune, and the bounded fan-out. Every prune step precedes the first provider call,
 and a pruned path costs nothing.
 """
@@ -22,13 +22,11 @@ from typing import Any, cast
 
 import anyio
 
-from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain import ChoiceQuestion, ScoreQuestion
-from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import FILE_JUDGE, FILES_JUDGE
 from jev_judge_mcp.providers import Evaluation, ProviderConfigError
-from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, code_of, define, frame
+from jev_judge_mcp.security import SecurityGuard
+from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, code_of, combined, define, frame
 from jev_judge_mcp.tools.file_judge import (
     KIND_REFINEMENT,
     KINDS,
@@ -38,7 +36,6 @@ from jev_judge_mcp.tools.file_judge import (
     project_answer,
 )
 from jev_judge_mcp.tools.file_state import pinned_directory, read_state, resolve_scoped
-from jev_judge_mcp.tools.files import combined
 
 logger = logging.getLogger(__name__)
 
@@ -299,8 +296,7 @@ def plan(
     scope: Path | None = None,
     *,
     recursive: bool = False,
-    key_path: Path | None = None,
-    redact: Redactor | None = None,
+    guard: SecurityGuard,
     check_cancelled: Callable[[], None] = lambda: None,
 ) -> tuple[list[tuple[str, str]], list[dict[str, str]]]:
     """Expand, prune, and read — the whole deterministic half of the tool, before any provider call.
@@ -364,14 +360,11 @@ def plan(
                 discovery_first.append(text)
             return False
         try:
-            resolved = path.resolve()
-        except (OSError, RuntimeError):
+            resolved = resolve_scoped(str(path), root)
+        except ToolError:
             skip(text, "outside_scope")
             return True
         if resolved in seen:
-            return True
-        if not resolved.is_relative_to(root):
-            skip(path.relative_to(root).as_posix(), "outside_scope")
             return True
         if traversed and any(part in SKIP_DIRECTORIES for part in resolved.relative_to(root).parts):
             return True
@@ -449,7 +442,7 @@ def plan(
                 cap_first.append(text)
             continue
         try:
-            content = read_state(resolved, caps=FILES_JUDGE, key_path=key_path, redact=redact)
+            content = read_state(resolved, guard, caps=FILES_JUDGE)
         except ToolError as error:
             skip(text, _SKIP_REASONS[error.code])
             continue
@@ -492,42 +485,40 @@ def plan(
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     kind: str = args["kind"]
     question = build_question(kind, args["instructions"], args["criteria"])
-    redact = Redactor(await anyio.to_thread.run_sync(redaction_values, runtime.settings))
+    guard = await runtime.security_guard()
     survivors, skipped = await anyio.to_thread.run_sync(
         lambda: plan(
             args["paths"],
             recursive=bool(args.get("recursive", False)),
-            key_path=stored_key_path(runtime.settings),
-            redact=redact,
+            guard=guard,
             check_cancelled=anyio.from_thread.check_cancelled,
         )
     )
 
+    questions = {QUESTION_ID: question}
+    states = [{"path": guard.scrub(path), "content": content} for path, content in survivors]
     evaluations: list[Evaluation | None] = [None] * len(survivors)
     failures: list[tuple[int, dict[str, str]]] = []
-    config_error: list[ProviderConfigError] = []
+    refusals: list[tuple[int, Exception]] = []
 
     async def judge(index: int) -> None:
-        path_text, content = survivors[index]
+        path_text, _ = survivors[index]
         try:
             async with runtime.file_fanout:
-                evaluations[index] = await runtime.ask(
-                    {"path": redact_credential_literals(path_text, redact), "content": content}, {QUESTION_ID: question}
-                )
-        except ProviderConfigError as error:
-            # The server cannot ask at all — not a per-file failure. Cancel the siblings and re-raise
-            # outside the group, so the kernel's `auth` refusal keeps its code (the raw group would
-            # flatten it to `provider`).
-            config_error.append(error)
-            task_group.cancel_scope.cancel()
-        except Exception as error:  # a per-file failure is a skip, never a batch error (ADR-0077)
-            failures.append((index, {"path": path_text, "reason": f"call_failed:{code_of(error)}"}))
+                evaluations[index] = await runtime.ask(states[index], questions)
+        except Exception as error:
+            code = code_of(error)
+            if isinstance(error, ProviderConfigError) or code == "input_too_large":
+                refusals.append((index, error))
+                task_group.cancel_scope.cancel()
+            else:
+                failures.append((index, {"path": path_text, "reason": f"call_failed:{code}"}))
 
     async with anyio.create_task_group() as task_group:
         for index in range(len(survivors)):
             task_group.start_soon(judge, index)
-    if config_error:
-        raise config_error[0]
+    if refusals:
+        raise min(refusals, key=lambda refusal: refusal[0])[1]
 
     expected: Sequence[str] = ()
     if isinstance(question, ChoiceQuestion):

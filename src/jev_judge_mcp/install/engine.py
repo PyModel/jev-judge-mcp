@@ -9,8 +9,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from jev_judge_mcp.credential_literal import redact_credential_literals
-from jev_judge_mcp.domain import is_json_object
+from jev_judge_mcp.domain import is_json_array, is_json_object
 from jev_judge_mcp.install.documents import (
     codex_entry_path,
     codex_headings_preserved,
@@ -63,7 +62,7 @@ from jev_judge_mcp.install.layout import (
     running_on_macos,
 )
 from jev_judge_mcp.install.redact import holds_literal, redact_diagnostic, redact_text
-from jev_judge_mcp.install.values import is_json_array
+from jev_judge_mcp.redaction.literals import redact_credential_literals
 
 TARGETS: tuple[str, ...] = (
     "claude-code",
@@ -109,7 +108,6 @@ class Request:
     confirmer: Callable[[str], bool] | None = None
     chooser: Callable[[str], tuple[str, ...]] | None = None
     verify: Callable[[list[str]], None] | None = None
-    before_write: Callable[[Path], None] | None = None
     stamp: str | None = None
 
 
@@ -196,7 +194,7 @@ def _validate(request: Request) -> None:
     if not supported_spec(request.launch.spec):
         raise InstallError(
             "unsupported launch spec; use the version-pinned PyPI spec "
-            "'jev-judge-mcp[typesafe]==<version>' or a checkout spec '<absolute path>[typesafe]'"
+            "'jev-judge-mcp==<version>' or a checkout spec '<absolute path>'"
         )
 
 
@@ -376,6 +374,8 @@ def _plan(request: Request, target: str, hits: list[_Hit], targets: Mapping[str,
             action.kind = "verify"
     except OSError as exc:
         return _Action(target, path, "fail", f"cannot read config: {exc.strerror}", False, False)
+    except UnicodeDecodeError:
+        return _Action(target, path, "fail", "config is not valid UTF-8; left unchanged", False, False)
     except (ConfigParseError, ConfigShapeError, UnicodeError) as exc:
         reason = exc.args[0] if exc.args else "unreadable config"
         return _Action(target, path, "fail", f"{reason}; left unchanged", False, False)
@@ -733,8 +733,6 @@ def _prepare_write(request: Request, action: _Action, stamp: str) -> None:
     if current is not None:
         backup = write_backup(request.layout.state_dir(), stamp, action.target, path.suffix, current)
         action.message = (action.message + f" backup: {backup}").strip()
-    if request.before_write is not None:
-        request.before_write(path)
 
 
 def _write_mode(path: Path, literal: bool) -> int:

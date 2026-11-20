@@ -1,30 +1,28 @@
 """Build and redact `jev_ask` State from framing text, files and bounded read-only commands."""
 
-import contextlib
 import os
 import re
 import shlex
 import shutil
-import signal
 import subprocess
-import threading
-import time
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
-from typing import BinaryIO, NoReturn
+from typing import NoReturn
 
-from jev_judge_mcp.credential_literal import redact_credential_literals
+from jev_judge_mcp import git
 from jev_judge_mcp.domain import NoulCriteria, Question
-from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.limits import ASK
-from jev_judge_mcp.redact_action import redact_action
+from jev_judge_mcp.policy.guard import FINAL_BLOCK_NOTICE
+from jev_judge_mcp.process import OutputTooLarge, capture
+from jev_judge_mcp.redaction.action import redact_action
+from jev_judge_mcp.security import SecurityGuard
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import ToolError
 from jev_judge_mcp.tools.file_state import is_secret_store, read_state, resolve_scoped
+from jev_judge_mcp.tools.gate_budget import fits_budget
 
 OWN_PART = "state"
 OUTPUT_PART = "command output"
@@ -48,7 +46,7 @@ class Skipped:
     reason: str
 
 
-def own_part(state_text: str, redact: Redactor | None = None) -> Part | None:
+def own_part(state_text: str, guard: SecurityGuard) -> Part | None:
     """The caller's own framing text as one part, credential-redacted; `None` when it is empty.
 
     The text is sent verbatim but for redaction — whitespace included, so a judgment never sees
@@ -56,7 +54,7 @@ def own_part(state_text: str, redact: Redactor | None = None) -> Part | None:
     tool runs; this re-measures after redaction, which can grow a short secret into a
     `[redacted]` marker.
     """
-    text = redact_credential_literals(state_text, redact)
+    text = guard.scrub(state_text)
     if not text.strip():
         return None
     units = length(text)
@@ -68,9 +66,7 @@ def own_part(state_text: str, redact: Redactor | None = None) -> Part | None:
     return Part(OWN_PART, text, units)
 
 
-def file_parts(
-    paths: Sequence[str], key_path: Path | None = None, redact: Redactor | None = None
-) -> tuple[list[Part], list[Skipped]]:
+def file_parts(paths: Sequence[str], guard: SecurityGuard) -> tuple[list[Part], list[Skipped]]:
     """Each caller-named path as one part, or its typed skip; a read refusal never fails the call.
 
     Order is input order, exact duplicate paths are read once, and every refusal is
@@ -85,11 +81,11 @@ def file_parts(
             continue
         seen.add(raw)
         try:
-            content = read_state(resolve_scoped(raw), key_path=key_path, redact=redact)
+            content = read_state(resolve_scoped(raw), guard)
         except ToolError as error:
             skipped.append(Skipped(raw, error.code))
             continue
-        parts.append(Part(redact_credential_literals(raw, redact), content, length(content)))
+        parts.append(Part(guard.scrub(raw), content, length(content)))
     return parts, skipped
 
 
@@ -180,7 +176,7 @@ _COMMAND_OPTIONS: dict[str, dict[str, _Value]] = {
 }
 
 
-def prepare_command(command: str, env: Mapping[str, str], key_path: Path | None) -> tuple[str, list[str]]:
+def prepare_command(command: str, env: Mapping[str, str], guard: SecurityGuard) -> tuple[str, list[str]]:
     """Validate and pin the executable before any state read or judgment."""
     try:
         argv = shlex.split(command, comments=False, posix=True)
@@ -205,7 +201,7 @@ def prepare_command(command: str, env: Mapping[str, str], key_path: Path | None)
         _refuse("the program is outside the read-only command allowlist")
     args, attached_values = _checked_arguments(name, argv[len(prefix) :], options)
     for word in (*argv, *attached_values):
-        _check_path(word, key_path)
+        _check_path(word, guard)
 
     executable = shutil.which(program, path=env.get("PATH", os.defpath))
     if executable is None:
@@ -283,7 +279,7 @@ def _refuse_option(name: str, options: Mapping[str, _Value]) -> NoReturn:
     _refuse(f"{name} requires a listed option with valid value syntax. Allowed options: {', '.join(options)}")
 
 
-def _check_path(word: str, key_path: Path | None) -> None:
+def _check_path(word: str, guard: SecurityGuard) -> None:
     path = Path(word).expanduser() if word.startswith("~/") else Path(word)
     # Git revisions can name files as REV:path.
     colon_path = word.rpartition(":")[2]
@@ -296,22 +292,15 @@ def _check_path(word: str, key_path: Path | None) -> None:
         for spelling in (candidate, resolved):
             if any(part.lower() in _PRIVATE_DIRECTORIES for part in spelling.parts):
                 _refuse("the command reaches a private directory")
-            if is_secret_store(spelling, key_path):
+            if is_secret_store(spelling, guard):
                 _refuse("the command touches a known secret store")
 
 
-def git_command(argv: list[str], env: dict[str, str]) -> list[str]:
-    """Build Git's argv under fixed policy and refuse configured worktree filters."""
+def git_command(argv: Sequence[str], env: Mapping[str, str], byte_cap: int) -> subprocess.CompletedProcess[bytes]:
+    """Refuse configured worktree filters before running the validated Git subcommand."""
     binary, subcommand, *args = argv
-    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull, GIT_NO_LAZY_FETCH="1", GIT_ALLOW_PROTOCOL="")
-    git = [
-        binary,
-        "--no-pager",
-        "--no-optional-locks",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        f"core.hooksPath={os.devnull}",
+    cwd = Path.cwd()
+    config = (
         "-c",
         "status.submoduleSummary=false",
         "-c",
@@ -328,26 +317,38 @@ def git_command(argv: list[str], env: dict[str, str]) -> list[str]:
         f"gpg.x509.program={os.devnull}",
         "-c",
         f"gpg.ssh.program={os.devnull}",
-    ]
+    )
     if subcommand in {"status", "diff"}:
         try:
-            filters = subprocess.run(  # noqa: S603 - only the resolved Git and fixed options
-                [*git, "config", "--includes", "--name-only", "--get-regexp", r"^filter\..*\.(clean|smudge|process)$"],
+            filters = git.run(
+                cwd,
+                "config",
+                "--includes",
+                "--name-only",
+                "--get-regexp",
+                r"^filter\..*\.(clean|smudge|process)$",
+                binary=binary,
                 env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=2,
-                check=False,
+                ignore_user_config=True,
             )
-        except (OSError, subprocess.TimeoutExpired):
+        except (OSError, subprocess.TimeoutExpired, OutputTooLarge):
             _refuse("Git's worktree filter configuration could not be checked")
         if filters.returncode != 1:
             _refuse("Git worktree filters are configured or could not be checked")
     flags = ["--ignore-submodules=all"]
     if subcommand != "status":
         flags += ["--no-ext-diff", "--no-textconv"]
-    return [*git, subcommand, *flags, *args]
+    return git.run(
+        cwd,
+        *config,
+        subcommand,
+        *flags,
+        *args,
+        binary=binary,
+        env=env,
+        byte_cap=byte_cap,
+        ignore_user_config=True,
+    )
 
 
 def command_disabled_refusal() -> str:
@@ -386,96 +387,44 @@ def run_command(
     argv: Sequence[str],
     timeout_seconds: int,
     output_units_max: int,
+    guard: SecurityGuard,
     env: Mapping[str, str] | None = None,
-    redactions: Sequence[str] = (),
+    is_git: bool = False,
 ) -> Part:
     """Capture the bounded, redacted output of a validated argv."""
     # Worst-case UTF-16 encoding is three UTF-8 bytes per unit, so crossing this byte bound
     # proves the decoded text is over the cap: the flood kill is never a false kill.
     byte_cap = 3 * output_units_max + 3
-    collected: dict[str, bytes] = {"stdout": b"", "stderr": b""}
-    state = {"overflow": False}
     try:
-        process = subprocess.Popen(  # noqa: S603 - validated argv with an absolute executable
-            argv,
-            shell=False,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=str(Path.cwd()),
-            env=dict(env) if env is not None else scrubbed_environment(),
-            start_new_session=True,
-        )
-    except (OSError, ValueError) as error:
-        # ValueError: a command the OS refuses to spawn at all, such as an embedded NUL byte.
-        raise ToolError(f"the command could not run ({error})", code="command_failed") from None
-
-    def drain(name: str, stream: BinaryIO) -> None:
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            chunk = stream.read(65_536)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            total += len(chunk)
-            if total > byte_cap:
-                state["overflow"] = True
-                break
-        collected[name] = b"".join(chunks)
-        stream.close()
-
-    timed_out = False
-    try:
-        if process.stdout is None or process.stderr is None:  # both pipes were requested
-            raise AssertionError("unreachable: Popen(stdout=PIPE, stderr=PIPE)")
-        readers = [
-            threading.Thread(target=drain, args=(name, stream), daemon=True)
-            for name, stream in (("stdout", process.stdout), ("stderr", process.stderr))
-        ]
-        deadline = time.monotonic() + timeout_seconds
-        for reader in readers:
-            reader.start()
-        while not state["overflow"]:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                timed_out = True
-                break
-            try:
-                process.wait(timeout=min(0.05, remaining))
-                break
-            except subprocess.TimeoutExpired:
-                pass
-    finally:
-        _kill_group(process)
-    for reader in readers:
-        reader.join(timeout=5)
-    if timed_out:
+        if is_git:
+            result = git_command(argv, env or scrubbed_environment(), byte_cap)
+        else:
+            result = capture(
+                argv,
+                cwd=Path.cwd(),
+                env=env if env is not None else scrubbed_environment(),
+                timeout_seconds=timeout_seconds,
+                byte_cap=byte_cap,
+            )
+    except subprocess.TimeoutExpired as error:
         raise ToolError(
-            f"the command exceeded the {timeout_seconds}-second timeout and was killed; "
+            f"the command exceeded the {error.timeout:g}-second timeout and was killed; "
             "run a shorter or quieter command",
             code="command_timeout",
-        )
-    if state["overflow"]:
+        ) from None
+    except OutputTooLarge:
         raise ToolError(
             f"the command output passed the {output_units_max:,}-unit cap and the run was killed; "
             "run a command that prints less",
             code="output_too_large",
-        )
-    if any(reader.is_alive() for reader in readers):
-        # A child that left the group (its own session) still holds a pipe, so the output can never
-        # be read to its end: refuse rather than return a part that is silently incomplete.
-        raise ToolError(
-            "the command left a process holding its output open after it exited; "
-            "run a command whose children exit with it",
-            code="command_failed",
-        )
-    stdout = collected["stdout"].decode("utf-8", errors="replace")
-    stderr = collected["stderr"].decode("utf-8", errors="replace")
+        ) from None
+    except (OSError, ValueError) as error:
+        raise ToolError(f"the command could not run ({error})", code="command_failed") from None
+    stdout = result.stdout.decode("utf-8", errors="replace")
+    stderr = result.stderr.decode("utf-8", errors="replace")
     block = redact_action(
-        redact_credential_literals(
-            f"exit status: {process.returncode}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
-            Redactor(redactions),
+        guard.scrub(
+            f"exit status: {result.returncode}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
         )
     )
     units = length(block)
@@ -486,19 +435,6 @@ def run_command(
             code="output_too_large",
         )
     return Part(OUTPUT_PART, block, units)
-
-
-def _kill_group(process: subprocess.Popen[bytes]) -> None:
-    """Kill the whole process group: the command dies with its children, so a piped grandchild
-    cannot hold the output pipes open past the kill (the repository is POSIX-only, ADR-0032).
-
-    `start_new_session=True` made the command's pid the group id, and a group id stays valid while
-    any member lives — including after the command itself was reaped — so the pid is used directly;
-    `os.getpgid` fails on a reaped leader and would turn the kill into a no-op.
-    """
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.killpg(process.pid, signal.SIGKILL)
-    process.wait()
 
 
 def question_units(questions: Mapping[str, Question]) -> int:
@@ -517,45 +453,60 @@ def question_units(questions: Mapping[str, Question]) -> int:
     return total
 
 
-def split_refusal(parts: Sequence[Part], questions_units: int) -> NoReturn:
-    """The one over-budget refusal: every part's size, then a first-fit Split suggestion.
+def named_state(parts: Sequence[Part]) -> dict[str, str]:
+    """The parts as named state fields; a name already taken gets a `_2`-style suffix.
 
-    The suggestion packs the parts, in composition order, into the fewest calls that each leave
-    room for the questions; the same questions are re-asked on every call. When the questions
-    alone are over the cap, or one part cannot fit beside them at all, the message says what to
-    trim instead. A truncated judgment is never an alternative (ADR-0077).
+    File parts are named by the caller's path, so a file literally called `state` must not
+    silently replace the caller's own framing part, and the suffix itself is never trusted
+    free: the loop re-checks until the name is fresh.
     """
-    state_units = sum(part.units for part in parts)
-    lines = [
-        f"jev_ask: the composed request is {state_units:,} units of state plus {questions_units:,} units "
-        f"of questions, over the {ASK.request_units_max:,}-unit cap. Nothing is truncated.",
-        "Per part: " + "; ".join(f"{part.name} {part.units:,}" for part in parts) + ".",
-    ]
-    if questions_units > ASK.request_units_max:
-        lines.append("The questions alone exceed the cap; trim the question set (fewer or narrower questions).")
-        raise ToolError(" ".join(lines), code="input_too_large")
-    capacity = ASK.request_units_max - questions_units
-    oversized = [part.name for part in parts if part.units > capacity]
-    if oversized:
-        lines.append(
-            f"{' and '.join(oversized)} cannot fit beside the questions in one call "
-            f"({capacity:,} units of room); shrink or drop that part."
-        )
-        raise ToolError(" ".join(lines), code="input_too_large")
-    calls: list[list[str]] = []
-    fill = 0
+    state: dict[str, str] = {}
     for part in parts:
-        if not calls or fill + part.units > capacity:
-            calls.append([part.name])
-            fill = part.units
+        name = part.name
+        counter = 1
+        while name in state:
+            counter += 1
+            name = f"{part.name}_{counter}"
+        state[name] = part.text
+    return state
+
+
+def split_refusal(parts: Sequence[Part], questions: Mapping[str, Question], reason: str) -> NoReturn:
+    """Estimate smaller compositions with the same questions."""
+    lines = [
+        f"jev_ask: {reason} Nothing is truncated.",
+        "Per part (UTF-16 units): " + "; ".join(f"{part.name} {part.units:,}" for part in parts) + ".",
+    ]
+    oversized = [part.name for part in parts if not fits_budget(named_state([part]), questions)]
+    if not fits_budget({}, questions):
+        lines.append(
+            "The questions alone exceed the packing estimate. Trim the question set (fewer or narrower questions)."
+        )
+    elif oversized:
+        lines.append(
+            f"Under the packing estimate, {' and '.join(oversized)} cannot fit beside the questions. "
+            "Split, shrink or drop the listed parts."
+        )
+    else:
+        groups: list[list[Part]] = []
+        for part in parts:
+            for group in groups:
+                if fits_budget(named_state([*group, part]), questions):
+                    group.append(part)
+                    break
+            else:
+                groups.append([part])
+        if len(groups) > 1:
+            lines.append(
+                "Split suggestion: "
+                + "; ".join(
+                    f"call {index}: {', '.join(part.name for part in group)}"
+                    for index, group in enumerate(groups, start=1)
+                )
+                + ". Re-ask the same questions on every call."
+            )
         else:
-            calls[-1].append(part.name)
-            fill += part.units
-    lines.append(
-        "Split suggestion: "
-        + "; ".join(f"call {index}: {', '.join(names)}" for index, names in enumerate(calls, start=1))
-        + ". Re-ask the same questions on every call."
-    )
+            lines.append("Split or trim the state or ask fewer questions per call.")
     raise ToolError(" ".join(lines), code="input_too_large")
 
 

@@ -57,10 +57,13 @@ def clopper_pearson_upper(errors: int, n: int, confidence: float = 0.95) -> floa
     low, high = errors / n, 1.0
     for _ in range(200):
         mid = (low + high) / 2
+        at_precision = mid == low or mid == high
         if binomial_cdf(errors, n, mid) > alpha:
             low = mid
         else:
             high = mid
+        if at_precision:
+            break
     return high
 
 

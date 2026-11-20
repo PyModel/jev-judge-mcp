@@ -11,12 +11,16 @@ from typing import Any
 from jev_judge_mcp.domain import ChoiceQuestion, Question
 from jev_judge_mcp.extract.candidates import Refused, find_candidates
 from jev_judge_mcp.extract.dialect import to_units
+from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import EXTRACT
 from jev_judge_mcp.policy import (
     DEFAULT_CLASSIFY_AUTO_ACCEPT,
     DEFAULT_MINIMUM_MARGIN,
     ExtractFieldEvidence,
     ExtractJudgment,
+    decide_extract_field,
+    extract_call_action,
+    fail_closed,
 )
 from jev_judge_mcp.policy.actions import Action
 from jev_judge_mcp.serialize import quote
@@ -32,12 +36,7 @@ from jev_judge_mcp.tools.base import (
     frame,
     headline,
 )
-from jev_judge_mcp.tools.observed import (
-    decide_extract_field,
-    extract_call_action,
-    fail_closed,
-    validate_extract_choice,
-)
+from jev_judge_mcp.tools.observed import validate_extract_choice
 from jev_judge_mcp.validation import margin, top_probability
 from jev_judge_mcp.validation.caps import CapLedger, candidate_budget_error, exceeds
 
@@ -135,7 +134,7 @@ class _Field:
         return {"candidates_truncated": self.truncated, "matches_skipped_too_long": self.too_long}
 
 
-async def _match(runtime: Runtime, index: int, raw: dict[str, str], units: str) -> _Field:
+async def _match(runtime: Runtime, index: int, identifier: str, raw: dict[str, str], units: str) -> _Field:
     telemetry = runtime.telemetry
     with telemetry.span("regex.extract") as span:
         telemetry.payload(span, "pattern", lambda: raw["pattern"])
@@ -148,7 +147,7 @@ async def _match(runtime: Runtime, index: int, raw: dict[str, str], units: str) 
             span.attributes.update(
                 outcome="ok", candidates=len(candidates), too_long=too_long, candidates_truncated=truncated
             )
-    return _Field(raw["id"], f"f{index}", raw["pattern"], raw["description"], candidates, too_long, truncated, error)
+    return _Field(identifier, f"f{index}", raw["pattern"], raw["description"], candidates, too_long, truncated, error)
 
 
 def _result(field: _Field, answer: object, auto_accept: float, minimum_margin: float) -> dict[str, object]:
@@ -215,15 +214,14 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     document = ledger.text(args["document"], EXTRACT.document_max, "context")
     raw_fields: list[dict[str, str]] = args["fields"]
 
-    seen: set[str] = set()
-    for raw in raw_fields:
-        if raw["id"] in seen:
-            raise ToolError(f"Duplicate field id: {raw['id']}", code="invalid_arguments")
-        seen.add(raw["id"])
+    ids = ensure_unique_ids(raw_fields, "field").ids
 
     # Fields run one after another, in caller order (ADR-0012 D5).
     units = to_units(document)
-    fields = [await _match(runtime, index, raw, units) for index, raw in enumerate(raw_fields)]
+    fields = [
+        await _match(runtime, index, identifier, raw, units)
+        for index, (identifier, raw) in enumerate(zip(ids, raw_fields, strict=True))
+    ]
 
     total = sum(length(candidate) for field in fields for candidate in field.candidates)
     if exceeds(total, EXTRACT.aggregate_candidate_units):

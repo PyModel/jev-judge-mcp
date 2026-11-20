@@ -1,33 +1,26 @@
 """Provider resolution beyond the recorded error texts (`provider.ts:35-77`, ADR-0007)."""
 
-import os
+import logging
 import re
 from pathlib import Path
 
 import pytest
 
+from jev_judge_mcp import keyfile
 from jev_judge_mcp.providers import ProviderConfigError, resolve_model, resolve_provider
 from jev_judge_mcp.providers.cloudflare import CloudflareProvider
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.openrouter import OpenRouterProvider
 from jev_judge_mcp.providers.resolver import NO_CREDENTIALS, VERCEL_UNSUPPORTED
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
-from jev_judge_mcp.settings import load_settings
-from tests.support.stdio import server_env
+from jev_judge_mcp.redaction.values import configure_logging
+from jev_judge_mcp.settings import Settings, load_settings
 
 TYPESAFE = {"TYPESAFE_API_KEY": "typesafe-fake-key"}
 OPENROUTER = {"OPENROUTER_API_KEY": "sk-or-v1"}
 CLOUDFLARE = {"CLOUDFLARE_API_TOKEN": "cloudflare-fake-token", "CLOUDFLARE_ACCOUNT_ID": "acct"}
 VERCEL = {"AI_GATEWAY_API_KEY": "gateway-fake-key"}
 COMPATIBLE = {"JEV_API_KEY": "compatible-fake-key", "JEV_API_BASE_URL": "https://jev.example/v1"}
-
-
-@pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    kept = server_env()
-    for key in list(os.environ):
-        if key not in kept:
-            monkeypatch.delenv(key)
 
 
 def resolve(monkeypatch: pytest.MonkeyPatch, *envs: dict[str, str]) -> object:
@@ -162,10 +155,9 @@ def test_model_default(monkeypatch: pytest.MonkeyPatch, env: dict[str, str], mod
     assert resolve_model(load_settings()) == model
 
 
-def test_empty_model_stays_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`JEV_MCP_MODEL ?? "jev-latest"` (`index.ts:72`): only an unset variable takes the default."""
+def test_empty_model_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JEV_MCP_MODEL", "")
-    assert resolve_model(load_settings()) == ""
+    assert resolve_model(load_settings()) == "jev-latest"
 
 
 # --- key-file fallback (ADR-0046) ---
@@ -233,3 +225,48 @@ def test_an_unexpanded_reference_falls_back_to_the_stored_key(
 def test_an_unexpanded_reference_without_a_stored_key_reports_no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ProviderConfigError, match=re.escape(NO_CREDENTIALS)):
         resolve(monkeypatch, {"TYPESAFE_API_KEY": "${TYPESAFE_API_KEY}"})
+
+
+def test_a_short_key_stored_after_settings_load_refuses_resolution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    key = tmp_path / "key"
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(key))
+    settings = load_settings()
+    key.write_text("tiny", encoding="utf-8")
+    with pytest.raises(ProviderConfigError, match="JEV_MCP_KEY_FILE"):
+        resolve_provider(settings)
+
+
+@pytest.mark.parametrize("rotate", [False, True], ids=["late-log-redaction", "rotating-key"])
+def test_late_key_is_redacted_in_provider_errors_and_logs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], rotate: bool
+) -> None:
+    marker = "first-opaque-key"
+    path = tmp_path / "key"
+    monkeypatch.setenv("JEV_MCP_KEY_FILE", str(path))
+    settings = load_settings()
+    root = logging.getLogger()
+    handlers, level = root.handlers.copy(), root.level
+    configure_logging("INFO")
+    path.write_text(marker, encoding="utf-8")
+    if rotate:
+        real_read = keyfile.stored_key
+
+        def rotating_read(current: Settings) -> str:
+            value = real_read(current)
+            path.write_text("rotated-opaque-key", encoding="utf-8")
+            return value
+
+        monkeypatch.setattr(keyfile, "stored_key", rotating_read)
+    try:
+        provider = resolve_provider(settings)
+        assert isinstance(provider, TypeSafeProvider)
+        sent = provider._api_key  # pyright: ignore[reportPrivateUsage]
+        assert provider._redact(f"echo {sent}") == "echo [redacted]"  # pyright: ignore[reportPrivateUsage]
+        assert sent == marker
+        logging.getLogger(__name__).warning("echo %s", sent)
+        assert "echo [redacted]" in capsys.readouterr().err
+    finally:
+        root.handlers[:] = handlers
+        root.setLevel(level)

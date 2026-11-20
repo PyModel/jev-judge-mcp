@@ -221,7 +221,7 @@ def call_tool_sync(tool: str, arguments: dict[str, Any], answers: dict[str, Any]
         pytest.param(
             "jev_score",
             {"subject": "Regression risk of the rename", "levels": ["minor", "moderate", "severe"]},
-            {"grade": {"score": 1.5, "confidence": 0.9, "probabilities": {"0": 0.1, "1": 0.7, "2": 0.2}}},
+            {"grade": {"score": 1.1, "confidence": 0.9, "probabilities": {"0": 0.1, "1": 0.7, "2": 0.2}}},
             None,
             False,
             id="score",

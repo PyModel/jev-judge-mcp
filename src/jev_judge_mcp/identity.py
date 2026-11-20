@@ -18,7 +18,9 @@ from pathlib import Path
 
 import anyio
 
+from jev_judge_mcp import git
 from jev_judge_mcp.domain import is_json_object
+from jev_judge_mcp.process import OutputTooLarge
 
 DISTRIBUTION = "jev-judge-mcp"
 """The distribution whose installed version is the plain identity (ADR-0049)."""
@@ -181,16 +183,8 @@ def _packed_ref(base: Path, name: str) -> str | None:
 def _tag_commit(tag: str, git_dir: Path) -> str | None:
     """Git peels loose or packed tag objects, including nested annotated tags."""
     try:
-        result = subprocess.run(  # noqa: S603
-            ["git", "--no-replace-objects", "--git-dir", str(git_dir), "rev-parse", "--verify", f"{tag}^{{commit}}"],  # noqa: S607
-            env={**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")}, "GIT_NO_LAZY_FETCH": "1"},
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=2,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        result = git.run(git_dir, "--git-dir", str(git_dir), "rev-parse", "--verify", f"{tag}^{{commit}}")
+    except (OSError, subprocess.TimeoutExpired, OutputTooLarge):
         return None
     return result.stdout.strip().decode("ascii", "replace") if result.returncode == 0 else None
 
@@ -227,27 +221,8 @@ def _source_stamp(root: Path) -> tuple[tuple[str, int, int, int], ...]:
 
 def _dirty(root: Path) -> bool | None:
     try:
-        status = subprocess.run(  # noqa: S603 - fixed command in the installation checkout
-            [  # noqa: S607 - use the operator's git on PATH
-                "git",
-                "--no-optional-locks",
-                "-C",
-                str(root),
-                "-c",
-                "core.fsmonitor=false",
-                "status",
-                "--porcelain",
-                "--untracked-files=normal",
-                "--ignore-submodules=none",
-            ],
-            env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=2,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        status = git.run(root, "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none")
+    except (OSError, subprocess.TimeoutExpired, OutputTooLarge):
         return None
     return bool(status.stdout) if status.returncode == 0 else None
 

@@ -110,29 +110,22 @@ def gate_reason_codes(
     reports `claim_confidence_low` rather than nothing.
     """
     valid = [claim for claim in claims if claim is not None]
-    codes: list[str] = []
-    if truncated:
-        codes.append("incomplete_context")
-    if review_invalid or source_invalid or len(valid) < len(claims):
-        codes.append("invalid_response")
-    if review_action == "escalate":
-        codes.append("review_escalated")
-    if review_action == "review":
-        codes.append("review_required")
-    if any(claim.verdict == "contradicted" for claim in valid):
-        codes.append("claims_contradicted")
-    if any(claim.verdict == "unsupported" for claim in valid):
-        codes.append("claims_unsupported")
     confidences = [claim.confidence if claim.confidence is not None else -1 for claim in valid]
-    if any(c < thresholds.review_at for c in confidences):
-        codes.append("claim_confidence_low")
-    if any(thresholds.review_at <= c < thresholds.auto_accept for c in confidences):
-        codes.append("claim_confidence_below_auto_accept")
-    if caller_note:
-        codes.append("caller_note_only")
-    if action == "auto":
-        codes.append("accepted")
-    return codes
+    present = {
+        "incomplete_context": truncated,
+        "invalid_response": review_invalid or source_invalid or len(valid) < len(claims),
+        "review_escalated": review_action == "escalate",
+        "review_required": review_action == "review",
+        "claims_contradicted": any(claim.verdict == "contradicted" for claim in valid),
+        "claims_unsupported": any(claim.verdict == "unsupported" for claim in valid),
+        "claim_confidence_low": any(c < thresholds.review_at for c in confidences),
+        "claim_confidence_below_auto_accept": any(
+            thresholds.review_at <= c < thresholds.auto_accept for c in confidences
+        ),
+        "caller_note_only": caller_note,
+        "accepted": action == "auto",
+    }
+    return [code for code in GATE_REASON_CODES if present[code]]
 
 
 @dataclass(frozen=True, slots=True)

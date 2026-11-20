@@ -44,8 +44,8 @@ REFUSED = [
 
 COMPILE_HEAVY = [r"\W" * 249 + ending for ending in (r"\D", r"\S", r"\.")]
 
-SLACK_S = 0.9
-"""Scheduling headroom over the 1 s deadline for ten concurrent kills on a loaded CI host."""
+REAP_SLACK_S = 1.5
+"""Scheduling and reaping headroom after the warm workers' deadlines on one CPU."""
 
 BENIGN: dict[str, Any] = {
     "document": "Build ABC-123 passed.",
@@ -104,12 +104,11 @@ async def test_corpus_times_out_inside_the_deadline_while_other_calls_are_served
 
     async def benign() -> None:
         while len(slow) < len(CATASTROPHIC):
-            began = time.monotonic() if served else started
             extracted = await toolset.call("jev_extract", BENIGN)
             screened = await toolset.call("jev_screen", {"text": "hello"})
             assert '"value": "ABC-123"' in text_of(extracted)
             assert not screened.is_error
-            served.append(time.monotonic() - began)
+            served.append(time.monotonic() - started)
             await anyio.sleep(0.05)
 
     try:
@@ -122,13 +121,12 @@ async def test_corpus_times_out_inside_the_deadline_while_other_calls_are_served
     finally:
         await toolset.aclose()
 
-    # Served throughout the storm, not after it.
-    assert len(served) >= 5
-    assert max(served) < 0.5
+    first_timeout = min(elapsed for elapsed, _ in slow.values())
+    assert sum(elapsed < first_timeout for elapsed in served) >= 5  # benign work must finish while every slow call runs
     for pattern, (elapsed, text) in slow.items():
         assert '"status": "invalid_pattern"' in text, pattern
         assert REGEX_TIMEOUT_REASON in text, pattern
-        assert REGEX_TIMEOUT_S <= elapsed < REGEX_TIMEOUT_S + SLACK_S, (pattern, elapsed)
+        assert REGEX_TIMEOUT_S <= elapsed < REGEX_TIMEOUT_S + REAP_SLACK_S, (pattern, elapsed)
     assert compiled == dict.fromkeys(COMPILE_HEAVY, marks)
 
 

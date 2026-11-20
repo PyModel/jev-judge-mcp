@@ -139,3 +139,11 @@ No offline eval test installs a built wheel since the host study interpreter was
 hosted eval needs no `dist` artifact. The parity stage excludes `test_policy_replay.py`, which runs through `make policy-replay`
 in hosted CI and in both gate legs. The native stages and the one-CPU Docker stage share
 a watchdog that sends the timeout signal to the stage's process group.
+
+## Amendment 2026-11-20: the Linux leg starts without host bytecode
+
+The Linux leg receives the clone after the native leg ran in it, compiled bytecode included.
+pytest reuses a rewritten test module whose source size and mtime still match, and that
+bytecode names host paths, so a traceback or `stack_info` line in the container could not
+read its source. Both Linux containers delete the copied `*.pyc` files before any stage runs,
+which leaves the same state as CI's fresh checkout.

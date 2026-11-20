@@ -1,24 +1,10 @@
-"""The regex execution port (ADR-0016): an executor compiles and matches a translated pattern.
-
-`RegexExecutor.find` runs one translated pattern over unit-space text under an absolute monotonic
-deadline and answers with a `MatchResult`: `Matches`, or one of three plain refusals — `Timeout`
-(the deadline passed), `Saturated` (admission refused at the queue bound, ADR-0025), `Invalid`
-(compilation failed or the executor could not produce a result). `extract/candidates.py` turns
-those outcomes into caller-facing reasons.
-
-Two adapters: `worker.ProcessRegexExecutor`, killable worker processes for production, and
-`InProcessRegexExecutor` here, which cannot stop a runaway match and exists for trusted corpora
-such as the Node differential test.
-"""
+"""The worker's matcher and its results, projected to tool outcomes by `extract/candidates.py`."""
 
 import re
 from dataclasses import dataclass
 from enum import Enum
-from time import monotonic
-from typing import Protocol
 
 from jev_judge_mcp.extract.dialect import Translated
-from jev_judge_mcp.limits import EXTRACT, ExtractCaps
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,14 +43,6 @@ class Invalid:
 type MatchResult = Matches | Timeout | Saturated | Invalid
 
 
-class RegexExecutor(Protocol):
-    async def find(self, pattern: Translated, text: str, *, deadline: float) -> MatchResult:
-        """Match `pattern` over unit-space `text`, finishing by monotonic `deadline`."""
-        ...
-
-    async def aclose(self) -> None: ...
-
-
 def match_all(pattern: Translated, units: str, max_candidates: int, max_units: int) -> Matches | Invalid:
     """`document.matchAll` with the reference's frozen pipeline (`index.ts:894-903`).
 
@@ -100,21 +78,3 @@ def match_all(pattern: Translated, units: str, max_candidates: int, max_units: i
             break
         candidates.append(value)
     return Matches(candidates, truncated, too_long)
-
-
-class InProcessRegexExecutor:
-    """Matches on the calling thread. `re` cannot be interrupted mid-match, so a result that lands
-    after the deadline is reported as `Timeout`, but a catastrophic pattern still blocks the caller:
-    never serve untrusted patterns with it."""
-
-    def __init__(self, caps: ExtractCaps = EXTRACT) -> None:
-        self._caps = caps
-
-    async def find(self, pattern: Translated, text: str, *, deadline: float) -> MatchResult:
-        if monotonic() >= deadline:
-            return Timeout()
-        result = match_all(pattern, text, self._caps.candidates_per_field, self._caps.candidate_units)
-        return Timeout() if monotonic() > deadline else result
-
-    async def aclose(self) -> None:
-        return None

@@ -2,9 +2,7 @@
 
 `jev_judge_mcp.validation` stays pure (ADR-0002); the spans are opened here, in the
 tools layer. A validator call is a `jev.validate` span labelled with its kind and whether the answer
-was valid — a rejected answer is a fail-closed. Policy functions are re-exported unwrapped: their
-`jev.policy` spans carried only a duration histogram, so they are gone and `jev.validate` owns the
-fail-closed signal alone.
+was valid — a rejected answer is a fail-closed. Tools import pure policy functions directly.
 
 The boundary `tests/unit/test_telemetry.py` enforces: every name in `TRACED` is imported by tools
 from here, never from the pure packages — an import of a traced name straight from `validation`
@@ -17,7 +15,7 @@ and adding it to `TRACED`, or its span — and the fail-closed signal — goes d
 from collections.abc import Callable
 from functools import wraps
 
-from jev_judge_mcp import policy, validation
+from jev_judge_mcp import validation
 from jev_judge_mcp.telemetry import span
 
 TRACED: set[str] = set()
@@ -42,27 +40,3 @@ validate_extract_choice = _validator("extract_choice", validation.validate_extra
 validate_noul = _validator("noul", validation.validate_noul)
 validate_score = _validator("score", validation.validate_score)
 validate_rubric_answer = _validator("score", validation.validate_rubric_answer)
-
-claim_action = policy.claim_action
-classification_decision = policy.classification_decision
-contradicts_recommendation = policy.contradicts_recommendation
-decide_extract_field = policy.decide_extract_field
-exists_verdict = policy.exists_verdict
-extract_call_action = policy.extract_call_action
-fail_closed = policy.fail_closed
-file_list_action = policy.file_list_action
-gate_claim_action = policy.gate_claim_action
-gate_reason_codes = policy.gate_reason_codes
-min_confidence = policy.min_confidence
-rank_candidates = policy.rank_candidates
-require_complete_context = policy.require_complete_context
-rerank_by_score = policy.rerank_by_score
-resolve_policy_thresholds = policy.resolve_policy_thresholds
-review_action = policy.review_action
-review_composite = policy.review_composite
-screen_fail_closed = policy.screen_fail_closed
-screen_recommendation = policy.screen_recommendation
-validate_policy_thresholds = policy.validate_policy_thresholds
-verify_action = policy.verify_action
-verify_claim_action = policy.verify_claim_action
-worst_action = policy.worst_action

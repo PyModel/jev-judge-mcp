@@ -3,6 +3,8 @@ status: accepted
 ---
 # The bench records an automatic arm that does not call Jev
 
+> Partially superseded. ADR-0071 supersedes the boolean `directTools` setting for installed Pi entries. The installer registers the published tools plus `get_jev_mcp_skill_md`. The [Pi entry](../harness/pi.md) lists the names.
+
 ADR-0030 still governs the outcome study (`evals/ab/`): a with-Jev coding run is measured only when
 the proxy logged a Jev answer, and a pair is evidence only when both arms are measured. That rule
 answers "does telling an agent to use Jev change the outcome of a task."
@@ -48,8 +50,7 @@ of C's median +10.4 s over A, the Jev round trip is ~0.5 s and the rest is that 
 (provider median 454.6 ms; server 0.8 ms; relay 1.4 ms). The arms were measuring the adapter's
 exposure defaults, not the tools.
 
-- **Exposure.** The bench's Pi MCP config and the installer's pi entry now set
-  `lifecycle: "eager"`, `directTools: true`, and `toolPrefix: "none"` (pi-mcp-adapter 2.37.0,
+- **Historical exposure (installer setting superseded by ADR-0071).** The bench's Pi MCP config and installer entry used eager startup, exposed every tool directly, and set `toolPrefix: "none"` (pi-mcp-adapter 2.37.0,
   `types.ts` `ServerEntry`; verified by a live one-prompt probe: the first system message lists
   `jev_verify` … `jev_score`). omp, Pythinker, OpenCode, Codex, Cursor, and Claude Code/Desktop use
   native MCP clients that list tools on connect, so only the pi surfaces change.

@@ -57,8 +57,8 @@ backticked paths. Two rules follow:
   is already clear. A missing description does not separate lookalikes.
 - **Keep a generic option and a catch-all apart.** If the list may not cover the input, add an
   `other` or `none` option and say in its description what belongs there — and nothing else.
-  `jev_decide` ships its own escape hatches (`ask_user`, `investigate`, `none`), so a decision among
-  candidates you wrote down does not need your own `other`.
+  `jev_decide` enables its own escape hatches by default (`ask_user`, `investigate`, `none`), so a decision among
+  candidates you wrote down does not need your own `other`. Set `escape_hatches: false` to offer only your own candidates.
 
 ## Domain rules go in the question; deterministic rules stay in code
 
@@ -101,10 +101,6 @@ really a pick among handlers or options you can name, that is `jev_decide`, not 
 blend that encodes a domain rule (if risk is high, reject regardless) is policy: the rule lives in
 your code, and only the judgment itself belongs to the model.
 
-Jev is invoked when an unresolved judgment earns a model decision. Deterministic evidence takes
-precedence; Jev is not a mandatory ceremony — the weights and the arithmetic are exactly the part
-Jev should never see.
-
 ## Routing: a cheap bounded choice in front of an expensive step
 
 Handing a task to the right executor — which agent, which harness, which pipeline — is a bounded
@@ -125,9 +121,6 @@ for cheaper judgments decides that in its own configuration, never in a tool arg
 stays in code — ask Jev only when the dispatch itself is the unresolved judgment. More than six
 handlers is not one call: group them coarsely first (the traversal below) or fix the handler list.
 And when the obvious handler is cheap to try and cheap to undo, try it instead of asking.
-
-Jev is invoked when an unresolved judgment earns a model decision. Deterministic evidence takes
-precedence; Jev is not a mandatory ceremony.
 
 ## Traversing a catalog bigger than one call
 
@@ -153,9 +146,6 @@ descriptions stop separating on their own.
 **When not to use it.** A catalog that fits one call is one `jev_classify` call. Classes your code
 can look up exactly stay in code. And an open-ended set you cannot enumerate is not a catalog —
 name the space differently or write the answer yourself.
-
-Jev is invoked when an unresolved judgment earns a model decision. Deterministic evidence takes
-precedence; Jev is not a mandatory ceremony.
 
 ## Threshold on what the answer actually gives you
 

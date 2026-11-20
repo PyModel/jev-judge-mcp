@@ -1,6 +1,7 @@
 """The candidate pipeline owns refusal text: each executor result maps to its frozen reason (ADR-0025)."""
 
 from time import monotonic
+from typing import override
 
 import pytest
 
@@ -14,6 +15,7 @@ from jev_judge_mcp.extract.candidates import (
 )
 from jev_judge_mcp.extract.dialect import Translated, to_units
 from jev_judge_mcp.extract.executor import Invalid, Matches, MatchResult, Saturated, Timeout, Unavailable
+from jev_judge_mcp.extract.worker import ProcessRegexExecutor
 
 pytestmark = pytest.mark.anyio
 
@@ -23,19 +25,18 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
-class Scripted:
+class Scripted(ProcessRegexExecutor):
     """An executor that answers `result` and records what it was asked."""
 
     def __init__(self, result: MatchResult) -> None:
+        super().__init__(size=1)
         self.result = result
         self.calls: list[tuple[Translated, str, float]] = []
 
+    @override
     async def find(self, pattern: Translated, text: str, *, deadline: float) -> MatchResult:
         self.calls.append((pattern, text, deadline))
         return self.result
-
-    async def aclose(self) -> None:
-        return None
 
 
 @pytest.mark.parametrize(

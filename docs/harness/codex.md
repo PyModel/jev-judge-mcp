@@ -1,33 +1,15 @@
 # Codex
 
-`jev-judge-mcp install` writes the `[mcp_servers.jev]` table in `~/.codex/config.toml` (ADR-0033). The TOML shape is in the README install section. The installer does not merge or enable the command hook.
+`jev-judge-mcp install` writes the `[mcp_servers.jev]` table in `~/.codex/config.toml` (ADR-0033). The TOML shape is in the README install section.
 
-The command hook is not the `jev_gate` MCP tool, which stays the completion gate (ADR-0035).
+For Streamable HTTP, follow the [HTTP setup](../../README.md#running-over-http-experimental).
 
 ## Routing skill
 
-Codex has no skill package. Paste `docs/skills/jev-mcp/SKILL.md` into the project's `AGENTS.md` for tool routing. Paste `src/jev_judge_mcp/skills/jev/SKILL.md` only when the task is building an app on the Jev API; its cookbook thresholds are not this server's defaults (`docs/reference/limits.md`). A connected client can read both at `jev-skill://jev-mcp/SKILL.md` and `jev-skill://jev/SKILL.md` instead of pasting. The on-demand rule is in `docs/agent-rules.md`.
+Codex has no skill package. Paste `docs/skills/jev-mcp/SKILL.md` into the project's `AGENTS.md` for tool routing. Paste `src/jev_judge_mcp/skills/jev/SKILL.md` only when the task is building an app on the Jev API; its cookbook thresholds are not this server's defaults (`docs/reference/limits.md`). A connected client can read both at `jev-skill://jev-mcp/SKILL.md` and `jev-skill://jev/SKILL.md` instead of pasting.
 
-## Reading deduplicated ids
+See the [caller ID rules](../tools.md#caller-ids) for matching results to inputs.
 
-`jev_find`, `jev_verify`, and `jev_gate` sanitize and de-duplicate caller ids. When the same id is sent on several items, the first occurrence in caller order keeps the sent id and later occurrences get `_1`, `_2`, …; an unsuffixed id in a row therefore names the first physical item sent under that id. The payload's `renamed_ids` maps the sent id to the returned id of its last renamed occurrence (ADR-0062).
+## Hooks
 
-## Command hook
-
-The hook is opt-in. It can deny or ask, and it can never allow. Empty stdout means the hook abstained and Codex keeps its own permission flow. Any other stdout is one JSON object whose `permissionDecision` is `deny` or `ask`.
-
-The judgment is routed by the event's tool name (ADR-0076). A `Bash` action is judged by two questions in one provider call: what the command would do to material in the working directory (`read_only`, `reversible`, or `irreversible`), and whether destroying work is its purpose. A `Write` or `Edit` gets two checks computed in code first: a target outside the working directory is denied before the provider is even constructed, and so is content carrying a credential literal — a well-known token format, or a quoted high-entropy value assigned to a secret-named key. Ordinary code is never a hit and is judged as written. What survives both is judged by one credential-in-content question. Any other tool name keeps the generic allow/deny question. Every deny reason names the failure and its confidence or probability, and ends with a final-block notice telling the agent not to retry, split, or reroute the action.
-
-`jev-judge-mcp install` does not merge [`gate.hooks.json`](gate.hooks.json) and does not enable it. The same fragment can be placed in `~/.codex/hooks.json` or a repo `.codex/hooks.json`. Codex runs that file after you trust it with `/hooks`. The sample command is `/absolute/path/to/jev-judge-mcp hook gate`. Real settings need the absolute path of the `jev-judge-mcp` executable. Do not use `uv run --directory`: that flag changes the working directory, so the hook judges the checkout instead of the caller's repo. `uv run --project <repo>` keeps the caller's cwd. The matcher is `Bash|Write|Edit` and the timeout is 30 seconds.
-
-`JEV_GATE_STATE` is the environment variable `src/jev_judge_mcp/hook.py` reads when it builds judged state. Unset, or whitespace only, it is omitted. Otherwise the stripped value is the next line after the event's cwd and permission mode, before the proposed action. `redact_action` runs on the action description and input. It does not run on `JEV_GATE_STATE`. That text is sent to the provider, so it is not a place to put a key. The hook reads no further hook variable. The thresholds — the 0.5 / 0.4 confidence floors for the effect and fallback questions, 0.7 for the destructive-intent and credential questions — are constants in `src/jev_judge_mcp/hook.py`, not environment variables.
-
-Invalid stdin, missing provider credentials, invalid settings, and unexpected local hook errors exit 0 with a stderr line and no decision. Set `JEV_HOOK_REQUIRED=1` when this hook is the enforcer so these failures ask (ADR-0065). A provider failure asks with reason `unreachable`.
-
-## Completion hook
-
-Codex hook matching is unverified against https://developers.openai.com/codex/hooks. Do not treat [`completion.hooks.json`](completion.hooks.json) as a Codex hook; its matcher is the Claude Code tool name `Bash`. It is not [`gate.hooks.json`](gate.hooks.json). `install` does not enable it. A missing credential fails open and is not a pass, unless `JEV_HOOK_REQUIRED=1` (ADR-0065), which asks. The command is the executable path, not `uv run --directory`. Use `jev-judge-mcp gate` until the Codex matcher is verified. The compact cut hook ([`compact.hooks.json`](compact.hooks.json)) is likewise unverified for Codex: it is written against Claude Code's SessionStart contract.
-
-## Screen hook
-
-`jev-judge-mcp hook screen` is a Claude Code PostToolUse annotator (`docs/harness/claude.md`). Codex PostToolUse matching is unverified against https://developers.openai.com/codex/hooks; do not treat [`screen.hooks.json`](screen.hooks.json) as a Codex hook. Use the CLI tools until the PostToolUse annotation shape is verified for Codex.
+Place the [command-hook fragment](gate.hooks.json) in `~/.codex/hooks.json` or a project's `.codex/hooks.json` and trust it with `/hooks`. See the [command-hook contract](hooks.md#command-hook). Codex matching for the Claude Code screen, compact and completion fragments is unverified. Use `jev-judge-mcp gate` for completion.

@@ -64,7 +64,7 @@ The cache stays opt-in and replay stays verbatim. Three operational properties c
   a multi-MB `jev_verify`/`jev_screen` state cannot stall every concurrent call while the cache
   is on. `Runtime.ask` awaits the wrappers; the sync `lookup`/`store` stay as the thread bodies.
 - **TTL.** `JEV_MCP_CACHE_TTL_SECONDS` (default 604800, seven days; `0` disables) bounds how long
-  an entry replays: past the TTL the entry is a miss and is deleted. Without it, a provider-side
+  an entry replays: past the TTL the entry is a miss. Without it, a provider-side
   model change under the same slug would replay stale answers forever, because the key covers
   only what the caller sent.
 - **Bounded size.** `JEV_MCP_CACHE_MAX_ENTRIES` (default 4096; `0` disables) caps the entry count;
@@ -97,8 +97,18 @@ unlink a concurrent refresh. Writers serialize publication and sweeping. Only re
 with a full lowercase SHA-256 digest and the JSON suffix count toward the cap. Only matching
 staging files older than one day are eligible for cleanup. Existing cache directories must be
 private and owned by the current user. New records use the dedicated `jev-records-v1/` child.
-Legacy records in its parent remain readable and are never swept. An unsuitable directory disables disk replay.
+The parent directory is outside the sweep. An unsuitable directory disables disk replay.
 For a custom cache or key location, select a new private directory owned by the service account.
+
+## Amendment (2026-11-19): records directory and metering
+
+The versioned `jev-records-v1/` directory is the sole replay source. Records from the former
+layout in its parent miss even when expiry is disabled. Expired records miss on read and may
+be replaced by a writer or evicted by the entry cap.
+
+Provider token counters accumulate measured usage, including measured zeros. A replay or a
+provider answer with no reported usage contributes no measurement. A shared request's measured
+usage is counted once, as the next amendment states.
 
 ## Amendment (2026-11-19) — the last caller leaving cancels shared work
 

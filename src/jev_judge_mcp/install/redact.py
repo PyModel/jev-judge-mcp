@@ -6,14 +6,12 @@ from collections.abc import Iterable, Mapping
 
 from pydantic import ValidationError
 
-from jev_judge_mcp.credential_literal import redact_credential_literals
-from jev_judge_mcp.domain import is_json_object
-from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.install.values import is_json_array
+from jev_judge_mcp.domain import is_json_array, is_json_object
 from jev_judge_mcp.keyfile import redaction_values
+from jev_judge_mcp.redaction.literals import redact_credential_literals
+from jev_judge_mcp.redaction.values import REDACTED, Redactor
 from jev_judge_mcp.settings import load_settings
 
-REDACTED = "[redacted]"
 HASH_PLACEHOLDER = "<redacted>"
 _KEY_NAME = "TYPESAFE_API_KEY"
 
@@ -33,8 +31,7 @@ def is_reference(value: str) -> bool:
 
 def redact_text(text: str, secrets: Iterable[str]) -> str:
     """Replace known secrets, then any remaining literal key assignment."""
-    for secret in sorted({secret for secret in secrets if secret}, key=len, reverse=True):
-        text = text.replace(secret, REDACTED)
+    text = Redactor(secrets)(text)
     text = _JSON_LITERAL.sub(rf"\1{REDACTED}\3", text)
     text = _TOML_LITERAL.sub(rf"\1{REDACTED}\3", text)
     return _TOML_LITERAL_SINGLE.sub(rf"\1{REDACTED}\3", text)
@@ -45,8 +42,7 @@ def redact_diagnostic(text: str, secrets: Iterable[str]) -> str:
         inventory = redaction_values(load_settings())
     except ValidationError:
         return "[diagnostic omitted: could not load secret inventory]"
-    known = Redactor([*inventory, *secrets])
-    return redact_credential_literals(redact_text(known(text), ()))
+    return redact_credential_literals(redact_text(text, [*inventory, *secrets]))
 
 
 def redact_tree(value: object) -> object:

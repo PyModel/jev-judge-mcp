@@ -34,5 +34,5 @@ def test_extracted_wheel_install_dry_run(tmp_path: Path) -> None:
         timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f'"jev-judge-mcp[typesafe]=={wheel.name.split("-")[1]}"' in result.stdout
+    assert f'"jev-judge-mcp=={wheel.name.split("-")[1]}"' in result.stdout
     assert not list(home.iterdir())

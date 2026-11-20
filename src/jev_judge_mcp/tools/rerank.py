@@ -3,12 +3,14 @@
 from typing import Any, cast
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question
+from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import CANDIDATES, RERANK
+from jev_judge_mcp.policy import fail_closed, rerank_by_score
 from jev_judge_mcp.serialize import to_fixed
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
 from jev_judge_mcp.tools.common import candidates_schema
-from jev_judge_mcp.tools.observed import fail_closed, rerank_by_score, validate_noul
+from jev_judge_mcp.tools.observed import validate_noul
 from jev_judge_mcp.validation.caps import CapLedger, candidate_budget_error, exceeds
 
 RELEVANCE_CRITERIA = NoulCriteria(
@@ -51,34 +53,10 @@ DEFINITION = define(
 )
 
 
-def _external_ids(raw: list[dict[str, str]]) -> list[str]:
-    """Caller ids verbatim and unique; an omitted id gets `candidate{i}`, suffixed past every used id."""
-    supplied: set[str] = set()
-    for candidate in raw:
-        if "id" in candidate:
-            if candidate["id"] in supplied:
-                raise ToolError(f"Duplicate candidate id: {candidate['id']}", code="invalid_arguments")
-            supplied.add(candidate["id"])
-    used = set(supplied)
-    ids: list[str] = []
-    for index, candidate in enumerate(raw):
-        if "id" in candidate:
-            external = candidate["id"]
-        else:
-            external = f"candidate{index}"
-            suffix = 2
-            while external in used:
-                external = f"candidate{index}_{suffix}"
-                suffix += 1
-        used.add(external)
-        ids.append(external)
-    return ids
-
-
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     query: str = args["query"]
     top_k: int | None = int(args["top_k"]) if "top_k" in args else None
-    ids = _external_ids(args["candidates"])
+    ids = ensure_unique_ids(args["candidates"], "candidate").ids
     ledger = CapLedger()
     texts = [ledger.text(candidate["text"], CANDIDATES.text_units, "item") for candidate in args["candidates"]]
     total = sum(length(text) for text in texts)

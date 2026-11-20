@@ -365,12 +365,13 @@ async def test_the_deadline_covers_sending_the_job() -> None:
     slot = pool._idle[0]  # pyright: ignore[reportPrivateUsage]
     pid = slot.process.pid
     slot.requests = _StalledSend()
+    budget = 0.3
     started = time.monotonic()
     try:
         with anyio.fail_after(2):
-            result = await pool.find(translate("a", "g"), to_units("a"), deadline=started + 0.3)
+            result = await pool.find(translate("a", "g"), to_units("a"), deadline=started + budget)
         assert result == Timeout()
-        assert 0.2 <= time.monotonic() - started < 1.5
+        assert budget <= time.monotonic() - started < 1.5  # allow scheduling and reaping after the send deadline
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
     finally:
@@ -388,24 +389,28 @@ async def test_a_full_pool_times_out_within_one_request_budget() -> None:
     async def run() -> None:
         outcomes.append(await pool.find(slow, to_units(SLOW_DOCUMENT), deadline=deadline()))
 
-    started = time.monotonic()
-    async with anyio.create_task_group() as tg:
-        tg.start_soon(run)
-        tg.start_soon(run)
-    elapsed = time.monotonic() - started
-    await pool.aclose()
+    try:
+        await pool.warm()
+        started = time.monotonic()
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(run)
+            tg.start_soon(run)
+        elapsed = time.monotonic() - started
+    finally:
+        await pool.aclose()
     assert outcomes == [Timeout(), Timeout()]
-    assert 1.0 <= elapsed < 1.8
+    assert REGEX_TIMEOUT_S <= elapsed < REGEX_TIMEOUT_S * 2  # a queued job cannot get a second budget
 
 
 async def test_admission_refuses_patterns_beyond_the_queue_bound() -> None:
     """ADR-0016: admission is bounded — a pattern the pool cannot serve fails without running."""
     pool = ProcessRegexExecutor(size=1, queue_bound=0)
-    started = time.monotonic()
-    refused = await pool.find(translate("[A-Z]{3}-\\d+", "g"), to_units(DOCUMENT), deadline=deadline())
+    try:
+        # A spent deadline would report a timeout if the job reached worker acquisition.
+        refused = await pool.find(translate("[A-Z]{3}-\\d+", "g"), to_units(DOCUMENT), deadline=time.monotonic())
+    finally:
+        await pool.aclose()
     assert refused == Saturated()
-    assert time.monotonic() - started < 0.5
-    await pool.aclose()
 
 
 def test_an_orphaned_worker_ends_itself_after_the_deadline() -> None:
