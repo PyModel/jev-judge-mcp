@@ -34,7 +34,9 @@ class AgentError(Exception):
 
 def protect_parent() -> None:
     if sys.platform == "linux":
-        getattr(ctypes.CDLL(None), "prctl", lambda *_: None)(4, 0, 0, 0, 0)  # PR_SET_DUMPABLE
+        prctl = getattr(ctypes.CDLL(None), "prctl", None)
+        if prctl is not None:
+            prctl(4, 0, 0, 0, 0)  # PR_SET_DUMPABLE
 
 
 def _confine_worker(tree: Path, *, read_only_inputs: bool) -> None:
