@@ -47,8 +47,8 @@ _COUNTLESS = "--- a/p.py\n+++ b/p.py\n@@ ... @@\n-old\n+new\n"
 _REVIEW_LOW = {**_REVIEW, "correctness": {"score": 1, "confidence": 0.3}, "safe_to_apply": {"noul": 0.2}}
 
 
-def _neutral_source(*ids: str) -> dict[str, object]:
-    return choice("none", "none", "evidence", *ids)
+def _selected_source(*ids: str) -> dict[str, object]:
+    return choice(ids[0], "none", "evidence", *ids)
 
 
 def test_diff_shape_is_computed_from_the_argument() -> None:
@@ -98,7 +98,7 @@ async def test_the_hint_follows_the_diff_structure(diff: object, hint: str | Non
 @pytest.mark.parametrize("verified", [True, False])
 async def test_review_and_claim_holds_name_the_blocking_check(verified: bool) -> None:
     args = {"request": "add the cache", "diff": _PATCH, "claims": ["the cache is wired"], "evidence": "x"}
-    answers = {**_REVIEW_LOW, **(_VERIFIED if verified else _UNSUPPORTED), "source_0": _neutral_source("diff")}
+    answers = {**_REVIEW_LOW, **(_VERIFIED if verified else _UNSUPPORTED), "source_0": _selected_source("diff")}
     result = await call_tool("jev_gate", args, answers)
     (check,) = result.payload["next_checks"]
     assert ("claim0" in check) is not verified
@@ -123,7 +123,7 @@ async def test_high_confidence_adverse_levels_explain_a_composite_only_hold() ->
     answers = {
         **_REVIEW,
         **_VERIFIED,
-        "source_0": _neutral_source("diff"),
+        "source_0": _selected_source("diff"),
         "correctness": {"score": 0, "confidence": 0.99},
         "test_gap": {"score": 2, "confidence": 0.99},
     }
@@ -145,7 +145,7 @@ async def test_a_real_patch_or_an_accepted_call_carries_no_hint() -> None:
     unsupported = await call_tool("jev_gate", args, {**_REVIEW, **_UNSUPPORTED})
     assert NO_HUNKS_CHECK not in unsupported.payload["next_checks"]
     accepted = await call_tool(
-        "jev_gate", {**args, "diff": _SUMMARY}, {**_REVIEW, **_VERIFIED, "source_0": _neutral_source("diff")}
+        "jev_gate", {**args, "diff": _SUMMARY}, {**_REVIEW, **_VERIFIED, "source_0": _selected_source("diff")}
     )
     assert accepted.payload["action"] == "auto", accepted.text
     assert NO_HUNKS_CHECK not in accepted.payload["next_checks"]
@@ -204,7 +204,7 @@ async def test_a_gate_that_sent_tests_to_the_review_does_not_ask_for_them_again(
         "claims": ["the cache is wired"],
         "evidence": "x",
     }
-    source = _neutral_source("diff" if isinstance(diff, str) else "diff_p.py", "tests")
+    source = _selected_source("diff" if isinstance(diff, str) else "diff_p.py", "tests")
     outcome = await call_tool("jev_gate", args, {**_REVIEW_LOW, **_VERIFIED, "source_0": source})
     assert not outcome.is_error, outcome.text
     assert len(outcome.payload["next_checks"]) == 1

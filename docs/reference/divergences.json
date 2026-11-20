@@ -914,6 +914,7 @@
         "tests/unit/test_file_diff.py"
       ],
       "fixtures": [],
+      "verify_hold_reasons": {"mock-151#1": "claim_verified_without_source"},
       "verify_holds": [
         "mock-144#0",
         "mock-151#2",
@@ -928,7 +929,7 @@
         "mock-151#11"
       ],
       "reference_behavior": "Missing optional answers can leave a reference decision at auto. Review thresholds can escalate without a cited line. Some diagnostics and file judgment capabilities are Python extensions.",
-      "python_behavior": "Verification and gates hold rows on invalid auxiliary source or defect answers. Verification reports stands only for verified auto rows. Review and gate share grounded diagnostics. The program-response-fields projection compares the recorded decisions with these policy changes applied. Internal errors, file batch provenance, citation IDs and hunk lines, choice keys, and diagnostic field shapes are pinned by the listed boundary tests."
+      "python_behavior": "Verification and gates hold rows on invalid auxiliary source or defect answers. An explicit no-source selection holds a verified claim for review. Verification reports stands only for verified auto rows. Review and gate share grounded diagnostics. The program-response-fields projection compares the recorded decisions with these policy changes applied. Internal errors, file batch provenance, citation IDs and hunk lines, choice keys, and diagnostic field shapes are pinned by the listed boundary tests."
     },
     {
       "id": "remove-tests-format",

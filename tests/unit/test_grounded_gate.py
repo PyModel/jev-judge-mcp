@@ -260,3 +260,18 @@ async def test_nonverifying_claim_never_reports_caller_note_only() -> None:
     }
     body = (await call_tool("jev_gate", args, answers)).payload
     assert body["reason_codes"] == ["claims_unsupported"]
+
+
+@pytest.mark.parametrize(("source", "expected"), [("none", "review"), ("tests", "auto")])
+async def test_verified_claim_requires_a_selected_source(source: str, expected: str) -> None:
+    answers = {
+        **_GOOD_REVIEW,
+        "defect_kind": choice("none", *_DEFECTS),
+        "claim_0": choice("verified", *VERDICTS),
+        "source_0": choice(source, "none", "run", "diff_math.py", "tests"),
+    }
+    body = (await call_tool("jev_gate", {**ARGS, "tests": "pytest: 3 passed"}, answers)).payload
+    row = body["verification"]["results"][0]
+    assert body["action"] == row["action"] == expected
+    assert row["supporting_evidence"] == (None if source == "none" else source)
+    assert ("claim_verified_without_source" in body["reason_codes"]) == (source == "none")

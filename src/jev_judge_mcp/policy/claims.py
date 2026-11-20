@@ -13,6 +13,8 @@ from jev_judge_mcp.policy.thresholds import PolicyThresholds
 
 type ClaimVerdict = Literal["verified", "contradicted", "unsupported"]
 
+VERIFIED_WITHOUT_SOURCE = "claim_verified_without_source"
+
 GATE_REASON_CODES = (
     "incomplete_context",
     "invalid_response",
@@ -23,6 +25,7 @@ GATE_REASON_CODES = (
     "claim_confidence_low",
     "claim_confidence_below_auto_accept",
     "caller_note_only",
+    VERIFIED_WITHOUT_SOURCE,
     "accepted",
 )
 """Summary gate reason codes, in their frozen order (`parity-manifest.json` `policy`)."""
@@ -48,10 +51,15 @@ def verify_claim_action(
     evidence: Sequence[Mapping[str, object]],
     *,
     source_invalid: bool = False,
+    verified_without_source: bool = False,
 ) -> Action:
     """jev_verify's row action: review for an unknown confidence (ADR-0043), `verify_action` otherwise,
-    and never auto on a caller note alone (ADR-0067). `source` is the raw source answer."""
-    action: Action = "review" if confidence is None or source_invalid else verify_action(confidence, auto_accept)
+    and review for a verified claim with an explicit no-source answer or caller-note-only support."""
+    action: Action = (
+        "review"
+        if confidence is None or source_invalid or verified_without_source
+        else verify_action(confidence, auto_accept)
+    )
     return "review" if note_blocks_auto(action, source, evidence) else action
 
 
@@ -65,10 +73,12 @@ def gate_claim_action(
     evidence: Sequence[Mapping[str, object]],
 ) -> Action:
     """jev_gate's row action: `claim_action` under the thresholds, never auto over cut context, and
-    never auto on a caller note alone (ADR-0067). `source` is the raw source answer."""
+    never auto without named independent support. `source` is the selected evidence ID or None."""
     action = require_complete_context(
         claim_action(verdict, confidence, thresholds.auto_accept, thresholds.review_at), truncated
     )
+    if verdict == "verified" and source is None and action == "auto":
+        return "review"
     return "review" if note_blocks_auto(action, source, evidence) else action
 
 
@@ -102,6 +112,7 @@ def gate_reason_codes(
     thresholds: PolicyThresholds,
     caller_note: bool = False,
     source_invalid: bool = False,
+    verified_without_source: bool = False,
 ) -> list[str]:
     """The gate's reason codes, in `GATE_REASON_CODES` order (`index.ts:1472-1482`).
 
@@ -123,6 +134,7 @@ def gate_reason_codes(
             thresholds.review_at <= c < thresholds.auto_accept for c in confidences
         ),
         "caller_note_only": caller_note,
+        VERIFIED_WITHOUT_SOURCE: verified_without_source,
         "accepted": action == "auto",
     }
     return [code for code in GATE_REASON_CODES if present[code]]

@@ -31,6 +31,12 @@ provider. Choice question keys obey the shared short-identifier limit.
 The CLI consumes the tool's action and unresolved status. Unexpected handler exceptions have the
 redacted `internal` code, which a required completion hook treats as failure to reach the provider.
 
+## Amendment (2026-11-20)
+
+When the model explicitly selects `none` as the source for a verified claim, gate and verify
+hold the claim for review. Policy version 3 adds `claim_verified_without_source` to explain
+the hold. A single implicit evidence item in verify still follows the single-item rule above.
+
 ## Consequences
 
 The divergence registry records the result and schema changes. Parity projects the approved

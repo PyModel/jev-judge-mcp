@@ -210,9 +210,8 @@ def _chain(previous: Expectation) -> Expectation:
     return expect
 
 
-_AUXILIARY_HOLDS = frozenset(
-    next(entry for entry in REGISTRY["divergences"] if entry["id"] == "tool-correctness")["verify_holds"]
-)
+_CORRECTNESS = next(entry for entry in REGISTRY["divergences"] if entry["id"] == "tool-correctness")
+_VERIFY_HOLDS = dict.fromkeys(_CORRECTNESS["verify_holds"], True) | _CORRECTNESS["verify_hold_reasons"]
 
 for _entry in REGISTRY["divergences"]:
     if _entry["id"] == "program-response-fields":
@@ -221,7 +220,7 @@ for _entry in REGISTRY["divergences"]:
             if _previous is not None:
                 _EXPECTATIONS[_fid] = _chain(_previous)
             else:
-                _EXPECTATIONS[_fid] = partial(expect_program, verify_hold=_fid in _AUXILIARY_HOLDS)
+                _EXPECTATIONS[_fid] = partial(expect_program, verify_hold=_VERIFY_HOLDS.get(_fid, False))
 
 _UNEXPECTED = sorted(
     {fid for divergence in REGISTRY["divergences"] for fid in divergence["fixtures"]} - _EXPECTATIONS.keys()

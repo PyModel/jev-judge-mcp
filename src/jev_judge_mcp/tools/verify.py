@@ -6,6 +6,7 @@ from jev_judge_mcp.domain import ChoiceQuestion, Question
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import VERIFY
 from jev_judge_mcp.policy import DEFAULT_AUTO_ACCEPT, fail_closed, verify_claim_action
+from jev_judge_mcp.policy.claims import VERIFIED_WITHOUT_SOURCE
 from jev_judge_mcp.responses import claim_extras, summary_extras
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, caller_actions, define, frame, headline
 from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items, identify_evidence
@@ -116,11 +117,18 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         confidence = validated.confidence
         support = source.choice if source is not None and source.choice != NO_SOURCE_ID else None
         policy_source = (None if source is None else source.choice) if source_asked else evidence[0]["id"]
+        verified_without_source = (
+            validated.choice == "supports"
+            and source is not None
+            and source.choice == NO_SOURCE_ID
+            and source.confidence_kind != "malformed"
+        )
         action = verify_claim_action(
             confidence,
             auto_accept,
             policy_source,
             evidence,
+            verified_without_source=verified_without_source,
             source_invalid=source_asked and (source is None or source.confidence_kind == "malformed"),
         )
         row = {
@@ -132,6 +140,8 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             "action": action,
             "supporting_evidence": support,
         }
+        if verified_without_source:
+            row["reason_codes"] = [VERIFIED_WITHOUT_SOURCE]
         row.update(claim_extras(row, evidence, supporting=support))
         results.append(row)
 

@@ -78,8 +78,8 @@ DEFINITION = define(
                 "type": "number",
                 "minimum": 0,
                 "maximum": 1,
-                "description": "Min score confidence or safe_to_apply below this escalates. Must be <= auto_accept. "
-                "Default min(0.5, auto_accept).",
+                "description": "An uncited low-confidence concern requires review. A confident defect with a "
+                "qualifying changed-line citation escalates. Must be <= auto_accept. Default min(0.5, auto_accept).",
             },
             "composite_floor": {
                 "type": "number",

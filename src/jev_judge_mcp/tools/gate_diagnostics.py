@@ -194,7 +194,7 @@ def _claim_blockers(verification: Mapping[str, Any], source_issues: Mapping[int,
                     "code": issue,
                     "value": row.get("supporting_evidence") or "none",
                     "next_check": "Supply an independent observation for this claim."
-                    if issue == "caller_note_only"
+                    if issue != "source_invalid"
                     else "Obtain a valid provider source judgment for this claim.",
                     **({"invalid_answer": f"source_{index}"} if issue == "source_invalid" else {}),
                 }
