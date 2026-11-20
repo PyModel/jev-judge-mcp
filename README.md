@@ -238,7 +238,8 @@ Rules:
   changes are included. Untracked files hold the gate. Run `git add -N <path>` and recheck. Test logs go in `tests` (`tests_path` for
   `jev_gate_range`) as the raw pass/fail lines. Per-file gates read caller evidence and sibling patches as space permits. The review lists optional omissions in `context_omissions`.
 - **Act on `action`:** `auto` → the verdict stands and you act on it. A contradicted claim at
-  `auto` is confidently false. `review` → confirm with tests, source reading, or a stronger check.
+  `auto` is confidently false. `review` → settle it with your own check (tests, source reading,
+  the code). Asking Jev the same question again is not a check.
   `escalate` → stop and surface it. An invalid required judgment leaves the row unjudged.
 - **Jev screens; it never proves.** A Jev check never replaces running the tests, lint, or types.
   A `jev_gate` `auto` is the recommended final judgment before "done", not
@@ -247,9 +248,11 @@ Rules:
 - **Batch.** One call with every claim, candidate, or item beats many calls; questions inside one
   request cannot see each other's answers.
 - **No re-asks.** Do not re-ask an unchanged question hoping for a better answer; gather better
-  evidence instead. Re-sending with the full diff or the raw logs is a new call, not a re-ask:
-  when `next_checks` says the escalate came from how you packed the call, re-pack once before
-  you report.
+  evidence instead. Re-sending with the full diff or the raw logs is a new call, not a re-ask.
+  `next_call` (the `jev_gate` `rollup`, `jev_verify` rows and `summary`) says whether a call can
+  still help: `with_input` → make one more call that adds the missing input (what `next_checks`
+  names, or evidence the claim rests on); `none` → settle it with your own check and report. A
+  row that holds after that one call is yours to settle, not to ask again.
 - **Failures are one line.** Tool error or missing key (`TYPESAFE_API_KEY`): say so in one line,
   then fall back to normal checks.
 - **Two skills.** Resource `jev-skill://jev-mcp/SKILL.md` says which tool fits a step. The packaged jev skill
@@ -412,6 +415,8 @@ Other operator facts:
   changed line with a defect, evidence contradicting a claim, or an explicit safety refusal.
   An invalid required judgment also stops the decision. Read the
   change verdict in `rollup` and use the prioritized `next_checks` and any untracked-file instructions.
+  `rollup.next_call` says whether another call can help (`with_input`) or the row is yours to settle
+  with your own check (`none`).
 - Per-tool weak spots and what recorded evidence exists for each tool are in
   [`docs/tools.md`](docs/tools.md); per-release evidence, including certified operating points, is
   recorded in [`docs/EVIDENCE.md`](docs/EVIDENCE.md).

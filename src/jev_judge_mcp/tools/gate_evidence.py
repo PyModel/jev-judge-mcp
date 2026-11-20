@@ -186,6 +186,7 @@ def grounded_review(
                 "evidence_line": line,
                 **({"safety_refusal": True} if selected == "safety_refusal" else {}),
                 "next_check": f"{_CHECKS[selected]} at patch line {line['line']} ({line['text']}).",
+                "next_call": "none",
             },
         )
     elif half.invalid:
@@ -198,7 +199,8 @@ def grounded_review(
                 "field": "defect_kind",
                 "code": "defect_kind_invalid",
                 "invalid_answer": "defect_kind",
-                "next_check": "Obtain a valid provider judgment for defects in this patch.",
+                "next_check": "No valid defect judgment came back. Check this patch for defects yourself.",
+                "next_call": "none",
             }
         )
     elif action == "escalate" or (kind is not None and kind.choice != "none"):
@@ -209,7 +211,8 @@ def grounded_review(
                 {
                     "field": "defect_line",
                     "code": "defect_line_missing",
-                    "next_check": f"Supply the exact changed line demonstrating {kind.choice}.",
+                    "next_check": f"Find the changed line that shows {kind.choice}, or rule it out yourself.",
+                    "next_call": "none",
                 },
             )
     payload = {**half.payload, "action": action, "citation_coverage": citations.coverage()}

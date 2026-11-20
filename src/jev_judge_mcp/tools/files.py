@@ -259,8 +259,11 @@ async def review_file_list(
         half, reasons = grounded_review(
             half, answers, pointers[index], settings.thresholds.auto_accept, path=item["path"]
         )
-        if evaluation is None:
-            reasons[0]["next_check"] = f"Split {item['path']} by hunk and retry the file review."
+        if evaluation is None:  # The provider refused the file as too large: a smaller call can carry it.
+            for reason in reasons:
+                reason.update(
+                    next_check=f"Split {item['path']} by hunk and retry the file review.", next_call="with_input"
+                )
         if gate_framing is not None and half.action != "auto" and index in omissions:
             names = {
                 "path": item["path"],
@@ -273,7 +276,9 @@ async def review_file_list(
                     "field": "context",
                     "code": "context_omitted",
                     "missing": missing_names,
-                    "next_check": f"Resubmit {item['path']} with omitted context: {', '.join(missing_names)}.",
+                    "next_check": f"Check {item['path']} yourself against context its review did not see: "
+                    f"{', '.join(missing_names)}.",
+                    "next_call": "none",
                 }
             )
         halves.append(half)
