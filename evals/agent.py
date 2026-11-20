@@ -49,7 +49,7 @@ from evals.ab import stream
 from evals.ab.grade import hardened_git
 from evals.artifacts import read_artifact
 from evals.relay import private_opener
-from evals.spend import amount, mark_agent_started
+from evals.spend import mark_agent_started
 
 REDACTED = b"[REDACTED]"
 
@@ -723,18 +723,6 @@ class AgentSetupError(RuntimeError):
     """The sandbox could not be prepared. Not a run: nothing is booked."""
 
 
-class AgentPreflightError(RuntimeError):
-    """The preflight never reached the model. The message is the agent's own error, capped, with no secret."""
-
-    cost_usd: float | None
-    model: str | None
-
-    def __init__(self, detail: str, *, cost_usd: float | None, model: str | None) -> None:
-        super().__init__(detail)
-        self.cost_usd = cost_usd
-        self.model = model
-
-
 class _StdoutCapExceeded(OSError):
     """The agent wrote more than `STDOUT_CAP_BYTES`. An `OSError`, so the study's `except Exception` books it."""
 
@@ -1174,19 +1162,6 @@ def run_agent(
         )
 
 
-def preflight_detail(run: AgentRunResult) -> str:
-    """The run's status, or the provider error the Pi parser records. Claude's stream never sets that field."""
-    failure = run.trace.result_field("server_error")
-    if isinstance(failure, str) and failure.strip():
-        return failure.splitlines()[0][:160]
-    line = next((stripped for raw in run.stderr.splitlines() if (stripped := raw.strip())), "")
-    return f"{run.status}; {line[:160]}" if line else run.status
-
-
-PREFLIGHT_TIMEOUT_S = 180.0
-"""One prompt to prove the agent can reach its model, before any paid run is booked."""
-
-
 def write_preflight(out: Path, *, cost_usd: float | None, model: str | None) -> None:
     """Record this preflight's cost where a report can add it. Not a ledger booking, and not a run."""
     out.mkdir(parents=True, exist_ok=True)
@@ -1194,45 +1169,3 @@ def write_preflight(out: Path, *, cost_usd: float | None, model: str | None) -> 
         json.dumps({"total_cost_usd": cost_usd, "model": model}) + "\n",
         encoding="utf-8",
     )
-
-
-def run_preflight(
-    argv: Callable[[Path], Sequence[str]],
-    *,
-    base_env: Mapping[str, str],
-    secret: str,
-    mcp_config: Mapping[str, Any],
-    login_keychain: bool,
-    parse: Callable[[Iterable[str]], stream.Trace] | None = None,
-    timeout_s: float = PREFLIGHT_TIMEOUT_S,
-    auth_provider: str | None = None,
-) -> AgentRunResult:
-    """One prompt through `run_agent`'s own env. Raises `AgentPreflightError` when the model was not reached.
-
-    The scratch dir is not the study's `out`, and this writes no ledger. `login_keychain` is true only
-    for Claude; a Pi or third-party-model preflight passes false and gets no keychain path. The yielded
-    workdir is gone by the time this returns: callers use the trace. `auth_provider` scopes the
-    preflight's auth.json exactly like a run's.
-    """
-    from evals.ab.outcomes import reached_model
-
-    with tempfile.TemporaryDirectory(prefix="jev-agent-preflight-") as temporary:
-        scratch = Path(temporary)
-        command = AgentCommand(argv=argv, timeout_s=timeout_s, login_keychain=login_keychain)
-        with run_agent(
-            command,
-            mcp_config=mcp_config,
-            base_env=base_env,
-            secret=secret,
-            run_dir=scratch,
-            parse=parse,
-            auth_provider=auth_provider,
-        ) as run:
-            cost = amount(run.trace.result_field("total_cost_usd"))
-            model = run.trace.model
-            reached = reached_model(run.trace)
-            detail = preflight_detail(run)
-            result = run
-        if not reached:
-            raise AgentPreflightError(detail, cost_usd=cost, model=model)
-        return result

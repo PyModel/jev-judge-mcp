@@ -40,7 +40,7 @@ POLICIES = {"claude": _policy(RUN_BOUND_USD), "pi": _policy(JEV_RUN_BOUND_USD)}
 POLICY = POLICIES["claude"]
 
 MAX_USD_ENV = "JEV_AB_MAX_USD"
-"""Lowers the dollar cap for one invocation, so an operator can bound a re-run's spend."""
+"""Lowers the dollar cap. The ledger persists the effective cap across invocations."""
 
 
 RUN_BOUND_ENV = "JEV_AB_RUN_BOUND_USD"

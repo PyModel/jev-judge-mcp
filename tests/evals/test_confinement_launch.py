@@ -404,12 +404,11 @@ def test_the_confined_mcp_config_points_the_server_at_the_shim_with_the_placehol
 
 def test_the_provider_upstream_keeps_its_base_path_and_exact_endpoints() -> None:
     """F3: `Upstream.provider` keeps the base URL's path and swaps `*` for the API family's
-    endpoints; `full_path` is what the broker forwards."""
+    endpoints."""
     upstream = launch.Upstream.provider("opencode-go", "https://opencode.ai/zen/go/v1", "/tmp/key")
     assert (upstream.host, upstream.port, upstream.scheme) == ("opencode.ai", 443, "https")
     assert upstream.base_path == "/zen/go/v1"
     assert upstream.paths == ("/chat/completions", "/models")
-    assert upstream.full_path("/chat/completions") == "/zen/go/v1/chat/completions"
     anthropic = launch.Upstream.provider("anthropic", "https://api.anthropic.com", "/tmp/key", api="anthropic")
     assert anthropic.credential_header == "x-api-key" and anthropic.credential_scheme == ""
     assert anthropic.paths == launch.ANTHROPIC_ENDPOINTS and anthropic.base_path == ""

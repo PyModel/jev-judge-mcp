@@ -176,10 +176,6 @@ class Upstream:
     def url(self) -> str:
         return f"{self.scheme}://{self.host}:{self.port}"
 
-    def full_path(self, path: str) -> str:
-        """The forwarded path: base path plus the origin-form endpoint path."""
-        return f"{self.base_path}{path}"
-
 
 @dataclass(frozen=True)
 class Capability:
@@ -213,8 +209,6 @@ class ConfinementSpec:
     timeout_s: float
     env: Mapping[str, str] = field(default_factory=dict[str, str])
     """The agent container's environment: placeholders and runtime settings, no secret values."""
-    adapter_source: str = ""
-    """Host path of the pi MCP adapter, copied into the scratch and used at /scratch/adapter."""
     uid: int = 0
     gid: int = 0
     broker_image: str = BROKER_IMAGE
@@ -255,11 +249,6 @@ def docker_run(argv: Sequence[str], *, check: bool = True, timeout: float = 120.
     if check and result.returncode != 0:
         raise ConfinementError(f"{' '.join(argv[:3])} failed: {result.stderr.strip()[:300]}")
     return result
-
-
-def image_present(image: str) -> bool:
-    probe = docker_run(["docker", "image", "inspect", image], check=False, timeout=60)
-    return probe.returncode == 0
 
 
 def broker_config(
@@ -682,18 +671,6 @@ def run_confined(
         config = scratch / "agent-cfg" / "mcp.json"
         config.write_text(json.dumps(document), encoding="utf-8")
         config.chmod(0o600)
-        if spec.adapter_source:
-            source = Path(spec.adapter_source)
-            adapter = scratch / "adapter"
-            if source.is_dir():
-                # F2: the adapter is a package (index.ts imports siblings); the whole directory
-                # crosses read-only-mounted at runtime, never a lone entry file.
-                shutil.copytree(
-                    source, adapter, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__", "node_modules")
-                )
-            else:
-                adapter.mkdir(exist_ok=True)
-                shutil.copyfile(source, adapter / "index.ts")
         _copy_modules(code := root / "code")
         _copy_modules(scratch / "code")
         credentials = credential_files(spec)

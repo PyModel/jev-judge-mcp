@@ -38,9 +38,7 @@ from typing import Any, cast
 from evals.ab import arms, ledger, outcomes, report, stream, tasks, unsafe
 from evals.ab.grade import old_rule_success, run_correct
 from evals.agent import (
-    PREFLIGHT_TIMEOUT_S,
     AgentCommand,
-    AgentPreflightError,
     AgentRunResult,
     AgentSetupError,
     container_boundary,
@@ -48,7 +46,6 @@ from evals.agent import (
     read_relay_log,
     real_agent_dir,
     run_agent,
-    run_preflight,
     scoped_models,
     write_preflight,
 )
@@ -116,8 +113,6 @@ class Setup:
     """The grader's interpreter."""
     auth_provider: str = ""
     """The one auth.json provider entry the agent's model needs; empty copies no auth."""
-    server_python: str = ""
-    """The study venv interpreter the sandbox launcher wraps; empty is the offline dry-run shape."""
     timeout_s: float = arms.RUN_TIMEOUT_S
     confinement: ConfinementSpec | None = None
     """The broker + container boundary live runs use (ADR-0074); None is the offline dry run."""
@@ -170,38 +165,6 @@ def parser_for(agent: str) -> Callable[[Iterable[str]], stream.Trace]:
 
 def run_id(task_id: str, arm: str, repeat: int) -> str:
     return f"{task_id}.{arm}.r{repeat}"
-
-
-def preflight(setup: Setup, out: Path | None = None) -> AgentRunResult:
-    """One prompt through `run_agent`'s own env, before the first paid run of a study.
-
-    A preflight that never reaches the model refuses the batch and books nothing. When `out` is given,
-    the cost is written to `preflight.json` either way, so a report can add it and a rerun of a
-    finished study is not what records it. Only Claude gets the login-keychain link.
-    """
-    try:
-        result = run_preflight(
-            lambda config: [
-                *setup.binary,
-                *argv_tail(setup.agent, "Reply with the single word ok.", config, arms.SYSTEM_ADDENDUM),
-            ],
-            base_env=setup.base_env,
-            secret=setup.secret,
-            mcp_config={},
-            login_keychain=setup.agent == "claude",
-            parse=parser_for(setup.agent),
-            timeout_s=PREFLIGHT_TIMEOUT_S,
-            auth_provider=setup.auth_provider or None,
-        )
-    except AgentPreflightError as error:
-        if out is not None:
-            write_preflight(out, cost_usd=error.cost_usd, model=error.model)
-        raise StudyRefusedError(
-            f"{setup.agent} preflight could not reach its model ({error}); refusing the batch before any run is booked"
-        ) from error
-    if out is not None:
-        write_preflight(out, cost_usd=amount(result.trace.result_field("total_cost_usd")), model=result.trace.model)
-    return result
 
 
 def arm_spec(spec: ConfinementSpec, arm: str) -> ConfinementSpec:
@@ -263,7 +226,6 @@ def run_one(task: tasks.Task, arm: str, repeat: int, setup: Setup, book: SpendLe
                 sandbox=sandbox,
                 server_env=setup.server_env,
                 api_key=setup.secret if arm == "B" else "",
-                interpreter=setup.server_python or None,
             ),
             base_env=setup.base_env,
             secret=setup.secret,
@@ -681,15 +643,8 @@ def container_env(agent: str) -> dict[str, str]:
     return env
 
 
-def derived_records(out: Path) -> list[dict[str, Any]]:
-    """The records with the failure category and the exploration evidence derived from the kept
-    grade fields and streams, not as stored: a canary fix re-renders a finished study without a
-    rerun, and the category keeps one owner (`outcomes.failure_category`). An escape stays an
-    escape — that is the voided-study stop, not a derived value."""
-    return _derive(_records(out, all_agents=True)[0])
-
-
 def _derive(stored: Mapping[Path, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recompute failure categories and exploration from saved evidence, preserving escapes."""
     derived: list[dict[str, Any]] = []
     for result_path, record in stored.items():
         row = dict(record)

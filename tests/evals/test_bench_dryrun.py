@@ -69,7 +69,6 @@ def setup(tmp: Path, loopback: Loopback, plan: Planner = default_plan) -> run.Se
     }
     return run.Setup(
         agent=agent,
-        server=[sys.executable, "-m", "jev_judge_mcp"],
         server_env=env,
         base_env=arms.agent_env(os.environ),
         secret=API_KEY,

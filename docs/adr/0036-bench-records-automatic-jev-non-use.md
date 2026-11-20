@@ -59,3 +59,8 @@ exposure defaults, not the tools.
 - **Arm C's sentence** names the now-visible `jev_` tools instead of the gateway dance.
 - **What does not change:** the arm definitions, the use gates, the caps, the scorer and analysis
 code, and the tools/list wire (no schema, name, or description change).
+
+## Amendment (2026-11-19): the CLI reports saved runs
+
+ADR-0074 requires confinement for live agent runs. The bench CLI keeps its refusal for pending
+paid runs. The historical Pi and Claude launch paths and host preflight have been removed.

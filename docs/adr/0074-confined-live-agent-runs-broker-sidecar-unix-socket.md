@@ -229,3 +229,12 @@ defect was `_record` diffing and grading the agent workdir in the harness proces
 - The offline sandbox and the grading container share the same Git invocation. It uses a fixed
   environment without inherited Git settings, disables global and system config, hooks and
   fsmonitor, and sets a 15-second timeout per command.
+
+## Amendment 2026-11-19: remove the unconfined bench launcher
+
+The bench CLI can report finished or stopped studies. Pending runs still trigger the confinement
+refusal, including when saved state changes during inspection. The host agent launcher is reachable
+only through the offline bench dry run. A live bench will require `run_confined`.
+
+A/B startup uses the confined provider probe. The host agent-prompt preflight and wheel-installed
+host interpreter are removed. Confined Pi runs use the adapter packaged in the agent image.

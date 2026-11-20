@@ -10,10 +10,9 @@ from typing import Any
 
 import pytest
 
-from evals.ab.stream import ToolUse, Trace
+from evals.ab.stream import Trace
 from evals.agent import AgentRunResult
 from evals.bench import chart, pi, run
-from evals.bench.gate import HarnessMismatchError
 from evals.bench.items import Item
 
 SUCCESS: list[dict[str, Any]] = [
@@ -133,38 +132,6 @@ def test_parse_sums_a_reported_usage_cost_and_flags_a_rate_limit() -> None:
 def test_parse_without_an_agent_end_has_no_result() -> None:
     trace = pi.parse(_lines([event for event in SUCCESS if event["type"] != "agent_end"]))
     assert trace.result is None and trace.result_field("subtype") is None
-
-
-def _proxy(tool: str, *, is_error: bool = False) -> dict[str, object]:
-    return {"seq": 0, "tool": tool, "is_error": is_error}
-
-
-def test_cross_check_maps_the_gateway_prefix_to_the_server_tool() -> None:
-    trace = pi.parse(_lines(SUCCESS))
-    pi.cross_check([_proxy("jev_verify")], trace)
-
-
-def test_cross_check_raises_when_the_attributed_calls_disagree() -> None:
-    trace = pi.parse(_lines(SUCCESS))
-    with pytest.raises(HarnessMismatchError):
-        pi.cross_check([_proxy("jev_screen")], trace)
-
-
-def test_cross_check_allows_a_failed_gateway_attempt_rescued_by_mcp_script() -> None:
-    """Both `mcp__jev` tries error client-side; the `mcpScript` forward succeeds and is unattributed."""
-    events = [
-        event
-        for event in SUCCESS
-        if not (event.get("type") == "tool_execution_end" and event.get("toolCallId") == "c1")
-    ]
-    events.append({"type": "tool_execution_end", "toolCallId": "c1", "toolName": "mcp__jev", "isError": True})
-    trace = pi.parse(_lines(events))
-    pi.cross_check([_proxy("jev_verify")], trace)  # the success is mcpScript's, not the failed gateway try
-
-
-def test_cross_check_passes_when_nothing_is_attributed() -> None:
-    trace = Trace(tool_uses=[ToolUse("mcp", {"server": "jev"}, "c0")])
-    pi.cross_check([_proxy("jev_verify")], trace)
 
 
 def test_unlabeled_chart_says_accuracy_is_not_measured() -> None:

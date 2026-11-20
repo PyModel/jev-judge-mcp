@@ -7,28 +7,22 @@ shape, synthesizing the `result` the runner scores from.
 
 Pi has no built-in MCP client. MCP comes from the `pi-mcp-adapter` extension, loaded explicitly with
 `--no-extensions -e` so neither arm inherits the user's other extensions or MCP servers. `--mcp-config`
-replaces the user's config: every arm gets the harness server, and B and C add the Jev server behind
-the bench proxy, eager and direct, so the published tools (`jev_verify`, ...) sit in the model's
-initial tool list under their own names. The `mcp` gateway still exists for search, describe, and
-status, and a Jev tool may also be called as `mcp({tool: "jev_verify"})`.
+replaces the user's config. Both A/B arms get the harness server. Arm B adds the Jev server,
+eager and direct, so the published tools (`jev_verify`, ...) sit in the model's initial tool list.
+The `mcp` gateway still exists for search, describe, and status, and can call a Jev tool as
+`mcp({tool: "jev_verify"})`.
 """
 
 import json
 import os
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
 from evals.ab.stream import ToolUse, Trace, is_torn_tail
-from evals.bench import prompt
-from evals.bench.gate import JEV_TOOLS, HarnessMismatchError
-from evals.bench.items import Item
 
 PI_MODEL = "ds4/glm-5.3-flash"
-"""The outcome study's Pi model. The bench uses `BENCH_MODEL`."""
-BENCH_MODEL = "opencode-go/deepseek-v4.1-flash"
-"""DeepSeek V4.1 through OpenCode, the only such model `pi --list-models` names. Bench arms only."""
 PI_THINKING = "high"
 _PROVIDER_FAILURE = re.compile(
     r"connection error|stream ended without finish_reason|\b429\b|rate[- ]limit|too many requests|"
@@ -90,11 +84,6 @@ def pi_command(
         "--",
         prompt_text,
     ]
-
-
-def flags(item: Item, arm: str, config: Path) -> Sequence[str]:
-    """The Pi argv after the binary, so `run_one` can prepend the resolved `pi` path."""
-    return pi_command("pi", prompt.render(item), config, prompt.addendum(arm, agent="pi"), model=BENCH_MODEL)[1:]
 
 
 def _blocks(message: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -228,48 +217,3 @@ def parse(lines: Iterable[str]) -> Trace:
 
 def _args(args: object) -> dict[str, object]:
     return cast(dict[str, object], args) if isinstance(args, dict) else {}
-
-
-def _exposed_tool(use: ToolUse) -> str | None:
-    """The Jev server tool a stream use invoked, or None for gateway chatter (search, connect, status).
-
-    The bench exposes the server eagerly and directly, so a use may carry a published name
-    (`jev_verify`) as well as the gateway (`mcp({tool: ...})`) or namespace (`mcp__jev__*`) shapes.
-    """
-    name = use.name
-    exposed: object = None
-    if name in JEV_TOOLS:
-        return name
-    if name in ("mcp", "mcp__jev"):
-        exposed = use.input.get("tool")
-    elif name.startswith("mcp__jev__"):
-        exposed = name.removeprefix("mcp__jev__")
-    if not isinstance(exposed, str):
-        return None
-    if exposed in JEV_TOOLS:
-        return exposed
-    stripped = exposed.removeprefix("jev_")
-    return stripped if stripped in JEV_TOOLS else None
-
-
-def cross_check(calls: Sequence[Mapping[str, Any]], trace: Trace) -> None:
-    """Successful stream attributions must have reached the proxy successfully.
-
-    Pi reaches Jev through the adapter's gateway, so only uses that name a Jev tool count; search,
-    connect, and status calls do not. A gateway attempt can fail client-side (wrong argument shape) and
-    then succeed through `mcpScript`, whose forwards are unattributed, so failed attempts and proxy rows
-    the stream cannot attribute are noise, not mismatches: compare only attributed calls that did not
-    error, and only against proxy forwards that succeeded. The use gate, which reads the proxy log, stays
-    the arbiter of whether a run used Jev at all. Unlike the Claude check, error flags are not compared
-    call-by-call: the adapter reports its own `isError`, which does not reliably mirror the server's.
-    """
-    streamed = {
-        tool for use in trace.tool_uses if (tool := _exposed_tool(use)) and not trace.tool_results.get(use.id, True)
-    }
-    if not streamed:
-        return
-    logged = {str(call.get("tool")) for call in calls if not call.get("is_error") and not call.get("refused")}
-    if missed := streamed - logged:
-        raise HarnessMismatchError(
-            f"stream Jev calls {sorted(missed)} never reached the proxy (logged {sorted(logged)})"
-        )
