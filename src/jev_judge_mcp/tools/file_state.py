@@ -58,8 +58,8 @@ def is_secret_store(path: Path, guard: SecurityGuard) -> bool:
     except FileNotFoundError:
         pass
     except OSError as error:
-        # A name too long to be a file cannot be the key; any other failure is a match.
-        if error.errno != errno.ENAMETOOLONG:
+        # A searched name too long to be a file cannot be the key; an error checking the key is a match.
+        if error.errno != errno.ENAMETOOLONG or error.filename != os.fspath(path):
             return True
     except RuntimeError:
         return True
@@ -145,6 +145,7 @@ def read_state(
     content = data.decode("utf-8", errors="replace")
     if length(content) > caps.file_units_max:
         refuse("file_too_large", f"file exceeds the {caps.file_units_max:,}-unit state cap: {path}")
-    # Redaction is the last step, so the cap measures the file as it is on disk, and a clean file
-    # passes through unchanged (the detector is the identity without a literal).
-    return guard.scrub(content)
+    scrubbed = guard.scrub(content)
+    if length(scrubbed) > caps.file_units_max:
+        refuse("file_too_large", f"redacted file exceeds the {caps.file_units_max:,}-unit state cap: {path}")
+    return scrubbed
