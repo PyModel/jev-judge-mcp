@@ -21,6 +21,7 @@ from jev_judge_mcp.providers import ProviderError
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.ask_state import (
     Part,
+    Skipped,
     command_disabled_refusal,
     file_parts,
     named_state,
@@ -204,8 +205,11 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         prepared = await anyio.to_thread.run_sync(prepare_command, command, env, guard)
     own = own_part(args.get("state", ""), guard)
     parts: list[Part] = [own] if own is not None else []
-    file_result, skipped = await anyio.to_thread.run_sync(file_parts, args.get("paths", []), guard)
-    parts.extend(file_result)
+    file_result: list[Part] = []
+    skipped: list[Skipped] = []
+    if paths := args.get("paths"):
+        file_result, skipped = await anyio.to_thread.run_sync(file_parts, paths, guard)
+        parts.extend(file_result)
     units = question_units(questions)
     wire_keys = {identifier: f"q{index}" for index, identifier in enumerate(questions)}
     wire_questions = {wire_keys[name]: question for name, question in questions.items()}

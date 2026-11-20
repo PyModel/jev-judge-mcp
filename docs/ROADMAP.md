@@ -177,7 +177,9 @@ Does Jev improve a coding agent (Claude Code, Pi) while it uses the Jev MCP tool
 In-process spans, metrics, and the 64-concurrent load gate are landed (`src/jev_judge_mcp/telemetry.py`,
 `make load`); HTTP-mode export (OpenTelemetry, a Prometheus endpoint) is not built.
 
-Spans `mcp.tool`, `jev.evaluate`, `jev.validate`, `regex.extract` with counts/flags/durations only — never evidence, claims, diffs, candidate text, or keys unless an explicit debug env flag is set. Metrics: calls, provider errors, fail-closed, auto/review/escalate, truncated, regex timeouts, tokens, durations. Load at 1/4/16/32/64 concurrent calls; local overhead excluding provider: p50 < 5 ms, p95 < 20 ms.
+Spans `mcp.tool`, `jev.evaluate`, `jev.validate`, `regex.extract` with counts/flags/durations only — never evidence, claims, diffs, candidate text, or keys unless an explicit debug env flag is set. Metrics: calls, provider errors, fail-closed, auto/review/escalate, truncated, regex timeouts, tokens, durations. Load at 1/4/16/32/64 concurrent calls; local overhead excluding provider: p50 < 5 ms, p95 < 20 ms. The test subtracts one stub provider delay per sequential provider call (`jev_gate_range` makes two), and the CI canary pins each tool's count. `jev_gate_range` reads its range with 5-8 Git runs, so it has its own limit: p50 < 150 ms, p95 < 200 ms.
+
+Known gap (measured 2026-11-20 at load averages 15-27, so the 16-64 rows are directional): `make load` passes at 1 and 4 concurrent calls and misses from 16. `jev_gate_range` misses its limit from 16 (p50 153-226 ms) and reaches p50 842-1535 ms at 64. Its Git runs also slow the other tools sharing the server: in the full mix they miss p95 from 16 (55-82 ms), while with `jev_gate_range` left out they pass both budgets up to 32 and miss p95 only at 64 (45-73 ms). Suspected cause, not yet profiled: each Git run spawns a process and two pipe-reader threads (`process.py`).
 
 ### P10 — Rollout [PY-16]
 
