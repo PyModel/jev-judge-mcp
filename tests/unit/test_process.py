@@ -42,27 +42,29 @@ def gone(pid: int) -> bool:
     try:
         return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] == "Z"
     except (FileNotFoundError, ProcessLookupError):
-        # On Linux the child was reaped between the kill and the read (open gives ENOENT, read gives ESRCH).
-        # macOS has no /proc, so a live pid stays not gone there.
-        return Path("/proc").is_dir()
+        # With procfs mounted, the child was reaped between the kill and the read (open gives ENOENT, read
+        # gives ESRCH). Without it (macOS, or an empty unmounted /proc) a live pid stays not gone.
+        return Path("/proc/self/stat").exists()
 
 
+@pytest.mark.parametrize("procfs", [True, False], ids=["procfs-mounted", "no-procfs"])
 @pytest.mark.parametrize("vanished", [FileNotFoundError, ProcessLookupError])
 def test_gone_counts_a_child_reaped_between_the_probe_and_the_read(
-    monkeypatch: pytest.MonkeyPatch, vanished: type[OSError]
+    monkeypatch: pytest.MonkeyPatch, vanished: type[OSError], procfs: bool
 ) -> None:
-    """On Linux the child can be reaped after kill(pid, 0) succeeds and before /proc/<pid>/stat is read."""
+    """With procfs mounted, a child reaped after kill(pid, 0) succeeds and before its stat is read is gone.
+    Without procfs (macOS, or an empty unmounted /proc) the same missing stat file means nothing: still alive."""
     assert not gone(os.getpid())
 
     def reaped(self: Path, *args: object, **kwargs: object) -> str:
         raise vanished(errno.ENOENT, "reaped", str(self))
 
-    def proc_exists(self: Path) -> bool:
-        return True
+    def mounted(self: Path) -> bool:
+        return procfs
 
     monkeypatch.setattr(Path, "read_text", reaped)
-    monkeypatch.setattr(Path, "is_dir", proc_exists)  # a /proc filesystem exists
-    assert gone(os.getpid())
+    monkeypatch.setattr(Path, "exists", mounted)
+    assert gone(os.getpid()) is procfs
 
 
 def wait_until(condition: Callable[[], bool], seconds: float = 3) -> bool:
