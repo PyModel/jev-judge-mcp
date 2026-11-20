@@ -139,6 +139,8 @@ workflow `release.yml`, environment `pypi`.
 
 - `.release-please-manifest.json` records the released version. A release pull
   request needs a releasable change such as a `feat` or `fix` commit in the scanned history.
+- Every release bumps the minor version, fixes included (`"versioning": "always-bump-minor"` in
+  `release-please-config.json`): 0.10.0, then 0.11.0, then 0.12.0.
 - When release-please opens or updates the release pull request with the workflow token,
   GitHub creates a pending `ci` run. A maintainer with write access selects **Approve workflows to run**
   in the pull request's merge box (ADR-0060). If that run is unavailable, use
