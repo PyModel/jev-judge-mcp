@@ -6,9 +6,8 @@ It does not scrub caller-written tool state. The command hook is the caller.
 
 import re
 
-from jev_judge_mcp.credential_literal import _mixed_case_with_digit  # pyright: ignore[reportPrivateUsage]
-
-REDACTED = "[redacted]"
+from jev_judge_mcp.redaction.literals import _mixed_case_with_digit  # pyright: ignore[reportPrivateUsage]
+from jev_judge_mcp.redaction.values import REDACTED
 
 # `$NAME`, `${NAME}`, `%NAME%`, or `$(...)`. The judge still sees the name.
 _REFERENCE = re.compile(r"^(?:\$\{?\w+\}?|%\w+%|\$\(.*\))$", re.ASCII)

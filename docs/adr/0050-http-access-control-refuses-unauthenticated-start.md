@@ -87,3 +87,11 @@ sockets remain IPv6-only. An unresolved address exits with a diagnostic naming `
 
 On SIGINT or SIGTERM, uvicorn gives active requests two seconds to finish before cancelling
 them, including any open event stream.
+
+## Amendment (2026-11-19): validate every replaced value and late key
+
+The eight-character floor runs over the exact spellings the value redactor will replace,
+including URL userinfo, URL passwords, and JSON-escaped spellings. A rejection identifies
+the configuration source. The provider resolver reads the stored key once per resolution,
+validates that snapshot and registers it with the installed log filter before constructing
+the provider. A key stored after process startup receives the same checks and redaction.

@@ -5,7 +5,6 @@ from typing import ClassVar
 import httpx
 
 from jev_judge_mcp.domain import JsonValue
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.providers.base import (
     Evaluation,
     HttpProvider,
@@ -14,6 +13,7 @@ from jev_judge_mcp.providers.base import (
     parse_envelope,
 )
 from jev_judge_mcp.providers.retry import RetryPolicy
+from jev_judge_mcp.redaction.values import Redactor
 
 
 class CompatibleProvider(HttpProvider):

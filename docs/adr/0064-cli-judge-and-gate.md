@@ -94,3 +94,26 @@ text. The completion hook supplies the matched, redacted Bash command as the def
 Its 90-second harness limit reserves ten seconds for startup, cleanup, and the reply. Evidence
 preparation consumes part of the remaining 80-second judgment budget, which includes provider
 retries.
+
+## Amendment (2026-11-19): shared evidence reads and command-targeted completion
+
+The CLI uses the file judgment reader. Claims keep the aggregate evidence unit limit and tests
+keep the gate document unit limit. Reads decode UTF-8 with replacement, check the first 8,000
+bytes for NUL, and scrub configured secrets and credential literals. DecisionResult preserves
+the reader's codes, including `path_outside_scope`, `not_found`, `binary_file`, `file_too_large`,
+and `secret_file`. The caller's shell directory still anchors relative evidence paths. All
+evidence stays inside the selected repository.
+
+The hook recognizes simple commands across newlines as well as shell operators, including
+assignments, `then`, `time`, `command`, and absolute executable paths. A literal preceding
+`cd` changes the shell directory. Git's `-C` changes the repository lookup and leaves the shell
+directory intact. An ambiguous target follows the hook's existing failure policy, with an ask
+only when required. Git inspection uses the shared hardened runner (ADR-0080).
+
+An explicit `JEV_COMPLETION_DIFF` takes precedence. An ordinary push uses its upstream range,
+then the last commit when there is no upstream, and the empty tree through HEAD for a root
+commit. A PR command for the current branch uses the merge base with the local
+`origin/<base>` ref selected by `gh pr create --base` or `branch.<name>.gh-merge-base`. The
+default is the local `origin/HEAD` ref. This works after a push has advanced the upstream.
+Missing refs or an ambiguous PR require an explicit range to get a judgment. Empty ranges
+abstain. The hook never fetches refs.

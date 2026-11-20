@@ -289,7 +289,7 @@ omitted its usage.
 See [ADR-0082](adr/0082-actionable-gate-escalation.md).
 
 From another git worktree run `jev-judge-mcp gate --diff BASE..HEAD --claims claims.txt
---tests test.log --request "requirement"` in that worktree. A range over the aggregate input budget returns `input_too_large` before a judgment. The same admission caps apply.
+--tests test.log --request "requirement"` in that worktree. A range over the aggregate input budget returns `input_too_large` before a judgment. The same admission caps apply. The CLI reads claims and tests relative to the shell directory within the selected repository. Evidence uses the file judgment reader with gate unit caps, UTF-8 replacement, and typed refusal codes such as `path_outside_scope`, `not_found`, and `file_too_large`.
 For changes exceeding the caps, separate concern-level decisions require an independent
 cross-file review.
 

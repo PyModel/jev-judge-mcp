@@ -16,7 +16,7 @@ import signal
 import socket
 import sys
 import time
-from collections.abc import Callable, Generator, Iterable
+from collections.abc import Callable, Generator
 from importlib.metadata import PackageNotFoundError
 from typing import Any, override
 
@@ -28,11 +28,11 @@ from mcp.types import INTERNAL_ERROR, CallToolResult, CancelledNotificationParam
 from pydantic import ValidationError
 from starlette.types import ASGIApp
 
-from jev_judge_mcp import keyfile
-from jev_judge_mcp.errors import RedactingFilter, Redactor
 from jev_judge_mcp.http_auth import BearerTokenMiddleware, ensure_http_access_control, require_http_token
 from jev_judge_mcp.identity import ServerVersion, reported_version
 from jev_judge_mcp.instructions import server_instructions
+from jev_judge_mcp.redaction.values import Redactor, configure_logging
+from jev_judge_mcp.security import build_guard
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import LogLevel, Settings, load_settings, unexpanded_references
 from jev_judge_mcp.skills import attach as attach_skills
@@ -41,9 +41,6 @@ from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 
 SERVER_NAME = "jev-mcp"
 DISTRIBUTION = "jev-judge-mcp"
-
-MIN_SECRET_LENGTH = 8
-"""Shortest configured secret the Redactor accepts: shorter values would blank matching text."""
 
 logger = logging.getLogger("jev_judge_mcp")
 
@@ -124,17 +121,6 @@ async def _already_handled(ctx: object, params: object) -> None:
 def build_server(settings: Settings) -> JevMCPServer:
     """The server with every tool; `tools/list` and `tools/call` share the Toolset's one registry."""
     return JevMCPServer(toolset=Toolset(Runtime(settings), TOOLS), log_level=settings.log_level)
-
-
-def configure_logging(level: LogLevel, secrets: Iterable[str] = ()) -> None:
-    """Log to stderr. Every record, from any logger, is redacted of `secrets` first (ADR-0008)."""
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setLevel(level)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    handler.addFilter(RedactingFilter(Redactor(secrets)))
-    root = logging.getLogger()
-    root.handlers[:] = [handler]
-    root.setLevel(level)
 
 
 HTTP_BIND_ATTEMPTS = 4
@@ -226,37 +212,11 @@ def warn_unexpanded_references() -> None:
         logger.warning("%s holds an unexpanded reference and counts as unset", variable)
 
 
-def ensure_secrets_redactable(settings: Settings) -> None:
+def ensure_secrets_redactable(settings: Settings) -> Redactor:
     try:
-        validate_secrets_redactable(settings)
+        return build_guard(settings).redact
     except ValueError as error:
         raise SystemExit(str(error)) from None
-
-
-def validate_secrets_redactable(settings: Settings) -> None:
-    """Refuse any configured secret too short to redact safely (ADR-0050).
-
-    The Redactor replaces exact values, so a 1-2 character secret would blank every matching
-    fragment of tool output and logs. Each configured `SecretStr` setting and the key-file key
-    (ADR-0046) is held to `MIN_SECRET_LENGTH`; the error names the variable, never the value.
-    """
-    for variable, value in settings.named_secrets():
-        if variable == "TYPESAFE_API_KEY":
-            value = value.strip() or value
-        if len(value) < MIN_SECRET_LENGTH:
-            raise ValueError(
-                f"{variable} is shorter than {MIN_SECRET_LENGTH} characters; refusing to start: "
-                "a secret that short cannot be redacted without corrupting text"
-            )
-    stored = keyfile.stored_key(settings)
-    if stored and len(stored) < MIN_SECRET_LENGTH:
-        where = f"the key file {keyfile.stored_key_path(settings)}"
-        if settings.key_file is not None:
-            where += " set by JEV_MCP_KEY_FILE"
-        raise ValueError(
-            f"{where} holds a key shorter than {MIN_SECRET_LENGTH} characters; refusing to start: "
-            "a secret that short cannot be redacted without corrupting text"
-        )
 
 
 class _UvicornServer(uvicorn.Server):
@@ -422,8 +382,8 @@ def print_version() -> None:
     print(f"{DISTRIBUTION} {identity}")
 
 
-def _configure_process_logging(settings: Settings) -> None:
-    configure_logging(settings.log_level, keyfile.redaction_values(settings))
+def _configure_process_logging(settings: Settings, redact: Redactor) -> None:
+    configure_logging(settings.log_level, redact.secrets)
     warn_unexpanded_references()
 
 
@@ -443,8 +403,7 @@ def _run_hook(argv: list[str]) -> int:
         from jev_judge_mcp.cli import completion_hook_main
 
         settings = load_settings()
-        validate_secrets_redactable(settings)
-        _configure_process_logging(settings)
+        _configure_process_logging(settings, build_guard(settings).redact)
         return completion_hook_main(argv[2:])
     except ValidationError as error:
         sys.stderr.write(_settings_error(error) + "\n")
@@ -522,21 +481,21 @@ def _main() -> None:
         except ValidationError as error:
             sys.exit(emit_configuration_failure(tool, "invalid_arguments", _settings_error(error)))
         try:
-            validate_secrets_redactable(subcommand_settings)
+            redact = build_guard(subcommand_settings).redact
         except ValueError as error:
             sys.exit(emit_configuration_failure(tool, "auth", str(error)))
-        _configure_process_logging(subcommand_settings)
+        _configure_process_logging(subcommand_settings, redact)
         sys.exit((judge_main if judge else gate_main)(args))
     settings = load_settings()
     # The gates run before logging and before anything binds, so a misconfiguration is one clear
     # line on stderr and a non-zero exit, never a live unauthenticated server (ADR-0050).
     ensure_http_access_control(settings)
-    ensure_secrets_redactable(settings)
+    redact = ensure_secrets_redactable(settings)
     with contextlib.ExitStack() as listeners:
         sockets = http_serve_sockets(settings)
         for sock in sockets or ():
             listeners.enter_context(sock)
-        _configure_process_logging(settings)
+        _configure_process_logging(settings, redact)
         server = build_server(settings)
         # One line, the same identity `initialize` will report (ADR-0054).
         logger.info("identity %s %s", server.name, server.version)

@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain import is_json_object
 from jev_judge_mcp.install.documents import (
     codex_entry_path,
@@ -64,6 +63,7 @@ from jev_judge_mcp.install.layout import (
 )
 from jev_judge_mcp.install.redact import holds_literal, redact_diagnostic, redact_text
 from jev_judge_mcp.install.values import is_json_array
+from jev_judge_mcp.redaction.literals import redact_credential_literals
 
 TARGETS: tuple[str, ...] = (
     "claude-code",

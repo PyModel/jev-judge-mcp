@@ -18,7 +18,7 @@ MCP ─▶ tool input validation ─▶ state + questions ─▶ Provider (envel
 ```
 src/jev_judge_mcp/
   server.py settings.py limits.py errors.py text.py ids.py serialize.py telemetry.py
-  stdio.py hook.py doctor.py cache.py keyfile.py setup.py fsutil.py redact_action.py
+  stdio.py hook.py doctor.py cache.py keyfile.py setup.py fsutil.py redaction/
   domain/     questions.py answers.py usage.py json.py
   providers/  base.py resolver.py typesafe.py compatible.py openrouter.py cloudflare.py
   validation/ choice.py noul.py score.py extract.py numbers.py caps.py

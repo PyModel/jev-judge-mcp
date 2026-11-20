@@ -20,8 +20,8 @@ import pytest
 from mcp import Client
 
 from jev_judge_mcp.domain import JsonValue, Usage
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.providers import Evaluation, JevProvider, ProviderName
+from jev_judge_mcp.redaction.values import Redactor
 from jev_judge_mcp.server import JevMCPServer, freeze_startup_heap
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset

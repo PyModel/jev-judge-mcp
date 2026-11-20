@@ -24,13 +24,13 @@ import httpx
 
 import jev_judge_mcp.providers.retry as retries
 from jev_judge_mcp.domain import JsonValue, Question, RawAnswer, Usage, as_number, decode_json, questions_to_wire
-from jev_judge_mcp.errors import DEFAULT_PORTS, Redactor
 from jev_judge_mcp.providers.retry import (
     DEFAULT_RETRY_POLICY,
     RetryPolicy,
     TransientFailure,
     retry_delay,
 )
+from jev_judge_mcp.redaction.values import DEFAULT_PORTS, Redactor
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.text import head
 

@@ -16,8 +16,6 @@ from typing import Any, cast
 import anyio
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question, ScoreQuestion
-from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import ASK, FILE_JUDGE, SANITIZE_ID_UNITS
 from jev_judge_mcp.providers import ProviderError
 from jev_judge_mcp.text import length
@@ -199,16 +197,14 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     command = args.get("command")
     prepared: tuple[str, list[str]] | None = None
     env = scrubbed_environment(runtime.settings)
-    key_path = stored_key_path(runtime.settings)
+    guard = await runtime.security_guard()
     if command is not None:
         if not runtime.settings.ask_commands:
             raise ToolError(command_disabled_refusal(), code="command_disabled")
-        prepared = await anyio.to_thread.run_sync(prepare_command, command, env, key_path)
-    secrets = await anyio.to_thread.run_sync(redaction_values, runtime.settings)
-    redact = Redactor(secrets)
-    own = own_part(args.get("state", ""), redact)
+        prepared = await anyio.to_thread.run_sync(prepare_command, command, env, guard)
+    own = own_part(args.get("state", ""), guard)
     parts: list[Part] = [own] if own is not None else []
-    file_result, skipped = await anyio.to_thread.run_sync(file_parts, args.get("paths", []), key_path, redact)
+    file_result, skipped = await anyio.to_thread.run_sync(file_parts, args.get("paths", []), guard)
     parts.extend(file_result)
     units = question_units(questions)
     wire_keys = {identifier: f"q{index}" for index, identifier in enumerate(questions)}
@@ -223,7 +219,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     if prepared is not None:
         program, argv = prepared
         output = await anyio.to_thread.run_sync(
-            run_command, argv, ASK.command_timeout_seconds, ASK.command_output_units_max, env, secrets, program == "git"
+            run_command, argv, ASK.command_timeout_seconds, ASK.command_output_units_max, guard, env, program == "git"
         )
         parts.append(output)
         _check_unit_cap(parts, wire_questions, units)

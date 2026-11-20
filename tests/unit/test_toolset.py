@@ -13,7 +13,7 @@ from mcp.types import CallToolResult, TextContent
 
 from jev_judge_mcp.extract.executor import InProcessRegexExecutor
 from jev_judge_mcp.providers import ProviderConfigError, ProviderError
-from jev_judge_mcp.server import configure_logging
+from jev_judge_mcp.redaction.values import configure_logging
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools.base import Handler, JevTool, Runtime, ToolError, ToolResult, define
 from jev_judge_mcp.tools.toolset import Toolset

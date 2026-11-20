@@ -7,6 +7,7 @@ directory) is the production behavior.
 
 import os
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ import pytest
 from jev_judge_mcp.limits import FILE_JUDGE
 from jev_judge_mcp.tools import file_state
 from jev_judge_mcp.tools.base import ToolError
+from tests.support.jev import TEST_GUARD
 
 
 def make(path: Path, data: bytes | str) -> Path:
@@ -37,7 +39,7 @@ def test_a_relative_path_resolves_inside_the_scope(tmp_path: Path) -> None:
     make(tmp_path / "notes.txt", "hello")
     resolved = file_state.resolve_scoped("notes.txt", scope=tmp_path)
     assert resolved == (tmp_path / "notes.txt").resolve()
-    assert file_state.read_state(resolved) == "hello"
+    assert file_state.read_state(resolved, TEST_GUARD) == "hello"
 
 
 def test_a_dotdot_escape_is_refused(tmp_path: Path) -> None:
@@ -64,12 +66,12 @@ def test_the_default_scope_is_the_working_directory(tmp_path: Path, monkeypatch:
 
 
 def test_a_missing_file_is_not_found(tmp_path: Path) -> None:
-    refuses("not_found")(lambda: file_state.read_state(tmp_path / "missing.txt"))
+    refuses("not_found")(lambda: file_state.read_state(tmp_path / "missing.txt", TEST_GUARD))
 
 
 def test_a_directory_is_not_a_file(tmp_path: Path) -> None:
     (tmp_path / "dir").mkdir()
-    refuses("not_a_file")(lambda: file_state.read_state(tmp_path / "dir"))
+    refuses("not_a_file")(lambda: file_state.read_state(tmp_path / "dir", TEST_GUARD))
 
 
 def test_an_unreadable_file_refuses_typed_instead_of_crashing_the_call(tmp_path: Path) -> None:
@@ -78,20 +80,20 @@ def test_an_unreadable_file_refuses_typed_instead_of_crashing_the_call(tmp_path:
     locked = make(tmp_path / "locked.txt", "shh")
     locked.chmod(0)
     try:
-        refuses("not_a_file")(lambda: file_state.read_state(locked))
+        refuses("not_a_file")(lambda: file_state.read_state(locked, TEST_GUARD))
     finally:
         locked.chmod(0o600)
 
 
 def test_a_secret_store_refuses_before_any_read(tmp_path: Path) -> None:
     make(tmp_path / ".env", "TOKEN=deadbeef")
-    refuses("secret_file")(lambda: file_state.read_state(tmp_path / ".env"))
+    refuses("secret_file")(lambda: file_state.read_state(tmp_path / ".env", TEST_GUARD))
 
 
 def test_a_dotted_suffix_env_dotenv_refuses_case_insensitively(tmp_path: Path) -> None:
     for name in ("secrets.env", "prod.env", "PROD.ENV"):
         make(tmp_path / name, "PASSWORD=hunter2")
-        refuses("secret_file")(lambda name=name: file_state.read_state(tmp_path / name))
+        refuses("secret_file")(lambda name=name: file_state.read_state(tmp_path / name, TEST_GUARD))
 
 
 def test_the_secret_store_family_and_the_stand_ins(tmp_path: Path) -> None:
@@ -114,17 +116,17 @@ def test_the_secret_store_family_and_the_stand_ins(tmp_path: Path) -> None:
     )
     for name in refused:
         make(tmp_path / name, "material")
-        assert file_state.is_secret_store(tmp_path / name), name
+        assert file_state.is_secret_store(tmp_path / name, TEST_GUARD), name
     allowed = (".env.example", ".env.sample", ".env.template", "notes.txt", "keys.md")
     for name in allowed:
         make(tmp_path / name, "fine to read")
-        assert not file_state.is_secret_store(tmp_path / name), name
-        assert file_state.read_state(tmp_path / name) == "fine to read"
+        assert not file_state.is_secret_store(tmp_path / name, TEST_GUARD), name
+        assert file_state.read_state(tmp_path / name, TEST_GUARD) == "fine to read"
 
 
 def test_a_credential_literal_is_redacted_before_it_becomes_state(tmp_path: Path) -> None:
     literal = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
-    content = file_state.read_state(make(tmp_path / "notes.txt", f"token: {literal}\nkeep: this line"))
+    content = file_state.read_state(make(tmp_path / "notes.txt", f"token: {literal}\nkeep: this line"), TEST_GUARD)
     assert literal not in content
     assert "[redacted]" in content
     assert "keep: this line" in content  # text without a literal passes through unchanged
@@ -132,19 +134,19 @@ def test_a_credential_literal_is_redacted_before_it_becomes_state(tmp_path: Path
 
 def test_a_nul_inside_the_window_is_binary(tmp_path: Path) -> None:
     data = b"a" * (FILE_JUDGE.binary_sniff_bytes - 1) + b"\x00"
-    refuses("binary_file")(lambda: file_state.read_state(make(tmp_path / "bin.bin", data)))
+    refuses("binary_file")(lambda: file_state.read_state(make(tmp_path / "bin.bin", data), TEST_GUARD))
 
 
 def test_a_nul_just_outside_the_window_is_text(tmp_path: Path) -> None:
     data = b"a" * FILE_JUDGE.binary_sniff_bytes + b"\x00"
-    assert "\x00" in file_state.read_state(make(tmp_path / "late.bin", data))
+    assert "\x00" in file_state.read_state(make(tmp_path / "late.bin", data), TEST_GUARD)
 
 
 def test_a_file_at_the_unit_cap_is_read_and_one_unit_over_is_refused(tmp_path: Path) -> None:
-    at_cap = file_state.read_state(make(tmp_path / "at.txt", "a" * FILE_JUDGE.file_units_max))
+    at_cap = file_state.read_state(make(tmp_path / "at.txt", "a" * FILE_JUDGE.file_units_max), TEST_GUARD)
     assert len(at_cap) == FILE_JUDGE.file_units_max
     over = make(tmp_path / "over.txt", "a" * (FILE_JUDGE.file_units_max + 1))
-    refuses("file_too_large")(lambda: file_state.read_state(over))
+    refuses("file_too_large")(lambda: file_state.read_state(over, TEST_GUARD))
 
 
 def test_a_byte_giant_is_refused(tmp_path: Path) -> None:
@@ -154,11 +156,11 @@ def test_a_byte_giant_is_refused(tmp_path: Path) -> None:
     astral = "😀" * (100_001)
     giant = make(tmp_path / "giant.txt", astral)
     assert giant.stat().st_size > 4 * FILE_JUDGE.file_units_max
-    refuses("file_too_large")(lambda: file_state.read_state(giant))
+    refuses("file_too_large")(lambda: file_state.read_state(giant, TEST_GUARD))
 
 
 def test_undecodable_bytes_decode_with_replacement_instead_of_crashing(tmp_path: Path) -> None:
-    content = file_state.read_state(make(tmp_path / "broken.txt", b"ok \xff\xfe bad"))
+    content = file_state.read_state(make(tmp_path / "broken.txt", b"ok \xff\xfe bad"), TEST_GUARD)
     assert "\ufffd" in content
 
 
@@ -169,7 +171,7 @@ def test_scout_004_configured_store_is_excluded_by_identity(tmp_path: Path, capl
     store = make(tmp_path / "configured-store", "")
     alias = tmp_path / "ordinary-name"
     alias.hardlink_to(store)
-    refuses("secret_file")(lambda: file_state.read_state(alias, key_path=store))
+    refuses("secret_file")(lambda: file_state.read_state(alias, guard=replace(TEST_GUARD, key_path=store)))
     assert "file refusal code=secret_file" in caplog.text and alias.name not in caplog.text
 
 
@@ -189,5 +191,7 @@ def test_scout_004_reader_requests_only_the_bounded_window(tmp_path: Path, monke
 
     path = make(tmp_path / "sample", "")
     monkeypatch.setattr(os, "fdopen", opened)
-    refuses("file_too_large")(lambda: file_state.read_state(path, caps=replace(FILE_JUDGE, file_units_max=2)))
+    refuses("file_too_large")(
+        lambda: file_state.read_state(path, TEST_GUARD, caps=replace(FILE_JUDGE, file_units_max=2))
+    )
     assert received == [9]

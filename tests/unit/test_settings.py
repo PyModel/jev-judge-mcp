@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
-from jev_judge_mcp.errors import Redactor
+from jev_judge_mcp.redaction.values import Redactor
 from jev_judge_mcp.settings import Settings, load_settings, unexpanded_references
 from tests.support.secrets import is_secret_field, secret_env
 

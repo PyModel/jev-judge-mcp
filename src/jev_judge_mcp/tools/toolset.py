@@ -14,13 +14,9 @@ import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from anyio import to_thread
 from mcp.types import CallToolResult, TextContent, Tool
 
-from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain import Usage
-from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.keyfile import redaction_values
 from jev_judge_mcp.policy.actions import Action
 from jev_judge_mcp.providers import ProviderConfigError, ProviderError
 from jev_judge_mcp.serialize import stringify, stringify_compact
@@ -117,8 +113,12 @@ class Toolset:
             if isinstance(error, ProviderError) and code == "input_too_large":
                 message += " Split the call into smaller inputs."
             if code == "internal":
-                secrets = await to_thread.run_sync(redaction_values, self.runtime.settings)
-                message = redact_credential_literals(message, Redactor(secrets))
+                try:
+                    guard = await self.runtime.security_guard()
+                except ProviderConfigError:
+                    message = "Internal tool error"
+                else:
+                    message = guard.scrub(message)
             return _error_outcome(message, code)
         span.attributes["outcome"] = "error_payload" if result.is_error else "ok"
         for scope in CAP_SCOPES:

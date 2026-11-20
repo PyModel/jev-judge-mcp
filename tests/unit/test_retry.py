@@ -5,10 +5,10 @@ from typing import ClassVar
 import pytest
 
 from jev_judge_mcp.domain import JsonValue, Usage
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.providers import Evaluation, RetryPolicy
 from jev_judge_mcp.providers import retry as retry_timing
 from jev_judge_mcp.providers.base import JevProvider, ProviderConfigError, ProviderName
+from jev_judge_mcp.redaction.values import Redactor
 from tests.support.retries import fast_retries as fast_retries
 
 

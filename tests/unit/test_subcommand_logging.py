@@ -16,8 +16,8 @@ from typing import Any
 
 import pytest
 
-from jev_judge_mcp.errors import RedactingFilter
 from jev_judge_mcp.providers import ProviderConfigError
+from jev_judge_mcp.redaction.values import RedactingFilter
 from jev_judge_mcp.server import main
 
 _CONFIGURED = "subcommand-fixture-secret-1"

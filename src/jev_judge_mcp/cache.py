@@ -23,7 +23,6 @@ import json
 import logging
 import os
 import re
-import stat
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -129,21 +128,19 @@ def lookup(
         fsutil.require_private_dir(directory)
         records = directory / _RECORDS
         fsutil.require_private_dir(records)
-        with open(
-            records / filename,
-            "rb",
-            opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK | os.O_NOFOLLOW),
-        ) as handle:
-            info = os.fstat(handle.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_size > _RECORD_BYTES_MAX:
-                return None
+        size = 0
+
+        def inspect(info: os.stat_result) -> None:
+            nonlocal size
             ttl = settings.cache_ttl_seconds
             if ttl > 0 and time.time() - info.st_mtime > ttl:
-                return None
-            data = handle.read(info.st_size + 1)
-            if len(data) != info.st_size:
-                return None
-            parsed = decode_json(data.decode("utf-8"))
+                raise ValueError("expired cache record")
+            size = info.st_size
+
+        data = fsutil.read_bounded(records / filename, max_bytes=_RECORD_BYTES_MAX, inspect=inspect)
+        if len(data) != size:
+            return None
+        parsed = decode_json(data.decode("utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(parsed, dict):

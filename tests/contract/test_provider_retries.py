@@ -17,11 +17,11 @@ import pytest
 import respx
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question
-from jev_judge_mcp.errors import REDACTED, Redactor
 from jev_judge_mcp.providers import NO_RETRIES, JevProvider, ProviderError, ProviderTimeoutError, RetryPolicy
 from jev_judge_mcp.providers import retry as retry_timing
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+from jev_judge_mcp.redaction.values import REDACTED, Redactor
 from jev_judge_mcp.tools.base import code_of
 from tests.support.retries import ControlledClock
 from tests.support.retries import controlled_clock as controlled_clock

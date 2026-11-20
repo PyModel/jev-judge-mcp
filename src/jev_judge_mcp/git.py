@@ -157,6 +157,17 @@ def diff_argument(
     return files if files is not None else diff
 
 
+def range_has_changes(cwd: Path, rev_range: str) -> bool | None:
+    """Use the patch reader's diff policy; None means that Git could not compare the revisions."""
+    try:
+        result = run(cwd, "diff", *_CANONICAL, "--quiet", rev_range, "--")
+    except (OutputTooLarge, OSError, subprocess.TimeoutExpired) as error:
+        raise GitDiffError("git diff failed") from error
+    if result.returncode in (0, 1):
+        return result.returncode == 1
+    return None
+
+
 def untracked_paths(cwd: Path) -> list[str]:
     try:
         result = run(cwd, "ls-files", "--others", "--exclude-standard", "-z", "--", ".")

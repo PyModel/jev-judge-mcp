@@ -34,7 +34,8 @@ stays a prefix; each extension carries its own pinning tests (`test_score_tool.p
 _PUBLISH_SNAPSHOT = """
 from mcp.types import Tool
 import anyio
-from jev_judge_mcp.server import JevMCPServer, configure_logging, serve
+from jev_judge_mcp.redaction.values import configure_logging
+from jev_judge_mcp.server import JevMCPServer, serve
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import JevTool, Runtime, Toolset
 from tests.support.tools_list import load_snapshot

@@ -16,7 +16,6 @@ from typing import Literal
 import anyio
 
 from jev_judge_mcp.domain.questions import Question
-from jev_judge_mcp.keyfile import redaction_values
 from jev_judge_mcp.providers import (
     Evaluation,
     JevProvider,
@@ -26,6 +25,8 @@ from jev_judge_mcp.providers import (
     resolve_model,
     resolve_provider,
 )
+from jev_judge_mcp.redaction.values import configure_logging
+from jev_judge_mcp.security import SecurityGuard, build_guard
 from jev_judge_mcp.settings import Settings, load_settings
 
 HOOK_HARNESS_TIMEOUT_SECONDS = 30.0
@@ -52,7 +53,7 @@ class HookFailure:
 
 def prepare(
     provider: JevProvider | None, *, resolve: Callable[[Settings], JevProvider] = resolve_provider
-) -> tuple[JevProvider, str] | HookFailure:
+) -> tuple[JevProvider, str, SecurityGuard] | HookFailure:
     """Settings, the redacting log handler, the model, and the provider: the pre-call wiring.
 
     The handler is configured before any provider call can log (ADR-0008), and after the hook's
@@ -60,18 +61,13 @@ def prepare(
     never a settings traceback. An injected `provider` skips resolution.
     """
     settings = load_settings()
-    # Imported here so the short-lived hook process loads the server module only once it runs for real.
-    from jev_judge_mcp.server import configure_logging, validate_secrets_redactable
-
-    validate_secrets_redactable(settings)
-    configure_logging(settings.log_level, redaction_values(settings))
-    model = resolve_model(settings)
-    if provider is not None:
-        return provider, model
     try:
-        return resolve(settings), model
-    except ProviderConfigError as error:
+        guard = build_guard(settings)
+        configure_logging(settings.log_level, guard.redact.secrets)
+        chosen = provider if provider is not None else resolve(settings)
+    except (ValueError, ProviderConfigError) as error:
         return HookFailure("config", str(error))
+    return chosen, resolve_model(settings), guard
 
 
 def judge(provider: JevProvider, state: str, questions: Mapping[str, Question], model: str) -> Evaluation | HookFailure:

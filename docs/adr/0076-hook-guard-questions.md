@@ -42,7 +42,7 @@ observation and the verdict, so its reason could only say "denied" without namin
   budget to its single provider call.
 - **Credential literals are evidence; code is not.** A false positive denies a normal write
   with no recourse, so the scan is strict and high precision by construction: the detector in
-  `src/jev_judge_mcp/credential_literal.py` hits only well-known token formats (AWS access key
+  `src/jev_judge_mcp/redaction/literals.py` hits only well-known token formats (AWS access key
   ids, GitHub and Slack tokens, OpenAI/Anthropic-style `sk-` keys with twenty mixed-case
   characters and a digit after the prefix so a CSS class name never matches, PEM private-key
   blocks, JWTs) and a quoted literal that is long, whitespace-free, and carries lower case,

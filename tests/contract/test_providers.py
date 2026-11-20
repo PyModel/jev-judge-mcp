@@ -17,12 +17,12 @@ import pytest
 import respx
 
 from jev_judge_mcp.domain import ChoiceQuestion, NoulCriteria, NoulQuestion, Question, ScoreQuestion, Usage
-from jev_judge_mcp.errors import REDACTED, Redactor
 from jev_judge_mcp.providers import NO_RETRIES, JevProvider, ProviderError, ProviderTimeoutError, RetryPolicy, base
 from jev_judge_mcp.providers.cloudflare import CloudflareProvider, cloudflare_slug
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.openrouter import OpenRouterProvider, openrouter_slug
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+from jev_judge_mcp.redaction.values import REDACTED, Redactor
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from jev_judge_mcp.tools.base import code_of

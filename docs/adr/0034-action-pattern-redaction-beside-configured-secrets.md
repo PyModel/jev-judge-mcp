@@ -28,3 +28,13 @@ The command gate checks its 100,000 UTF-16-unit event ceiling before parsing or 
 both permission modes. A larger event abstains by default and asks when `JEV_HOOK_REQUIRED=1`.
 Gate, screen, and compact-cut reserve five of their 30 harness seconds for local work and
 the reply. Compact-cut reads only regular transcripts and caps each tail read at 8 MiB.
+
+## Amendment (2026-11-19): redaction ownership and hook state
+
+The `redaction` package owns the replacement marker and the three redaction rules.
+`redaction.values` masks the configured exact values and owns log filtering.
+`redaction.literals` detects credential literals in provider-bound state.
+`redaction.action` retains the command-pattern rules. Hook state and ask state use the
+per-call guard's exact-values-then-literals ordering. Hooks additionally apply the action
+rules where they process commands, tool output, or transcript turns. The installer uses
+the shared exact-value redactor for diagnostics.

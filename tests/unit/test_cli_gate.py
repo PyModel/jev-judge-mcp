@@ -17,6 +17,8 @@ from jev_judge_mcp.domain import JsonValue, Question
 from jev_judge_mcp.git import split_unified
 from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.providers.base import Evaluation
+from jev_judge_mcp.security import SecurityGuard
+from jev_judge_mcp.tools import file_state
 from tests.support.git_repo import repo_with_diff
 from tests.support.jev import FakeProvider
 
@@ -48,24 +50,17 @@ def _clear_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GIT_WORK_TREE", raising=False)
 
 
-def test_gate_refuses_an_undecodable_tests_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_gate_replaces_undecodable_bytes_in_the_tests_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.chdir(Path.cwd())
-    claims = Path("README.md")
-    tests = tmp_path / "tests.log"
-    # A path outside the repo is already refused. An inside-repo file that is not UTF-8 must
-    # still return an envelope, not a traceback.
-    inside = Path("tests.log.bad")
-    inside.write_bytes(b"\xff\xfe not utf-8")
-    try:
-        code = gate_main(["--diff", "HEAD", "--claims", str(claims), "--tests", str(inside)])
-    finally:
-        inside.unlink(missing_ok=True)
-    captured = capsys.readouterr()
-    assert code == 2
-    assert json.loads(captured.out)["error"]["code"] == "invalid_arguments"
-    del tests
+    repo = repo_with_diff(tmp_path)
+    monkeypatch.chdir(repo)
+    (repo / "tests.log").write_bytes(b"good \xff")
+    provider = FakeProvider({})
+    result = cli.run_gate(["--diff", "HEAD~1", "--claims", "claims.json", "--tests", "tests.log"], provider=provider)
+    assert result.exit_code == 0
+    assert any(isinstance(state, dict) and state.get("tests") == "good �" for state, _ in provider.requests)
 
 
 @pytest.mark.parametrize(("args", "tool"), [(["judge", "jev_verify"], "jev_verify"), (["gate"], "jev_gate")])
@@ -116,7 +111,7 @@ def test_gate_refuses_a_path_outside_the_repo(tmp_path: Path, capsys: pytest.Cap
     captured = capsys.readouterr()
     assert code == 2
     envelope = json.loads(captured.out)
-    assert envelope["error"]["code"] == "invalid_arguments"
+    assert envelope["error"]["code"] == "path_outside_scope"
     assert envelope["action"] is None
 
 
@@ -205,7 +200,7 @@ def test_required_completion_hook_asks_when_gate_never_calls_the_provider(
     captured = capsys.readouterr()
     assert code == 0
     assert _ask(captured.out) == "ask"
-    assert "invalid_arguments" in captured.out
+    assert "path_outside_scope" in captured.out
     assert "allow" not in captured.out
 
 
@@ -263,6 +258,13 @@ def test_the_asks_reason_states_the_gate_action_as_a_fact(
     ("command", "matches"),
     [
         pytest.param("git  push", True, id="extra-space"),
+        pytest.param("make test\ngit push", True, id="newline"),
+        pytest.param("TRACE=on git push", True, id="assignment"),
+        pytest.param("if true; then git push; fi", True, id="then"),
+        pytest.param("time git push", True, id="time"),
+        pytest.param("command git push", True, id="command"),
+        pytest.param("/usr/bin/git push", True, id="absolute-git"),
+        pytest.param("echo 'x\ngit push'", False, id="quoted-newline"),
         pytest.param("git\tpush", True, id="tab"),
         pytest.param("git push origin main", True, id="push-with-args"),
         pytest.param("gh pr create", True, id="pr-create"),
@@ -335,16 +337,16 @@ def test_the_completion_range_is_what_the_push_sends(tmp_path: Path, monkeypatch
     empty range means nothing is being pushed and the hook abstains (ADR-0064 amendment)."""
     repo = repo_with_diff(tmp_path)
     monkeypatch.chdir(repo)
-    assert cli.completion_range({"JEV_COMPLETION_DIFF": "HEAD~1"}) == "HEAD~1"
-    assert cli.completion_range({}) == "HEAD~1..HEAD"  # no upstream yet: the last commit
+    assert cli.completion_range({"JEV_COMPLETION_DIFF": "HEAD~1"}, repo) == "HEAD~1"
+    assert cli.completion_range({}, repo) == "HEAD~1..HEAD"  # no upstream yet: the last commit
     branch = subprocess.run(
         ["git", "branch", "--show-current"], check=True, capture_output=True, text=True
     ).stdout.strip()
     subprocess.run(["git", "branch", "base", "HEAD~1"], check=True, capture_output=True)
     subprocess.run(["git", "branch", "--set-upstream-to=base", branch], check=True, capture_output=True)
-    assert cli.completion_range({}) == "@{upstream}..HEAD"  # one commit ahead of the upstream
+    assert cli.completion_range({}, repo) == "@{upstream}..HEAD"  # one commit ahead of the upstream
     subprocess.run(["git", "branch", "-f", "base", "HEAD"], check=True, capture_output=True)
-    assert cli.completion_range({}) is None  # up to date: the push sends nothing
+    assert cli.completion_range({}, repo) is None  # up to date: the push sends nothing
 
 
 def test_an_up_to_date_push_abstains(
@@ -381,7 +383,7 @@ def test_an_up_to_date_push_abstains(
         ("sensitive_label", "secret_file"),
         ("opened_store", "secret_file"),
         ("patch", "invalid_arguments"),
-        ("claims_size", "input_too_large"),
+        ("claims_size", "file_too_large"),
     ],
 )
 def test_gate_guards_local_inputs_before_judgment(
@@ -400,10 +402,10 @@ def test_gate_guards_local_inputs_before_judgment(
         # Simulate an inconclusive preliminary path check on an ordinary test fixture.
         monkeypatch.setenv("JEV_MCP_KEY_FILE", str(repo / "tests.log"))
 
-        def unrecognized_path(_path: Path, _key: Path) -> bool:
+        def unrecognized_path(_path: Path, _guard: SecurityGuard) -> bool:
             return False
 
-        monkeypatch.setattr(cli, "is_secret_store", unrecognized_path)
+        monkeypatch.setattr(file_state, "is_secret_store", unrecognized_path)
     elif case == "patch":
 
         def unsplittable(_text: str) -> None:
@@ -522,3 +524,48 @@ def test_completion_claims_and_provider_deadline(
     fragment = Path(__file__).resolve().parents[2] / "docs/harness/completion.hooks.json"
     timeout = json.loads(fragment.read_text())["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"]
     assert 0 < remaining < timeout
+
+
+@pytest.mark.parametrize("command", ["cd repo && git push", "git -C repo push"])
+def test_completion_uses_the_commands_repository(command: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = repo_with_diff(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    provider = FakeProvider({})
+    completion_hook_main(
+        [],
+        text=json.dumps({"tool_input": {"command": command}}),
+        environ={"JEV_COMPLETION_CLAIMS": str(repo / "claims.json"), "JEV_COMPLETION_TESTS": str(repo / "tests.log")},
+        provider=provider,
+    )
+    assert any("+x = 2" in str(state) for state, _ in provider.requests)
+
+
+@pytest.mark.parametrize("command", ["gh pr create", "gh pr merge"])
+def test_completion_judges_the_branch_against_its_base_after_push(
+    command: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = repo_with_diff(tmp_path)
+    monkeypatch.chdir(repo)
+    for args in (
+        ("branch", "pushed", "HEAD"),
+        ("branch", "--set-upstream-to=pushed"),
+        ("update-ref", "refs/remotes/origin/main", "HEAD~1"),
+        ("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"),
+    ):
+        subprocess.run(["git", *args], check=True, capture_output=True)
+    provider = FakeProvider({})
+    completion_hook_main(
+        [],
+        text=json.dumps({"tool_input": {"command": command}}),
+        environ={"JEV_COMPLETION_CLAIMS": "claims.json", "JEV_COMPLETION_TESTS": "tests.log"},
+        provider=provider,
+    )
+    assert any("+x = 2" in str(state) for state, _ in provider.requests)
+
+
+def test_gate_reports_a_missing_tests_file_by_type(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(repo_with_diff(tmp_path))
+    provider = FakeProvider({})
+    result = cli.run_gate(["--diff", "HEAD~1", "--claims", "claims.json", "--tests", "missing.log"], provider=provider)
+    assert (result.exit_code, result.error_code) == (2, "not_found")
+    assert not provider.requests

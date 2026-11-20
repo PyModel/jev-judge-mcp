@@ -12,14 +12,13 @@ from pathlib import Path
 from typing import NoReturn
 
 from jev_judge_mcp import git
-from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain import NoulCriteria, Question
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.gate_budget import fits_budget
 from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.limits import ASK
 from jev_judge_mcp.process import OutputTooLarge, capture
-from jev_judge_mcp.redact_action import redact_action
+from jev_judge_mcp.redaction.action import redact_action
+from jev_judge_mcp.security import SecurityGuard
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import ToolError
@@ -47,7 +46,7 @@ class Skipped:
     reason: str
 
 
-def own_part(state_text: str, redact: Redactor | None = None) -> Part | None:
+def own_part(state_text: str, guard: SecurityGuard) -> Part | None:
     """The caller's own framing text as one part, credential-redacted; `None` when it is empty.
 
     The text is sent verbatim but for redaction — whitespace included, so a judgment never sees
@@ -55,7 +54,7 @@ def own_part(state_text: str, redact: Redactor | None = None) -> Part | None:
     tool runs; this re-measures after redaction, which can grow a short secret into a
     `[redacted]` marker.
     """
-    text = redact_credential_literals(state_text, redact)
+    text = guard.scrub(state_text)
     if not text.strip():
         return None
     units = length(text)
@@ -67,9 +66,7 @@ def own_part(state_text: str, redact: Redactor | None = None) -> Part | None:
     return Part(OWN_PART, text, units)
 
 
-def file_parts(
-    paths: Sequence[str], key_path: Path | None = None, redact: Redactor | None = None
-) -> tuple[list[Part], list[Skipped]]:
+def file_parts(paths: Sequence[str], guard: SecurityGuard) -> tuple[list[Part], list[Skipped]]:
     """Each caller-named path as one part, or its typed skip; a read refusal never fails the call.
 
     Order is input order, exact duplicate paths are read once, and every refusal is
@@ -84,11 +81,11 @@ def file_parts(
             continue
         seen.add(raw)
         try:
-            content = read_state(resolve_scoped(raw), key_path=key_path, redact=redact)
+            content = read_state(resolve_scoped(raw), guard)
         except ToolError as error:
             skipped.append(Skipped(raw, error.code))
             continue
-        parts.append(Part(redact_credential_literals(raw, redact), content, length(content)))
+        parts.append(Part(guard.scrub(raw), content, length(content)))
     return parts, skipped
 
 
@@ -179,7 +176,7 @@ _COMMAND_OPTIONS: dict[str, dict[str, _Value]] = {
 }
 
 
-def prepare_command(command: str, env: Mapping[str, str], key_path: Path | None) -> tuple[str, list[str]]:
+def prepare_command(command: str, env: Mapping[str, str], guard: SecurityGuard) -> tuple[str, list[str]]:
     """Validate and pin the executable before any state read or judgment."""
     try:
         argv = shlex.split(command, comments=False, posix=True)
@@ -204,7 +201,7 @@ def prepare_command(command: str, env: Mapping[str, str], key_path: Path | None)
         _refuse("the program is outside the read-only command allowlist")
     args, attached_values = _checked_arguments(name, argv[len(prefix) :], options)
     for word in (*argv, *attached_values):
-        _check_path(word, key_path)
+        _check_path(word, guard)
 
     executable = shutil.which(program, path=env.get("PATH", os.defpath))
     if executable is None:
@@ -282,7 +279,7 @@ def _refuse_option(name: str, options: Mapping[str, _Value]) -> NoReturn:
     _refuse(f"{name} requires a listed option with valid value syntax. Allowed options: {', '.join(options)}")
 
 
-def _check_path(word: str, key_path: Path | None) -> None:
+def _check_path(word: str, guard: SecurityGuard) -> None:
     path = Path(word).expanduser() if word.startswith("~/") else Path(word)
     # Git revisions can name files as REV:path.
     colon_path = word.rpartition(":")[2]
@@ -295,7 +292,7 @@ def _check_path(word: str, key_path: Path | None) -> None:
         for spelling in (candidate, resolved):
             if any(part.lower() in _PRIVATE_DIRECTORIES for part in spelling.parts):
                 _refuse("the command reaches a private directory")
-            if is_secret_store(spelling, key_path):
+            if is_secret_store(spelling, guard):
                 _refuse("the command touches a known secret store")
 
 
@@ -390,8 +387,8 @@ def run_command(
     argv: Sequence[str],
     timeout_seconds: int,
     output_units_max: int,
+    guard: SecurityGuard,
     env: Mapping[str, str] | None = None,
-    redactions: Sequence[str] = (),
     is_git: bool = False,
 ) -> Part:
     """Capture the bounded, redacted output of a validated argv."""
@@ -426,9 +423,8 @@ def run_command(
     stdout = result.stdout.decode("utf-8", errors="replace")
     stderr = result.stderr.decode("utf-8", errors="replace")
     block = redact_action(
-        redact_credential_literals(
+        guard.scrub(
             f"exit status: {result.returncode}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
-            Redactor(redactions),
         )
     )
     units = length(block)

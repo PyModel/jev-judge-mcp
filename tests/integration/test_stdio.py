@@ -92,7 +92,8 @@ def test_stdin_eof_exits_cleanly() -> None:
 # A handler that prints: the SDK diverts fd 1 to stderr while serving, so the print must miss the wire.
 _PRINTING_SERVER = """
 import anyio
-from jev_judge_mcp.server import JevMCPServer, configure_logging, serve
+from jev_judge_mcp.redaction.values import configure_logging
+from jev_judge_mcp.server import JevMCPServer, serve
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import Runtime, Toolset
 

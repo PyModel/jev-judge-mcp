@@ -16,7 +16,6 @@ import pytest
 
 from jev_judge_mcp.domain import JsonValue, Question, Usage
 from jev_judge_mcp.domain.questions import ChoiceQuestion, NoulQuestion
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.hook import (
     DESTRUCTIVE_INTENT_THRESHOLD,
     ESTIMATED_CONFIDENCE_THRESHOLD,
@@ -28,6 +27,7 @@ from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.providers import Evaluation, JevProvider, ProviderError, ProviderTimeoutError
 from jev_judge_mcp.providers.base import ProviderName
 from jev_judge_mcp.providers.resolver import resolve_model
+from jev_judge_mcp.redaction.values import Redactor
 from jev_judge_mcp.server import hook_requested, installer_requested
 from jev_judge_mcp.server import main as server_main
 from jev_judge_mcp.settings import Settings, load_settings
@@ -422,11 +422,14 @@ def test_ordinary_code_write_is_judged_and_reads_naturally(capsys: pytest.Captur
     assert "[redacted]" not in state
 
 
+@pytest.mark.parametrize(("cwd", "target"), [("/work/repo", "src/a.py"), ("/", str(Path("/") / "tmp" / "x"))])
 def test_inside_repo_write_judges_the_content_and_stays_silent_without_a_secret(
     capsys: pytest.CaptureFixture[str],
+    cwd: str,
+    target: str,
 ) -> None:
     provider = RecordingProvider({"secret_content": _noul(0.05)})
-    code = main(["gate"], text=_write_event(), environ={}, provider=provider)
+    code = main(["gate"], text=_write_event(target, cwd=cwd), environ={}, provider=provider)
     captured = capsys.readouterr()
     assert code == 0
     assert captured.out == ""
@@ -535,7 +538,11 @@ def test_generic_fallback_allow_stays_silent(capsys: pytest.CaptureFixture[str])
     assert capsys.readouterr().out == ""
 
 
-def test_redacts_the_action_and_keeps_operator_state(capsys: pytest.CaptureFixture[str]) -> None:
+def test_redacts_the_action_and_keeps_operator_state(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = "fixture-http-authorization-value"
+    monkeypatch.setenv("JEV_MCP_HTTP_TOKEN", marker)
     provider = RecordingProvider(
         {
             "effect": _answered("irreversible", 0.75, 0.95, options=_EFFECT),
@@ -548,7 +555,7 @@ def test_redacts_the_action_and_keeps_operator_state(capsys: pytest.CaptureFixtu
     code = main(
         ["gate"],
         text=_event(f"rm -rf {targets} {ordinary}", description=description),
-        environ={"JEV_GATE_STATE": _STATE},
+        environ={"JEV_GATE_STATE": f"{_STATE} {marker}"},
         provider=provider,
     )
     assert code == 0
@@ -556,6 +563,7 @@ def test_redacts_the_action_and_keeps_operator_state(capsys: pytest.CaptureFixtu
     state = provider.states[0]
     assert isinstance(state, str)
     assert _STATE in state
+    assert marker not in state
     assert "working in: /work/repo" in state
     assert targets in state and ordinary in state
     assert "Permission mode: acceptEdits" in state

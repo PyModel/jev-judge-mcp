@@ -7,22 +7,20 @@ per-file read, so the rules stay in one place: the path scope is the server's wo
 with no caller override, known secret stores refuse `secret_file` before any read, the binary
 sniff is a NUL scan of the first bytes of the caller's caps block (the `jev_file_judge` window by
 default), and the size cap is that block's `file_units_max` measured in UTF-16 units (ADR-0005).
-What does get read is redacted
-with the ADR-0076 credential-literal detector before it becomes state, so a judgment about a
-config file never ships its secrets to the provider.
+The per-call guard scrubs configured secrets and credential literals before the text becomes State.
 """
 
+import errno
 import logging
 import os
-import stat
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import NoReturn
 
-from jev_judge_mcp.credential_literal import redact_credential_literals
-from jev_judge_mcp.errors import Redactor
+from jev_judge_mcp.fsutil import read_bounded
 from jev_judge_mcp.limits import FILE_JUDGE, FileJudgeCaps, FilesJudgeCaps
+from jev_judge_mcp.security import SecurityGuard
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.base import ToolError
 
@@ -47,20 +45,20 @@ _SECRET_ENV_STANDINS = frozenset({".env.example", ".env.sample", ".env.template"
 the checked-in stand-ins, so a real environment file is never read but its redacted example is."""
 
 
-def is_secret_store(path: Path, key_path: Path | None = None) -> bool:
+def is_secret_store(path: Path, guard: SecurityGuard) -> bool:
     """Whether the file's name is a known secret store: such files are never read.
 
     Matched on the resolved path's name, so a symlink's target name decides. The configured
     key is also excluded by path and file identity.
     """
-    if key_path is not None:
-        try:
-            if path.absolute() == key_path.absolute() or path == key_path.resolve() or path.samefile(key_path):
-                return True
-        except FileNotFoundError:
-            pass
-        except (OSError, RuntimeError):
+    key_path = guard.key_path
+    try:
+        if path.absolute() == key_path.absolute() or path == key_path.resolve() or path.samefile(key_path):
             return True
+    except FileNotFoundError:
+        pass
+    except (OSError, RuntimeError):
+        return True
     name = path.name.lower()
     if name in _SECRET_EXACT:
         return True
@@ -112,42 +110,32 @@ def pinned_directory(directory: Path) -> Generator[int]:
 
 def read_state(
     path: Path,
+    guard: SecurityGuard,
     caps: FileJudgeCaps | FilesJudgeCaps = FILE_JUDGE,
-    *,
-    key_path: Path | None = None,
-    redact: Redactor | None = None,
 ) -> str:
     """Read only the validated descriptor, up to the byte ceiling plus one sentinel byte."""
-    if is_secret_store(path, key_path):
+    if is_secret_store(path, guard):
         refuse("secret_file", f"{path.name} is a known secret store and is never read")
-    limit = 4 * caps.file_units_max
+
+    def inspect(info: os.stat_result) -> None:
+        try:
+            key_info = guard.key_path.stat()
+        except FileNotFoundError:
+            return
+        if os.path.samestat(key_info, info):
+            refuse("secret_file", f"{path.name} is the active key store")
+
     try:
         with pinned_directory(path.parent) as directory:
-            fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-        try:
-            info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode):
-                refuse("not_a_file", f"path is not a regular file: {path}")
-            if key_path is not None:
-                try:
-                    key_info = key_path.stat()
-                except FileNotFoundError:
-                    pass
-                else:
-                    if os.path.samestat(key_info, info):
-                        refuse("secret_file", f"{path.name} is the active key store")
-            if info.st_size > limit:
-                refuse("file_too_large", f"file exceeds the {caps.file_units_max:,}-unit state cap: {path}")
-            with os.fdopen(fd, "rb", closefd=False) as handle:
-                data = handle.read(limit + 1)
-        finally:
-            os.close(fd)
+            data = read_bounded(Path(path.name), dir_fd=directory, max_bytes=4 * caps.file_units_max, inspect=inspect)
     except FileNotFoundError:
         refuse("not_found", f"file not found: {path}")
-    except (OSError, ValueError) as error:
+    except OSError as error:
+        if error.errno == errno.EFBIG:
+            refuse("file_too_large", f"file exceeds the {caps.file_units_max:,}-unit state cap: {path}")
         refuse("not_a_file", f"path is not a readable file: {path} ({error})")
-    if len(data) > limit:
-        refuse("file_too_large", f"file exceeds the {caps.file_units_max:,}-unit state cap: {path}")
+    except ValueError:
+        refuse("not_a_file", f"path is not a readable file: {path}")
     if b"\x00" in data[: caps.binary_sniff_bytes]:
         refuse("binary_file", f"file looks binary (NUL byte in the first {caps.binary_sniff_bytes} bytes): {path}")
     content = data.decode("utf-8", errors="replace")
@@ -155,4 +143,4 @@ def read_state(
         refuse("file_too_large", f"file exceeds the {caps.file_units_max:,}-unit state cap: {path}")
     # Redaction is the last step, so the cap measures the file as it is on disk, and a clean file
     # passes through unchanged (the detector is the identity without a literal).
-    return redact_credential_literals(content, redact)
+    return guard.scrub(content)

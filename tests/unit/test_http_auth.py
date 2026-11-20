@@ -127,13 +127,22 @@ def test_the_token_generation_hint_is_in_the_refusal(monkeypatch: pytest.MonkeyP
 # --- the redaction floor (every configured secret) ---
 
 
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        ("TYPESAFE_API_KEY", "abc"),
+        ("TYPESAFE_BASE_URL", "https://username:xy@fixture.invalid"),
+    ],
+)
 def test_a_short_configured_secret_refuses_startup_naming_the_variable(
     monkeypatch: pytest.MonkeyPatch,
+    variable: str,
+    value: str,
 ) -> None:
-    settings = settings_with(monkeypatch, TYPESAFE_API_KEY="abc")
-    with pytest.raises(SystemExit, match="TYPESAFE_API_KEY") as exc:
+    settings = settings_with(monkeypatch, **{variable: value})
+    with pytest.raises(SystemExit, match=variable) as exc:
         ensure_secrets_redactable(settings)
-    assert "abc" not in str(exc.value)
+    assert value not in str(exc.value)
 
 
 def test_an_http_token_under_the_redaction_floor_is_refused_too(monkeypatch: pytest.MonkeyPatch) -> None:

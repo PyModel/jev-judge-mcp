@@ -22,12 +22,10 @@ from typing import Any, cast
 
 import anyio
 
-from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain import ChoiceQuestion, ScoreQuestion
-from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import FILE_JUDGE, FILES_JUDGE
 from jev_judge_mcp.providers import Evaluation, ProviderConfigError
+from jev_judge_mcp.security import SecurityGuard
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, code_of, define, frame
 from jev_judge_mcp.tools.file_judge import (
     KIND_REFINEMENT,
@@ -299,8 +297,7 @@ def plan(
     scope: Path | None = None,
     *,
     recursive: bool = False,
-    key_path: Path | None = None,
-    redact: Redactor | None = None,
+    guard: SecurityGuard,
     check_cancelled: Callable[[], None] = lambda: None,
 ) -> tuple[list[tuple[str, str]], list[dict[str, str]]]:
     """Expand, prune, and read — the whole deterministic half of the tool, before any provider call.
@@ -364,14 +361,11 @@ def plan(
                 discovery_first.append(text)
             return False
         try:
-            resolved = path.resolve()
-        except (OSError, RuntimeError):
+            resolved = resolve_scoped(str(path), root)
+        except ToolError:
             skip(text, "outside_scope")
             return True
         if resolved in seen:
-            return True
-        if not resolved.is_relative_to(root):
-            skip(path.relative_to(root).as_posix(), "outside_scope")
             return True
         if traversed and any(part in SKIP_DIRECTORIES for part in resolved.relative_to(root).parts):
             return True
@@ -449,7 +443,7 @@ def plan(
                 cap_first.append(text)
             continue
         try:
-            content = read_state(resolved, caps=FILES_JUDGE, key_path=key_path, redact=redact)
+            content = read_state(resolved, guard, caps=FILES_JUDGE)
         except ToolError as error:
             skip(text, _SKIP_REASONS[error.code])
             continue
@@ -492,19 +486,18 @@ def plan(
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     kind: str = args["kind"]
     question = build_question(kind, args["instructions"], args["criteria"])
-    redact = Redactor(await anyio.to_thread.run_sync(redaction_values, runtime.settings))
+    guard = await runtime.security_guard()
     survivors, skipped = await anyio.to_thread.run_sync(
         lambda: plan(
             args["paths"],
             recursive=bool(args.get("recursive", False)),
-            key_path=stored_key_path(runtime.settings),
-            redact=redact,
+            guard=guard,
             check_cancelled=anyio.from_thread.check_cancelled,
         )
     )
 
     questions = {QUESTION_ID: question}
-    states = [{"path": redact_credential_literals(path, redact), "content": content} for path, content in survivors]
+    states = [{"path": guard.scrub(path), "content": content} for path, content in survivors]
     evaluations: list[Evaluation | None] = [None] * len(survivors)
     failures: list[tuple[int, dict[str, str]]] = []
     refusals: list[tuple[int, Exception]] = []

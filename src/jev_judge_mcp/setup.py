@@ -13,11 +13,11 @@ import getpass
 from collections.abc import Callable, Sequence
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.keyfile import normalized_key, store_key
 from jev_judge_mcp.providers import ProviderError
 from jev_judge_mcp.providers.resolver import resolve_model
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+from jev_judge_mcp.redaction.values import Redactor
 from jev_judge_mcp.settings import Settings, load_settings
 
 KEY_URL = "https://console.typesafe.ai/settings/keys"

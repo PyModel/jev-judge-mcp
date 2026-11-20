@@ -11,14 +11,13 @@ import pytest
 import respx
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Usage
-from jev_judge_mcp.errors import REDACTED, RedactingFilter, Redactor
 from jev_judge_mcp.providers import NO_RETRIES, Evaluation, ProviderError
 from jev_judge_mcp.providers.base import decode_body, parse_envelope
 from jev_judge_mcp.providers.cloudflare import CloudflareProvider, cloudflare_slug
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.openrouter import openrouter_slug
+from jev_judge_mcp.redaction.values import REDACTED, RedactingFilter, Redactor, configure_logging
 from jev_judge_mcp.serialize import stringify_compact
-from jev_judge_mcp.server import configure_logging
 from jev_judge_mcp.text import head
 from tests.support.retries import fast_retries as fast_retries
 

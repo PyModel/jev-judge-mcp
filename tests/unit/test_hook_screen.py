@@ -183,14 +183,19 @@ def test_object_tool_response_is_judged_as_serialized_state(capsys: pytest.Captu
     assert "build ok" in state
 
 
-def test_judged_text_is_redacted_before_the_provider(capsys: pytest.CaptureFixture[str]) -> None:
+def test_judged_text_is_redacted_before_the_provider(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = "fixture-http-authorization-value"
+    monkeypatch.setenv("JEV_MCP_HTTP_TOKEN", marker)
     provider = FakeProvider({"screen": {"noul": 0.9}})
-    code = main(["screen"], text=_event("deploy --token sk-SECRET123 done"), environ={}, provider=provider)
+    code = main(["screen"], text=_event(f"deploy --token sk-SECRET123 done {marker}"), environ={}, provider=provider)
     assert code == 0
     capsys.readouterr()
     state = provider.requests[0][0]
     assert isinstance(state, str)
     assert "sk-SECRET123" not in state
+    assert marker not in state
     assert "[redacted]" in state
 
 

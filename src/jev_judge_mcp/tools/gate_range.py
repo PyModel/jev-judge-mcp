@@ -15,10 +15,9 @@ from typing import Any
 
 import anyio
 
-from jev_judge_mcp.credential_literal import has_private_key_boundary, redact_credential_literals
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.git import GitDiffError, GitDiffTooLarge, diff_argument, repo_root, scoped_range, untracked_paths
-from jev_judge_mcp.keyfile import redaction_values, stored_key_path
+from jev_judge_mcp.redaction.literals import has_private_key_boundary
+from jev_judge_mcp.security import SecurityGuard
 from jev_judge_mcp.tools import gate
 from jev_judge_mcp.tools.arguments import Refinement
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define
@@ -75,19 +74,16 @@ DEFINITION = define(
 
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     passed: dict[str, Any] = {key: args[key] for key in _PASSED if key in args}
-    key_path = stored_key_path(runtime.settings)
-    redact = Redactor(await anyio.to_thread.run_sync(redaction_values, runtime.settings))
+    guard = await runtime.security_guard()
     tests_path: str | None = args.get("tests_path")
     if tests_path is not None:
-        tests = await anyio.to_thread.run_sync(
-            lambda: read_state(resolve_scoped(tests_path), key_path=key_path, redact=redact)
-        )
+        tests = await anyio.to_thread.run_sync(lambda: read_state(resolve_scoped(tests_path), guard))
         passed["tests"] = tests
         # This reader read the log, so the review weighs it as read, not self-reported (ADR-0067).
         passed["tests_sha256"] = hashlib.sha256(tests.encode("utf-8")).hexdigest()
     try:
         files, skipped = await anyio.to_thread.run_sync(
-            lambda: read_range(args["range"], key_path, redact, cwd=Path.cwd(), include_untracked=True)
+            lambda: read_range(args["range"], guard, cwd=Path.cwd(), include_untracked=True)
         )
     except GitDiffTooLarge as error:
         raise ToolError(str(error), code="input_too_large") from error
@@ -101,7 +97,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
 
 
 def read_range(
-    rev_range: str, key_path: Path, redact: Redactor, *, cwd: Path, include_untracked: bool = False
+    rev_range: str, guard: SecurityGuard, *, cwd: Path, include_untracked: bool = False
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Read and guard the diff inside the caller's scope: the CLI repository root or the MCP working directory."""
     root = repo_root(cwd)
@@ -116,7 +112,7 @@ def read_range(
         )
     kept: list[dict[str, str]] = []
     skipped: list[dict[str, str]] = [
-        {"path": redact_credential_literals(path, redact), "reason": "untracked"}
+        {"path": guard.scrub(path), "reason": "untracked"}
         for path in (untracked_paths(cwd) if include_untracked and ".." not in revision else [])
     ]
     if len(diff) != len(complete):
@@ -131,11 +127,11 @@ def read_range(
         paths = [root / origin / item["path"] for origin in origins]
         if not paths or any(not path.is_relative_to(cwd) for path in paths):
             raise GitDiffError("git patch origin is outside the working directory")
-        label = redact_credential_literals(item["path"], redact)
+        label = guard.scrub(item["path"])
         if (
             has_private_key_boundary(full)
             or label != item["path"]
-            or any(is_secret_store(path, key_path) for path in paths)
+            or any(is_secret_store(path, guard) for path in paths)
         ):
             skipped.append({"path": label, "reason": "secret_file"})
         elif any(
@@ -144,7 +140,7 @@ def read_range(
         ):
             skipped.append({"path": label, "reason": "binary"})
         else:
-            kept.append({"path": item["path"], "patch": redact_credential_literals(patch, redact)})
+            kept.append({"path": item["path"], "patch": guard.scrub(patch)})
     if not kept and not skipped:
         raise GitDiffError("git diff was empty")
     if not kept and all(item["reason"] == "secret_file" for item in skipped):

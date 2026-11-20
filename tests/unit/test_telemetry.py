@@ -12,7 +12,7 @@ import pytest
 from jev_judge_mcp import validation
 from jev_judge_mcp.domain import JsonValue, Usage
 from jev_judge_mcp.providers import Evaluation, ProviderError
-from jev_judge_mcp.server import configure_logging
+from jev_judge_mcp.redaction.values import configure_logging
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.telemetry import CAP_SCOPES, Span, Telemetry, describe, span
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset

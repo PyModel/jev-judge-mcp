@@ -29,6 +29,8 @@ from jev_judge_mcp.providers import (
     resolve_model,
     resolve_provider,
 )
+from jev_judge_mcp.redaction.values import register_log_secrets
+from jev_judge_mcp.security import SecurityGuard, build_guard
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.telemetry import ACTIONS, Span, Telemetry
 from jev_judge_mcp.tools.arguments import ArgumentsError, Refinement
@@ -239,6 +241,14 @@ class Runtime:
             await self._regex_executor.warm()
         except Exception:
             logger.warning("regex pool did not warm; workers will start on demand", exc_info=True)
+
+    async def security_guard(self) -> SecurityGuard:
+        try:
+            guard = await anyio.to_thread.run_sync(build_guard, self.settings)
+        except ValueError as error:
+            raise ProviderConfigError(str(error)) from None
+        register_log_secrets(guard.redact)
+        return guard
 
     async def ask(self, state: Payload, questions: Mapping[str, Question]) -> Evaluation:
         """Ask Jev `questions` about `state`. Raises `ProviderError` with redacted text.

@@ -18,7 +18,7 @@ from jev_judge_mcp.tools.ask_state import (
     question_units,
     run_command,
 )
-from tests.support.jev import FakeProvider, call_tool
+from tests.support.jev import TEST_GUARD, FakeProvider, call_tool
 
 pytestmark = pytest.mark.anyio
 
@@ -47,7 +47,7 @@ def allow_args(**extra: Any) -> dict[str, Any]:
 
 
 def test_own_state_is_redacted_and_measured_but_never_stripped() -> None:
-    part = own_part(f"token: {TOKEN}\n\n")
+    part = own_part(f"token: {TOKEN}\n\n", TEST_GUARD)
     assert part is not None
     assert TOKEN not in part.text and "[redacted]" in part.text
     assert part.text.endswith("\n\n")
@@ -56,19 +56,19 @@ def test_own_state_is_redacted_and_measured_but_never_stripped() -> None:
 
 def test_own_state_over_the_cap_refuses_typed() -> None:
     with pytest.raises(Exception) as raised:
-        own_part("a" * (ASK.state_units_max + 1))
+        own_part("a" * (ASK.state_units_max + 1), TEST_GUARD)
     assert getattr(raised.value, "code", "") == "input_too_large"
 
 
 def test_whitespace_only_own_state_is_no_part() -> None:
-    assert own_part("   \n\t ") is None
+    assert own_part("   \n\t ", TEST_GUARD) is None
 
 
 def test_file_parts_skip_refused_paths_typed_and_read_duplicates_once(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "a.txt").write_text("alpha", encoding="utf-8")
     (tmp_path / "b.bin").write_bytes(b"ok\x00")
-    parts, skipped = file_parts(["a.txt", "missing.txt", "b.bin", ".env", "a.txt"])
+    parts, skipped = file_parts(["a.txt", "missing.txt", "b.bin", ".env", "a.txt"], TEST_GUARD)
     assert [part.name for part in parts] == ["a.txt"]
     assert [(skip.path, skip.reason) for skip in skipped] == [
         ("missing.txt", "not_found"),
@@ -82,7 +82,7 @@ def test_file_parts_skip_refused_paths_typed_and_read_duplicates_once(tmp_path: 
 
 def test_command_output_is_redacted_and_carries_exit_status_and_stderr() -> None:
     script = f'import sys; print("done"); print("token:{TOKEN}", file=sys.stderr)'
-    part = run_command([sys.executable, "-c", script], timeout_seconds=10, output_units_max=1_000)
+    part = run_command([sys.executable, "-c", script], timeout_seconds=10, output_units_max=1_000, guard=TEST_GUARD)
     assert TOKEN not in part.text and "[redacted]" in part.text
     assert "exit status: 0" in part.text
     assert "--- stderr ---" in part.text and "token:[redacted]" in part.text
@@ -90,14 +90,19 @@ def test_command_output_is_redacted_and_carries_exit_status_and_stderr() -> None
 
 def test_command_timeout_kills_the_run_and_refuses_typed() -> None:
     with pytest.raises(Exception) as raised:
-        run_command([sys.executable, "-c", "import time; time.sleep(5)"], timeout_seconds=1, output_units_max=1_000)
+        run_command(
+            [sys.executable, "-c", "import time; time.sleep(5)"],
+            timeout_seconds=1,
+            output_units_max=1_000,
+            guard=TEST_GUARD,
+        )
     assert getattr(raised.value, "code", "") == "command_timeout"
     assert "1-second timeout" in str(raised.value)
 
 
 def test_command_output_over_the_cap_refuses_after_the_run() -> None:
     with pytest.raises(Exception) as raised:
-        run_command([sys.executable, "-c", "print('hello')"], timeout_seconds=10, output_units_max=1)
+        run_command([sys.executable, "-c", "print('hello')"], timeout_seconds=10, output_units_max=1, guard=TEST_GUARD)
     assert getattr(raised.value, "code", "") == "output_too_large"
 
 
@@ -107,7 +112,7 @@ def test_a_background_child_never_holds_the_output_open_or_outlives_the_run() ->
         "import subprocess, sys; print('first'); "
         "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); print('second')"
     )
-    part = run_command([sys.executable, "-c", script], timeout_seconds=10, output_units_max=1_000)
+    part = run_command([sys.executable, "-c", script], timeout_seconds=10, output_units_max=1_000, guard=TEST_GUARD)
     assert "first" in part.text and "second" in part.text  # the parent's output is never lost
     assert time.monotonic() - started < 5  # the stray child dies with the run; no join backstop fires
 
@@ -231,5 +236,5 @@ def test_scout_012_command_receives_only_operating_environment(monkeypatch: pyte
     assert "BENIGN_PARENT_MARKER" not in env
     assert env["LANG"] == "C" and env["PATH"]
     with patch("subprocess.Popen", side_effect=OSError("fixture")) as spawn, pytest.raises(ToolError):
-        run_command([os.path.abspath(sys.executable)], 1, 100)
+        run_command([os.path.abspath(sys.executable)], 1, 100, guard=TEST_GUARD)
     assert spawn.call_args.kwargs["env"] == env

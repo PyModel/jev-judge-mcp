@@ -14,16 +14,11 @@ gets judged.
 
 import os
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
-from jev_judge_mcp.credential_literal import (
-    REDACTED,
-    has_credential_field,
-    has_credential_literal,
-    redact_credential_literals,
-)
 from jev_judge_mcp.domain.answers import ChoiceAnswer
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.domain.questions import ChoiceQuestion, NoulCriteria, NoulQuestion, Question
@@ -34,9 +29,16 @@ from jev_judge_mcp.providers import (
     JevProvider,
     resolve_provider,
 )
-from jev_judge_mcp.redact_action import redact_action
+from jev_judge_mcp.redaction.action import redact_action
+from jev_judge_mcp.redaction.literals import (
+    has_credential_field,
+    has_credential_literal,
+)
+from jev_judge_mcp.security import SecurityGuard
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.text import length
+from jev_judge_mcp.tools.base import ToolError
+from jev_judge_mcp.tools.file_state import resolve_scoped
 from jev_judge_mcp.validation.choice import margin, validate_choice
 from jev_judge_mcp.validation.noul import validate_noul
 
@@ -110,7 +112,6 @@ class _Plan:
 
     tool: str
     containment: _Containment
-    state: str
     credential_matched: bool = False
 
 
@@ -167,7 +168,7 @@ def main(
         return fail_open_or_ask(required, _FAIL_OPEN_STDIN, "stdin was not hook-event JSON")
     if not is_json_object(parsed):
         return fail_open_or_ask(required, _FAIL_OPEN_STDIN, "stdin was not hook-event JSON")
-    plan = _plan(parsed, env.get("JEV_GATE_STATE"))
+    plan = _plan(parsed)
     if plan.containment == "outside":
         # Deterministic evidence takes precedence: this denial needs no settings, no logging, and
         # no provider, so none of them is built (ADR-0076).
@@ -184,8 +185,9 @@ def main(
     prepared = prepare(provider, resolve=resolve_provider)
     if isinstance(prepared, HookFailure):
         return fail_open_or_ask(required, f"jev-judge-mcp hook: fail-open ({prepared.detail})\n", "auth")
-    chosen, model = prepared
-    judged = judge(chosen, plan.state, _questions(plan), model)
+    chosen, model, guard = prepared
+    state = event_state(parsed, env.get("JEV_GATE_STATE"), plan, guard)
+    judged = judge(chosen, state, _questions(plan), model)
     # Any failure past the wiring — timeout, provider error, a cancelled loop — is `unreachable`.
     outcome = _Outcome("ask", _ask_reason("unreachable")) if isinstance(judged, HookFailure) else _outcome(plan, judged)
     if outcome.kind == "allow":
@@ -274,64 +276,35 @@ def _questions(plan: _Plan) -> dict[str, Question]:
     return {_QUESTION_ID: ChoiceQuestion(instructions=_QUESTION, criteria={"allow": _ALLOW, "deny": _DENY})}
 
 
-def _plan(event: dict[str, object], extra: str | None) -> _Plan:
+def _plan(event: dict[str, object]) -> _Plan:
     tool = _text(event.get("tool_name"), "unknown")
     if tool not in _WRITES:
-        return _Plan(tool, "unknown", event_state(event, extra, "unknown", redact_action))
-    containment = _containment(event)
-    if containment == "outside":
-        return _Plan(tool, containment, "")
-
-    credential_matched = False
-
-    def redact_input(value: object, field: str = "") -> object:
-        nonlocal credential_matched
-        if isinstance(value, str):
-            if field and has_credential_field(field, value):
-                credential_matched = True
-                return REDACTED
-            redacted = redact_credential_literals(value)
-            credential_matched |= redacted != value
-            return redacted
-        elif is_json_object(value):
-            for key in value:
-                if has_credential_literal(key):
-                    credential_matched = True
-            return {key: redact_input(member, key) for key, member in value.items()}
-        elif isinstance(value, list):
-            items: list[object] = value  # pyright: ignore[reportUnknownVariableType]
-            return [redact_input(item) for item in items]
-        return value
-
-    # Scan decoded strings so JSON escaping cannot hide literal syntax or word boundaries.
-    value = redact_input(event.get("tool_input", {}))
-    if credential_matched:
-        return _Plan(tool, containment, "", credential_matched=True)
-    state = event_state(event, extra, containment, redact_credential_literals, input_text=_render_input(value))
-    return _Plan(tool, containment, state)
-
-
-def _containment(event: dict[str, object]) -> _Containment:
-    """Whether the write target resolves inside the working directory, computed before any call."""
+        return _Plan(tool, "unknown")
     cwd = event.get("cwd")
-    tool_input = event.get("tool_input")
-    target_raw = tool_input.get("file_path") if is_json_object(tool_input) else None
-    if not (isinstance(cwd, str) and cwd and isinstance(target_raw, str) and target_raw):
-        return "unknown"
-    expanded = os.path.expanduser(target_raw)
-    base = os.path.realpath(cwd)
-    target = os.path.realpath(expanded if os.path.isabs(expanded) else os.path.join(base, expanded))
-    return "inside" if target == base or target.startswith(base + os.sep) else "outside"
+    tool_input = event.get("tool_input", {})
+    target = tool_input.get("file_path") if is_json_object(tool_input) else None
+    containment: _Containment = "unknown"
+    if isinstance(cwd, str) and cwd and isinstance(target, str) and target:
+        try:
+            resolve_scoped(os.path.expanduser(target), Path(cwd))
+        except ToolError:
+            return _Plan(tool, "outside")
+        containment = "inside"
+    return _Plan(tool, containment, _has_literal(tool_input))
 
 
-def event_state(
-    event: dict[str, object],
-    extra: str | None,
-    containment: _Containment,
-    redact: Callable[[str], str],
-    *,
-    input_text: str | None = None,
-) -> str:
+def _has_literal(value: object, field: str = "") -> bool:
+    if isinstance(value, str):
+        return has_credential_field(field, value) or has_credential_literal(value)
+    if is_json_object(value):
+        return any(has_credential_literal(key) or _has_literal(member, key) for key, member in value.items())
+    if isinstance(value, list):
+        items: list[object] = value  # pyright: ignore[reportUnknownVariableType]
+        return any(_has_literal(item) for item in items)
+    return False
+
+
+def event_state(event: dict[str, object], extra: str | None, plan: _Plan, guard: SecurityGuard) -> str:
     lines = [
         f"An autonomous coding agent is working in: {_text(event.get('cwd'), 'unknown')}",
         f"Permission mode: {_text(event.get('permission_mode'), 'default')}",
@@ -340,17 +313,18 @@ def event_state(
         lines.append(extra.strip())
     lines.append("The agent proposes the tool call below. Judge only whether it is safe to run without human review.")
     parts = [f"Tool: {_text(event.get('tool_name'), 'unknown')}"]
-    if containment == "inside":
+    if plan.containment == "inside":
         parts.append("Repo containment: the target path resolves inside the working directory (computed in code).")
-    elif containment == "unknown":
+    elif plan.containment == "unknown":
         parts.append("Repo containment: the target path could not be checked against the working directory.")
     description = event.get("description")
     if isinstance(description, str) and description:
-        parts.append(f"Description: {redact(description)}")
-    if input_text is None:
-        input_text = redact(_render_input(event.get("tool_input", {})))
-    parts.append(f"Input: {input_text}")
-    return "\n".join(lines) + "\n\n--- proposed action ---\n" + "\n".join(parts)
+        parts.append(f"Description: {description}")
+    parts.append(f"Input: {_render_input(event.get('tool_input', {}))}")
+    action = guard.scrub("\n".join(parts))
+    if plan.tool not in _WRITES:
+        action = redact_action(action)
+    return guard.scrub("\n".join(lines)) + "\n\n--- proposed action ---\n" + action
 
 
 def _render_input(value: object) -> str:

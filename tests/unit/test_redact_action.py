@@ -11,9 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from jev_judge_mcp.redact_action import REDACTED, redact_action
+from jev_judge_mcp.redaction.action import redact_action
+from jev_judge_mcp.redaction.values import REDACTED
 
-_MODULE = Path(__file__).resolve().parents[2] / "src" / "jev_judge_mcp" / "redact_action.py"
+_MODULE = Path(__file__).resolve().parents[2] / "src" / "jev_judge_mcp" / "redaction" / "action.py"
 
 # 16, 20, 10, 16, and 30 are the source patterns' minimum lengths.
 _SK = "sk-FAKE000000000000"

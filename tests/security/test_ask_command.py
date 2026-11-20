@@ -13,7 +13,7 @@ from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from jev_judge_mcp.tools.ask_state import run_command
-from tests.support.jev import FakeProvider
+from tests.support.jev import TEST_GUARD, FakeProvider
 
 pytestmark = pytest.mark.anyio
 
@@ -139,7 +139,9 @@ async def test_the_child_env_lacks_configured_secrets_and_output_redacts_them(tm
     a secret value that still reaches the output is redacted on the way to the provider."""
     key = "configured-fixture-secret"
     monkeypatch.setenv("JEV_API_KEY", key)
-    (tmp_path / "notes.txt").write_text(f"literal={key}\n")
+    url_fixture = "opaque-fixture-password"
+    monkeypatch.setenv("TYPESAFE_BASE_URL", f"https://username:{url_fixture}@fixture.invalid")
+    (tmp_path / "notes.txt").write_text(f"literal={key}\npassword={url_fixture}\n")
     spawn = Mock(wraps=subprocess.Popen)
     monkeypatch.setattr(subprocess, "Popen", spawn)
     provider = FakeProvider({"q0": {"noul": 0.9}})
@@ -149,6 +151,7 @@ async def test_the_child_env_lacks_configured_secrets_and_output_redacts_them(tm
     output = str(provider.requests[0][0])
     assert key not in output
     assert "literal=[redacted]" in output
+    assert url_fixture not in output and "password=[redacted]" in output
 
 
 async def test_a_flooding_command_is_killed_at_the_cap(tmp_path: Any, monkeypatch: Any) -> None:
@@ -159,7 +162,7 @@ async def test_a_flooding_command_is_killed_at_the_cap(tmp_path: Any, monkeypatc
     head = shutil.which("head")
     assert head is not None
     with pytest.raises(Exception) as raised:
-        run_command([head, "-n", "100000", str(flood)], timeout_seconds=15, output_units_max=100)
+        run_command([head, "-n", "100000", str(flood)], timeout_seconds=15, output_units_max=100, guard=TEST_GUARD)
     assert getattr(raised.value, "code", "") == "output_too_large"
     assert "killed" in str(raised.value)
     assert time.monotonic() - started < 10  # the pipes never buffer a flood

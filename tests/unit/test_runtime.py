@@ -12,11 +12,11 @@ import anyio
 import pytest
 
 from jev_judge_mcp.domain import JsonValue, NoulCriteria, NoulQuestion, Question, Usage
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.extract.executor import InProcessRegexExecutor
 from jev_judge_mcp.extract.worker import ProcessRegexExecutor
 from jev_judge_mcp.providers import DEFAULT_RETRY_POLICY, Evaluation, JevProvider
 from jev_judge_mcp.providers.base import ProviderName
+from jev_judge_mcp.redaction.values import Redactor
 from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.tools.base import Runtime
 

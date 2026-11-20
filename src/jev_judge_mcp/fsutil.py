@@ -10,6 +10,7 @@ import errno
 import os
 import stat
 import tempfile
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import Literal
@@ -19,24 +20,42 @@ from jev_judge_mcp.settings import Settings
 DIR_MODE = 0o700
 
 
-def read_bounded(path: Path, *, max_bytes: int, follow_symlinks: bool = False) -> bytes:
-    """Read one regular file, enforcing the byte limit even when it grows after open.
+class NotRegularFile(OSError):
+    """A descriptor that cannot be read as file data."""
 
-    Raise OSError for an unsuitable file. Nonblocking open lets fstat reject a pipe without
-    waiting for a writer. Callers editing an explicitly symlinked config can opt into following it.
-    """
+
+def read_bounded(
+    path: Path,
+    *,
+    max_bytes: int,
+    dir_fd: int | None = None,
+    follow: bool = False,
+    tail: bool = False,
+    inspect: Callable[[os.stat_result], None] | None = None,
+) -> bytes:
+    """Read a bounded regular-file snapshot after checking its opened descriptor."""
     if max_bytes < 0:
         raise ValueError("max_bytes must be nonnegative")
-    flags = os.O_NONBLOCK | os.O_NOCTTY | (0 if follow_symlinks else os.O_NOFOLLOW)
-    with open(path, "rb", opener=lambda name, mode: os.open(name, mode | flags)) as handle:
-        info = os.fstat(handle.fileno())
+    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY | (0 if follow else os.O_NOFOLLOW)
+    fd = os.open(path, flags, dir_fd=dir_fd)
+    try:
+        info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
-            raise OSError(errno.EINVAL, "expected a regular file", str(path))
-        if info.st_size <= max_bytes:
+            raise NotRegularFile(errno.EINVAL, "expected a regular file", str(path))
+        if inspect is not None:
+            inspect(info)
+        if not tail and info.st_size > max_bytes:
+            raise OSError(errno.EFBIG, f"file exceeds {max_bytes} bytes", str(path))
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            if tail:
+                handle.seek(max(0, info.st_size - max_bytes))
+                return handle.read(max_bytes)
             data = handle.read(max_bytes + 1)
-            if len(data) <= max_bytes:
-                return data
-    raise OSError(errno.EFBIG, f"file exceeds {max_bytes} bytes", str(path))
+        if len(data) > max_bytes:
+            raise OSError(errno.EFBIG, f"file exceeds {max_bytes} bytes", str(path))
+        return data
+    finally:
+        os.close(fd)
 
 
 def xdg_home(kind: Literal["cache", "config"], settings: Settings) -> Path:

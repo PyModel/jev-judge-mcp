@@ -18,7 +18,6 @@ from typing import cast
 from pydantic import SecretStr
 
 from jev_judge_mcp.domain.json import decode_json, is_json_object
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.fsutil import read_bounded
 from jev_judge_mcp.keyfile import redaction_values, stored_key, stored_key_path
 from jev_judge_mcp.policy.thresholds import (
@@ -37,6 +36,7 @@ from jev_judge_mcp.policy.thresholds import (
 )
 from jev_judge_mcp.providers import PRIMARY_CREDENTIAL, ProviderConfigError
 from jev_judge_mcp.providers.resolver import KeySource, select_provider, typesafe_key
+from jev_judge_mcp.redaction.values import Redactor
 from jev_judge_mcp.settings import Settings, load_settings, unexpanded_references
 from jev_judge_mcp.tools import TOOLS
 
@@ -211,7 +211,7 @@ def _expanded(rules: Sequence[str]) -> tuple[str, ...]:
 
 def _allow_rules(path: Path) -> tuple[str, ...]:
     try:
-        data = read_bounded(path, max_bytes=_MAX_CLAUDE_SETTINGS_BYTES, follow_symlinks=True)
+        data = read_bounded(path, max_bytes=_MAX_CLAUDE_SETTINGS_BYTES, follow=True)
         parsed = decode_json(data.decode("utf-8"))
     except (OSError, ValueError):
         return ()

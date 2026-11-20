@@ -25,10 +25,10 @@ import pytest
 
 from jev_judge_mcp import keyfile
 from jev_judge_mcp.domain import Question
-from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.limits import REVIEW
 from jev_judge_mcp.providers import NO_RETRIES, Evaluation, JevProvider
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+from jev_judge_mcp.redaction.values import Redactor
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from tests.support.jev import text_of

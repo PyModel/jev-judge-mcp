@@ -79,14 +79,46 @@
       "surface": "provider",
       "tier": "both",
       "status": "sanctioned",
-      "adr": "docs/adr/0008-provider-endpoints-and-credentials-are-process-config-only.md",
+      "adr": "docs/adr/0050-http-access-control-refuses-unauthenticated-start.md",
       "tests": [
         "tests/contract/test_providers.py",
-        "tests/security/test_inputs.py"
+        "tests/security/test_inputs.py",
+        "tests/unit/test_http_auth.py",
+        "tests/unit/test_resolver.py"
       ],
       "fixtures": [],
       "reference_behavior": "Redacts only JEV_API_KEY, and only on the compatible provider's error body (quirk Q9).",
-      "python_behavior": "Every configured secret is redacted on every provider, on every error path and log line, with URL-userinfo variants covered."
+      "python_behavior": "Every provider redacts configured secrets and covered URL-userinfo variants from errors and logs. Validation checks every replaced spelling. A stored key joins provider and log redaction when resolved."
+    },
+    {
+      "id": "per-call-local-state-guard",
+      "surface": "request",
+      "tier": "tier_b",
+      "status": "sanctioned",
+      "adr": "docs/adr/0087-per-call-security-guard-and-local-file-boundaries.md",
+      "tests": [
+        "tests/unit/test_ask.py",
+        "tests/unit/test_file_state.py",
+        "tests/unit/test_hook.py",
+        "tests/unit/test_hook_compact.py",
+        "tests/unit/test_hook_screen.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The frozen TypeScript MCP tools have no local file or hook State builders.",
+      "python_behavior": "A required guard protects the current key store and scrubs exact configuration values and credential literals from local evidence, ask State and hook State."
+    },
+    {
+      "id": "cli-evidence-and-completion-target",
+      "surface": "result",
+      "tier": "tier_b",
+      "status": "sanctioned",
+      "adr": "docs/adr/0064-cli-judge-and-gate.md",
+      "tests": [
+        "tests/unit/test_cli_gate.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The frozen TypeScript MCP server has no standalone CLI evidence reader or command-targeted completion hook.",
+      "python_behavior": "CLI gate evidence shares the file judgment reader and its typed refusals. The completion hook resolves the command's repository and uses a PR base independently of the push upstream."
     },
     {
       "id": "cancellation-propagates",
