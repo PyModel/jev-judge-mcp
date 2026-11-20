@@ -162,10 +162,9 @@ def test_model_default(monkeypatch: pytest.MonkeyPatch, env: dict[str, str], mod
     assert resolve_model(load_settings()) == model
 
 
-def test_empty_model_stays_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`JEV_MCP_MODEL ?? "jev-latest"` (`index.ts:72`): only an unset variable takes the default."""
+def test_empty_model_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JEV_MCP_MODEL", "")
-    assert resolve_model(load_settings()) == ""
+    assert resolve_model(load_settings()) == "jev-latest"
 
 
 # --- key-file fallback (ADR-0046) ---

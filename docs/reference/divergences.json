@@ -376,7 +376,7 @@
       ],
       "fixtures": [],
       "reference_behavior": "Every tool call sends a provider request; nothing is replayed from disk, so there is no cache to bound or expire.",
-      "python_behavior": "When JEV_MCP_CACHE is on, the cache is bounded and non-blocking (ADR-0047 amendment): the key serialization and the file IO run in a worker thread off the event loop, an entry older than JEV_MCP_CACHE_TTL_SECONDS (default seven days, 0 disables) is a miss and is deleted, and a store past JEV_MCP_CACHE_MAX_ENTRIES (default 4096, 0 disables) evicts oldest-mtime entries first. Replay of a live entry stays verbatim (response-cache)."
+      "python_behavior": "When JEV_MCP_CACHE is on, the cache is bounded and non-blocking (ADR-0047 amendment): the key serialization and file IO run off the event loop, replay reads only the versioned records directory, an entry older than JEV_MCP_CACHE_TTL_SECONDS (default seven days, 0 disables) is a miss, and a store past JEV_MCP_CACHE_MAX_ENTRIES (default 4096, 0 disables) evicts oldest-mtime entries first. Replay of a live entry stays verbatim (response-cache)."
     },
     {
       "id": "provider-inflight-cap",
@@ -405,6 +405,34 @@
       "fixtures": [],
       "reference_behavior": "The reference publishes exactly ten tools; no tool exposes a caller-supplied score rubric.",
       "python_behavior": "jev_score is published after the snapshot ten (the snapshot stays a byte-identical prefix of tools/list): one score question over a caller rubric of 2-10 levels, strict whole-answer validation (validate_rubric_answer), ADR-owned caps in limits.SCORE, and no policy thresholds."
+    },
+    {
+      "id": "score-distribution-consistency",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0048-extension-tools-after-the-frozen-ten.md",
+      "tests": [
+        "tests/contract/test_fail_closed.py",
+        "tests/contract/test_score_tool.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "Fixed review rubrics validate the score and ignore a supplied level distribution. The recorded review answers omit distributions.",
+      "python_behavior": "A score with a supplied distribution is invalid if the distribution is malformed or its weighted mean differs from the score by more than 0.005 times one plus the sum of the level indices, with float64 slack. Fixed review rubrics still accept a score without a distribution."
+    },
+    {
+      "id": "empty-model-uses-default",
+      "surface": "request",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0008-provider-endpoints-and-credentials-are-process-config-only.md",
+      "tests": [
+        "tests/unit/test_resolver.py",
+        "tests/unit/test_settings.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "An explicit empty JEV_MCP_MODEL is sent as an empty model.",
+      "python_behavior": "An empty JEV_MCP_MODEL selects jev-latest. All settings treat an empty environment value as unset."
     },
     {
       "id": "gate-range-tool-extension",

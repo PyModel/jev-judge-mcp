@@ -329,22 +329,24 @@ The agent outcome study ran on 2026-09-23 with `jev-1.13.0`: three tasks, three 
 
 ## Configuration
 
-The server reads environment variables only. It does not load a `.env` file.
+The server reads configuration only from the process environment at startup. Empty values use
+the same defaults as unset variables. Path settings expand a leading `~`.
 
 | Variable | Default | What it does |
 |---|---|---|
 | `TYPESAFE_API_KEY` | unset | TypeSafe key; takes priority over the stored key |
-| `JEV_MCP_KEY_FILE` | `~/.config/jev-mcp/key` | where `setup` stores the key and the server reads it |
+| `JEV_MCP_KEY_FILE` | `$XDG_CONFIG_HOME/jev-mcp/key`, else `~/.config/jev-mcp/key` | where `setup` stores the key and the server reads it |
 | `JEV_PROVIDER` | `auto` | `auto` takes the first provider with credentials: typesafe, openrouter, cloudflare, compatible. The reference's vercel provider (`AI_GATEWAY_API_KEY`) is not supported |
 | `JEV_MCP_MODEL` | `jev-latest` | Jev model to ask |
 | `JEV_ASK_COMMANDS` | off | Set to `1` to let `jev_ask` run read-only commands with allowlisted options directly without a shell. An ask uses one provider call for its questions |
 | `JEV_MCP_CACHE` | off | replay identical requests from disk at no API cost; leave it off when answers must be fresh, and delete the directory to clear it |
-| `JEV_MCP_CACHE_DIR` | `~/.cache/jev-mcp` | where the cache lives |
+| `JEV_MCP_CACHE_DIR` | `$XDG_CACHE_HOME/jev-mcp`, else `~/.cache/jev-mcp` | the cache stores records in the `jev-records-v1/` child |
 | `JEV_MCP_CACHE_MAX_ENTRIES` | `4096` | cache entry cap; a store past it evicts the oldest entries first (`0` disables) |
-| `JEV_MCP_CACHE_TTL_SECONDS` | `604800` | cache entry age in seconds before it stops replaying and is deleted (`0` disables) |
+| `JEV_MCP_CACHE_TTL_SECONDS` | `604800` | cache entry age in seconds before it stops replaying (`0` disables) |
 | `JEV_MCP_TRANSPORT` | `stdio` | `streamable-http` is experimental and binds `JEV_MCP_HTTP_HOST:JEV_MCP_HTTP_PORT`, default `127.0.0.1:8088`. Port 8000 is often already taken, so it is not the default |
 | `JEV_MCP_HTTP_TOKEN` | unset | bearer token for the HTTP transport; required on every request, and required for any non-loopback `JEV_MCP_HTTP_HOST` |
-| `JEV_MCP_LOG_LEVEL` | `INFO` | logs go to stderr |
+| `JEV_MCP_LOG_LEVEL` | `INFO` | case-insensitive log level for stderr |
+| `JEV_STUDY_USAGE_PROVENANCE` | off | set to `1` to include `usage.reported` in tool results |
 | `JEV_MCP_MAX_INFLIGHT` | `0` | cap on concurrent provider requests per process; extra calls wait instead of fanning out (`0` = no cap) |
 
 ## Operator notes

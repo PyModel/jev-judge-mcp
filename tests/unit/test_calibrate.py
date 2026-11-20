@@ -103,7 +103,7 @@ def test_the_server_slices_calibrate_arguments_like_the_other_subcommands(
     ("lines", "message"),
     [
         ([CLEAN, "{not json}"], "rows.jsonl:2: not one JSON object"),
-        ([CLEAN, '{"score": NaN, "correct": true}'], "rows.jsonl:2: not one JSON object (NaN is not a finite"),
+        ([CLEAN, '{"score": NaN, "correct": true}'], "rows.jsonl:2: not one JSON object (NaN is not JSON"),
         (['{"correct": true}'], "rows.jsonl:1: need score and correct"),
         (['{"score": true, "correct": true}'], "rows.jsonl:1: score must be a finite number"),
         (['{"score": 1.5, "correct": true}'], "rows.jsonl:1: score 1.5 is outside [0, 1]"),
@@ -228,6 +228,9 @@ def test_pathological_rows_files_exit_two_instead_of_crashing(
     huge = rows_file(tmp_path, ['{"score": 1' + "0" * 400 + ', "correct": true}'])
     assert calibrate.main([str(huge), "--max-error", "0.3"]) == 2
     assert "finite" in capsys.readouterr().err
+    many_digits = rows_file(tmp_path, ['{"score": 1' + "0" * 5000 + ', "correct": true}'])
+    assert calibrate.main([str(many_digits), "--max-error", "0.3"]) == 2
+    assert "score must be a finite number" in capsys.readouterr().err
     deep = rows_file(tmp_path, ["[" * 100_000])
     assert calibrate.main([str(deep), "--max-error", "0.3"]) == 2
     assert "not one JSON object" in capsys.readouterr().err

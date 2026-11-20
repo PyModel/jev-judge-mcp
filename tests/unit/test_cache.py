@@ -135,9 +135,10 @@ def test_the_default_cache_directory_follows_xdg(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.delenv("JEV_MCP_CACHE_DIR", raising=False)
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-    assert cache_dir(load_settings()) == tmp_path / "jev-mcp"
+    settings = load_settings()
     monkeypatch.delenv("XDG_CACHE_HOME")
     monkeypatch.setenv("HOME", str(tmp_path))
+    assert cache_dir(settings) == tmp_path / "jev-mcp"
     assert cache_dir(load_settings()) == tmp_path / ".cache" / "jev-mcp"
 
 
@@ -415,22 +416,30 @@ async def test_scout_001_never_sweeps_legacy_directory(
 
 
 @pytest.mark.parametrize("identifier,expected_calls", [(None, 1), (42, 2), ("x" * 1025, 2), ("bad\ntrace", 2)])
-async def test_scout_025_validates_legacy_request_ids(cache_env: Path, identifier: object, expected_calls: int) -> None:
+async def test_cached_request_ids_are_validated(cache_env: Path, identifier: object, expected_calls: int) -> None:
     provider = FakeProvider(ANSWERS)
     runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
     await runtime.ask({}, _question())
     entry = next(cache_env.iterdir())
     record = json.loads(entry.read_bytes())
     record.pop("request_id")
-    entry.unlink()
-    legacy = cache_env.parent / entry.name
-    legacy.write_text(json.dumps(record))
+    entry.write_text(json.dumps(record))
     assert (await runtime.ask({}, _question())).request_id is None
     assert len(provider.requests) == 1
     record["request_id"] = identifier
-    legacy.write_text(json.dumps(record))
+    entry.write_text(json.dumps(record))
     assert (await runtime.ask({}, _question())).request_id is None
     assert len(provider.requests) == expected_calls
+
+
+async def test_records_in_the_cache_root_are_ignored(cache_env: Path) -> None:
+    provider = FakeProvider(ANSWERS)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    await runtime.ask({}, _question())
+    entry = next(cache_env.iterdir())
+    entry.rename(cache_env.parent / entry.name)
+    await runtime.ask({}, _question())
+    assert len(provider.requests) == 2
 
 
 @pytest.mark.parametrize(

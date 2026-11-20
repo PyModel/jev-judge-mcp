@@ -18,6 +18,7 @@ from anyio import to_thread
 from mcp.types import CallToolResult, TextContent, Tool
 
 from jev_judge_mcp.credential_literal import redact_credential_literals
+from jev_judge_mcp.domain import Usage
 from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.keyfile import redaction_values
 from jev_judge_mcp.policy.actions import Action
@@ -124,7 +125,7 @@ class Toolset:
             span.attributes["action"] = result.action
         for action in ACTIONS:
             span.attributes[f"item_actions.{action}"] = result.item_actions.count(action)
-        return _from_result(result)
+        return _from_result(result, include_reported=self.runtime.settings.study_usage_provenance)
 
     async def aclose(self) -> None:
         logger.debug("metrics %s", self.runtime.telemetry.metrics.snapshot())
@@ -168,10 +169,14 @@ def _error_outcome(text: str, code: str) -> ToolOutcome:
     return ToolOutcome(payload=None, text=text, is_error=True, action=None, error_code=code)
 
 
-def _from_result(result: ToolResult) -> ToolOutcome:
+def _from_result(result: ToolResult, *, include_reported: bool) -> ToolOutcome:
+    payload = result.payload
+    usage = payload.get("usage")
+    if isinstance(usage, Usage):
+        payload = {**payload, "usage": usage.to_wire(include_reported=include_reported)}
     return ToolOutcome(
-        payload=result.payload,
-        text=stringify(result.payload),
+        payload=payload,
+        text=stringify(payload),
         is_error=result.is_error,
         action=result.decision_action,
         error_code=(result.error_code or "internal") if result.is_error else None,

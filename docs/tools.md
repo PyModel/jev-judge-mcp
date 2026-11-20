@@ -187,7 +187,8 @@ severe-defect recall.
 **Weak spots.** A confidence below `review_at` (default 0.5) requires review. Escalation requires a
 named defect or safety refusal grounded in a changed line, or an invalid required judgment. A
 malformed or missing answer to a requested defect-category question prevents `auto`. The rubrics are fixed
-(correctness, spec_match, test_gap, blast_radius); callers cannot add one. A string `diff` over
+(correctness, spec_match, test_gap, blast_radius); callers cannot add one. Review checks any
+supplied score distribution against the score. A string `diff` over
 the cap is truncated and judgment over cut context never stands `auto`; a file-list `diff` is
 reviewed per file instead — one oversized or unreviewable file lists in `unreviewed_files`, marks
 the call `partial`, and keeps it off `auto` (ADR-0066).
@@ -250,7 +251,8 @@ contradiction without sufficient corroboration yields `unsupported` and `reporte
 contradicted`. Its probabilities still describe the provider's original judgment.
 `citation_coverage` reports the number of eligible and offered lines. A held change can be split
 by hunk to expose more lines. Aggregated token counts sum the reported usage across calls.
-In study provenance mode, `usage.reported` is false if any contributing call omitted its usage.
+With `JEV_STUDY_USAGE_PROVENANCE=1` at startup, `usage.reported` is false if any contributing call
+omitted its usage.
 See [ADR-0082](adr/0082-actionable-gate-escalation.md).
 
 From another git worktree run `jev-judge-mcp gate --diff BASE..HEAD --claims claims.txt
@@ -272,7 +274,10 @@ nearest-level accuracy, level MAE, within-one rate.
 **Weak spots.** Positions between levels are weakly calibrated: `score` is a probability-weighted
 position, not a magnitude — threshold it against levels, do not interpolate (README tool table).
 Levels and text bounds are owned by ADR-0048, not by a parity-manifest block. One call, one rubric:
-several scales are several questions.
+several scales are several questions. A score that differs from the weighted mean of its reported
+level probabilities by more than the combined rounding allowance returns `invalid_response`.
+The allowance is half a hundredth times one plus the sum of the level indices, with floating-point
+slack. The same check applies to score questions in `jev_file_judge`, `jev_files_judge`, and `jev_ask`.
 
 **Not for** continuous magnitudes, or when you need an explanation — the answer is a distribution,
 never text.

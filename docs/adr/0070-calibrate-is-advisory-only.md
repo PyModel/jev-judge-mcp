@@ -20,3 +20,10 @@ Callers judge with the frozen thresholds and may want a threshold fitted to thei
 
 - An operator with labeled outcomes gets an honestly bounded threshold recommendation instead of guessing 0.5, without touching the parity-frozen surface: no tool schema, no wire behavior, no policy default changes.
 - The eval harness and the shipped command share one statistics implementation; a bound bug fixed for one is fixed for both.
+
+## Amendment (2026-11-19): threshold sweep and row decoding
+
+Threshold selection sorts scores once and removes each tied group from cumulative AUTO and
+error counts. It returns the first feasible point in descending coverage order. Certification
+and selection use the same Clopper-Pearson bound as before. Row decoding uses the domain JSON
+decoder and rejects non-finite scores.

@@ -90,11 +90,11 @@ async def test_a_score_question_carries_the_ordered_levels_and_the_full_distribu
     outcome = await call_tool(
         "jev_file_judge",
         args,
-        {"file": {"score": 1.5, "probabilities": {"0": 0.1, "1": 0.8, "2": 0.1}, "confidence": 0.8}},
+        {"file": {"score": 1.0, "probabilities": {"0": 0.1, "1": 0.8, "2": 0.1}, "confidence": 0.8}},
     )
     assert not outcome.is_error, outcome.text
     assert outcome.payload["answer"] == {
-        "score": 1.5,
+        "score": 1.0,
         "nearest_level": 1,
         "probabilities": {"0": 0.1, "1": 0.8, "2": 0.1},
         "confidence": 0.8,

@@ -11,7 +11,7 @@ from typing import Any, get_args, override
 import pytest
 
 from jev_judge_mcp import validation
-from jev_judge_mcp.domain import JsonValue
+from jev_judge_mcp.domain import JsonValue, Usage
 from jev_judge_mcp.providers import Evaluation, ProviderError
 from jev_judge_mcp.server import configure_logging
 from jev_judge_mcp.settings import load_settings
@@ -132,6 +132,29 @@ async def test_metrics_count_calls_errors_fail_closed_actions_tokens_and_truncat
     assert metrics['tokens{direction="input"}'] == 3
     assert metrics['duration_ms_count{span="mcp.tool"}'] == 5
     assert metrics['duration_ms_bucket{span="mcp.tool",le="+Inf"}'] == 5
+
+
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize("reported", [False, True])
+async def test_token_metrics_distinguish_unreported_usage_and_measured_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cached: bool, reported: bool
+) -> None:
+    if cached:
+        monkeypatch.setenv("JEV_MCP_CACHE", "1")
+        monkeypatch.setenv("JEV_MCP_CACHE_DIR", str(tmp_path / "cache"))
+
+    class ZeroTokenProvider(FakeProvider):
+        @override
+        async def _send(
+            self, state: JsonValue, questions: dict[str, JsonValue], model: str, timeout: float | None
+        ) -> Evaluation:
+            return Evaluation(self.answers, Usage(reported=reported), self.name, model)
+
+    case = CASE["jev_verify"]
+    telemetry = await run([(case.tool, case.arguments, case.permissive)], ZeroTokenProvider)
+    metrics = telemetry.metrics.snapshot()
+    assert metrics.get('tokens{direction="input"}') == (0 if reported else None)
+    assert metrics.get('tokens{direction="output"}') == (0 if reported else None)
 
 
 async def test_an_unasked_source_question_is_not_fail_closed() -> None:

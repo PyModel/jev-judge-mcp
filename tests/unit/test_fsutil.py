@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from jev_judge_mcp import fsutil
+from jev_judge_mcp.settings import load_settings
 
 
 def _mode(path: Path) -> int:
@@ -55,9 +56,9 @@ def test_no_temporary_survives_a_failed_write(monkeypatch: pytest.MonkeyPatch, t
 def test_xdg_home_honors_the_override_and_the_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "c"))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    assert fsutil.xdg_home("cache") == tmp_path / "c"
+    assert fsutil.xdg_home("cache", load_settings()) == tmp_path / "c"
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert fsutil.xdg_home("config") == tmp_path / ".config"
+    assert fsutil.xdg_home("config", load_settings()) == tmp_path / ".config"
 
 
 def test_private_directory_creation_does_not_need_chmod(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

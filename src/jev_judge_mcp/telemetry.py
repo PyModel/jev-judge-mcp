@@ -106,8 +106,10 @@ class Metrics:
             case "jev.evaluate":
                 if "error" in attributes:
                     self._add(f'provider_errors{{error="{attributes["error"]}"}}')
-                self._add('tokens{direction="input"}', _number(attributes.get("input_tokens", 0)))
-                self._add('tokens{direction="output"}', _number(attributes.get("output_tokens", 0)))
+                for direction in ("input", "output"):
+                    token_key = f"{direction}_tokens"
+                    if token_key in attributes:
+                        self._add(f'tokens{{direction="{direction}"}}', _number(attributes[token_key]))
             case "jev.validate":
                 if attributes.get("valid") is False:
                     self._add(f'fail_closed{{kind="{attributes["kind"]}"}}')

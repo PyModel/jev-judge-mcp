@@ -80,7 +80,7 @@ _CASES: list[tuple[str, str, re.Pattern[str] | None, _Actual]] = [
         "jev_decide",
         "requirements",
         re.compile(r"(\d+)\.\.(\d+) reject"),
-        (DECIDE.requirements_min, DECIDE.requirements_max),
+        (0, DECIDE.requirements_max),
     ),
     ("jev_decide", "requirement_text", re.compile(r"(\d+)\.\.(\d+)"), (DECIDE.requirement_min, DECIDE.requirement_max)),
     ("jev_rerank", "candidates", re.compile(r"\.\.(\d+) reject"), CANDIDATES.max_items),
@@ -89,7 +89,7 @@ _CASES: list[tuple[str, str, re.Pattern[str] | None, _Actual]] = [
     ("jev_rerank", "top_k", re.compile(r"int (\d+)\.\.(\d+), default all"), (RERANK.top_k_min, RERANK.top_k_max)),
     ("jev_compare", "passage_a", re.compile(r"(\d+)\.\.(\d+) reject"), (COMPARE.passage_min, COMPARE.passage_max)),
     ("jev_compare", "passage_b", re.compile(r"(\d+)\.\.(\d+) reject"), (COMPARE.passage_min, COMPARE.passage_max)),
-    ("jev_compare", "aspects", re.compile(r"(\d+)\.\.(\d+) reject"), (COMPARE.aspects_min, COMPARE.aspects_max)),
+    ("jev_compare", "aspects", re.compile(r"(\d+)\.\.(\d+) reject"), (0, COMPARE.aspects_max)),
     ("jev_compare", "aspect_text", re.compile(r"(\d+)\.\.(\d+)"), (COMPARE.aspect_min, COMPARE.aspect_max)),
     (
         "jev_extract",

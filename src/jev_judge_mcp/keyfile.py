@@ -24,7 +24,7 @@ def stored_key_path(settings: Settings) -> Path:
     """Where the stored key lives: `JEV_MCP_KEY_FILE`, else the XDG config default."""
     if settings.key_file is not None:
         return settings.key_file
-    return fsutil.xdg_home("config") / "jev-mcp" / "key"
+    return fsutil.xdg_home("config", settings) / "jev-mcp" / "key"
 
 
 KEY_FILE_BYTES_MAX = 4096

@@ -6,12 +6,19 @@ Q4 confidence rule and extract's inline Q2 check belong to those tools (P5), not
 """
 
 import math
+from collections.abc import Callable
 from typing import cast
 
 import pytest
 
 from jev_judge_mcp.domain import ChoiceAnswer
-from jev_judge_mcp.validation import PROBABILITY_SUM_TOLERANCE, margin, top_probability, validate_choice
+from jev_judge_mcp.validation import (
+    PROBABILITY_SUM_TOLERANCE,
+    margin,
+    top_probability,
+    validate_choice,
+    validate_extract_choice,
+)
 
 FIND_KEYS = ["a", "b"]
 RELATION_KEYS = ["supports", "contradicts", "says_nothing"]
@@ -102,11 +109,14 @@ def test_verify_bad_relation_rejected(answer: object) -> None:
     assert validate_choice(answer, RELATION_KEYS) is None
 
 
+@pytest.mark.parametrize("validate", [validate_choice, validate_extract_choice])
 @pytest.mark.parametrize("confidence", ["0.99", 2, -1, True, False, {}, [], math.nan, math.inf, 1.7])
-def test_malformed_confidence_becomes_none_without_rejecting(confidence: object) -> None:
+def test_malformed_confidence_becomes_none_without_rejecting(
+    confidence: object, validate: Callable[[object, list[str]], ChoiceAnswer | None]
+) -> None:
     # jev_verify rejects these (quirk Q4, P5); the shared validator keeps the pick with unknown confidence,
     # as jev_decide does ("normalizes non-finite confidence to null without discarding the pick").
-    answer = validate_choice({**pick("supports", RELATION_KEYS), "confidence": confidence}, RELATION_KEYS)
+    answer = validate({**pick("supports", RELATION_KEYS), "confidence": confidence}, RELATION_KEYS)
     assert answer is not None
     assert answer.choice == "supports"
     assert answer.confidence is None
@@ -135,9 +145,8 @@ def test_json_null_confidence_is_absent() -> None:
     assert answer.confidence_kind == "absent"
 
 
-def test_bare_float_confidence_is_a_number() -> None:
-    """A constructor that only has the wire number cannot say malformed; a float is a number."""
-    answer = ChoiceAnswer("b", {"a": 0.1, "b": 0.9}, 0.4)
+def test_constructs_number_and_malformed_confidence() -> None:
+    answer = ChoiceAnswer("b", {"a": 0.1, "b": 0.9}, 0.4, "number")
     assert answer.confidence == 0.4
     assert answer.confidence_kind == "number"
     malformed = ChoiceAnswer("b", {"a": 0.1, "b": 0.9}, None, "malformed")
@@ -146,8 +155,10 @@ def test_bare_float_confidence_is_a_number() -> None:
 
 
 def test_confidence_kind_must_match_the_wire_number() -> None:
-    with pytest.raises(ValueError, match="malformed confidence"):
+    with pytest.raises(ValueError, match="marked malformed"):
         ChoiceAnswer("b", {"a": 0.1, "b": 0.9}, 0.4, "malformed")
+    with pytest.raises(ValueError, match="marked absent"):
+        ChoiceAnswer("b", {"a": 0.1, "b": 0.9}, 0.4, "absent")
     with pytest.raises(ValueError, match="number confidence"):
         ChoiceAnswer("b", {"a": 0.1, "b": 0.9}, None, "number")
 
@@ -230,7 +241,9 @@ def test_non_argmax_rejected() -> None:
 @pytest.mark.parametrize("choice", ["c0", "c1"])
 def test_either_tied_maximum_accepted(choice: str) -> None:
     answer = validate_choice({"choice": choice, "probabilities": {"c0": 0.5, "c1": 0.5, "c2": 0}}, CLASSIFY_KEYS)
-    assert answer == ChoiceAnswer(choice=choice, probabilities={"c0": 0.5, "c1": 0.5, "c2": 0.0}, confidence=None)
+    assert answer == ChoiceAnswer(
+        choice=choice, probabilities={"c0": 0.5, "c1": 0.5, "c2": 0.0}, confidence=None, confidence_kind="absent"
+    )
 
 
 def test_argmax_tolerance_is_1e_9() -> None:
@@ -319,6 +332,6 @@ def test_margin() -> None:
 
 def test_top_probability_is_the_chosen_labels_not_the_maximum() -> None:
     """Policy gates the chosen label's probability; within ARGMAX_TOLERANCE it may trail the maximum."""
-    assert top_probability(ChoiceAnswer("b", {"a": 0.1, "b": 0.9}, None)) == 0.9
-    tied = ChoiceAnswer("a", {"a": 0.5 - 5e-10, "b": 0.5 + 5e-10}, None)
+    assert top_probability(ChoiceAnswer("b", {"a": 0.1, "b": 0.9}, None, "absent")) == 0.9
+    tied = ChoiceAnswer("a", {"a": 0.5 - 5e-10, "b": 0.5 + 5e-10}, None, "absent")
     assert top_probability(tied) == 0.5 - 5e-10

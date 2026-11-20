@@ -89,7 +89,6 @@ class DecideCaps:
     candidate_id_max: int
     candidate_description_min: int
     candidate_description_max: int
-    requirements_min: int
     requirements_max: int
     requirement_min: int
     requirement_max: int
@@ -112,7 +111,6 @@ class CompareCaps:
 
     passage_min: int
     passage_max: int
-    aspects_min: int
     aspects_max: int
     aspect_min: int
     aspect_max: int
@@ -260,15 +258,12 @@ DECIDE: Final = DecideCaps(
     candidate_id_max=64,
     candidate_description_min=1,
     candidate_description_max=2000,
-    requirements_min=0,
     requirements_max=3,
     requirement_min=1,
     requirement_max=500,
 )
 RERANK: Final = RerankCaps(query_min=1, query_max=2000, aggregate_candidate_units=100_000, top_k_min=1, top_k_max=250)
-COMPARE: Final = CompareCaps(
-    passage_min=1, passage_max=20_000, aspects_min=0, aspects_max=10, aspect_min=1, aspect_max=200
-)
+COMPARE: Final = CompareCaps(passage_min=1, passage_max=20_000, aspects_max=10, aspect_min=1, aspect_max=200)
 EXTRACT: Final = ExtractCaps(
     document_min=1,
     document_max=50_000,
@@ -332,12 +327,12 @@ class FilesJudgeCaps:
 FILE_JUDGE: Final = FileJudgeCaps(
     file_units_max=100_000,
     instructions_units_max=2_000,
-    choice_options_min=2,
-    choice_options_max=250,
-    choice_option_units_max=2_000,
-    score_levels_min=2,
-    score_levels_max=10,
-    score_level_units_max=200,
+    choice_options_min=CLASSIFY.classes_min,
+    choice_options_max=CLASSIFY.classes_max,
+    choice_option_units_max=CLASSIFY.class_description_units,
+    score_levels_min=SCORE.levels_min,
+    score_levels_max=SCORE.levels_max,
+    score_level_units_max=SCORE.level_units_max,
     binary_sniff_bytes=8_000,
 )
 ASK: Final = AskCaps(

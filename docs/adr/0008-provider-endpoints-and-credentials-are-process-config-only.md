@@ -28,3 +28,14 @@ argument representation before emitting them.
 
 ADR-0084 removes the TypeSafe SDK and its wire-log filter. HTTPX and HTTPCore diagnostics
 omit request bodies at DEBUG. Opt-in payload telemetry still applies to tool spans.
+
+## Amendment (2026-11-19): settings defaults and usage provenance
+
+Every setting uses its default for an empty environment value. This includes `JEV_MCP_MODEL`:
+an empty value selects `jev-latest` in Python. Log-level values are case-insensitive. Cache,
+key-file, and XDG paths expand a leading `~` when Settings loads. The XDG cache and config
+overrides are captured together with the other settings.
+
+The study relay opts into `usage.reported` with `JEV_STUDY_USAGE_PROVENANCE=1` in the child
+environment. Settings captures that choice and the tool dispatcher supplies it when rendering
+usage. The default usage payload contains just the two token counts.

@@ -163,7 +163,7 @@ def frame(
         "model": evaluation.model,
         "provider": evaluation.provider,
         **body,
-        "usage": evaluation.usage.to_wire(),
+        "usage": evaluation.usage,
     }
     if evaluation.request_id:
         framed["request_id"] = evaluation.request_id
@@ -260,10 +260,7 @@ class Runtime:
             provider = self._provider
             if self.settings.jev_judge_mcp_cache:
                 return await self._cached(provider, wire_state, questions, span)
-            evaluation = await self._evaluate_capped(provider, wire_state, questions)
-            span.attributes["input_tokens"] = evaluation.usage.input_tokens
-            span.attributes["output_tokens"] = evaluation.usage.output_tokens
-            return evaluation
+            return await self._evaluate_capped(provider, wire_state, questions, span)
 
     async def _cached(
         self, provider: JevProvider, state: JsonValue, questions: Mapping[str, Question], span: Span
@@ -292,9 +289,7 @@ class Runtime:
             if cached is not None:
                 span.attributes["cache"] = "hit"
                 return cached
-            evaluation = await self._evaluate_capped(provider, state, questions, work)
-            span.attributes["input_tokens"] = evaluation.usage.input_tokens
-            span.attributes["output_tokens"] = evaluation.usage.output_tokens
+            evaluation = await self._evaluate_capped(provider, state, questions, span, work)
             await cache.astore(self.settings, *identity, evaluation, digest=key)
             return evaluation
 
@@ -311,7 +306,12 @@ class Runtime:
         return await work.replay()
 
     async def _evaluate_capped(
-        self, provider: JevProvider, state: JsonValue, questions: Mapping[str, Question], work: _Pending | None = None
+        self,
+        provider: JevProvider,
+        state: JsonValue,
+        questions: Mapping[str, Question],
+        span: Span,
+        work: _Pending | None = None,
     ) -> Evaluation:
         """The provider call, behind the opt-in in-flight cap (ADR-0069); the default is no cap.
 
@@ -325,7 +325,11 @@ class Runtime:
         async with capacity:
             if work is not None:
                 work.dispatched = True
-            return await provider.evaluate(state, questions, self.model, None)
+            evaluation = await provider.evaluate(state, questions, self.model, None)
+        if evaluation.usage.reported:
+            span.attributes["input_tokens"] = evaluation.usage.input_tokens
+            span.attributes["output_tokens"] = evaluation.usage.output_tokens
+        return evaluation
 
     async def aclose(self) -> None:
         errors: list[BaseException] = []

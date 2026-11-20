@@ -14,6 +14,8 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Literal
 
+from jev_judge_mcp.settings import Settings
+
 DIR_MODE = 0o700
 
 
@@ -37,12 +39,10 @@ def read_bounded(path: Path, *, max_bytes: int, follow_symlinks: bool = False) -
     raise OSError(errno.EFBIG, f"file exceeds {max_bytes} bytes", str(path))
 
 
-def xdg_home(kind: Literal["cache", "config"]) -> Path:
+def xdg_home(kind: Literal["cache", "config"], settings: Settings) -> Path:
     """The XDG base for `kind`: `$XDG_CACHE_HOME` / `$XDG_CONFIG_HOME`, else the default under home."""
-    override = os.environ.get(f"XDG_{kind.upper()}_HOME")
-    if override:
-        return Path(override)
-    return Path.home() / (".cache" if kind == "cache" else ".config")
+    override = settings.xdg_cache_home if kind == "cache" else settings.xdg_config_home
+    return override if override is not None else Path.home() / f".{kind}"
 
 
 def private_dir(path: Path) -> Path:

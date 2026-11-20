@@ -119,10 +119,11 @@ Every bound is a schema reject; nothing truncates.
 | `candidate_id_max` | 64 | above → reject (ids must match `^[a-z][a-z0-9_-]*$`) |
 | `candidate_description_min` | 1 | below → reject |
 | `candidate_description_max` | 2000 | above → reject |
-| `requirements_min` | 0 | below → reject |
 | `requirements_max` | 3 | above → reject |
 | `requirement_min` | 1 | below → reject |
 | `requirement_max` | 500 | above → reject |
+
+The requirements array may be empty.
 
 ### jev_rerank (`limits.RERANK`)
 
@@ -142,10 +143,11 @@ Candidate caps are the shared `CANDIDATES` table below.
 | --- | --- | --- |
 | `passage_min` | 1 | below → reject |
 | `passage_max` | 20000 | above → reject |
-| `aspects_min` | 0 | below → reject |
 | `aspects_max` | 10 | above → reject |
 | `aspect_min` | 1 | below → reject |
 | `aspect_max` | 200 | above → reject |
+
+The aspects array may be empty.
 
 ### jev_extract (`limits.EXTRACT`)
 

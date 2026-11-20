@@ -577,16 +577,32 @@ def test_metadata_recorder_discards_unrecognized_values() -> None:
 
 def test_study_child_keeps_usage_provenance_through_stdio(tmp_path: Path) -> None:
     child = """
-import json, sys
-from jev_judge_mcp.providers.base import parse_envelope
-for line in sys.stdin:
-    call = json.loads(line)
-    body = {"answers": {}}
-    if call["id"] == 2:
-        body["usage"] = {"input_tokens": 0, "output_tokens": 0}
-    usage = parse_envelope(body, "fixture").usage.to_wire()
-    content = [{"type":"text","text":json.dumps({"usage":usage})}]
-    print(json.dumps({"id":call["id"],"result":{"content":content}}),flush=True)
+import asyncio, json, os, sys
+from dataclasses import replace
+from jev_judge_mcp.domain import Usage
+from jev_judge_mcp.settings import load_settings
+from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
+from tests.support.jev import FakeProvider, choice
+
+class Provider(FakeProvider):
+    async def _send(self, state, questions, model, timeout):
+        evaluation = await super()._send(state, questions, model, timeout)
+        return replace(evaluation, usage=Usage(reported=len(self.requests) == 2))
+
+async def main():
+    settings = load_settings()
+    del os.environ["JEV_STUDY_USAGE_PROVENANCE"]
+    provider = Provider({"relation_claim0": choice("supports", "supports", "contradicts", "says_nothing")})
+    tools = Toolset(Runtime(settings, provider_factory=lambda _: provider), TOOLS)
+    try:
+        for line in sys.stdin:
+            call = json.loads(line)
+            result = await tools.call(call["params"]["name"], {"claims": ["A claim"], "evidence": "Evidence"})
+            print(json.dumps({"id": call["id"], "result": result.model_dump(by_alias=True)}), flush=True)
+    finally:
+        await tools.aclose()
+
+asyncio.run(main())
 """
     log = tmp_path / "study.jsonl"
     command = [sys.executable, "-m", "evals.ab.proxy", str(log), "--", sys.executable, "-c", child]
