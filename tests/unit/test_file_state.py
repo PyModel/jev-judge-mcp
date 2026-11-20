@@ -166,8 +166,8 @@ def test_a_byte_giant_is_refused(tmp_path: Path) -> None:
 
 
 def test_redacted_file_content_must_fit_the_same_utf16_cap(tmp_path: Path) -> None:
-    path = make(tmp_path / "notes.txt", "x😀")
-    redact = Redactor(["x"])
+    path = make(tmp_path / "notes.txt", "test-key😀")
+    redact = Redactor(["test-key"])
     assert file_state.read_state(path, replace(FILE_JUDGE, file_units_max=12), redact=redact) == "[redacted]😀"
     refuses("file_too_large")(
         lambda: file_state.read_state(path, replace(FILE_JUDGE, file_units_max=11), redact=redact)
