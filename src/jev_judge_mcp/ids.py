@@ -22,9 +22,6 @@ def sanitize_id(raw: str) -> str:
 
 class UniqueIds(NamedTuple):
     items: list[dict[str, object]]
-    """Copies of the input items with `id` set; an existing `id` keeps its key position."""
-    renamed: dict[str, str]
-    """Caller id → id used, for every non-empty caller id that changed."""
 
 
 def ensure_unique_ids(items: Sequence[Mapping[str, object]], fallback_prefix: str) -> UniqueIds:
@@ -34,7 +31,6 @@ def ensure_unique_ids(items: Sequence[Mapping[str, object]], fallback_prefix: st
     beyond the shared collision loop, exactly as in the reference.
     """
     used: set[str] = set()
-    renamed: dict[str, str] = {}
     out: list[dict[str, object]] = []
     for index, item in enumerate(items):
         raw = item.get("id")
@@ -46,7 +42,5 @@ def ensure_unique_ids(items: Sequence[Mapping[str, object]], fallback_prefix: st
             new_id = f"{base}_{suffix}"
             suffix += 1
         used.add(new_id)
-        if raw_id and raw_id != new_id:
-            renamed[raw_id] = new_id
         out.append({**item, "id": new_id})
-    return UniqueIds(out, renamed)
+    return UniqueIds(out)

@@ -13,7 +13,7 @@
 
 </div>
 
-An MCP server that gives your coding agent fifteen judgment tools backed by TypeSafe's Jev model. The agent hands a tool some evidence and a question it can enumerate: is this claim supported, is this page safe to read, which of these files answers the question, did this patch finish the task. Jev answers with probabilities, usually in under a second (median 464.6 ms round trip in the recorded bench), for about $0.025 per 1,000 decisions on the recorded classify run — and on that benchmark every answer the policy auto-accepted was correct, with the misses routed to review instead of through. Policy turns the probabilities into one of three actions: `auto` (proceed), `review` (check it another way), or `escalate` (stop). The numbers and their sources: [Measured results](#measured-results).
+An MCP server that gives your coding agent fifteen judgment tools backed by TypeSafe's Jev model. The agent hands a tool some evidence and a question it can enumerate: is this claim supported, is this page safe to read, which of these files answers the question, did this patch finish the task. Jev answers with probabilities, usually in under a second (median 464.6 ms round trip in the recorded bench), for about $0.025 per 1,000 decisions on the recorded classify run — and on that benchmark every answer the policy auto-accepted was correct, with the misses routed to review instead of through. Policy turns the probabilities into one of three actions: `auto` (act on the verdict), `review` (check it another way), or `escalate` (stop). The numbers and their sources: [Measured results](#measured-results).
 
 Use it for checks that have a fixed set of answers. When the step needs new text, code, or options you cannot list, the agent should write it itself.
 
@@ -236,9 +236,9 @@ Rules:
   `...`, a path, or "see evidence item". A large change goes as a `[{path, patch}]` file list or
   as separate calls split by concern. Test logs go in `tests` (`tests_path` for
   `jev_gate_range`) as the raw pass/fail lines. Per-file gates read caller evidence and sibling patches as space permits. The review lists optional omissions in `context_omissions`.
-- **Act on `action`:** `auto` → proceed · `review` → confirm with tests, source reading, or a
-  stronger check · `escalate` → stop and surface it. `invalid_response` → the row is unjudged;
-  leave it without a verdict.
+- **Act on `action`:** `auto` → the verdict stands and you act on it. A contradicted claim at
+  `auto` is confidently false. `review` → confirm with tests, source reading, or a stronger check.
+  `escalate` → stop and surface it. An invalid required judgment leaves the row unjudged.
 - **Jev screens; it never proves.** A Jev check never replaces running the tests, lint, or types.
   A `jev_gate` `auto` is the recommended final judgment before "done", not
   sufficient, and it is skipped when tests, type checks, build, lint, or another
@@ -377,9 +377,9 @@ Other operator facts:
   candidate's probability, to four decimal places. The response has no spread field. A flat band of
   low values means the candidates were not distinguishable: treat the order as weak, and read
   `ranked[].relevance` rather than the rank numbers.
-- In `jev_review`, a rubric confidence or `safe_to_apply` below `review_at` escalates.
-  In `jev_gate`, uncertainty alone requires review. An escalation identifies a changed line
-  with a defect, evidence contradicting a claim, or an explicit safety refusal. Read the
+- In `jev_review` and `jev_gate`, uncertainty alone requires review. An escalation identifies a
+  changed line with a defect, evidence contradicting a claim, or an explicit safety refusal.
+  An invalid required judgment also stops the decision. Read the
   change verdict in `rollup` and use the single `next_checks` entry to act.
 - Per-tool weak spots and what recorded evidence exists for each tool are in
   [`docs/tools.md`](docs/tools.md); per-release evidence, including certified operating points, is

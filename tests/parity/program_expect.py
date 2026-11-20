@@ -12,22 +12,23 @@ from typing import Any
 
 from jev_judge_mcp.domain import questions_to_wire
 from jev_judge_mcp.ids import ensure_unique_ids
+from jev_judge_mcp.policy import GATE_REASON_CODES
 from jev_judge_mcp.responses import (
+    EXCERPT_CHECK,
+    NO_HUNKS_CHECK,
     SCORE_SCALE,
     caller_renames,
     claim_extras,
     diff_shape,
     nearest_level,
-    next_checks_for,
     renamed_ids_field,
-    review_saw_tests,
     summary_extras,
 )
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.tools.common import evidence_items
 from jev_judge_mcp.tools.gate import CLAIM_SUPPORT, REVIEW_FRAMING, claim_question, gate_source_question
 from jev_judge_mcp.tools.gate_evidence import add_citations
-from jev_judge_mcp.tools.review import ANTI_INJECTION
+from jev_judge_mcp.tools.review import ANTI_INJECTION, PURPOSE
 from jev_judge_mcp.tools.review_half import review_questions
 from jev_judge_mcp.tools.verify import ROLE_RULE, VERIFY_SUFFIX
 
@@ -39,7 +40,7 @@ _OLD_CLAIM = (
 
 
 def expect_program(
-    bodies: list[Any], text: str, is_error: bool, arguments: Mapping[str, Any]
+    bodies: list[Any], text: str, is_error: bool, arguments: Mapping[str, Any], *, verify_hold: bool = False
 ) -> tuple[list[Any], str, bool]:
     rewritten = [_rewrite_body(body) for body in bodies]
     if is_error or not text.startswith("{"):
@@ -48,17 +49,17 @@ def expect_program(
     tool = payload.get("tool")
     if tool not in ("jev_find", "jev_gate", "jev_verify", "jev_review"):
         return bodies, text, is_error
-    rewritten_bodies = [_rewrite_body(body) for body in bodies]
+    rewritten_bodies = rewritten
     evidence = _asked_evidence(rewritten_bodies)
     had_tests = any(
         isinstance(body, dict) and isinstance(body.get("state"), dict) and body["state"].get("tests")
         for body in rewritten_bodies
     )
-    payload = _rewrite_payload(payload, tool, evidence, had_tests, rewritten_bodies, arguments)
+    payload = _rewrite_payload(payload, tool, evidence, had_tests, rewritten_bodies, arguments, verify_hold)
     return rewritten_bodies, stringify(payload), is_error
 
 
-def frozen_review_fields(actual: str, expected: str) -> str:
+def frozen_review_fields(actual: str, expected: str, arguments: Mapping[str, Any]) -> str:
     """Check the documented extensions; compare all other fields in frozen wire order."""
     if not expected.startswith("{"):
         return actual
@@ -73,21 +74,27 @@ def frozen_review_fields(actual: str, expected: str) -> str:
         assert rollup == {"action": original["action"], "reason_counts": dict(Counter(b["code"] for b in blockers))}
         assert bool(blockers) == (original["action"] != "auto")
         assert all(b["field"] and b["next_check"] for b in blockers)
-        assert observed["reason_codes"] == list(
-            dict.fromkeys([*original["reason_codes"], *(b["code"] for b in blockers)])
+        checks = observed.pop("next_checks")
+        assert len(checks) == 1
+        shape = diff_shape(arguments.get("diff"))
+        expected_check = (
+            "The row stands. Proceed."
+            if original["action"] == "auto"
+            else {"text": NO_HUNKS_CHECK, "excerpt": EXCERPT_CHECK}.get(shape)
         )
-        assert len(observed["next_checks"]) == 1
-        assert observed["next_checks"][0] in original["next_checks"] + [b["next_check"] for b in blockers]
-        observed.update(reason_codes=original["reason_codes"], next_checks=original["next_checks"])
+        assert checks[0] in [expected_check, *(b["next_check"] for b in blockers)]
         coverage = observed["review"].pop("citation_coverage")
         assert 0 <= coverage["offered"] <= min(32, coverage["available"])
         for row in observed["verification"]["results"]:
             if row.get("reported_verdict") == "contradicted":
                 coverage = row.pop("citation_coverage")
                 assert 0 <= coverage["offered"] <= min(32, coverage["available"])
-    elif original["action"] != "auto":
-        blockers = observed.pop("blockers")
-        assert blockers and all(b["field"] and b["next_check"] for b in blockers)
+    else:
+        coverage = observed.pop("citation_coverage")
+        assert 0 <= coverage["offered"] <= min(32, coverage["available"])
+        if original["action"] != "auto":
+            blockers = observed.pop("blockers")
+            assert blockers and all(b["field"] and b["next_check"] for b in blockers)
     return stringify(observed)
 
 
@@ -118,25 +125,28 @@ def _rewrite_body(body: Any) -> Any:
             implicit.append({"id": "diff", "text": state["diff"], "kind": "diff", "role": "after"})
         if state.get("tests"):
             implicit.append({"id": "tests", "text": state["tests"], "kind": "tool_output", "role": "current"})
+        diff_index = len(evidence)
         evidence = ensure_unique_ids([*evidence, *implicit], "evidence").items
         state["evidence"] = evidence
         ids = [str(item["id"]) for item in evidence]
-        if len(evidence) > 1:
-            ordered: dict[str, Any] = {}
-            for name, question in questions.items():
-                ordered[name] = question
-                if name.startswith("claim_"):
-                    index = int(name.removeprefix("claim_"))
-                    ordered[f"source_{index}"] = gate_source_question(index, ids).to_wire()
-            questions.clear()
-            questions.update(ordered)
+        ordered: dict[str, Any] = {}
+        for name, question in questions.items():
+            ordered[name] = question
+            if name.startswith("claim_"):
+                index = int(name.removeprefix("claim_"))
+                ordered[f"source_{index}"] = gate_source_question(index, ids).to_wire()
+        questions.clear()
+        questions.update(ordered)
         typed = review_questions(REVIEW_FRAMING)
         for i in range(len(state["claims"])):
             typed[f"claim_{i}"] = claim_question(i)
-            if len(evidence) > 1:
-                typed[f"source_{i}"] = gate_source_question(i, ids)
-        add_citations(state, typed, [implicit[0]])
+            typed[f"source_{i}"] = gate_source_question(i, ids)
+        add_citations(state, typed, [evidence[diff_index]])
         add_citations(state, typed, evidence, claim_count=len(state["claims"]))
+        questions.update({k: v for k, v in questions_to_wire(typed).items() if k not in questions})
+    elif isinstance(state, dict) and state.get("purpose") == PURPOSE:
+        typed = review_questions()
+        add_citations(state, typed, [{"id": "diff", "kind": "diff", "text": state["diff"]}])
         questions.update({k: v for k, v in questions_to_wire(typed).items() if k not in questions})
     return rewritten
 
@@ -182,59 +192,60 @@ def _rewrite_payload(
     had_tests: bool,
     bodies: list[Any],
     arguments: Mapping[str, Any],
+    verify_hold: bool,
 ) -> dict[str, Any]:
+    has_defect_question = any("defect_kind" in body.get("questions", {}) for body in bodies if isinstance(body, dict))
+    invalid_defect = False
     if tool == "jev_review" or "review" in payload:
         review = payload if tool == "jev_review" else payload.get("review")
         if isinstance(review, dict):
+            invalid_defect = review["action"] == "auto" and has_defect_question
+            if invalid_defect or (review["action"] == "escalate" and review.get("status") != "invalid_response"):
+                review["action"] = "review"
             _annotate_review(review, had_tests)
     verification = payload.get("verification")
     if isinstance(verification, dict) and isinstance(verification.get("results"), list):
+        rows = verification["results"]
         if tool == "jev_gate":
-            # The frozen provider never answered a citation question. Every old hold stays a hold.
-            rows = verification["results"]
             review = payload["review"]
-            if review["action"] == "escalate" and review.get("status") != "invalid_response":
-                review["action"] = "review"
+            # The recorded provider never answered any of the newly asked source or citation questions.
+            invalid_source = any(row["action"] == "auto" for row in rows)
             for row in rows:
                 if row.get("verdict") == "contradicted":
                     row.update(reported_verdict="contradicted", verdict="unsupported")
-                if row["action"] == "escalate" and row.get("status") != "invalid_response":
+                if row["action"] == "auto" or (row["action"] == "escalate" and row.get("status") != "invalid_response"):
                     row["action"] = "review"
             order = ("auto", "review", "escalate")
             verification["action"] = max((row["action"] for row in rows), key=order.index)
             payload["action"] = max(review["action"], verification["action"], key=order.index)
+            verification["summary"]["needs_review"] = sum(row["action"] != "auto" for row in rows)
             verification["summary"].update(
                 {label: sum(row["verdict"] == label for row in rows) for label in ("contradicted", "unsupported")}
             )
-            codes = []
-            for code in payload["reason_codes"]:
-                if code == "claims_contradicted":
-                    code = "claims_unsupported"
-                if code == "review_escalated" and review["action"] == "review":
-                    code = "review_required"
-                if code not in codes:
-                    codes.append(code)
-            payload["reason_codes"] = codes
-        _annotate_claims(verification["results"], evidence)
+            codes = set(payload["reason_codes"]) - {"claims_contradicted", "review_escalated", "accepted"}
+            if any(row["verdict"] == "unsupported" for row in rows):
+                codes.add("claims_unsupported")
+            if review["action"] != "auto":
+                codes.add("review_required" if review["action"] == "review" else "review_escalated")
+            if invalid_source or invalid_defect:
+                codes.add("invalid_response")
+            if payload["action"] == "auto":
+                codes.add("accepted")
+            payload["reason_codes"] = [code for code in GATE_REASON_CODES if code in codes]
+        _annotate_claims(rows, evidence)
         summary = verification.get("summary")
         if isinstance(summary, dict):
-            summary.update(summary_extras(verification["results"]))
+            summary.update(summary_extras(rows))
     if tool == "jev_verify" and isinstance(payload.get("results"), list):
-        _annotate_claims(payload["results"], evidence)
+        rows = payload["results"]
+        if verify_hold:
+            (row,) = rows
+            row["action"] = "review"
+        _annotate_claims(rows, evidence)
         summary = payload.get("summary")
         if isinstance(summary, dict):
-            summary.update(summary_extras(payload["results"]))
-    if tool == "jev_gate" and isinstance(payload.get("reason_codes"), list):
-        _insert_after(
-            payload,
-            "reason_codes",
-            "next_checks",
-            next_checks_for(
-                payload["reason_codes"],
-                diff_shape=diff_shape(arguments.get("diff")),
-                review_saw_tests=review_saw_tests(arguments),
-            ),
-        )
+            summary["needs_review"] = sum(row["action"] == "review" for row in rows)
+            summary.update(summary_extras(rows))
     _insert_renamed_ids(payload, tool, bodies, arguments)
     return payload
 

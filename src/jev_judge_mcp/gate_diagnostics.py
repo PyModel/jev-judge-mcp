@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from jev_judge_mcp.limits import GATE
-from jev_judge_mcp.responses import EXCERPT_CHECK, NO_HUNKS_CHECK
+from jev_judge_mcp.responses import EXCERPT_CHECK, NO_HUNKS_CHECK, diff_shape
 from jev_judge_mcp.text import length
 
 type Blocker = dict[str, Any]
@@ -33,7 +33,7 @@ def size_blocker(field: str, units: int, limit: int) -> Blocker:
 def input_cuts(
     args: Mapping[str, Any], evidence: Sequence[Mapping[str, object]], doc_units: int = GATE.doc_units
 ) -> list[Blocker]:
-    """Recover each original document length before the gate's CapLedger discarded its suffix."""
+    """Identify caller documents over their UTF-16 limits."""
     docs = [(k, args[k], doc_units) for k in ("request", "diff", "tests") if isinstance(args.get(k), str)]
     docs.extend((f"claims[{i}]", v, GATE.claim_units) for i, v in enumerate(args.get("claims", [])))
     docs.extend((f"evidence[{i}]", str(item["text"]), doc_units) for i, item in enumerate(evidence))
@@ -117,7 +117,7 @@ def review_blockers(review: Mapping[str, Any]) -> list[Blocker]:
     return blockers
 
 
-def _claim_blockers(verification: Mapping[str, Any], truncated: bool) -> list[Blocker]:
+def _claim_blockers(verification: Mapping[str, Any], source_issues: Mapping[int, str]) -> list[Blocker]:
     blockers: list[Blocker] = []
     thresholds = verification["thresholds"]
     for index, row in enumerate(verification["results"]):
@@ -132,8 +132,7 @@ def _claim_blockers(verification: Mapping[str, Any], truncated: bool) -> list[Bl
                     "field": "verdict",
                     "code": "claim_invalid",
                     "value": None,
-                    "safety_refusal": True,
-                    "evidence_line": {"source": "provider", "field": f"claim_{index}", "value": None},
+                    "invalid_answer": f"claim_{index}",
                     "next_check": "Obtain a valid provider judgment for this claim.",
                 }
             )
@@ -187,32 +186,40 @@ def _claim_blockers(verification: Mapping[str, Any], truncated: bool) -> list[Bl
                     "next_check": "Check this exact claim against a direct observation.",
                 }
             )
-        elif verdict == "verified" and not truncated:
+        elif (issue := source_issues.get(index)) is not None:
             blockers.append(
                 {
                     **claim,
                     "field": "supporting_evidence",
-                    "code": "caller_note_only",
+                    "code": issue,
                     "value": row.get("supporting_evidence") or "none",
-                    "next_check": "Supply an independent observation for this claim.",
+                    "next_check": "Supply an independent observation for this claim."
+                    if issue == "caller_note_only"
+                    else "Obtain a valid provider source judgment for this claim.",
+                    **({"invalid_answer": f"source_{index}"} if issue == "source_invalid" else {}),
                 }
             )
     return blockers
 
 
-def explain_gate(body: dict[str, Any], blockers: list[Blocker], *, verification_cut: bool = False) -> None:
+def explain_gate(body: dict[str, Any], blockers: list[Blocker], diff: object, source_issues: Mapping[int, str]) -> None:
     """One change verdict, with a count per diagnostic and one highest-priority check."""
-    claim_blockers = _claim_blockers(body["verification"], verification_cut)
+    claim_blockers = _claim_blockers(body["verification"], source_issues)
     for blocker in claim_blockers:
         blocker["next_check"] = f"{blocker['claim_id']}: {blocker['next_check']}"
     blockers = [*blockers, *claim_blockers]
     counts = Counter(str(b["code"]) for b in blockers)
     body["rollup"] = {"action": body["action"], "reason_counts": dict(counts)}
+    shape_check = {"text": NO_HUNKS_CHECK, "excerpt": EXCERPT_CHECK}.get(diff_shape(diff))
     if not blockers:
+        body["next_checks"] = (
+            ["The row stands. Proceed."] if body["action"] == "auto" else ([shape_check] if shape_check else [])
+        )
         return
     body["blockers"] = blockers
-    body["reason_codes"] = list(dict.fromkeys([*body["reason_codes"], *counts]))
     priority = next((b for b in blockers if "evidence_line" in b), None)
+    if priority is None:
+        priority = next((b for b in blockers if b["code"] == "claim_invalid"), None)
     if priority is None:
         priority = next(
             (
@@ -224,7 +231,7 @@ def explain_gate(body: dict[str, Any], blockers: list[Blocker], *, verification_
         )
     if priority is not None:
         check = priority["next_check"]
-    elif shape_check := next((c for c in body["next_checks"] if c in (NO_HUNKS_CHECK, EXCERPT_CHECK)), None):
+    elif shape_check:
         check = shape_check
     else:
         check = (claim_blockers or blockers)[0]["next_check"]

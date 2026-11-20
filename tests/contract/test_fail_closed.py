@@ -17,7 +17,7 @@ from typing import Any, cast
 
 import pytest
 
-from tests.support.jev import call_tool
+from tests.support.jev import NO_DEFECT, call_tool
 
 pytestmark = pytest.mark.anyio
 
@@ -222,6 +222,7 @@ GOOD_REVIEW: dict[str, Any] = {
     "test_gap": {"score": 0, "confidence": 0.95},
     "blast_radius": {"score": 0, "confidence": 0.95},
     "safe_to_apply": {"noul": 0.95},
+    "defect_kind": NO_DEFECT,
 }
 REVIEW_TARGETS: dict[str, Mapping[str, Mutation]] = {
     **{rubric: {**noul_mutations("score"), **CONFIDENCE_MUTATIONS} for rubric in list(GOOD_REVIEW)[:4]},
@@ -352,6 +353,7 @@ CASES: list[Case] = [
         },
         {
             **GOOD_REVIEW,
+            "source_0": choice("evidence", {"evidence": 0.98, "diff": 0.01, "none": 0.01}),
             "claim_0": choice("verified", {"verified": 0.97, "contradicted": 0.02, "unsupported": 0.01}),
         },
         lambda payload, _: payload["action"] == "auto",

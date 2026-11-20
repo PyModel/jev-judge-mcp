@@ -23,7 +23,7 @@ from jev_judge_mcp.providers import NO_RETRIES, JevProvider, ProviderError, Prov
 from jev_judge_mcp.providers import retry as retry_timing
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
-from jev_judge_mcp.tools.toolset import code_of
+from jev_judge_mcp.tools.base import code_of
 from tests.support.retries import ControlledClock
 from tests.support.retries import controlled_clock as controlled_clock
 from tests.support.retries import fast_retries as fast_retries

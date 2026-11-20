@@ -99,10 +99,8 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     for claim in claims:
         relation = answers.get(f"relation_{claim['id']}")
         validated = validate_choice(relation, RELATION_TO_VERDICT)
-        # source_* is auxiliary and asked only for several evidence items. Validating an answer
-        # that was never asked counts a fail-closed that did not happen. Its absence never
-        # invalidates the relation, but a present source must name a supplied id or "none".
-        source = validate_choice(answers.get(f"source_{claim['id']}"), source_keys) if len(evidence) > 1 else None
+        source_asked = len(evidence) > 1
+        source = validate_choice(answers.get(f"source_{claim['id']}"), source_keys) if source_asked else None
         # Q4 (ADR-0012, ADR-0043): malformed confidence invalidates; absent confidence does not.
         if validated is None or validated.confidence_kind == "malformed":
             closed = fail_closed("verify")
@@ -122,7 +120,14 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             continue
         confidence = validated.confidence
         support = source.choice if source is not None and source.choice != "none" else None
-        action = verify_claim_action(confidence, auto_accept, None if source is None else source.choice, evidence)
+        policy_source = (None if source is None else source.choice) if source_asked else evidence[0]["id"]
+        action = verify_claim_action(
+            confidence,
+            auto_accept,
+            policy_source,
+            evidence,
+            source_invalid=source_asked and (source is None or source.confidence_kind == "malformed"),
+        )
         row = {
             "id": claim["id"],
             "claim": claim["text"],

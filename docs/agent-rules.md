@@ -57,9 +57,9 @@ Rules:
   `...`, a path, or "see evidence item". A large change goes as a `[{path, patch}]` file list or
   as separate calls split by concern. Test logs go in `tests` (`tests_path` for
   `jev_gate_range`) as the raw pass/fail lines. Per-file gates read caller evidence and sibling patches as space permits. The review lists optional omissions in `context_omissions`.
-- **Act on `action`:** `auto` → proceed · `review` → confirm with tests, source reading, or a
-  stronger check · `escalate` → stop and surface it. `invalid_response` → the row is unjudged;
-  leave it without a verdict.
+- **Act on `action`:** `auto` → the verdict stands and you act on it. A contradicted claim at
+  `auto` is confidently false. `review` → confirm with tests, source reading, or a stronger check.
+  `escalate` → stop and surface it. An invalid required judgment leaves the row unjudged.
 - **Jev screens; it never proves.** A Jev check never replaces running the tests, lint, or types.
   A `jev_gate` `auto` is the recommended final judgment before "done", not
   sufficient, and it is skipped when tests, type checks, build, lint, or another

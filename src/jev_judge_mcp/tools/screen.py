@@ -99,6 +99,8 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
                 },
             ),
             action=_headline(failed.action),
+            call_action=failed.action,
+            unresolved=failed.action != "pass",
         )
 
     recommendation = screen_recommendation(
@@ -115,6 +117,8 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             },
         ),
         action=_headline(recommendation.action),
+        call_action=recommendation.action,
+        unresolved=recommendation.action != "pass",
     )
 
 

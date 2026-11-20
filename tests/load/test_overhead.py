@@ -46,10 +46,12 @@ def anyio_backend() -> str:
 
 
 def answer_book() -> dict[str, Any]:
-    """Every permissive answer by question key; tools that share a key share the answer."""
+    """Static permissive answers by question key."""
     book: dict[str, Any] = {}
     for case in CASES:
         for key, answer in case.permissive.items():
+            if key.startswith("source_"):
+                continue
             assert book.setdefault(key, answer) == answer, key
     return book
 
@@ -57,10 +59,8 @@ def answer_book() -> dict[str, Any]:
 def answer_for(book: dict[str, Any], key: str, question: JsonValue) -> Any:
     """The case's permissive answer, or a Choice derived from the question's own labels.
 
-    jev_gate asks a `source_<index>` Choice whose labels are the evidence ids of the case it is scoring,
-    and no case records that answer. Those labels depend on the arguments, so they come from the question
-    itself, not a hardcoded id. Every Score and Noul key is already in the book; a question this cannot
-    answer raises, which the canary sees.
+    Gate source Choice labels depend on the evidence IDs in each call. Derive the answer from
+    the question so fixtures with the same question key can use different evidence IDs.
     """
     if key in book:
         return book[key]
@@ -169,8 +169,7 @@ async def test_every_tool_call_succeeds_at_low_concurrency() -> None:
 
     `make load` measures overhead and stays out of CI, which is how an unanswered `source_<index>`
     question shipped in 0.5.0. One pass per tool per level fails on the first question the stub
-    cannot answer. The derived source answer must name the caller's evidence id: a claim row's
-    `invalid_response` does not see a source answer that failed validation.
+    cannot answer. The derived source answer must name the caller's evidence ID.
     """
     toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: StubProvider()), TOOLS)
     server = JevMCPServer(toolset=toolset, log_level="WARNING")

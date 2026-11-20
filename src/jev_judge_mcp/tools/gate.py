@@ -10,15 +10,12 @@ from jev_judge_mcp.gate_diagnostics import explain_gate, input_cuts
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.policy import Action, ClaimJudgment, ClaimVerdict, PolicyThresholds
-from jev_judge_mcp.policy.claims import note_blocks_auto
+from jev_judge_mcp.policy.claims import claim_action
 from jev_judge_mcp.providers import Evaluation, ProviderError
 from jev_judge_mcp.responses import (
     caller_renames,
     claim_extras,
-    diff_shape,
-    next_checks_for,
     renamed_ids_field,
-    review_saw_tests,
     summary_extras,
 )
 from jev_judge_mcp.serialize import js_number_to_locale_string_en_us
@@ -125,11 +122,6 @@ DEFINITION = define(
                 "type": "string",
                 "description": "Reported test output for the patch review. Subject to the document and request limits.",
             },
-            "tests_format": {"type": "string", "description": "text, junit, or tap. Omitted text is self-reported."},
-            "tests_sha256": {
-                "type": "string",
-                "description": "Hash of a tests log a reader hashed. The server does not hash caller text.",
-            },
             "auto_accept": {
                 "type": "number",
                 "minimum": 0,
@@ -227,10 +219,12 @@ class VerificationHalf:
     payload: dict[str, object]
     action: Action
     judgments: list[ClaimJudgment | None]
-    caller_note: bool
+    source_issues: dict[int, str]
 
 
-async def handle(args: dict[str, Any], runtime: Runtime, *, withheld: Sequence[dict[str, str]] = ()) -> ToolResult:
+async def handle(
+    args: dict[str, Any], runtime: Runtime, *, withheld: Sequence[dict[str, str]] | None = None
+) -> ToolResult:
     settings = review_settings(args)
     # The evidence budgets are evidence-driven and identical for every per-file call, so they are
     # refused once here, before the split: a file list over budget is an isError like a string is.
@@ -288,17 +282,16 @@ async def _ask_gate(
     evidence_ids = [str(item["id"]) for item in asked_evidence]
     for index in range(len(claims)):
         questions[f"claim_{index}"] = claim_question(index)
-        if len(asked_evidence) > 1:
-            questions[f"source_{index}"] = gate_source_question(index, evidence_ids)
+        questions[f"source_{index}"] = gate_source_question(index, evidence_ids)
     check_gate_budget(state, questions)
-    patch_lines = add_citations(state, questions, [_implicit_evidence(docs.diff, None)[0]])
+    patch_lines = add_citations(state, questions, [asked_evidence[len(sent_evidence)]])
     counter_lines = add_citations(state, questions, asked_evidence, claim_count=len(claims))
     evaluation = await runtime.ask(state, questions)
     answers = evaluation.answers
 
     review = project_review(answers, settings, False)
     review, blockers = grounded_review(review, answers, patch_lines, thresholds.auto_accept)
-    if docs.tests and not args.get("tests_sha256"):
+    if docs.tests and not runtime.tests_read_from_file:
         review.payload["tests_weight"] = "self_reported"
 
     verification = _verify_claims(answers, claims, asked_evidence, evidence_ids, thresholds, counter_lines)
@@ -307,25 +300,22 @@ async def _ask_gate(
     reason_codes = gate_reason_codes(
         truncated=False,
         review_action=review.action,
-        review_invalid=review.invalid,
+        review_invalid=review.invalid or any(b["code"] == "defect_kind_invalid" for b in blockers),
+        source_invalid="source_invalid" in verification.source_issues.values(),
         claims=verification.judgments,
         action=action,
         thresholds=thresholds,
-        caller_note=verification.caller_note,
+        caller_note="caller_note_only" in verification.source_issues.values(),
     )
     body: dict[str, object] = {
         "truncated": False,
         "action": action,
         "reason_codes": reason_codes,
-        # A text or trimmed diff that did not stand gets its hint: computed from the argument, not judged.
-        "next_checks": next_checks_for(
-            reason_codes, diff_shape=diff_shape(args["diff"]), review_saw_tests=review_saw_tests(args)
-        ),
         "review": review.payload,
         "verification": verification.payload,
         **renamed_ids_field(renamed),
     }
-    explain_gate(body, blockers)
+    explain_gate(body, blockers, args["diff"], verification.source_issues)
     return GateAsk(body, action, evaluation)
 
 
@@ -341,6 +331,7 @@ def _verify_claims(
     results: list[dict[str, object]] = []
     judgments: list[ClaimJudgment | None] = []
     claim_actions: list[Action] = []
+    source_issues: dict[int, str] = {}
     for index, claim in enumerate(claims):
         answer = validate_choice(answers.get(f"claim_{index}"), CLAIM_CRITERIA)
         if answer is None:
@@ -373,13 +364,7 @@ def _verify_claims(
         ):
             verdict = "unsupported"
         judgments.append(ClaimJudgment(verdict, answer.confidence))
-        # Asked only when more than one evidence item was sent (the same condition as the ask).
-        # Validating the missing answer would count a fail-closed that never happened.
-        source = (
-            validate_choice(answers.get(f"source_{index}"), [*evidence_ids, "none"])
-            if len(asked_evidence) > 1
-            else None
-        )
+        source = validate_choice(answers.get(f"source_{index}"), [*evidence_ids, "none"])
         support = source.choice if source is not None and source.choice != "none" else None
         action = gate_claim_action(
             verdict,
@@ -389,6 +374,12 @@ def _verify_claims(
             source=None if source is None else source.choice,
             evidence=asked_evidence,
         )
+        if claim_action(verdict, answer.confidence, thresholds.auto_accept, thresholds.review_at) == "auto":
+            if source is None or source.confidence_kind == "malformed":
+                source_issues[index] = "source_invalid"
+                action = "review"
+            elif action == "review":
+                source_issues[index] = "caller_note_only"
         if action == "escalate" and verdict != "contradicted":
             action = "review"
         claim_actions.append(action)
@@ -424,11 +415,7 @@ def _verify_claims(
         "thresholds": {"auto_accept": thresholds.auto_accept, "review_at": thresholds.review_at},
         "results": results,
     }
-    caller_note = any(
-        row.get("supporting_evidence") and note_blocks_auto("auto", row.get("supporting_evidence"), asked_evidence)
-        for row in results
-    )
-    return VerificationHalf(verification, verification_action, judgments, caller_note)
+    return VerificationHalf(verification, verification_action, judgments, source_issues)
 
 
 _FILE_REVIEW_PURPOSE = (
@@ -446,7 +433,7 @@ async def _handle_file_list(
     settings: ReviewSettings,
     evidence: list[dict[str, object]],
     raw_evidence: list[dict[str, object]],
-    withheld: Sequence[dict[str, str]],
+    withheld: Sequence[dict[str, str]] | None,
 ) -> ToolResult:
     """Per-file review plus one claims verification (ADR-0066 and its amendment).
 
@@ -474,8 +461,7 @@ async def _handle_file_list(
     questions: dict[str, Question] = {}
     for index in range(len(claims)):
         questions[f"claim_{index}"] = claim_question(index)
-        if len(asked_evidence) > 1:
-            questions[f"source_{index}"] = gate_source_question(index, evidence_ids)
+        questions[f"source_{index}"] = gate_source_question(index, evidence_ids)
     state = {
         "purpose": (
             "Check each completion claim of the proposed multi-file patch against the evidence only. The "
@@ -507,30 +493,29 @@ async def _handle_file_list(
 
     review_action = worst_action([half.action for half in reviewed.halves])
     review_payload = reviewed.review_half(review_action)
-    if reviewed.unhashed_tests:
+    if tests and withheld is None and not runtime.tests_read_from_file:
         review_payload["tests_weight"] = "self_reported"
     action = file_list_action([review_action, verification.action], bool(withheld))
     reason_codes = gate_reason_codes(
         truncated=bool(withheld),
         review_action=review_action,
-        review_invalid=any(half.invalid for half in reviewed.halves),
+        review_invalid=any(half.invalid for half in reviewed.halves)
+        or any(b["code"] == "defect_kind_invalid" for b in reviewed.blockers),
+        source_invalid="source_invalid" in verification.source_issues.values(),
         claims=verification.judgments,
         action=action,
         thresholds=settings.thresholds,
-        caller_note=verification.caller_note,
+        caller_note="caller_note_only" in verification.source_issues.values(),
     )
     payload: dict[str, object] = {
         "truncated": False,
         "action": action,
         "reason_codes": reason_codes,
-        "next_checks": next_checks_for(
-            reason_codes, diff_shape=diff_shape(args["diff"]), review_saw_tests=review_saw_tests(args)
-        ),
         "review": review_payload,
         "verification": verification.payload,
         **renamed_ids_field(renamed),
         "partial": bool(withheld),
-        "unreviewed_files": [item["path"] for item in withheld],
+        "unreviewed_files": [item["path"] for item in withheld or ()],
     }
     withheld_blockers = [
         {
@@ -539,9 +524,9 @@ async def _handle_file_list(
             "code": "file_withheld",
             "next_check": f"Review {item['path']} locally. Its patch was withheld ({item['reason']}).",
         }
-        for item in withheld
+        for item in withheld or ()
     ]
-    explain_gate(payload, [*reviewed.blockers, *withheld_blockers])
+    explain_gate(payload, [*reviewed.blockers, *withheld_blockers], args["diff"], verification.source_issues)
     return ToolResult(frame("jev_gate", combined([*reviewed.evaluations, evaluation]), payload), action=action)
 
 

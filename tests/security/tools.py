@@ -11,6 +11,9 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
+from tests.support.jev import NO_DEFECT
+from tests.support.jev import choice as certain_choice
+
 type Path = tuple[str | int, ...]
 
 COSTUME: dict[str, Any] = {
@@ -77,6 +80,7 @@ GOOD_REVIEW: dict[str, Any] = {
     "test_gap": {"score": 0, "confidence": 0.95},
     "blast_radius": {"score": 0, "confidence": 0.95},
     "safe_to_apply": {"noul": 0.95},
+    "defect_kind": NO_DEFECT,
 }
 WEAK_REVIEW: dict[str, Any] = {
     "correctness": dressed({"score": 0, "confidence": 0.95}),
@@ -235,7 +239,11 @@ CASES: tuple[ToolCase, ...] = (
             "tests": "PASS unknown user",
         },
         [("request",), ("diff",), ("claims", 0), ("evidence", 0, "text"), ("tests",)],
-        {**GOOD_REVIEW, "claim_0": choice("verified", {"verified": 0.97, "contradicted": 0.02, "unsupported": 0.01})},
+        {
+            **GOOD_REVIEW,
+            "claim_0": choice("verified", {"verified": 0.97, "contradicted": 0.02, "unsupported": 0.01}),
+            "source_0": certain_choice("ci", "ci", "diff", "tests", "none"),
+        },
         {
             **GOOD_REVIEW,
             "claim_0": dressed(choice("contradicted", {"verified": 0.02, "contradicted": 0.97, "unsupported": 0.01})),
@@ -334,7 +342,11 @@ CASES: tuple[ToolCase, ...] = (
             "evidence": [{"id": "ci", "text": REVIEW_TEXT[2]}],
         },
         [("request",), ("claims", 0), ("evidence", 0, "text")],
-        {**GOOD_REVIEW, "claim_0": choice("verified", {"verified": 0.97, "contradicted": 0.02, "unsupported": 0.01})},
+        {
+            **GOOD_REVIEW,
+            "claim_0": choice("verified", {"verified": 0.97, "contradicted": 0.02, "unsupported": 0.01}),
+            "source_0": certain_choice("ci", "ci", "diff_notes.txt", "none"),
+        },
         {
             **GOOD_REVIEW,
             "claim_0": dressed(choice("contradicted", {"verified": 0.02, "contradicted": 0.97, "unsupported": 0.01})),

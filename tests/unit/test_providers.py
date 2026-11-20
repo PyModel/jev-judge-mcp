@@ -26,7 +26,7 @@ from jev_judge_mcp.server import configure_logging
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.text import head
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
-from jev_judge_mcp.tools.toolset import code_of
+from jev_judge_mcp.tools.base import code_of
 from tests.support.retries import fast_retries as fast_retries
 
 QUESTIONS = {"q": NoulQuestion("Is it?", NoulCriteria("yes", "no"))}

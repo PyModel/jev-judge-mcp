@@ -15,7 +15,7 @@ _WHEN = (
 )
 _HONOR = (
     "Honor action. Do not grep verdict. "
-    "auto means the row stands and you may proceed. "
+    "auto means the verdict stands and you act on it. A contradicted claim at auto is confidently false. "
     "review means you still own the row and must confirm it before proceeding. "
     "escalate means stop and decide yourself. This server does not call another model. "
     "Read blockers for the failing file or claim, the comparison, and the next check. Ignoring escalate is not a pass."

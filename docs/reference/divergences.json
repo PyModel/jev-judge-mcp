@@ -794,6 +794,68 @@
       "python_behavior": "The gate asks bounded evidence-pointer questions. A change rolls up file and claim reasons and gives one next check. Escalations require a named and cited defect, a cited contradiction or an explicit refusal. The program-response-fields fixture projection retains the frozen score and probability assertions."
     },
     {
+      "id": "tool-correctness",
+      "surface": "result",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0083-fail-closed-tool-results.md",
+      "tests": [
+        "tests/parity/test_tool_fixtures.py",
+        "tests/unit/test_verify.py",
+        "tests/unit/test_grounded_gate.py",
+        "tests/unit/test_gate_next_checks.py",
+        "tests/unit/test_cli_gate.py",
+        "tests/unit/test_files_judge.py",
+        "tests/contract/test_file_judge.py",
+        "tests/contract/test_files_judge.py",
+        "tests/unit/test_file_diff.py"
+      ],
+      "fixtures": [],
+      "verify_holds": [
+        "mock-144#0",
+        "mock-151#2",
+        "mock-151#3",
+        "mock-151#4",
+        "mock-151#5",
+        "mock-151#6",
+        "mock-151#7",
+        "mock-151#8",
+        "mock-151#9",
+        "mock-151#10",
+        "mock-151#11"
+      ],
+      "reference_behavior": "Missing optional answers can leave a reference decision at auto. Review thresholds can escalate without a cited line. Some diagnostics and file judgment capabilities are Python extensions.",
+      "python_behavior": "Verification and gates hold rows on invalid auxiliary source or defect answers. Verification reports stands only for verified auto rows. Review and gate share grounded diagnostics. The program-response-fields projection compares the recorded decisions with these policy changes applied. Internal errors, file batch provenance, citation IDs and hunk lines, choice keys, and diagnostic field shapes are pinned by the listed boundary tests."
+    },
+    {
+      "id": "remove-tests-format",
+      "surface": "tool_schema",
+      "tier": "tier_a",
+      "status": "sanctioned",
+      "adr": "docs/adr/0083-fail-closed-tool-results.md",
+      "tests": [
+        "tests/contract/test_tools_list.py",
+        "tests/unit/test_file_diff.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The reference tool schemas do not declare tests_format. The previous Python file-list schema extension advertised it.",
+      "python_behavior": "Gate and review drop tests_format from their published schemas. Test provenance follows who read the log."
+    },
+    {
+      "id": "remove-tests-sha256",
+      "surface": "tool_schema",
+      "tier": "tier_a",
+      "status": "sanctioned",
+      "adr": "docs/adr/0083-fail-closed-tool-results.md",
+      "tests": [
+        "tests/contract/test_tools_list.py",
+        "tests/unit/test_file_diff.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The reference tool schemas do not declare tests_sha256. The previous Python file-list schema extension advertised it.",
+      "python_behavior": "Gate and review drop tests_sha256 from their published schemas. Test provenance follows who read the log."
+    },
+    {
       "id": "session-source-version",
       "surface": "result",
       "tier": "both",

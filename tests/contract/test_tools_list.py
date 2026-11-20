@@ -145,8 +145,6 @@ def _expected_tool(frozen: dict[str, Any], actual: dict[str, Any]) -> dict[str, 
             for field in ("kind", "role"):
                 want["properties"][field] = {"type": "string", "description": _description(got["properties"][field])}
     if name in {"jev_gate", "jev_review"}:
-        for field in ("tests_format", "tests_sha256"):
-            props[field] = {"type": "string", "description": _description(current[field])}
         legacy = props["diff"]
         description = legacy.pop("description")
         patch = {

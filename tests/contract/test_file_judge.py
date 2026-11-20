@@ -9,7 +9,7 @@ from typing import Any, cast
 
 import pytest
 
-from jev_judge_mcp.limits import FILE_JUDGE
+from jev_judge_mcp.limits import FILE_JUDGE, SANITIZE_ID_UNITS
 from jev_judge_mcp.tools import TOOLS
 from jev_judge_mcp.tools.file_judge import DEFINITION
 from tests.support.jev import call_tool
@@ -151,6 +151,14 @@ async def test_an_env_example_is_read_and_a_literal_reaches_the_provider_redacte
     state, _ = outcome.requests[0]
     content = cast(str, cast(dict[str, object], state)["content"])
     assert literal not in content and "[redacted]" in content
+
+
+async def test_choice_keys_obey_the_short_identifier_utf16_limit() -> None:
+    key = "🧪" * (SANITIZE_ID_UNITS // 2) + "a"
+    args = noul_args(criteria={key: "first option", "b": "second option"}) | {"kind": "choice"}
+    outcome = await call_tool("jev_file_judge", args, {})
+    assert outcome.is_error and outcome.code == "invalid_arguments", outcome.text
+    assert outcome.requests == []
 
 
 async def test_criteria_broken_for_the_kind_refuses_before_any_call(tmp_path: Any, monkeypatch: Any) -> None:

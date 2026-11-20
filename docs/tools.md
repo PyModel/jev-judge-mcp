@@ -29,12 +29,22 @@ Every tool's schema advertises `additionalProperties: false`; the runtime keeps 
 zod strip: unknown keys are stripped, not refused — a missing or ill-typed declared key is refused
 typed `invalid_arguments` (ADR-0022).
 
+Errors include `invalid_arguments` for schema refusals, `input_too_large` for input or context
+limits, `auth` for authentication and configuration, `quota` for rate limiting, `timeout` for
+provider timeouts, `provider` for other provider failures, and `internal` for unexpected tool
+failures. Tools can also return codes for their own refusals. An `internal` error does not establish
+provider contact and makes a required completion hook ask.
+
 ---
 
 ## jev_verify — claims against evidence
 
 **Use when** you hold claims (a summary, a PR description, an agent's "done" list) and the evidence
-they cite, and want verified / contradicted / unsupported per claim.
+they cite, and want verified / contradicted / unsupported per claim. Act on an `auto` verdict.
+An `auto` contradiction is confidently false. `stands` is true only for a verified claim at
+`auto`. A sole caller note counts as the policy source without filling `supporting_evidence`.
+A caller note alone cannot earn `auto`. If a source was requested, a missing or malformed source
+answer holds the claim for review.
 
 **Measured.** L3 live run, 2026-09-23: n=5 claims, contradiction_recall 1.000, macro_f1 1.000,
 brier 0.00004, ece 0.002, selective_accuracy 1.000, auto_coverage 1.000, invalid 0. Five synthetic
@@ -174,9 +184,9 @@ exactly what your pattern matched.
 **Measured.** No recorded live eval. Scorer: P(defective | auto), safe_to_apply AUROC,
 severe-defect recall.
 
-**Weak spots.** Escalate here is uncertainty, not a finding: the lowest rubric confidence below
-`review_at` (default 0.5) escalates, including a low-confidence ancillary score like `test_gap` on
-a patch the other scores accept (README § Operator notes). The rubrics are fixed
+**Weak spots.** A confidence below `review_at` (default 0.5) requires review. Escalation requires a
+named defect or safety refusal grounded in a changed line, or an invalid required judgment. A
+malformed or missing answer to a requested defect-category question prevents `auto`. The rubrics are fixed
 (correctness, spec_match, test_gap, blast_radius); callers cannot add one. A string `diff` over
 the cap is truncated and judgment over cut context never stands `auto`; a file-list `diff` is
 reviewed per file instead — one oversized or unreviewable file lists in `unreviewed_files`, marks
@@ -187,7 +197,9 @@ you pass (ADR-0063: diff and tests count as evidence when you do not pass them e
 
 A held review includes `blockers` with the triggering field, observed value, applicable threshold,
 and a next check. Rubric confidence blockers also show the score, nearest level and whether that
-level is favorable, intermediate or adverse.
+level is favorable, intermediate or adverse. Where a changed line is available, the next check
+points to the patch. Caller-supplied test text is marked `tests_weight: self_reported`. The gate
+omits that mark when the CLI or range tool reads the log itself.
 
 ## jev_gate — did the work finish
 
@@ -208,8 +220,9 @@ would refuse. Split by file or hunk and send each claim with the evidence it nee
 
 **Reading a held gate.** Use `blockers` for file-by-file and claim-by-claim comparisons. For
 example, `spec_match_confidence_below_review_at` can report a favorable level, confidence 0.49
-and threshold 0.5. Check the requirement against its implementation. Existing summary reason
-codes remain. The request, target patch and tests are the primary review inputs. The target path,
+and threshold 0.5. Check the requirement against its implementation. Summary reason codes use the
+frozen vocabulary. Read detailed blocker codes in `blockers` and `rollup.reason_counts`. The
+request, target patch and tests are the primary review inputs. The target path,
 caller evidence items and sibling patches share a supplemental UTF-16 budget. When any of these
 are omitted, `jev_review.context_omissions` or the gate’s `review.context_omissions` lists each
 target path and index, required and allowed units, and omitted entries. This field is informational
@@ -223,11 +236,16 @@ by code across files, withheld paths and claims. Accepted changes have an empty 
 `next_checks` contains one prioritized action. Every other held comparison keeps its own check in
 `blockers`. When a rubric needs review and a changed line is available, the suggested check
 names a patch line to inspect. An omitted input on a held file is identified by path or evidence ID.
+The source and defect category questions hold otherwise-auto decisions for review when their answers
+are missing or malformed. Plain summaries require actual diff structure before they count as patches.
 
 A named defect or explicit safety rejection cites a changed line. A confirmed claim contradiction
 cites a counterexample and sets the claim excerpt to that line. The line number is one-based within
-the submitted patch or evidence item. Text is a bounded excerpt. Invalid required answers explicitly
-refuse a decision and identify the provider field. Low confidence alone requires review. A provider
+the submitted patch or evidence item. The source uses the ID sent to the provider, including any
+renamed implicit diff. Changed code remains citable even when it resembles a diff header.
+`evidence_line` is always `{source, line, text}`. Invalid answers identify the provider question
+in `invalid_answer`. Only a cited safety refusal sets `safety_refusal`. Invalid required answers
+explicitly refuse a decision. Low confidence alone requires review. A provider
 contradiction without sufficient corroboration yields `unsupported` and `reported_verdict:
 contradicted`. Its probabilities still describe the provider's original judgment.
 `citation_coverage` reports the number of eligible and offered lines. A held change can be split
@@ -278,7 +296,7 @@ prefixed `.env` family, `*.pem`,
 reaches the provider. Paths must resolve inside the server's working directory,
 symlinks followed; there is no override, and an escaping path is refused `path_outside_scope` with no
 provider call. One question per call: several files are `jev_files_judge`, the batched form of this
-tool.
+tool. Choice option IDs must contain 1 to 64 UTF-16 units each.
 
 **Not for** exact lookups, counting, math, or anything grep answers — run the command and read the
 answer yourself.
@@ -302,7 +320,9 @@ among the answers is `jev_find` fed those answers as candidates.
 files from at most 32 path entries, each file at the `jev_file_judge` 100,000-unit cap — and the
 prune is deterministic: the same tree and the same paths always skip the same files. A per-file
 call failure is a skipped path, never a batch error, so a batch is only as good as its surviving
-files: read `skipped` before trusting `results`.
+files: read `skipped` before trusting `results`. File judgments and file-list reviews share a
+runtime cap of eight simultaneous file judgments. With zero calls, the batch reports the requested
+model and `provider: none`. If every call fails, the batch identifies the attempted provider.
 
 **Not for** exact lookups, counting, math, or anything grep answers — run the command and read the
 answer yourself.
@@ -334,8 +354,8 @@ execution and no ask call — but the gate judgment itself is one provider call.
 not a sandbox: an interpreter one-liner such as `python -c` or `node -e` names no network client,
 so it passes the denylist and can still reach the network once commands are enabled. Enabling
 `command` trusts the gate's judgment and the operator's own isolation, not a containment
-boundary. 1 to 20 questions
-per call, at most 20 paths; questions in one request cannot see each other's answers. Every
+boundary. 1 to 20 questions per call, at most 20 paths. Choice option IDs use the same 1 to 64
+UTF-16 unit limit as `jev_file_judge`. Questions in one request cannot see each other's answers. Every
 answer is typed: a probability, one option, or a scale position — never an explanation.
 
 **Not for** exact lookups, counting, math, or anything grep answers — run that in your own shell

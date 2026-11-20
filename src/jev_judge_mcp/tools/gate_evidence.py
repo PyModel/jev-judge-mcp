@@ -9,7 +9,7 @@ from typing import Any, TypedDict
 from jev_judge_mcp.domain import ChoiceQuestion, Question
 from jev_judge_mcp.gate_budget import GateBudgetError, check_gate_budget
 from jev_judge_mcp.gate_diagnostics import Blocker, review_blockers
-from jev_judge_mcp.responses import EXCERPT_UNITS
+from jev_judge_mcp.responses import EXCERPT_UNITS, hunk_counts
 from jev_judge_mcp.text import head
 from jev_judge_mcp.tools.observed import validate_choice
 from jev_judge_mcp.tools.review_half import ANTI_INJECTION, ReviewHalf
@@ -54,9 +54,19 @@ def _lines(item: Mapping[str, object]) -> list[Line]:
     source = str(item["id"])
     is_patch = item.get("kind") == "diff"
     lines: list[Line] = []
-    for number, raw in enumerate(str(item["text"]).split("\n"), 1):
-        if is_patch and (not raw.startswith(("+", "-")) or raw.startswith(("+++ ", "--- "))):
-            continue
+    patch = str(item["text"])
+    old = new = 0
+    for number, raw in enumerate(patch.split("\n"), 1):
+        if is_patch:
+            if raw.startswith("@@ "):
+                old, new = hunk_counts(raw, len(patch)) or (0, 0)
+                continue
+            in_hunk = old > 0 or new > 0
+            if in_hunk and not raw.startswith("\\"):
+                old = max(0, old - (not raw.startswith("+")))
+                new = max(0, new - (not raw.startswith("-")))
+            if not raw.startswith(("+", "-")) or (not in_hunk and raw.startswith(("+++ ", "--- "))):
+                continue
         excerpt = head(raw, EXCERPT_UNITS)
         if (excerpt[1:] if is_patch else excerpt).strip():
             lines.append({"source": source, "line": number, "text": excerpt})
@@ -176,15 +186,23 @@ def grounded_review(
                 "field": "defect",
                 "code": selected,
                 "evidence_line": line,
+                **({"safety_refusal": True} if selected == "safety_refusal" else {}),
                 "next_check": f"{_CHECKS[selected]} at patch line {line['line']} ({line['text']}).",
             },
         )
     elif half.invalid:
-        # A required rubric never produced a usable result. Preserve the explicit fail-closed protocol.
         for blocker in blockers:
-            blocker.update(
-                safety_refusal=True, evidence_line={"source": "provider", "field": blocker["field"], "value": None}
-            )
+            blocker["invalid_answer"] = blocker["field"]
+    elif citations.lines and (kind is None or kind.confidence_kind == "malformed") and action == "auto":
+        action = "review"
+        blockers.append(
+            {
+                "field": "defect_kind",
+                "code": "defect_kind_invalid",
+                "invalid_answer": "defect_kind",
+                "next_check": "Obtain a valid provider judgment for defects in this patch.",
+            }
+        )
     elif action == "escalate" or (kind is not None and kind.choice != "none"):
         action = "review"
         if kind is not None and kind.choice != "none":

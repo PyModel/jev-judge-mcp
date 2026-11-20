@@ -24,7 +24,7 @@ from jev_judge_mcp.providers.cloudflare import CloudflareProvider, cloudflare_sl
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.openrouter import OpenRouterProvider, openrouter_slug
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
-from jev_judge_mcp.tools.toolset import code_of
+from jev_judge_mcp.tools.base import code_of
 from tests.support.retries import fast_retries as fast_retries
 from tests.support.secrets import secret_env
 

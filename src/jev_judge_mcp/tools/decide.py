@@ -201,7 +201,8 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
                 ],
                 "warnings": warnings,
             },
-        )
+        ),
+        unresolved=recommendation["selected"] is None or recommendation["escaped"] is True,
     )
 
 

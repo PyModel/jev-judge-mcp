@@ -11,10 +11,9 @@ from typing import Any
 
 import pytest
 
-from jev_judge_mcp import cli
 from jev_judge_mcp.cli import judge_main
 from jev_judge_mcp.providers import ProviderError
-from tests.support.jev import FakeProvider, call_tool
+from tests.support.jev import NO_DEFECT, FakeProvider, call_tool, choice
 
 _VERIFY_SUPPORTED = {
     "choice": "supports",
@@ -27,9 +26,11 @@ _GOOD_REVIEW: dict[str, Any] = {
     "test_gap": {"score": 0, "confidence": 0.95},
     "blast_radius": {"score": 0, "confidence": 0.95},
     "safe_to_apply": {"noul": 0.95},
+    "defect_kind": NO_DEFECT,
 }
 _GOOD_GATE = {
     **_GOOD_REVIEW,
+    "source_0": choice("evidence", "none", "evidence", "diff"),
     "claim_0": {
         "choice": "verified",
         "confidence": 0.97,
@@ -472,22 +473,28 @@ def test_extract_headlines_are_computed_on_the_outcome() -> None:
     )
     assert settled.extract is not None
     assert settled.extract.item_action is None
-    assert settled.extract.call_action == "auto"
+    assert settled.extract.call_action == settled.action == "auto"
+    assert not settled.unresolved
     broken = anyio.run(
         run,
         {"document": "Price: $10", "fields": [{"id": "price", "pattern": "[", "description": "the price"}]},
     )
     assert broken.extract is not None
     assert broken.extract.item_action is None
-    assert broken.extract.call_action == "review"
+    assert broken.extract.call_action == broken.action == "review"
+    assert broken.unresolved
 
 
-def test_every_registered_tool_has_a_decision_mapping() -> None:
-    """Guard: a tool that registers without a payload mapping or extract headlines judges unresolved."""
+def test_every_registered_tool_has_a_decision_boundary_case() -> None:
     from jev_judge_mcp.tools import TOOLS
 
-    assert set(cli.TOOL_DECISIONS) | {"jev_extract"} == {tool.name for tool in TOOLS}
-    assert "jev_extract" not in cli.TOOL_DECISIONS
+    covered = {
+        case.values[0]
+        for test in (test_a_clean_call_resolves_every_tool, test_a_call_that_needs_attention_stays_unresolved)
+        for mark in getattr(test, "pytestmark", ())
+        for case in mark.args[1]
+    }
+    assert covered | {"jev_gate_range", "jev_ask", "jev_file_judge"} == {tool.name for tool in TOOLS}
 
 
 _VERIFY = {"claims": ["The service listens on 8080."], "evidence": "server.listen(8080)"}

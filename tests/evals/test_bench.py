@@ -30,7 +30,7 @@ from evals.runners.manifest import load_cases
 from evals.scorers.tools import SCORERS, Example
 from evals.spend import SpendLedger
 from jev_judge_mcp.tools import TOOLS
-from jev_judge_mcp.tools.arguments import parse_arguments
+from jev_judge_mcp.tools.arguments import compile_argument_schema
 from tests.evals import booking_cases
 from tests.support.agent_stubs import dead_login, reaches_model
 
@@ -80,7 +80,7 @@ def test_every_input_is_a_valid_call_of_its_tool() -> None:
     tools = {tool.name: tool for tool in TOOLS}
     for item in ITEMS:
         tool = tools[item.tool]
-        parse_arguments(tool.name, tool.definition.input_schema, item.input, tool.refinements)
+        compile_argument_schema(tool.name, tool.definition.input_schema, tool.refinements)(item.input)
 
 
 def test_load_cases_reads_the_bench_file() -> None:

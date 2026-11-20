@@ -79,7 +79,7 @@ These tools read no files. The review judges exactly the `diff` you send, and th
 
 | Action | What you do |
 | --- | --- |
-| `auto` | The row stands (`stands` is true). Proceed. |
+| `auto` | The verdict stands. Act on it. A contradicted claim at `auto` is confidently false. |
 | `review` | You still own this. Confirm it with a stronger check. |
 | `escalate` | You still own this. Stop on this row. Do not grep `verified`. |
 | `invalid_response` | The row is unjudged. Leave it without a verdict. |

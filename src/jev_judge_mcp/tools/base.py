@@ -20,10 +20,18 @@ from jev_judge_mcp.domain import JsonValue, Question
 from jev_judge_mcp.extract.executor import RegexExecutor
 from jev_judge_mcp.extract.worker import ProcessRegexExecutor
 from jev_judge_mcp.policy import Action
-from jev_judge_mcp.providers import Evaluation, JevProvider, resolve_model, resolve_provider
+from jev_judge_mcp.providers import (
+    Evaluation,
+    JevProvider,
+    ProviderConfigError,
+    ProviderError,
+    ProviderTimeoutError,
+    resolve_model,
+    resolve_provider,
+)
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.telemetry import ACTIONS, Span, Telemetry
-from jev_judge_mcp.tools.arguments import Refinement
+from jev_judge_mcp.tools.arguments import ArgumentsError, Refinement
 from jev_judge_mcp.tools.observed import worst_action
 from jev_judge_mcp.validation.caps import CapScope
 
@@ -43,6 +51,35 @@ class ToolError(Exception):
     def __init__(self, message: str, *, code: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def code_of(error: BaseException) -> str:
+    """The one error-code mapping. It reads the exception type and status, never the text.
+
+    ProviderConfigError is `auth` for every provider, including a malformed OpenRouter key.
+    A 401 is `auth` and a 429 is `quota` from `ProviderError.status` (ADR-0072). A 400 whose body
+    carried `error_type` `max_tokens_exceeded` is `input_too_large`: the model's context window, which
+    the caller fixes by splitting (ADR-0079). A timeout is
+    `timeout`. Argument errors are `invalid_arguments`. A ToolError carries the code its raise
+    site set. An unexpected handler error is `internal`.
+    """
+    if isinstance(error, ProviderConfigError):
+        return "auth"
+    if isinstance(error, ProviderTimeoutError):
+        return "timeout"
+    if isinstance(error, ProviderError):
+        if error.status == 401:
+            return "auth"
+        if error.status == 429:
+            return "quota"
+        if error.status == 400 and error.error_type == "max_tokens_exceeded":
+            return "input_too_large"
+        return "provider"
+    if isinstance(error, ArgumentsError):
+        return "invalid_arguments"
+    if isinstance(error, ToolError):
+        return error.code
+    return "internal"
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +114,23 @@ class ToolResult:
     truncated: frozenset[CapScope] = frozenset()
     error_code: str | None = None
     extract: ExtractHeadlines | None = None
+    call_action: str | None = None
+    unresolved: bool | None = None
+
+    @property
+    def decision_action(self) -> str | None:
+        if self.extract is not None:
+            return self.extract.call_action
+        return self.call_action if self.call_action is not None else self.action
+
+    @property
+    def decision_unresolved(self) -> bool:
+        if self.unresolved is not None:
+            return self.unresolved
+        action = self.decision_action
+        if action is not None:
+            return action != "auto"
+        return self.payload.get("status") != "ok"
 
 
 def caller_actions(values: Iterable[object]) -> tuple[Action, ...]:
@@ -90,16 +144,20 @@ def headline(item_actions: tuple[Action, ...]) -> Action | None:
 
 
 def frame(
-    tool: str, evaluation: Evaluation | None, body: Mapping[str, object], *, model: str | None = None
+    tool: str,
+    evaluation: Evaluation | None,
+    body: Mapping[str, object],
+    *,
+    model: str | None = None,
+    provider: str = "none",
 ) -> dict[str, object]:
     """A success payload: `tool, model, provider`, then `body` in its own order, then `usage`.
 
-    With no `evaluation` the call never asked Jev (jev_extract with no candidates): the caller names
-    the configured `model`, the provider is `"none"`, and usage is `null`. The gate's `isError`
-    refusal (`{tool, error}`) is not a success payload and is never framed.
+    Without an `evaluation`, the caller supplies the configured `model`. Usage is `null` and the
+    provider defaults to `"none"`.
     """
     if evaluation is None:
-        return {"tool": tool, "model": model, "provider": "none", **body, "usage": None}
+        return {"tool": tool, "model": model, "provider": provider, **body, "usage": None}
     framed: dict[str, object] = {
         "tool": tool,
         "model": evaluation.model,
@@ -141,9 +199,13 @@ class Runtime:
         settings: Settings,
         provider_factory: Callable[[Settings], JevProvider] = resolve_provider,
         regex_executor: RegexExecutor | None = None,
+        *,
+        tests_read_from_file: bool = False,
     ) -> None:
         self.settings = settings
         self.model = resolve_model(settings)
+        self.tests_read_from_file = tests_read_from_file
+        self.file_fanout = anyio.CapacityLimiter(8)
         self._provider_factory = provider_factory
         self._provider: JevProvider | None = None
         self._regex_executor = regex_executor or ProcessRegexExecutor()
@@ -155,6 +217,10 @@ class Runtime:
         self._regex_closed = False
         self._max_inflight = settings.max_inflight
         self._inflight: anyio.Semaphore | None = None
+
+    @property
+    def provider_name(self) -> str:
+        return self._provider.name if self._provider is not None else "none"
 
     @property
     def regex_executor(self) -> RegexExecutor:

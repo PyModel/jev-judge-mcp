@@ -138,6 +138,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             },
         ),
         truncated=ledger.scopes,
+        unresolved=False,
     )
 
 
