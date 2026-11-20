@@ -381,7 +381,7 @@ def test_startup_binds_once_before_warmup(monkeypatch: pytest.MonkeyPatch) -> No
     def no_logging(*_args: object) -> None:
         return None
 
-    monkeypatch.setattr(server_module, "configure_logging", no_logging)
+    monkeypatch.setattr(server_module, "configure_process_logging", no_logging)
     monkeypatch.setattr(server_module, "freeze_startup_heap", lambda: None)
     calls: list[str] = []
     issued: list[socket.socket] = []

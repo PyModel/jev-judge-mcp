@@ -96,3 +96,11 @@ and both tools' `diff` descriptions now ask for the real git diff, whole or as a
 an excerpt is judged as written. The jev_gate description also says the diff and tests are sent
 twice (ADR-0063), so a diff near its cap can overflow the model's window (ADR-0079). No constraint
 changes; name, title, and execution stay pinned (`SCHEMA_DIVERGENCE`).
+
+## Amendment (2026-11-19): tool names are available without handlers
+
+The installer and doctor use the ordered names in `registry.py`. A contract test pins
+the full definitions in `tools/__init__.py` to that tuple in publication order
+(`test_the_installer_expects_the_published_registry`). The same definitions still serve
+discovery and dispatch. The tool-only budget and diagnostic helpers live beside the handlers
+in `tools/`.

@@ -8,7 +8,7 @@ from collections.abc import Iterable
 from threading import Lock
 from urllib.parse import urlsplit
 
-from jev_judge_mcp.settings import LogLevel
+from jev_judge_mcp.settings import LogLevel, Settings, unexpanded_references
 
 REDACTED = "[redacted]"
 DEFAULT_PORTS = {"http": 80, "https": 443}
@@ -109,6 +109,12 @@ class RedactingFilter(logging.Filter):
         if record.stack_info:
             record.stack_info = redact(record.stack_info)
         return True
+
+
+def configure_process_logging(settings: Settings, redact: Redactor) -> None:
+    configure_logging(settings.log_level, redact.secrets)
+    for variable in unexpanded_references():
+        logging.getLogger("jev_judge_mcp").warning("%s holds an unexpanded reference and counts as unset", variable)
 
 
 def configure_logging(level: LogLevel, secrets: Iterable[str] = ()) -> None:

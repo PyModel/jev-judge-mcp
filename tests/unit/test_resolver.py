@@ -6,13 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from jev_judge_mcp import keyfile, server
+from jev_judge_mcp import keyfile
 from jev_judge_mcp.providers import ProviderConfigError, resolve_model, resolve_provider
 from jev_judge_mcp.providers.cloudflare import CloudflareProvider
 from jev_judge_mcp.providers.compatible import CompatibleProvider
 from jev_judge_mcp.providers.openrouter import OpenRouterProvider
 from jev_judge_mcp.providers.resolver import NO_CREDENTIALS, VERCEL_UNSUPPORTED
 from jev_judge_mcp.providers.typesafe import TypeSafeProvider
+from jev_judge_mcp.redaction.values import configure_logging
 from jev_judge_mcp.settings import Settings, load_settings
 
 TYPESAFE = {"TYPESAFE_API_KEY": "typesafe-fake-key"}
@@ -247,7 +248,7 @@ def test_late_key_is_redacted_in_provider_errors_and_logs(
     settings = load_settings()
     root = logging.getLogger()
     handlers, level = root.handlers.copy(), root.level
-    server.configure_logging("INFO")
+    configure_logging("INFO")
     path.write_text(marker, encoding="utf-8")
     if rotate:
         real_read = keyfile.stored_key

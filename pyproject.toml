@@ -32,7 +32,7 @@ Changelog = "https://github.com/PyModel/jev-judge-mcp/blob/main/CHANGELOG.md"
 telemetry = ["opentelemetry-sdk>=1.44,<2", "prometheus-client>=0.26,<0.27"]
 
 [project.scripts]
-jev-judge-mcp = "jev_judge_mcp.server:main"
+jev-judge-mcp = "jev_judge_mcp.__main__:main"
 
 [dependency-groups]
 dev = [

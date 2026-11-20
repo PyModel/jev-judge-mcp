@@ -20,7 +20,7 @@ from packaging.version import VERSION_PATTERN
 from jev_judge_mcp.domain import decode_json, is_json_object
 from jev_judge_mcp.install.errors import InstallError
 from jev_judge_mcp.install.redact import is_reference
-from jev_judge_mcp.tools import TOOLS
+from jev_judge_mcp.registry import TOOL_NAMES
 
 PACKAGE = "jev-judge-mcp"
 SERVER_NAME = "jev-mcp"
@@ -60,7 +60,7 @@ def require_checkout_uvx(uvx: str) -> None:
 
 def pi_direct_tools() -> list[str]:
     """Published tools plus the routing skill. Other packaged files stay resources, not Pi tools."""
-    return [*(tool.name for tool in TOOLS), PI_SKILL_TOOL]
+    return [*TOOL_NAMES, PI_SKILL_TOOL]
 
 
 @dataclass(frozen=True)

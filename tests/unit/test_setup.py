@@ -11,7 +11,6 @@ from typing import cast
 import pytest
 
 from jev_judge_mcp.providers import ProviderError
-from jev_judge_mcp.server import setup_requested
 from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.setup import main
 
@@ -162,13 +161,6 @@ def test_a_configured_base_url_reaches_the_verify_provider(monkeypatch: pytest.M
     code, _ = run(monkeypatch, isolated, prompt_input=KEY)
     assert code == 0
     assert seen["base_url"] == "https://proxy.example/v1"
-
-
-def test_setup_is_a_subcommand_and_nothing_else_is() -> None:
-    assert setup_requested(["jev-judge-mcp", "setup"]) is True
-    assert setup_requested(["jev-judge-mcp"]) is False
-    assert setup_requested(["jev-judge-mcp", "install"]) is False
-    assert setup_requested(["jev-judge-mcp", "--help"]) is False
 
 
 def test_oversize_input_preserves_the_store_and_skips_verification(

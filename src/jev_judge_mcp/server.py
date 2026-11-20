@@ -1,14 +1,12 @@
 """MCP entry point: stdio by default, Streamable HTTP when `JEV_MCP_TRANSPORT=streamable-http`.
 
 stdout belongs to the protocol. Logging goes to stderr. SIGINT and SIGTERM stop the server
-with exit status 0. Uvicorn can log requests cancelled at its shutdown deadline. `install`,
-`hook`, and `doctor` are dispatched before the server starts.
+with exit status 0. Uvicorn can log requests cancelled at its shutdown deadline.
 """
 
 import contextlib
 import errno
 import gc
-import io
 import logging
 import os
 import select
@@ -17,7 +15,6 @@ import socket
 import sys
 import time
 from collections.abc import Callable, Generator
-from importlib.metadata import PackageNotFoundError
 from typing import Any, override
 
 import anyio
@@ -25,22 +22,20 @@ import uvicorn
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.shared.exceptions import MCPError
 from mcp.types import INTERNAL_ERROR, CallToolResult, CancelledNotificationParams, NotificationParams, TextContent, Tool
-from pydantic import ValidationError
 from starlette.types import ASGIApp
 
 from jev_judge_mcp.http_auth import BearerTokenMiddleware, ensure_http_access_control, require_http_token
 from jev_judge_mcp.identity import ServerVersion, reported_version
 from jev_judge_mcp.instructions import server_instructions
-from jev_judge_mcp.redaction.values import Redactor, configure_logging
+from jev_judge_mcp.redaction.values import Redactor, configure_process_logging
 from jev_judge_mcp.security import build_guard
 from jev_judge_mcp.serialize import stringify
-from jev_judge_mcp.settings import LogLevel, Settings, load_settings, unexpanded_references
+from jev_judge_mcp.settings import LogLevel, Settings, load_settings
 from jev_judge_mcp.skills import attach as attach_skills
 from jev_judge_mcp.stdio import stdio_streams
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 
 SERVER_NAME = "jev-mcp"
-DISTRIBUTION = "jev-judge-mcp"
 
 logger = logging.getLogger("jev_judge_mcp")
 
@@ -206,12 +201,6 @@ def _bind_http_sockets(host: str, port: int) -> list[socket.socket]:
     return sockets
 
 
-def warn_unexpanded_references() -> None:
-    """Name each credential the harness passed through unexpanded; it was read as unset (ADR-0046)."""
-    for variable in unexpanded_references():
-        logger.warning("%s holds an unexpanded reference and counts as unset", variable)
-
-
 def ensure_secrets_redactable(settings: Settings) -> Redactor:
     try:
         return build_guard(settings).redact
@@ -288,204 +277,7 @@ def freeze_startup_heap() -> None:
     gc.freeze()
 
 
-def require_posix() -> None:
-    """Refuse a non-POSIX platform before settings, signals, or the extract worker pool (ADR-0032).
-
-    CPython reports Windows as `sys.platform == "win32"`. Any `win*` name is the same family.
-    The message names that platform. `SystemExit` with a string prints once and exits 1.
-    """
-    if sys.platform.startswith("win"):
-        raise SystemExit(
-            f"unsupported platform {sys.platform}: jev-judge-mcp is POSIX-only; "
-            "Windows is unsupported until Windows-specific behavior is implemented and tested"
-        )
-
-
-def installer_requested(argv: list[str]) -> bool:
-    """True only for the `install` subcommand. No arguments, and every other argument, stay the server."""
-    return len(argv) > 1 and argv[1] == "install"
-
-
-def hook_requested(argv: list[str]) -> bool:
-    """True only for the `hook` subcommand. No arguments, and every other argument, stay the server."""
-    return len(argv) > 1 and argv[1] == "hook"
-
-
-def doctor_requested(argv: list[str]) -> bool:
-    """True only for the `doctor` subcommand. No arguments, and every other argument, stay the server."""
-    return len(argv) > 1 and argv[1] == "doctor"
-
-
-def setup_requested(argv: list[str]) -> bool:
-    """True only for the `setup` subcommand. No arguments, and every other argument, stay the server."""
-    return len(argv) > 1 and argv[1] == "setup"
-
-
-def calibrate_requested(argv: list[str]) -> bool:
-    """True only for the `calibrate` subcommand (ADR-0070). Offline; no provider, no secrets."""
-    return len(argv) > 1 and argv[1] == "calibrate"
-
-
-def judge_requested(argv: list[str]) -> bool:
-    return len(argv) > 1 and argv[1] == "judge"
-
-
-def gate_cli_requested(argv: list[str]) -> bool:
-    return len(argv) > 1 and argv[1] == "gate"
-
-
-def completion_hook_requested(argv: list[str]) -> bool:
-    return len(argv) > 1 and argv[1] == "completion-hook"
-
-
-def version_requested(argv: list[str]) -> bool:
-    """True only for `--version`. It prints the build identity and does not start the server (ADR-0054)."""
-    return len(argv) > 1 and argv[1] == "--version"
-
-
-def help_requested(argv: list[str]) -> bool:
-    """True only for `--help`/`-h`. It prints usage and does not start the server."""
-    return len(argv) > 1 and argv[1] in ("--help", "-h")
-
-
-USAGE = """\
-usage: jev-judge-mcp [<subcommand>]
-
-With no arguments it serves MCP over stdio. JEV_MCP_TRANSPORT=streamable-http serves
-Streamable HTTP instead (JEV_MCP_HTTP_PORT, JEV_MCP_HTTP_TOKEN).
-
-subcommands:
-  install            install the server into a harness config
-  hook               run gate, screen, or compact-cut
-  doctor             diagnose the local setup
-  setup              store the TypeSafe API key
-  calibrate          advisory threshold fitting on your labeled rows (offline)
-  judge              call one tool; one JSON object on stdin
-  gate               review a git range from local repo files
-  completion-hook    opt-in completion gate
-  --version          print the build identity
-  --help, -h         print this usage
-"""
-
-
-def print_usage() -> None:
-    """Every subcommand, on stdout, then exit 0 (the same surface as `--version`)."""
-    print(USAGE, end="")
-
-
-def print_version() -> None:
-    """The same identity `initialize` reports, on stdout, then exit 0."""
-    try:
-        identity = reported_version()
-    except PackageNotFoundError:
-        raise SystemExit(f"{DISTRIBUTION} is not installed; its version cannot be reported") from None
-    print(f"{DISTRIBUTION} {identity}")
-
-
-def _configure_process_logging(settings: Settings, redact: Redactor) -> None:
-    configure_logging(settings.log_level, redact.secrets)
-    warn_unexpanded_references()
-
-
-def _run_hook(argv: list[str]) -> int:
-    from jev_judge_mcp.hook import fail_open_or_ask, hook_required
-
-    annotates = argv[1:3] in (["hook", "screen"], ["hook", "compact-cut"])
-    required = not annotates and hook_required(os.environ)
-    try:
-        stdin = sys.stdin
-        if isinstance(stdin, io.TextIOWrapper):
-            stdin.reconfigure(encoding="utf-8", errors="strict")
-        if hook_requested(argv):
-            from jev_judge_mcp.hook import main as hook_main
-
-            return hook_main(argv[2:])
-        from jev_judge_mcp.cli import completion_hook_main
-
-        settings = load_settings()
-        _configure_process_logging(settings, build_guard(settings).redact)
-        return completion_hook_main(argv[2:])
-    except ValidationError as error:
-        sys.stderr.write(_settings_error(error) + "\n")
-        return fail_open_or_ask(required, "", "invalid settings")
-    except Exception:
-        return fail_open_or_ask(required, "jev-judge-mcp hook: unexpected error\n", "hook failed")
-
-
-def _settings_error(error: ValidationError) -> str:
-    problems: list[str] = []
-    for issue in error.errors(include_input=False, include_context=True, include_url=False):
-        variable = issue["loc"][0]
-        kind = issue["type"]
-        if kind.startswith("bool"):
-            accepted = "true/false, 1/0, yes/no, on/off, y/n or t/f"
-        elif variable == "JEV_MCP_HTTP_PORT":
-            accepted = "an integer from 1 through 65535"
-        elif kind.startswith("int") or variable in ("JEV_MCP_MAX_INFLIGHT", "JEV_MCP_CACHE_MAX_ENTRIES"):
-            accepted = "a non-negative integer"
-        elif variable == "JEV_MCP_CACHE_TTL_SECONDS":
-            accepted = "a non-negative number of seconds"
-        elif kind == "literal_error":
-            accepted = str(issue.get("ctx", {}).get("expected", "a supported value"))
-        elif variable in ("JEV_MCP_KEY_FILE", "JEV_MCP_CACHE_DIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME"):
-            accepted = "a filesystem path with a resolvable home directory"
-        else:
-            accepted = "text"
-        problems.append(f"{variable} must be {accepted}")
-    return "Invalid settings: " + ", ".join(problems)
-
-
 def main() -> None:
-    try:
-        _main()
-    except ValidationError as error:
-        raise SystemExit(_settings_error(error)) from None
-
-
-def _main() -> None:
-    # The platform gate covers the installer, the command hook, the doctor, setup, and the server.
-    # No arguments keep stdout protocol-only (ADR-0032, ADR-0033).
-    require_posix()
-    if version_requested(sys.argv):
-        print_version()
-        return
-    if help_requested(sys.argv):
-        print_usage()
-        return
-    if installer_requested(sys.argv):
-        from jev_judge_mcp.install.cli import main as install_main
-
-        sys.exit(install_main(sys.argv[2:]))
-    if hook_requested(sys.argv) or completion_hook_requested(sys.argv):
-        sys.exit(_run_hook(sys.argv))
-    if doctor_requested(sys.argv):
-        from jev_judge_mcp.doctor import main as doctor_main
-
-        sys.exit(doctor_main(sys.argv[2:]))
-    if setup_requested(sys.argv):
-        from jev_judge_mcp.setup import main as setup_main
-
-        sys.exit(setup_main(sys.argv[2:]))
-    if calibrate_requested(sys.argv):
-        from jev_judge_mcp.cli import calibrate_main
-
-        sys.exit(calibrate_main(sys.argv[2:]))
-    if judge_requested(sys.argv) or gate_cli_requested(sys.argv):
-        from jev_judge_mcp.cli import emit_configuration_failure, gate_main, judge_main
-
-        judge = judge_requested(sys.argv)
-        args = sys.argv[2:]
-        tool = (args[0] if args else "") if judge else "jev_gate"
-        try:
-            subcommand_settings = load_settings()
-        except ValidationError as error:
-            sys.exit(emit_configuration_failure(tool, "invalid_arguments", _settings_error(error)))
-        try:
-            redact = build_guard(subcommand_settings).redact
-        except ValueError as error:
-            sys.exit(emit_configuration_failure(tool, "auth", str(error)))
-        _configure_process_logging(subcommand_settings, redact)
-        sys.exit((judge_main if judge else gate_main)(args))
     settings = load_settings()
     # The gates run before logging and before anything binds, so a misconfiguration is one clear
     # line on stderr and a non-zero exit, never a live unauthenticated server (ADR-0050).
@@ -495,7 +287,7 @@ def _main() -> None:
         sockets = http_serve_sockets(settings)
         for sock in sockets or ():
             listeners.enter_context(sock)
-        _configure_process_logging(settings, redact)
+        configure_process_logging(settings, redact)
         server = build_server(settings)
         # One line, the same identity `initialize` will report (ADR-0054).
         logger.info("identity %s %s", server.name, server.version)

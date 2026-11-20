@@ -37,14 +37,14 @@ from jev_judge_mcp.policy.thresholds import (
 from jev_judge_mcp.providers import PRIMARY_CREDENTIAL, ProviderConfigError
 from jev_judge_mcp.providers.resolver import KeySource, select_provider, typesafe_key
 from jev_judge_mcp.redaction.values import Redactor
+from jev_judge_mcp.registry import TOOL_NAMES
 from jev_judge_mcp.settings import Settings, load_settings, unexpanded_references
-from jev_judge_mcp.tools import TOOLS
 
 _BARE_SERVER = "mcp__jev"
 _UNSET = "(unset)"
 _MAX_CLAUDE_SETTINGS_BYTES = 1_048_576
 
-ALLOW_RULES: tuple[str, ...] = tuple(f"mcp__jev__{tool.name}" for tool in TOOLS)
+ALLOW_RULES: tuple[str, ...] = tuple(f"mcp__jev__{name}" for name in TOOL_NAMES)
 
 _POLICY: tuple[tuple[str, float], ...] = (
     ("DEFAULT_AUTO_ACCEPT", DEFAULT_AUTO_ACCEPT),

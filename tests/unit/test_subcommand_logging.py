@@ -3,7 +3,7 @@
 Without it, a toolset `logger.exception` in these short-lived processes reached stderr through
 logging's lastResort handler, which has no `RedactingFilter`: error text carrying a configured
 secret would print verbatim. `judge`, `gate`, and `completion-hook` configure logging in the
-`server.main` dispatch before the subcommand runs. `hook gate` configures it inside its own
+`__main__.main` dispatch before the subcommand runs. `hook gate` configures it inside its own
 `main`, after the usage and stdin fail-open gates, so a misconfigured environment still gets
 their one-line answers; the completion hook keeps its own stdout/stderr swap.
 """
@@ -16,9 +16,9 @@ from typing import Any
 
 import pytest
 
+from jev_judge_mcp.__main__ import main
 from jev_judge_mcp.providers import ProviderConfigError
 from jev_judge_mcp.redaction.values import RedactingFilter
-from jev_judge_mcp.server import main
 
 _CONFIGURED = "subcommand-fixture-secret-1"
 

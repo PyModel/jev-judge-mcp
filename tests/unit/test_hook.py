@@ -14,6 +14,7 @@ import anyio
 import httpx
 import pytest
 
+from jev_judge_mcp.__main__ import main as cli_main
 from jev_judge_mcp.domain import JsonValue, Question, Usage
 from jev_judge_mcp.domain.questions import ChoiceQuestion, NoulQuestion
 from jev_judge_mcp.hook import main
@@ -28,8 +29,6 @@ from jev_judge_mcp.providers import Evaluation, JevProvider, ProviderError, Prov
 from jev_judge_mcp.providers.base import ProviderName
 from jev_judge_mcp.providers.resolver import resolve_model
 from jev_judge_mcp.redaction.values import Redactor
-from jev_judge_mcp.server import hook_requested, installer_requested
-from jev_judge_mcp.server import main as server_main
 from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.tools import TOOLS
 
@@ -134,13 +133,6 @@ def _write_event(file_path: str = "src/a.py", **extra: object) -> str:
     }
     payload.update(extra)
     return json.dumps(payload)
-
-
-def test_hook_subcommand_is_not_the_installer() -> None:
-    assert hook_requested(["jev-judge-mcp"]) is False
-    assert hook_requested(["jev-judge-mcp", "hook"]) is True
-    assert hook_requested(["jev-judge-mcp", "install"]) is False
-    assert installer_requested(["jev-judge-mcp", "hook"]) is False
 
 
 def test_confident_irreversible_bash_denies_and_never_allows(capsys: pytest.CaptureFixture[str]) -> None:
@@ -786,20 +778,20 @@ def test_server_dispatches_hook_gate(monkeypatch: pytest.MonkeyPatch) -> None:
         return 0
 
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook", "gate"])
-    monkeypatch.setattr("jev_judge_mcp.server.load_settings", _refuse_settings)
+    monkeypatch.setattr("jev_judge_mcp.__main__.load_settings", _refuse_settings)
     monkeypatch.setattr("jev_judge_mcp.server.build_server", _refuse_server)
     monkeypatch.setattr("jev_judge_mcp.hook.main", fake)
     with pytest.raises(SystemExit) as caught:
-        server_main()
+        cli_main()
     assert caught.value.code == 0
     assert seen == [["gate"]]
 
 
 def test_server_rejects_a_bare_hook(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook"])
-    monkeypatch.setattr("jev_judge_mcp.server.load_settings", _refuse_settings)
+    monkeypatch.setattr("jev_judge_mcp.__main__.load_settings", _refuse_settings)
     with pytest.raises(SystemExit) as caught:
-        server_main()
+        cli_main()
     captured = capsys.readouterr()
     assert caught.value.code == 2
     assert captured.out == ""
@@ -809,10 +801,10 @@ def test_server_rejects_a_bare_hook(monkeypatch: pytest.MonkeyPatch, capsys: pyt
 def test_posix_guard_covers_the_hook(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook", "gate"])
-    monkeypatch.setattr("jev_judge_mcp.server.load_settings", _refuse_settings)
+    monkeypatch.setattr("jev_judge_mcp.__main__.load_settings", _refuse_settings)
     monkeypatch.setattr("jev_judge_mcp.hook.main", _refuse_hook)
     with pytest.raises(SystemExit) as caught:
-        server_main()
+        cli_main()
     assert caught.value.code == _POSIX_MESSAGE
 
 
@@ -916,7 +908,7 @@ def _run_cli_hook(
     monkeypatch.setattr(root, "handlers", [])
     monkeypatch.setattr(root, "level", root.level)
     with pytest.raises(SystemExit) as exit_info:
-        server_main()
+        cli_main()
     assert exit_info.value.code == 0
     return provider
 
@@ -985,10 +977,10 @@ def test_a_bare_hook_with_an_invalid_env_still_prints_usage(
     """The usage gate answers before any settings parsing: an invalid numeric env cannot traceback."""
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook"])
     monkeypatch.setenv("JEV_MCP_MAX_INFLIGHT", "-3")
-    monkeypatch.setattr("jev_judge_mcp.server.load_settings", _refuse_settings)
+    monkeypatch.setattr("jev_judge_mcp.__main__.load_settings", _refuse_settings)
     monkeypatch.setattr("jev_judge_mcp.server.build_server", _refuse_server)
     with pytest.raises(SystemExit) as caught:
-        server_main()
+        cli_main()
     captured = capsys.readouterr()
     assert caught.value.code == 2
     assert "usage" in captured.err
@@ -1001,10 +993,10 @@ def test_hook_gate_with_bad_stdin_and_an_invalid_env_fails_open(
     """The bad-stdin fail-open gate also answers before settings: exit 0, one stderr line, no traceback."""
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook", "gate"])
     monkeypatch.setenv("JEV_MCP_MAX_INFLIGHT", "-3")
-    monkeypatch.setattr("jev_judge_mcp.server.load_settings", _refuse_settings)
+    monkeypatch.setattr("jev_judge_mcp.__main__.load_settings", _refuse_settings)
     monkeypatch.setattr(sys, "stdin", io.StringIO("not-json"))
     with pytest.raises(SystemExit) as caught:
-        server_main()
+        cli_main()
     captured = capsys.readouterr()
     assert caught.value.code == 0
     assert captured.out == ""
@@ -1016,7 +1008,7 @@ def test_help_describes_the_hook_subcommands(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "--help"])
-    server_main()
+    cli_main()
     lines = [line.split(maxsplit=1) for line in capsys.readouterr().out.splitlines() if line.startswith("  ")]
     commands = dict(lines)
     assert all(name in commands["hook"] for name in ("gate", "screen", "compact-cut"))

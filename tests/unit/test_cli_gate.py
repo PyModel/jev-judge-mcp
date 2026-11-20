@@ -82,7 +82,7 @@ def test_cli_configuration_failures_emit_a_result(
 ) -> None:
     import sys
 
-    from jev_judge_mcp.server import main
+    from jev_judge_mcp.__main__ import main
 
     monkeypatch.setenv(variable, value)
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", *args])

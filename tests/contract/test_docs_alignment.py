@@ -25,9 +25,9 @@ import pytest
 from jev_judge_mcp import cache, limits
 from jev_judge_mcp.calibration.targets import error_budget
 from jev_judge_mcp.domain import Usage
-from jev_judge_mcp.install.verify import EXPECTED_TOOLS
 from jev_judge_mcp.policy import thresholds as policy_thresholds
 from jev_judge_mcp.providers import Evaluation
+from jev_judge_mcp.registry import TOOL_NAMES
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.telemetry import Telemetry
 from jev_judge_mcp.tools import TOOLS
@@ -96,7 +96,7 @@ def test_every_adr_citation_resolves() -> None:
 
 
 def test_the_installer_expects_the_published_registry() -> None:
-    assert tuple(EXPECTED_TOOLS) == tuple(tool.name for tool in TOOLS)
+    assert tuple(TOOL_NAMES) == tuple(tool.name for tool in TOOLS)
 
 
 def test_numeric_tool_count_claims_match_the_registry() -> None:

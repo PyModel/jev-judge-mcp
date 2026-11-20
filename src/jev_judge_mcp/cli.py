@@ -128,13 +128,6 @@ def run_gate(
     )
 
 
-def calibrate_main(argv: Sequence[str]) -> int:
-    """Advisory threshold fitting on the caller's labeled rows (ADR-0070); offline, no provider."""
-    from jev_judge_mcp import calibrate
-
-    return calibrate.main(argv)
-
-
 def _gate_options(argv: Sequence[str]) -> dict[str, str]:
     options: dict[str, str] = {}
     index = 0

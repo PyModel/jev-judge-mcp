@@ -8,6 +8,7 @@ from typing import ClassVar, override
 
 import pytest
 
+from jev_judge_mcp.__main__ import main as cli_main
 from jev_judge_mcp.domain import JsonValue, Question, Usage
 from jev_judge_mcp.domain.questions import ChoiceQuestion
 from jev_judge_mcp.hook.compact import (
@@ -23,7 +24,6 @@ from jev_judge_mcp.hook.compact import (
 from jev_judge_mcp.providers import NO_RETRIES, Evaluation, JevProvider, ProviderError, ProviderTimeoutError
 from jev_judge_mcp.providers.base import ProviderName
 from jev_judge_mcp.redaction.values import Redactor
-from jev_judge_mcp.server import main as server_main
 from jev_judge_mcp.text import length
 
 _TURN = "live work turn"
@@ -353,11 +353,11 @@ def test_server_dispatches_hook_compact_cut(monkeypatch: pytest.MonkeyPatch) -> 
         return 0
 
     monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "hook", "compact-cut"])
-    monkeypatch.setattr("jev_judge_mcp.server.load_settings", _refuse_server)
+    monkeypatch.setattr("jev_judge_mcp.__main__.load_settings", _refuse_server)
     monkeypatch.setattr("jev_judge_mcp.server.build_server", _refuse_server)
     monkeypatch.setattr("jev_judge_mcp.hook.compact.compact_cut_main", fake)
     with pytest.raises(SystemExit) as caught:
-        server_main()
+        cli_main()
     assert caught.value.code == 0
     assert seen == [["compact-cut"]]
 
