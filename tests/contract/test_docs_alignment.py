@@ -266,6 +266,7 @@ def test_tool_cards_state_the_frozen_numbers() -> None:
             r"([\d,]+) compact UTF-8 bytes for state plus the\s+longest question and ([\d,]+) bytes",
             (limits.STATE_QUESTION_BYTES, limits.REQUEST_BYTES),
         ),
+        (r"State and questions share a ([\d,]+) UTF-16 unit cap", (limits.ASK.request_units_max,)),
         (r"Own `state` is framing, capped at ([\d,]+)\s+units", (limits.ASK.state_units_max,)),
         (r"command output is capped at ([\d,]+) units", (limits.ASK.command_output_units_max,)),
         (r"runs under a\s+(\d+)-second timeout", (limits.ASK.command_timeout_seconds,)),
@@ -421,6 +422,7 @@ def test_agent_rule_block_caps_match_limits() -> None:
             f"\u2264{limits.GATE.evidence_items} evidence items",
             f"{limits.GATE.aggregate_evidence_units:,} units",
             f"≤{limits.GATE.files_max} files",
+            f"{limits.GATE.doc_units:,} units per document",
         ],
         "jev_gate_range": [
             f"\u2264{limits.GATE.claims_max} claims",
@@ -436,10 +438,12 @@ def test_agent_rule_block_caps_match_limits() -> None:
         "jev_decide": [f"{limits.DECIDE.candidates_min}\u2013{limits.DECIDE.candidates_max} options"],
         "jev_extract": [f"{limits.EXTRACT.document_max:,} units", f"\u2264{limits.EXTRACT.fields_max} fields"],
         "jev_score": [f"{limits.SCORE.levels_min}\u2013{limits.SCORE.levels_max} levels"],
+        "jev_file_judge": [f"{limits.FILE_JUDGE.file_units_max:,} units per file read"],
         "jev_ask": [
             f"{limits.ASK.questions_min}\u2013{limits.ASK.questions_max} questions",
             f"\u2264{limits.ASK.files_max} paths",
-            "shared request limits",
+            f"{limits.ASK.request_units_max:,} units for state and questions",
+            f"{limits.ASK.command_output_units_max:,} units of command output",
         ],
     }
     missing = [

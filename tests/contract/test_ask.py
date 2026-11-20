@@ -230,14 +230,14 @@ def test_the_question_text_bounds_are_the_file_tool_convention() -> None:
 def _wide_choice(key_units: int) -> dict[str, object]:
     """250 options whose descriptions stay under the request cap; only the key width differs."""
     keys = [f"{index:03d}".ljust(key_units, "k") for index in range(FILE_JUDGE.choice_options_max - 1)]
-    criteria = {key: "d" * 95 for key in [*keys, "other"]}
+    criteria = {key: "d" * 420 for key in [*keys, "other"]}
     return {"state": "s", "questions": {"q0": {"type": "choice", "instructions": "Choose", "criteria": criteria}}}
 
 
 async def test_choice_option_keys_count_toward_the_composed_request_cap() -> None:
     outcome = await call_tool("jev_ask", _wide_choice(64), {})
     assert outcome.code == "input_too_large"
-    assert "questions alone exceed the cap" in outcome.text
+    assert "120,000-unit cap" in outcome.text
     assert not outcome.requests
     narrow = await call_tool("jev_ask", _wide_choice(3), {})
     assert len(narrow.requests) == 1

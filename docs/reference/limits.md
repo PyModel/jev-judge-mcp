@@ -14,12 +14,12 @@ Astral-plane characters (emoji, some CJK) count as two.
 
 These caps are not Jev's context window. The model accepts 64k tokens per request and 32k for
 `state` plus the longest question (https://docs.typesafe.ai/models.md). An input inside every cap
-on this page can still exceed that window. Before sending, every tool limits compact UTF-8 to 30,000 bytes for state plus the longest
-question and 60,000 bytes total, including the encoded question IDs and criteria. A string gate
-sends the diff and test log once in
-the review state and once as evidence (ADR-0063), so budget about twice their size. The server does
-not count tokens. When the API refuses a request as over its window (a 400 with `error_type`
-`max_tokens_exceeded`), the code is `input_too_large` and the remedy is to split the call (ADR-0079).
+on this page can still exceed that window. The provider enforces the window. When it returns 400
+with `detail.error_type: max_tokens_exceeded`, tools return `input_too_large` with split advice.
+File-list and range gates hold the files from rejected claims groups for local review.
+Claims packing and Ask split suggestions use an estimate of 30,000 compact UTF-8 bytes for state
+plus the longest question and 60,000 bytes total, including question IDs and criteria. A string
+gate sends the diff and test log in both review state and evidence (ADR-0063, ADR-0079, ADR-0086).
 
 ## The three behaviors at a bound
 
@@ -187,12 +187,13 @@ The aspects array may be empty.
 | `claim_units` | 2000 | over → `input_too_large` before sending. Split into narrower claims with their evidence. |
 | `evidence_items` | 16 | over → budget error (`input_too_large`) |
 | `aggregate_evidence_units` | 200000 | bounds the sum of file-list patches and provides a raw aggregate guard on caller evidence |
-| `doc_units` | 30000 | raw document guard derived from `STATE_QUESTION_BYTES`; the encoded byte check usually binds first |
+| `doc_units` | 50000 | a string `request`, `diff`, or `tests` or one evidence item over the cap refuses `input_too_large`. Over-cap file-list patches are held for local review |
 | `files_max` | 64 | a file-list `diff` with more entries refuses `input_too_large` before any request, for `jev_gate` and `jev_review` alike: one review request runs per file (ADR-0066 amendment) |
 
-File-list gates pack patches into groups under both byte ceilings and withhold a patch as
-`oversize` when it cannot fit with the shared inputs. A string gate or shared input that exceeds the
-budget refuses `input_too_large`. Gate inputs are never cut and the result retains `"truncated": false`.
+File-list gates pack patches by the byte estimate and send a patch in its own group when it
+cannot fit beside another patch. A provider context refusal for a claims group marks its files
+`oversize` and holds its claims for review. A string gate returns `input_too_large` on provider
+context refusal. Gate inputs are never cut and the result retains `"truncated": false`.
 
 ### jev_score (`limits.SCORE`, ADR-0048)
 
@@ -218,7 +219,7 @@ the instructions bound.
 
 | Cap | Value | Over the bound |
 | --- | --- | --- |
-| `file_units_max` | 30000 | refuse `file_too_large` |
+| `file_units_max` | 100000 | refuse `file_too_large` |
 | `instructions_units_max` | 2000 | refuse |
 | `choice_options_min` | 2 | below → reject |
 | `choice_options_max` | 250 | above → reject |
@@ -231,8 +232,8 @@ the instructions bound.
 ### jev_files_judge (`limits.FILES_JUDGE`, ADR-0077)
 
 A bound over the input entries rejects the call; a bound over one file skips that file with a
-reason, before the first provider call either way. An over-budget serialized request for any surviving file
-refuses the batch before fan-out. The per-file units and the NUL sniff window are
+reason, before the first provider call either way. A provider context refusal for a surviving file
+returns `input_too_large` with split advice. The per-file units and the NUL sniff window are
 shared with `jev_file_judge` — one number to calibrate, both constants move together. The two shape
 bounds keep a real tree inside one call: discovery stops at the candidate bound (glob expansion
 never enters a skip-listed directory on the way), reading stops once the file cap's survivors
@@ -243,16 +244,16 @@ plus the first few paths — instead of one row per file.
 | --- | --- | --- |
 | `files_max` | 64 | surviving paths over it are skipped `over_the_file_cap`, before any call |
 | `patterns_max` | 32 | above → reject |
-| `file_units_max` | 30000 | that file is skipped `too_large` |
+| `file_units_max` | 100000 | that file is skipped `too_large` |
 | `binary_sniff_bytes` | 8000 | the NUL-scan window that classifies the file `binary` |
 | `discovery_max` | 512 | candidates over it are never read; one aggregate `over_the_file_cap` row names the count |
 | `skip_rows_max` | 64 | further skips collapse into one aggregate row per reason |
 
 ### jev_ask (`limits.ASK`, ADR-0077)
 
-No part truncates: an over-budget call refuses typed, with each part's size and a Split
-suggestion. The question and path caps reject; either shared byte ceiling is a strict greater-than
-error, and the output cap and the timeout refuse after or around the run.
+No part truncates. Exceeding the composed UTF-16 cap or the provider context window returns
+`input_too_large` with each part's size and split advice. The question and path caps reject.
+The output cap and the timeout can refuse the run.
 
 | Cap | Value | Over the bound |
 | --- | --- | --- |
@@ -260,6 +261,7 @@ error, and the output cap and the timeout refuse after or around the run.
 | `questions_max` | 20 | above → reject |
 | `files_max` | 20 | above → reject |
 | `state_units_max` | 20000 | refuse before any call |
+| `request_units_max` | 120000 | aggregate state and question units above the cap refuse `input_too_large` before calling the provider |
 | `command_output_units_max` | 30000 | refuse `output_too_large` after the run |
 | `command_timeout_seconds` | 30 | the run is killed and the call refuses |
 

@@ -17,9 +17,9 @@ import anyio
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question, ScoreQuestion
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.gate_budget import GateBudgetError, check_gate_budget
 from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import ASK, FILE_JUDGE, SANITIZE_ID_UNITS
+from jev_judge_mcp.providers import ProviderError
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.ask_state import (
     Part,
@@ -33,7 +33,7 @@ from jev_judge_mcp.tools.ask_state import (
     scrubbed_environment,
     split_refusal,
 )
-from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, define, frame
+from jev_judge_mcp.tools.base import JevTool, Runtime, ToolError, ToolResult, code_of, define, frame
 from jev_judge_mcp.tools.file_judge import INVALID, build_question, project_answer
 
 KINDS = ("noul", "choice", "score")
@@ -183,13 +183,15 @@ def _expected(question: Question) -> tuple[str, ...]:
     return ()
 
 
-def _preflight(parts: list[Part], questions: dict[str, Question]) -> dict[str, str]:
-    state = named_state(parts)
-    try:
-        check_gate_budget(state, questions)
-    except GateBudgetError as error:
-        split_refusal(parts, questions, error)
-    return state
+def _check_unit_cap(parts: list[Part], questions: dict[str, Question], units: int) -> None:
+    state_units = sum(part.units for part in parts)
+    if state_units + units > ASK.request_units_max:
+        split_refusal(
+            parts,
+            questions,
+            f"The composed request is {state_units:,} units of state plus {units:,} units of questions, "
+            f"over the {ASK.request_units_max:,}-unit cap.",
+        )
 
 
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
@@ -211,7 +213,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     units = question_units(questions)
     wire_keys = {identifier: f"q{index}" for index, identifier in enumerate(questions)}
     wire_questions = {wire_keys[name]: question for name, question in questions.items()}
-    state = _preflight(parts, wire_questions)
+    _check_unit_cap(parts, wire_questions, units)
     if not parts and command is None:
         raise ToolError(
             "no state: give `state`, at least one readable `paths` entry, or a `command`.",
@@ -224,8 +226,13 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
             run_command, argv, ASK.command_timeout_seconds, ASK.command_output_units_max, env, secrets, program == "git"
         )
         parts.append(output)
-        state = _preflight(parts, wire_questions)
-    evaluation = await runtime.ask(state, wire_questions)
+        _check_unit_cap(parts, wire_questions, units)
+    try:
+        evaluation = await runtime.ask(named_state(parts), wire_questions)
+    except ProviderError as error:
+        if code_of(error) == "input_too_large":
+            split_refusal(parts, wire_questions, "Provider context limit reached. Split or trim the input.")
+        raise
     answers: dict[str, Any] = {}
     statuses: list[str] = []
     for identifier, question in questions.items():

@@ -325,7 +325,7 @@ async def test_gate_holds_an_oversized_patch_and_reviews_its_sibling() -> None:
     assert len(provider.requests) == 2 and "large.py" not in str(provider.requests)
 
 
-async def test_gate_checks_exact_utf8_budget_including_longest_question_and_duplicated_documents() -> None:
+async def test_string_gate_sends_state_above_the_packing_estimate() -> None:
     args = {"request": "r", "diff": "+ 😀", "claims": ["c"], "evidence": "x"}
     answers = _verified_with_source("evidence", "diff")
     sample = await call_tool("jev_gate", args, answers)
@@ -343,14 +343,16 @@ async def test_gate_checks_exact_utf8_budget_including_longest_question_and_dupl
     assert remaining > 0
     at = await call_tool("jev_gate", {**args, "evidence": "x" * (remaining + 1)}, answers)
     assert at.payload["action"] == "auto" and len(at.requests) == 1
-    over = await call_tool("jev_gate", {**args, "evidence": "x" * (remaining + 2)}, _GATE_ANSWERS)
-    assert over.is_error and over.code == "input_too_large" and not over.requests
-    assert "30001" in over.text and "30000" in over.text and "hunk" in over.text
+    over = await call_tool("jev_gate", {**args, "evidence": "x" * (remaining + 2)}, answers)
+    assert not over.is_error and over.payload["action"] == "auto" and len(over.requests) == 1
 
 
-async def test_gate_preflights_canonical_verification_and_all_expanded_questions() -> None:
-    result, provider = await _call_gate_raw(_patches(10, 3500), [{"id": "proof", "text": "\x01" * 5_100}])
-    assert result.is_error and "caller evidence" in str(result.content[0]) and not provider.requests
+async def test_gate_attempts_claim_groups_even_if_shared_evidence_exceeds_the_packing_estimate() -> None:
+    result, provider = await _call_gate_raw(_patches(2, 3500), [{"id": "proof", "text": "\x01" * 5_100}])
+    assert not result.is_error and len(provider.requests) == 4
+
+
+async def test_gate_packs_groups_with_all_expanded_questions() -> None:
     outcome = await call_tool(
         "jev_gate",
         {
@@ -673,7 +675,7 @@ async def test_a_file_list_over_the_file_cap_is_refused_before_any_request() -> 
     assert not (await call_tool("jev_review", {"request": "r", "diff": at_cap}, {})).is_error
 
 
-async def test_the_review_file_list_refuses_an_oversized_request_as_its_string_path_does() -> None:
+async def test_the_review_file_list_holds_a_truncated_request_as_its_string_path_does() -> None:
     answers = {
         "correctness": {"score": 2, "confidence": 0.95},
         "spec_match": {"score": 2, "confidence": 0.95},
@@ -688,18 +690,19 @@ async def test_the_review_file_list_refuses_an_oversized_request_as_its_string_p
         {"request": "r" * (REVIEW.doc_units + 1), "diff": [{"path": "a.py", "patch": "+x"}]},
         answers,
     )
-    assert cut.is_error and cut.code == "input_too_large" and cut.requests == []
+    assert cut.payload["truncated"] is True and cut.payload["action"] != "auto"
 
 
 class SlowReviewProvider(FakeProvider):
     """Holds each review call open long enough to overlap; a patch containing `low` answers with a
     low-confidence rubric, and one containing `down` fails as a provider outage would."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, overflow_claims: bool = False) -> None:
         super().__init__(_GATE_ANSWERS)
         self.in_flight = 0
         self.max_in_flight = 0
         self.cancelled = 0
+        self.overflow_claims = overflow_claims
 
     @override
     async def _send(
@@ -714,6 +717,10 @@ class SlowReviewProvider(FakeProvider):
             if "down" in diff:
                 raise ProviderError("the provider is down")
             items = cast(dict[str, Any], state).get("evidence", [])
+            if self.overflow_claims and "claim_0" in questions and any(len(item["text"]) == 40_000 for item in items):
+                error = ProviderError("context overflow")
+                error.status, error.error_type = 400, "max_tokens_exceeded"
+                raise error
             answers = _verified_with_source(*(item["id"] for item in items))
             if "low" in diff:
                 answers["correctness"] = {"score": 1, "confidence": 0.2}
@@ -896,18 +903,43 @@ async def test_omitted_supplemental_evidence_is_named_on_an_accepted_gate() -> N
     assert {"id": "large", "text": "x" * 14_000} in claim_state["evidence"]
 
 
-async def test_gate_checks_every_file_before_dispatch_and_preserves_provider_window_guidance() -> None:
-    result, provider = await _call_gate_raw(
-        [{"path": "tiny", "patch": "+"}, {"path": "second", "patch": "+" * 31_000}],
-        [{"id": "log", "text": "ok"}],
-    )
-    assert not result.is_error and len(provider.requests) == 2
+@pytest.mark.parametrize("overflow", [False, True], ids=["accepted", "provider-overflow"])
+@pytest.mark.parametrize("sibling", [False, True], ids=["single-group", "sibling-group"])
+async def test_gate_sends_a_40_kb_patch_in_its_own_group(sibling: bool, overflow: bool) -> None:
+    provider = SlowReviewProvider(overflow_claims=overflow)
+    result = await _call_slow(provider, ["+" * 40_000, *(["+ tiny"] if sibling else [])])
+    assert not result.is_error and len(provider.requests) == (4 if sibling else 2)
+    groups = [
+        cast(dict[str, Any], state)["evidence"] for state, questions in provider.requests if "claim_0" in questions
+    ]
+    assert [[item["id"] for item in group] for group in groups] == [
+        ["log", "diff_src_0.py"],
+        *([["log", "diff_src_1.py"]] if sibling else []),
+    ]
     payload = json.loads(cast(TextContent, result.content[0]).text)
-    assert payload["skipped"] == [{"path": "second", "reason": "oversize"}]
-    assert payload["action"] != "auto"
+    assert payload["verification"]["results"][0]["action"] == ("review" if overflow else "auto")
+    assert payload["action"] == ("review" if overflow else "auto")
+    assert payload.get("skipped", []) == ([{"path": "src/0.py", "reason": "oversize"}] if overflow else [])
+    assert payload["unreviewed_files"] == (["src/0.py"] if overflow else [])
+    assert payload["review"]["file_actions"] == {
+        "src/0.py": "review" if overflow else "auto",
+        **({"src/1.py": "auto"} if sibling else {}),
+    }
+    if overflow:
+        assert payload["calls"] == len(provider.requests)
+        assert payload["usage"] == dict.fromkeys(("input_tokens", "output_tokens"), len(provider.requests) - 1)
+
+
+async def test_string_gate_preserves_provider_window_guidance() -> None:
     error = ProviderError("opaque provider error")
     error.status, error.error_type = 400, "max_tokens_exceeded"
     provider = FakeProvider({}, error=error)
-    result = await _call_slow(provider, ["+a"])
+    toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: provider), TOOLS)
+    try:
+        result = await toolset.call(
+            "jev_gate", {"request": "Fix it.", "diff": "+a", "claims": ["fixed"], "evidence": "tests passed"}
+        )
+    finally:
+        await toolset.aclose()
     assert result.structured_content == {"code": "input_too_large"}
     assert "32k" in str(result.content[0]) and "hunk" in str(result.content[0])

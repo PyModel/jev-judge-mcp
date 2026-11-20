@@ -111,7 +111,7 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
 
 | Surface | Bound | Value | Reason |
 | --- | --- | --- | --- |
-| `jev_file_judge` | `file_units_max` | 100,000 | roughly half of Jev's 64k-token request window at worst-case encoding, so questions and framing still fit when the file is the whole state |
+| `jev_file_judge` | `file_units_max` | 100,000 | raw UTF-16 read cap. The provider enforces its context window |
 | `jev_file_judge` | `instructions_units_max` | 2,000 | a question is a narrow ask — the classify/decide description bound |
 | `jev_file_judge` | choice criteria | 2–250 options, 2,000 units each | the `jev_classify` bounds: one convention for caller-supplied option sets |
 | `jev_file_judge` | score criteria | 2–10 levels, 200 units each | the ADR-0048 rubric freeze, unchanged |
@@ -126,7 +126,7 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
 | `jev_ask` | `files_max` | 20 | an ask composes several state parts, so files keep a small share of the window |
 | `jev_ask` | `state_units_max` | 20,000 | own state is framing, not a document dump; bulk material belongs in `paths` |
 | `jev_ask` | `command_output_units_max` | 30,000 | room beside own state and file parts inside one request |
-| `jev_ask` | `request_units_max` | 120,000 | historical UTF-16 aggregate used by the original split refusal; superseded below |
+| `jev_ask` | `request_units_max` | 120,000 | raw aggregate of state and questions in UTF-16 units |
 | `jev_ask` | command timeout | 30 s | the same budget the hook passes its provider call; a longer run belongs in the agent's own shell |
 | `hook screen` | `SCREEN_INPUT_CHARS` | 6,000 | caps the judged prefix of tool output; typical reads are far smaller and the call stays cheap |
 | `hook compact-cut` | `turns_max` | 20 | covers any realistic session segment while bounding the state |
@@ -203,13 +203,14 @@ An accepted command contributes redacted output to state and uses a single provi
 caller's questions. The composed UTF-16 budget counts choice option keys. Server-generated wire
 keys keep caller question ids out of the provider request keys. Results use the original caller ids.
 
-## Amendment (2026-11-19): measure the encoded provider request
+## Amendment (2026-11-19): distinguish input caps from the provider window
 
 The previous claim that 120,000 UTF-16 units fit inside 64k tokens at worst-case encoding was
-incorrect. That count also omitted the provider's 32k state-plus-question window. Ask, its split
-suggestions, and file judgment now use the shared compact UTF-8 limits in ADR-0086. The raw file
-read bound derives from the state window. File-list judgment preflights every surviving request
-before starting fan-out.
+incorrect. That count also omitted the provider's 32k state-plus-question window. Ask keeps
+the 120,000-unit composed input cap and the 30,000-unit command output cap. Both file judgment
+tools keep the 100,000-unit per-file read cap. The provider enforces the token window and its
+refusal maps to `input_too_large` with split advice. Ask uses the compact UTF-8 estimate only to
+suggest splits. See the [ADR-0086 amendment](0086-shared-provider-window-and-gate-packing.md#amendment-2026-11-19-the-byte-budget-packs-the-provider-refuses).
 
 ## Considered Options
 

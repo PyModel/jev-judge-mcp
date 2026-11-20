@@ -65,7 +65,7 @@ The rule that a missing, malformed, or out-of-bounds answer produces `invalid_re
 _Avoid_: fallback, graceful degradation
 
 **Truncated Context**:
-A document the judgment is made over (a doc, diff, claim, or evidence item) that exceeded a cap and was cut before reaching Jev. A judgment over truncated context can never be `auto`. Gate inputs are refused when they cannot fit. A file-list gate can withhold an oversized patch for local review and report the remaining judgments as partial. Cut item text (a jev_find or jev_rerank candidate, a jev_classify item or class description) is not Truncated Context: it is reported to telemetry only and does not change the action. jev_extract's capped candidate universe is a separate rule of its own field decision.
+A document the judgment is made over (a doc, diff, claim, or evidence item) that exceeded a cap and was cut before reaching Jev. A judgment over truncated context can never be `auto`. Gate inputs are subject to raw input caps. A file-list gate reports partial coverage and holds a file for local review when its patch exceeds the raw file cap or the provider rejects its claims group for context size. Cut item text (a jev_find or jev_rerank candidate, a jev_classify item or class description) is not Truncated Context: it is reported to telemetry only and does not change the action. jev_extract's capped candidate universe is a separate rule of its own field decision.
 _Avoid_: partial input, clipped
 
 **File judgment**:

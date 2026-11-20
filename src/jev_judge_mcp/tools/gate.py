@@ -8,10 +8,10 @@ from typing import Any, cast
 import anyio
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question
-from jev_judge_mcp.gate_budget import GateBudgetError, check_gate_budget, fits_budget
+from jev_judge_mcp.gate_budget import fits_budget
 from jev_judge_mcp.gate_diagnostics import explain_gate, input_cuts
 from jev_judge_mcp.ids import generated_ids
-from jev_judge_mcp.limits import GATE, STATE_QUESTION_BYTES
+from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.policy import Action, ClaimJudgment, ClaimVerdict, PolicyThresholds
 from jev_judge_mcp.policy.claims import claim_action
 from jev_judge_mcp.providers import Evaluation, ProviderError
@@ -19,9 +19,9 @@ from jev_judge_mcp.responses import claim_extras, summary_extras
 from jev_judge_mcp.serialize import js_number_to_locale_string_en_us
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.arguments import Refinement
-from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, define, frame
+from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, code_of, define, frame
 from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items, has_non_empty_evidence, identify_evidence
-from jev_judge_mcp.tools.files import combined, file_list_refusal, file_patches, file_review_state, review_file_list
+from jev_judge_mcp.tools.files import combined, file_list_refusal, file_patches, review_file_list
 from jev_judge_mcp.tools.gate_evidence import Citations, add_citations, contradicting_line, grounded_review
 from jev_judge_mcp.tools.observed import (
     fail_closed,
@@ -73,9 +73,9 @@ DEFINITION = define(
     "list, and raw test output in tests. File reviews include bounded caller evidence and sibling patches. "
     "review.context_omissions lists optional inputs left out. An excerpt, "
     "paraphrase, or path is judged as written and "
-    "scores low. The string diff and tests are sent twice. File-list claims use budget-packed groups; "
-    "a patch that cannot fit is withheld for local review. "
-    f"Each call must fit {STATE_QUESTION_BYTES:,} UTF-8 bytes of state plus its longest question. Evidence "
+    "scores low. The string diff and tests are sent twice. File-list claims use packed groups; "
+    "a patch above the packing target is sent alone. On provider context overflow, files in the group "
+    "are held for local review. Evidence "
     f"is capped at {GATE.evidence_items} items and {js_number_to_locale_string_en_us(GATE.aggregate_evidence_units)} "
     "UTF-16 units in aggregate, which also bounds the sum of file patches. Does not run tests or apply changes. "
     "Use jev_review for a patch without claims, jev_verify for claims without a patch review.",
@@ -90,7 +90,8 @@ DEFINITION = define(
             "diff": {
                 "description": (
                     "The real unified diff (git diff output), or a file list of {path, patch} objects, one per "
-                    f"file (at most {GATE.files_max}). Oversized patches are withheld from file-list gates. "
+                    f"file (at most {GATE.files_max}). Patches over {GATE.doc_units:,} UTF-16 units are held "
+                    "for local review, as are files in a claims group that hits the provider context limit. "
                     "An excerpt is reviewed as written and scores low."
                 ),
                 "anyOf": [
@@ -247,10 +248,8 @@ async def handle(
         if isinstance(args.get("diff"), list):
             return await _handle_file_list(args, runtime, settings, evidence, withheld)
         ask = await _ask_gate(args, runtime, settings, evidence)
-    except GateBudgetError as error:
-        return _refused(str(error) if withheld is not None else f"{error} {SPLIT_GUIDANCE}")
     except ProviderError as error:
-        if error.status == 400 and error.error_type == "max_tokens_exceeded":
+        if code_of(error) == "input_too_large":
             return _refused(
                 f"Provider context limit reached (32k tokens per state and question, 64k total). {SPLIT_GUIDANCE}"
             )
@@ -287,7 +286,6 @@ async def _ask_gate(
     for index in range(len(claims)):
         questions[f"claim_{index}"] = claim_question(index)
         questions[f"source_{index}"] = gate_source_question(index, evidence_ids)
-    check_gate_budget(state, questions)
     patch_lines = add_citations(state, questions, implicit[:1])
     counter_lines = add_citations(state, questions, asked_evidence, claim_count=len(claims))
     evaluation = await runtime.ask(state, questions)
@@ -329,6 +327,8 @@ def _verify_claims(
     evidence_ids: list[str],
     thresholds: PolicyThresholds,
     counter_lines: Citations,
+    *,
+    overflow: bool = False,
 ) -> VerificationHalf:
     """`claim` and `source` answers to one canonical verification block, for any ask shape."""
     results: list[dict[str, object]] = []
@@ -340,7 +340,7 @@ def _verify_claims(
         answer = validate_choice(answers.get(f"claim_{index}"), CLAIM_CRITERIA)
         if answer is None:
             invalid.add(index)
-            closed = fail_closed("gate")
+            closed = "review" if overflow else fail_closed("gate")
             assert closed != "status"
             judgments.append(None)
             claim_actions.append(closed)
@@ -488,21 +488,6 @@ def _claim_request(request: str, claims: list[str], evidence: list[dict[str, obj
     )
 
 
-def _preflight_claim_base(
-    request: str, claims: list[str], caller: list[dict[str, object]], tests: list[dict[str, object]]
-) -> None:
-    for part, group in (
-        ("request", _claim_request(request, [], [])),
-        ("claims", _claim_request(request, claims, [])),
-        ("caller evidence", _claim_request(request, claims, caller)),
-        ("tests", _claim_request(request, claims, [*caller, *tests])),
-    ):
-        try:
-            check_gate_budget(group.state, group.questions)
-        except GateBudgetError as error:
-            raise GateBudgetError(f"{part} cannot fit in the claims request: {error}") from error
-
-
 def _aggregate_claims(groups: list[VerificationHalf], thresholds: PolicyThresholds) -> VerificationHalf:
     if len(groups) == 1:
         return groups[0]
@@ -574,42 +559,32 @@ async def _handle_file_list(
     test_evidence = _implicit_evidence(None, tests)
     caller_evidence = _caller_evidence(evidence, [*implicit, *test_evidence])
     caller = list(map(_sent_evidence_item, caller_evidence))
-    _preflight_claim_base(request, claims, caller, test_evidence)
 
-    def prepare(patches: list[dict[str, object]]) -> ClaimRequest:
-        return _claim_request(request, claims, [*caller, *patches, *test_evidence])
+    def prepare(indices: list[int]) -> ClaimRequest:
+        return _claim_request(request, claims, [*caller, *(implicit[i] for i in indices), *test_evidence])
 
-    def fits(group: ClaimRequest) -> bool:
-        return fits_budget(group.state, group.questions)
-
-    fitting: list[dict[str, str]] = []
-    oversize: list[dict[str, str]] = []
-    bins: list[list[dict[str, object]]] = []
-    rubric = review_questions(_FILE_REVIEW_FRAMING)
-    if files:
-        for part, log in (("request", None), ("tests", tests)):
-            try:
-                check_gate_budget(file_review_state(ReviewDocs(request, "", log), _FILE_REVIEW_PURPOSE), rubric)
-            except GateBudgetError as error:
-                raise GateBudgetError(f"{part} cannot fit in the file review: {error}") from error
-    for item, patch in zip(files, implicit, strict=True):
-        mandatory = file_review_state(ReviewDocs(request, item["patch"], tests), _FILE_REVIEW_PURPOSE)
-        if not fits_budget(mandatory, rubric) or not fits(prepare([patch])):
-            oversize.append({"path": item["path"], "reason": "oversize"})
+    fitting: list[int] = []
+    oversized: set[int] = set()
+    bins: list[list[int]] = []
+    for index, item in enumerate(files):
+        if exceeds(length(item["patch"]), GATE.doc_units):
+            oversized.add(index)
             continue
-        fitting.append(item)
+        fitting.append(index)
         for group in bins:
-            if fits(prepare([*group, patch])):
-                group.append(patch)
+            candidate = prepare([*group, index])
+            if fits_budget(candidate.state, candidate.questions):
+                group.append(index)
                 break
         else:
-            bins.append([patch])
-    prepared = [prepare(group) for group in bins or [[]]]
+            bins.append([index])
+    bins = bins or [[]]
+    prepared = [prepare(group) for group in bins]
     citations = [
         add_citations(group.state, group.questions, group.evidence, claim_count=len(claims)) for group in prepared
     ]
     reviewed = await review_file_list(
-        fitting,
+        [files[i] for i in fitting],
         args,
         runtime,
         settings,
@@ -626,6 +601,8 @@ async def _handle_file_list(
             async with runtime.file_fanout:
                 evaluated[index] = await runtime.ask(group.state, group.questions)
         except Exception as error:
+            if code_of(error) == "input_too_large":
+                return
             failures[index] = error
             tasks.cancel_scope.cancel()
 
@@ -634,18 +611,32 @@ async def _handle_file_list(
             tasks.start_soon(verify, index, group)
     if failures:
         raise failures[min(failures)]
-    evaluations = [evaluated[index] for index in range(len(prepared))]
+    overflow = set(range(len(prepared))) - evaluated.keys()
+    held = {file_index for group_index in overflow for file_index in bins[group_index]}
     verification = _aggregate_claims(
         [
-            _verify_claims(evaluation.answers, claims, group.evidence, group.evidence_ids, settings.thresholds, lines)
-            for evaluation, group, lines in zip(evaluations, prepared, citations, strict=True)
+            _verify_claims(
+                evaluated[i].answers if i in evaluated else {},
+                claims,
+                group.evidence,
+                group.evidence_ids,
+                settings.thresholds,
+                lines,
+                overflow=i in overflow,
+            )
+            for i, (group, lines) in enumerate(zip(prepared, citations, strict=True))
         ],
         settings.thresholds,
     )
 
-    skipped = [*(withheld or ()), *oversize]
-    review_action = worst_action([half.action for half in reviewed.halves]) if fitting else "review"
-    review_payload = reviewed.review_half(review_action)
+    skipped = [
+        *(withheld or ()),
+        *({"path": files[i]["path"], "reason": "oversize"} for i in sorted(oversized | held)),
+    ]
+    review_action = file_list_action([half.action for half in reviewed.halves], bool(held or not fitting))
+    review_payload = reviewed.review_half(
+        review_action, held_indices=frozenset(index for index, file_index in enumerate(fitting) if file_index in held)
+    )
     if tests and withheld is None and not runtime.tests_read_from_file:
         review_payload["tests_weight"] = "self_reported"
     action = file_list_action([review_action, verification.action], bool(skipped))
@@ -669,8 +660,8 @@ async def _handle_file_list(
         "partial": bool(skipped),
         "unreviewed_files": [item["path"] for item in skipped],
     }
-    if len(prepared) > 1:
-        payload["calls"] = len(reviewed.evaluations) + len(evaluations)
+    if len(prepared) > 1 or overflow or len(reviewed.evaluations) != len(fitting):
+        payload["calls"] = len(fitting) + len(prepared)
     if skipped:
         payload["skipped"] = skipped
     withheld_blockers = [
@@ -684,16 +675,30 @@ async def _handle_file_list(
     ]
     explain_gate(payload, [*reviewed.blockers, *withheld_blockers], args["diff"], verification.source_issues)
     next_checks = cast(list[str], payload["next_checks"])
+    if overflow:
+        next_checks.append(f"Provider context limit reached. {SPLIT_GUIDANCE}")
     for blocker in withheld_blockers:
         if blocker["reason"] == "untracked" and blocker["next_check"] not in next_checks:
             next_checks.append(blocker["next_check"])
-    return ToolResult(frame("jev_gate", combined([*reviewed.evaluations, *evaluations]), payload), action=action)
+    evaluations = [*reviewed.evaluations, *(evaluated[i] for i in sorted(evaluated))]
+    return ToolResult(
+        frame(
+            "jev_gate",
+            combined(evaluations) if evaluations else None,
+            payload,
+            model=runtime.model,
+            provider=runtime.provider_name,
+        ),
+        action=action,
+    )
 
 
 def _withheld_check(path: str, reason: str) -> str:
     if reason == "untracked":
         literal = f"./{path}" if path.startswith(("-", ":")) else path
         return f"Run git add -N {quote(literal)} and recheck the range."
+    if reason == "oversize":
+        return f"Review {path} locally or split its patch by hunk and resubmit it to jev_gate."
     return f"Review {path} locally. Its patch was withheld ({reason})."
 
 

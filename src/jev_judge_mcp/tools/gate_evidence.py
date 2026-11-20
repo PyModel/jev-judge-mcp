@@ -7,7 +7,7 @@ from itertools import zip_longest
 from typing import Any, TypedDict
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question
-from jev_judge_mcp.gate_budget import GateBudgetError, check_gate_budget
+from jev_judge_mcp.gate_budget import fits_budget
 from jev_judge_mcp.gate_diagnostics import Blocker, review_blockers
 from jev_judge_mcp.responses import EXCERPT_UNITS, hunk_counts
 from jev_judge_mcp.text import head
@@ -141,9 +141,7 @@ def add_citations(
                     "Missing evidence, a diff header, or an unrelated failure is none." + ANTI_INJECTION,
                     criteria,
                 )
-        try:
-            check_gate_budget({**state, field: lines}, {**questions, **additions})
-        except GateBudgetError:
+        if not fits_budget({**state, field: lines}, {**questions, **additions}):
             candidates = candidates[::2] if len(candidates) > 1 else []
             continue
         questions.update(additions)

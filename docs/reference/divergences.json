@@ -829,11 +829,12 @@
       "status": "sanctioned",
       "adr": "docs/adr/0079-upstream-context-overflow-is-input-too-large.md",
       "tests": [
-        "tests/unit/test_providers.py"
+        "tests/unit/test_providers.py",
+        "tests/contract/test_providers.py"
       ],
       "fixtures": [],
       "reference_behavior": "The reference has no typed error code. A 400 the model returns for a request over its context window is the same error text as any other HTTP failure.",
-      "python_behavior": "An isError from a provider 400 whose JSON body carries detail.error_type max_tokens_exceeded carries code input_too_large, so the caller splits the call. Another error_type, a body that only names the token as a string, or another status stays provider. The error text is unchanged (ADR-0079)."
+      "python_behavior": "An isError from a provider 400 whose JSON body carries detail.error_type max_tokens_exceeded carries code input_too_large, so the caller splits the call. Another error_type, a body that only names the token as a string, or another status stays provider. The tool result includes split advice. File-list and range gates hold the affected files on claims-group context overflow (ADR-0086)."
     },
     {
       "id": "gate-diagnostics-and-file-context",
@@ -959,26 +960,7 @@
         "ADR-0062"
       ],
       "reference_behavior": "Oversized primary documents are clipped and sent.",
-      "python_behavior": "String gates refuse oversized input before any review or verification. ADR-0086 derives the raw document guard from the 30,000-byte provider limit."
-    },
-    {
-      "id": "shared-provider-request-window",
-      "surface": "result",
-      "tier": "tier_a",
-      "status": "sanctioned",
-      "adr": "docs/adr/0086-shared-provider-window-and-gate-packing.md",
-      "tests": [
-        "tests/security/test_inputs.py",
-        "tests/parity/test_tool_fixtures.py"
-      ],
-      "fixtures": [
-        "truncated/review-request-exactly-at-cap#0",
-        "truncated/review-tests-over-cap#0",
-        "mock-018#0",
-        "mock-026#0"
-      ],
-      "reference_behavior": "Admitted review and extract states are sent even if their compact JSON exceeds the provider window.",
-      "python_behavior": "Every tool preflights both compact UTF-8 request limits. These calls return input_too_large before dispatch."
+      "python_behavior": "String gates refuse oversized input before any review or verification. The raw gate document guard is 50,000 UTF-16 units."
     },
     {
       "id": "gate-packed-claims",
@@ -992,7 +974,7 @@
       ],
       "fixtures": [],
       "reference_behavior": "The reference supports string diffs and has no server-read range gate.",
-      "python_behavior": "File-list and server-read range gates pack claim verification into bounded groups and hold oversized, binary, and untracked files as applicable."
+      "python_behavior": "File-list and server-read range gates use first-fit claim groups and send patches above the estimate alone. Provider context overflow holds that group’s files as oversize and caps the claims at review. Raw input caps, binary patches, and untracked paths can also trigger a local hold."
     }
   ]
 }

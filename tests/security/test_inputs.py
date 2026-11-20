@@ -28,7 +28,7 @@ SCHEMA_REJECT = "MCP error -32602"
 @pytest.mark.parametrize(
     "tool", ["jev_review", "jev_verify", "jev_screen", "jev_ask", "jev_file_judge", "jev_files_judge"]
 )
-async def test_provider_window_refuses_encoded_state_before_any_request(
+async def test_raw_input_under_tool_caps_reaches_provider_even_over_the_byte_estimate(
     tool: str, tmp_path: FilePath, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Under every raw UTF-16 cap. Escaped control characters cost six bytes on the wire.
@@ -45,9 +45,9 @@ async def test_provider_window_refuses_encoded_state_before_any_request(
         "jev_files_judge": {"paths": ["large.txt"], "kind": "noul", **noul},
     }
     outcome = await call_tool(tool, args[tool], {})
-    assert outcome.is_error and outcome.code == "input_too_large", outcome.text
-    assert "30000" in outcome.text and "state plus longest question" in outcome.text
-    assert outcome.requests == []
+    assert not outcome.is_error, outcome.text
+    ((state, _),) = outcome.requests
+    assert json.dumps(large) in json.dumps(state)
 
 
 UNICODE = [
@@ -163,13 +163,13 @@ async def test_truncated_input_is_never_auto(tool: str, field: str) -> None:
     case = BY_TOOL[tool]
     cap = REVIEW.doc_units if tool == "jev_review" else GATE.doc_units
     at_cap = await call_tool(tool, with_value(case.arguments, (field,), pad(cap)), case.permissive)
-    assert at_cap.code == "input_too_large" and not at_cap.requests and "30000" in at_cap.text
+    assert at_cap.requests and case.acts(at_cap.payload), at_cap.text
     over = await call_tool(tool, with_value(case.arguments, (field,), pad(cap + 1)), case.permissive)
     if tool == "jev_gate":
         assert over.code == "input_too_large" and not over.requests and field in over.text
         assert "action" not in over.payload
     else:
-        assert over.code == "input_too_large" and not over.requests and "30000" in over.text
+        assert over.requests and over.payload["truncated"] and not case.acts(over.payload), over.text
 
 
 async def test_gate_evidence_budgets_are_errors_not_truncation() -> None:

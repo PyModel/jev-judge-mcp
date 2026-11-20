@@ -25,7 +25,6 @@ import anyio
 from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain import ChoiceQuestion, ScoreQuestion
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.gate_budget import GateBudgetError, check_gate_budget
 from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import FILE_JUDGE, FILES_JUDGE
 from jev_judge_mcp.providers import Evaluation, ProviderConfigError
@@ -506,35 +505,28 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
 
     questions = {QUESTION_ID: question}
     states = [{"path": redact_credential_literals(path, redact), "content": content} for path, content in survivors]
-    for path, state in zip(survivors, states, strict=True):
-        try:
-            check_gate_budget(state, questions)
-        except GateBudgetError as error:
-            raise GateBudgetError(f"{path[0]}: {error}") from error
-
     evaluations: list[Evaluation | None] = [None] * len(survivors)
     failures: list[tuple[int, dict[str, str]]] = []
-    config_error: list[ProviderConfigError] = []
+    refusals: list[tuple[int, Exception]] = []
 
     async def judge(index: int) -> None:
         path_text, _ = survivors[index]
         try:
             async with runtime.file_fanout:
                 evaluations[index] = await runtime.ask(states[index], questions)
-        except ProviderConfigError as error:
-            # The server cannot ask at all — not a per-file failure. Cancel the siblings and re-raise
-            # outside the group, so the kernel's `auth` refusal keeps its code (the raw group would
-            # flatten it to `provider`).
-            config_error.append(error)
-            task_group.cancel_scope.cancel()
-        except Exception as error:  # a per-file failure is a skip, never a batch error (ADR-0077)
-            failures.append((index, {"path": path_text, "reason": f"call_failed:{code_of(error)}"}))
+        except Exception as error:
+            code = code_of(error)
+            if isinstance(error, ProviderConfigError) or code == "input_too_large":
+                refusals.append((index, error))
+                task_group.cancel_scope.cancel()
+            else:
+                failures.append((index, {"path": path_text, "reason": f"call_failed:{code}"}))
 
     async with anyio.create_task_group() as task_group:
         for index in range(len(survivors)):
             task_group.start_soon(judge, index)
-    if config_error:
-        raise config_error[0]
+    if refusals:
+        raise min(refusals, key=lambda refusal: refusal[0])[1]
 
     expected: Sequence[str] = ()
     if isinstance(question, ChoiceQuestion):

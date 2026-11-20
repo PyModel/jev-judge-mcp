@@ -114,6 +114,8 @@ class Toolset:
                 logger.exception("tool %s raised", name)
             code = code_of(error)
             message = str(error)
+            if isinstance(error, ProviderError) and code == "input_too_large":
+                message += " Split the call into smaller inputs."
             if code == "internal":
                 secrets = await to_thread.run_sync(redaction_values, self.runtime.settings)
                 message = redact_credential_literals(message, Redactor(secrets))

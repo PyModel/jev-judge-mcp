@@ -26,6 +26,8 @@ from jev_judge_mcp.providers.typesafe import TypeSafeProvider
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from jev_judge_mcp.tools.base import code_of
+from tests.contract.test_fail_closed import CASES as TOOL_CASES
+from tests.support.git_repo import repo_with_diff
 from tests.support.jev import text_of
 from tests.support.retries import fast_retries as fast_retries
 from tests.support.secrets import secret_env
@@ -551,6 +553,54 @@ async def test_an_upstream_context_overflow_codes_input_too_large(
         await evaluate(provider)
 
     assert code_of(caught.value) == code
+
+
+@pytest.mark.parametrize("case", [next(case for case in CASES if case.id == "typesafe")], ids=["typesafe"])
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        *(pytest.param(case.tool, case.arguments, id=case.tool) for case in TOOL_CASES),
+        pytest.param(
+            "jev_files_judge",
+            {
+                "paths": ["tests/fixtures/file_judge/notes.txt"],
+                "kind": "noul",
+                "instructions": "Name a port.",
+                "criteria": {},
+            },
+            id="jev_files_judge",
+        ),
+        pytest.param(
+            "jev_gate_range",
+            {"range": "HEAD~1..HEAD", "request": "Change x.", "claims": ["x changed"], "evidence": "test log"},
+            id="jev_gate_range",
+        ),
+    ],
+)
+async def test_each_tool_handles_the_provider_context_refusal(
+    peer: Peer, name: str, arguments: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if name == "jev_gate_range":
+        monkeypatch.chdir(repo_with_diff(tmp_path))
+    provider, wire = peer.provider(reply(b'{"detail":{"error_type":"max_tokens_exceeded"}}', 400))
+    toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: provider), TOOLS)
+    try:
+        result = await toolset.call(name, arguments)
+    finally:
+        await toolset.aclose()
+
+    if name == "jev_gate_range":
+        assert not result.is_error, text_of(result)
+        assert ["claims" in sent.body["state"] for sent in wire.sent] == [False, True]
+        payload = json.loads(text_of(result))
+        assert payload["skipped"] == [{"path": "x.py", "reason": "oversize"}]
+        assert payload["verification"]["results"][0]["action"] == "review"
+        assert payload["calls"] == 2 and payload["usage"] is None
+        assert any("split" in check.lower() for check in payload["next_checks"])
+    else:
+        assert len(wire.sent) == 1, text_of(result)
+        assert result.is_error and result.structured_content == {"code": "input_too_large"}
+        assert "split" in text_of(result).lower()
 
 
 async def test_connection_error_text_is_redacted(case: Case, peer: Peer) -> None:

@@ -223,7 +223,7 @@ async def test_incomplete_worktree_range_names_each_withheld_file(repo: Path, na
         (repo / ".gitattributes").write_text("hidden.txt -diff\n")
     if reason == "oversize":
         commit_files(repo, {name: "before\n"})
-    (repo / name).write_text("changed\n" if reason != "oversize" else "x" * 40_000)
+    (repo / name).write_text("changed\n" if reason != "oversize" else "x" * GATE.doc_units)
     for fixture in ("claims.json", "tests.log"):
         (repo / fixture).unlink()
 

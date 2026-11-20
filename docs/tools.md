@@ -21,11 +21,10 @@ The compatible and Cloudflare providers report a valid body `model` when availab
 report the model sent. All providers prefer a valid body request ID, then check the response
 headers, and omit `request_id` if neither supplies one. Upstream metadata strings must be
 nonempty, at most 1,024 characters, and printable ASCII (ADR-0057). A `jev-latest` caller on
-TypeSafe cannot see which version answered (ADR-0001 parity). UTF-16 caps below are not Jev's context
-window (64k tokens per request, 32k for state plus the longest question). Every provider request
-is checked against 30,000 compact UTF-8 bytes for state plus its longest question and 60,000 bytes
-total. Oversized requests return `input_too_large` before dispatch (ADR-0086). The same error code
-covers an overflow reported by the provider (ADR-0079).
+TypeSafe cannot see which version answered (ADR-0001 parity). UTF-16 caps below govern tool
+admission. The provider enforces its context window of 64k tokens per request and 32k for state
+plus the longest question. A provider context refusal returns `input_too_large` with split advice.
+File-list and range gates hold any files from a rejected claims group for review (ADR-0079, ADR-0086).
 
 Every tool's schema advertises `additionalProperties: false`; the runtime keeps the reference's
 zod strip: unknown keys are stripped, not refused — a missing or ill-typed declared key is refused
@@ -235,16 +234,19 @@ A confident contradiction with a cited counterexample escalates. A file list get
 fitting file. First-fit grouping in file order packs patches into claim requests, each with all
 claims, caller evidence, and tests. A confident cited contradiction takes precedence over
 verification in any group. A confident verification in any group can stand if no group
-contradicts it, and any invalid or missing answer holds that claim for review. A patch that cannot
-fit alone is listed in `skipped` as `oversize` and requires local review. Multi-group results include
-`calls`, counting every review and claim request, and usage sums all requests.
+contradicts it, and any invalid or missing answer holds that claim for review. A patch above
+the packing estimate is sent in its own group. If the provider rejects a claims group for context
+size, all files in that group appear in `skipped` as `oversize` and its claims require review.
+Multi-group results and results with context rejections include `calls`, counting each review and
+claim request. Usage sums the calls that report usage.
 
 Evidence is capped at 16 items and 200,000 aggregate UTF-16 units. File lists allow up to 64 entries
-and 200,000 UTF-16 units of patches in aggregate. Each provider request must fit 30,000 compact
-UTF-8 bytes for state plus its longest question and 60,000 bytes total. A string gate includes the
-diff and tests in review state and again as implicit evidence (ADR-0063). The request limits
-count both copies. Pass a file list when the string gate exceeds its budget. If the shared request, claims, evidence, or tests
-cannot fit, the refusal names the part to narrow.
+and 200,000 UTF-16 units of patches in aggregate. The raw cap is 50,000 UTF-16 units per document
+or file patch. Over-cap file patches are held for local review. Claims packing targets
+30,000 compact UTF-8 bytes for state plus the longest question and 60,000 bytes total.
+A string gate includes the diff and tests in review state and again as implicit evidence
+(ADR-0063). The provider's token limits count both copies. Pass a file list when the string gate
+exceeds the provider window.
 [Caller evidence IDs](#caller-ids) reserve `none` for source selection and `diff` for patch
 citations. They also reserve sanitized `diff:<path>` keys for file patches and `tests` when a log
 is supplied.
@@ -323,7 +325,7 @@ the state's `content` field.
 
 **Measured.** No recorded live eval, and no bench corpus yet (extension tool, ADR-0077).
 
-**Weak spots.** The whole decoded file is the state, capped at 30,000 UTF-16 units; an over-cap or
+**Weak spots.** The whole decoded file is the state, capped at 100,000 UTF-16 units; an over-cap or
 binary file refuses typed (`file_too_large`; a NUL byte in the first 8,000 bytes means `binary_file`)
 instead of being judged over a cut read. Known secret stores — every `*.env` dotenv and the dot-
 prefixed `.env` family, `*.pem`,
@@ -353,10 +355,10 @@ among the answers is `jev_find` fed those answers as candidates.
 **Measured.** No recorded live eval, and no bench corpus yet (extension tool, ADR-0077).
 
 **Weak spots.** The hard caps bound a call before the first provider call — at most 64 surviving
-files from at most 32 path entries, each file at the `jev_file_judge` 30,000-unit read cap — and the
-prune is deterministic: the same tree and the same paths always skip the same files. A per-file
-call failure is a skipped path, never a batch error, so a batch is only as good as its surviving
-files: read `skipped` before trusting `results`. File judgments and file-list reviews share a
+files from at most 32 path entries, each file at the `jev_file_judge` 100,000-unit read cap. The
+same tree and paths always produce the same local skips. A provider context refusal fails the
+batch with `input_too_large` and split advice. Other per-file call failures appear in `skipped`.
+Read `skipped` before trusting `results`. File judgments and file-list reviews share a
 runtime cap of eight simultaneous file judgments. With zero calls, the batch reports the requested
 model and `provider: none`. If every call fails, the batch identifies the attempted provider.
 
@@ -409,10 +411,10 @@ to refuse.
 
 **Measured.** No recorded live eval, and no bench corpus yet (extension tool, ADR-0077).
 
-**Weak spots.** Nothing truncates. The limits are 30,000 compact UTF-8 bytes for state plus the
-longest question and 60,000 bytes for the whole request. Both include JSON framing and question
-criteria. An over-budget call refuses with every part's size and a first-fit split suggestion
-naming which parts go to which call. Re-ask the same questions on each.
+**Weak spots.** Nothing truncates. State and questions share a 120,000 UTF-16 unit cap.
+Exceeding that cap or the provider's context window returns `input_too_large` with each part's
+size and split advice. The split estimate includes JSON framing and question criteria.
+Re-ask the same questions on each proposed call.
 Own `state` is framing, capped at 20,000
 units; command output is capped at 30,000 units and an over-cap run is killed and refused; the
 command runs under a 30-second timeout, in the working directory, with closed stdin and a scrubbed

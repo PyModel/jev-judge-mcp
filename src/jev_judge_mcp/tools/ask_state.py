@@ -15,7 +15,7 @@ from jev_judge_mcp import git
 from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain import NoulCriteria, Question
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.gate_budget import GateBudgetError, fits_budget
+from jev_judge_mcp.gate_budget import fits_budget
 from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.limits import ASK
 from jev_judge_mcp.process import OutputTooLarge, capture
@@ -475,18 +475,21 @@ def named_state(parts: Sequence[Part]) -> dict[str, str]:
     return state
 
 
-def split_refusal(parts: Sequence[Part], questions: Mapping[str, Question], error: GateBudgetError) -> NoReturn:
-    """Suggest only compositions that fit both provider windows with the same questions."""
+def split_refusal(parts: Sequence[Part], questions: Mapping[str, Question], reason: str) -> NoReturn:
+    """Estimate smaller compositions with the same questions."""
     lines = [
-        f"jev_ask: {error} Nothing is truncated.",
+        f"jev_ask: {reason} Nothing is truncated.",
         "Per part (UTF-16 units): " + "; ".join(f"{part.name} {part.units:,}" for part in parts) + ".",
     ]
     oversized = [part.name for part in parts if not fits_budget(named_state([part]), questions)]
     if not fits_budget({}, questions):
-        lines.append("The questions alone exceed the cap; trim the question set (fewer or narrower questions).")
+        lines.append(
+            "The questions alone exceed the packing estimate. Trim the question set (fewer or narrower questions)."
+        )
     elif oversized:
         lines.append(
-            f"{' and '.join(oversized)} cannot fit beside the questions in one call; shrink or drop that part."
+            f"Under the packing estimate, {' and '.join(oversized)} cannot fit beside the questions. "
+            "Split, shrink or drop the listed parts."
         )
     else:
         groups: list[list[Part]] = []
@@ -497,14 +500,18 @@ def split_refusal(parts: Sequence[Part], questions: Mapping[str, Question], erro
                     break
             else:
                 groups.append([part])
-        lines.append(
-            "Split suggestion: "
-            + "; ".join(
-                f"call {index}: {', '.join(part.name for part in group)}" for index, group in enumerate(groups, start=1)
+        if len(groups) > 1:
+            lines.append(
+                "Split suggestion: "
+                + "; ".join(
+                    f"call {index}: {', '.join(part.name for part in group)}"
+                    for index, group in enumerate(groups, start=1)
+                )
+                + ". Re-ask the same questions on every call."
             )
-            + ". Re-ask the same questions on every call."
-        )
-    raise ToolError(" ".join(lines), code="input_too_large") from error
+        else:
+            lines.append("Split or trim the state or ask fewer questions per call.")
+    raise ToolError(" ".join(lines), code="input_too_large")
 
 
 def _refuse(reason: str) -> NoReturn:

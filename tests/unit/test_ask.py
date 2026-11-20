@@ -1,6 +1,5 @@
 """State assembly, command lifecycle, and request budgeting for jev_ask."""
 
-import json
 import os
 import sys
 import time
@@ -9,7 +8,7 @@ from typing import Any
 import pytest
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, ScoreQuestion
-from jev_judge_mcp.limits import ASK, STATE_QUESTION_BYTES
+from jev_judge_mcp.limits import ASK
 from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
@@ -128,11 +127,14 @@ async def test_split_refusal_names_every_part_and_the_first_fit_calls(tmp_path: 
     monkeypatch.chdir(tmp_path)
     (tmp_path / "a.md").write_text("a" * 23_000)
     (tmp_path / "b.md").write_text("b" * 9_000)
+    bulk_paths = ["c.md", "d.md", "e.md"]
+    for path in bulk_paths:
+        (tmp_path / path).write_text("x" * 27_000)
     args = {key: value for key, value in allow_args(state="s" * 9_000).items() if key != "command"}
     answers = {"q0": {"noul": 0.5}}
-    over = await call_tool("jev_ask", {**args, "paths": ["a.md", "b.md"]}, answers)
+    over = await call_tool("jev_ask", {**args, "paths": ["a.md", "b.md", *bulk_paths]}, answers)
     assert over.is_error and over.code == "input_too_large" and not over.requests
-    assert all(part in over.text for part in ("state 9,000", "a.md 23,000", "b.md 9,000"))
+    assert all(part in over.text for part in ("state 9,000", "a.md 23,000", "b.md 9,000", "e.md 27,000"))
     assert "call 1: state, b.md" in over.text and "call 2: a.md" in over.text
     assert "Re-ask the same questions on every call" in over.text
     first = await call_tool("jev_ask", {**args, "paths": ["b.md"]}, answers)
@@ -142,20 +144,27 @@ async def test_split_refusal_names_every_part_and_the_first_fit_calls(tmp_path: 
 
 async def test_split_refusal_says_what_to_trim_when_the_questions_alone_are_over() -> None:
     questions = {
-        f"q{i}": {"type": "noul", "instructions": "i" * 1_999, "criteria": {"true": "a" * 1_900}} for i in range(16)
+        f"q{i}": {
+            "type": "choice",
+            "instructions": "i" * 1_999,
+            "criteria": {f"option{j}": "a" * 1_900 for j in range(8)},
+        }
+        for i in range(8)
     }
     result = await call_tool("jev_ask", {"state": "s", "questions": questions}, {})
     assert result.is_error and result.code == "input_too_large" and not result.requests
-    assert "whole request" in result.text and "trim the question set" in result.text
+    assert "120,000-unit cap" in result.text and "trim the question set" in result.text.lower()
 
 
 async def test_split_refusal_names_a_part_that_cannot_fit_beside_the_questions(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "big.log").write_text("b" * 29_500)
+    for path in ("a.log", "b.log", "c.log", "d.log"):
+        (tmp_path / path).write_text("a" * 23_000)
     result = await call_tool(
         "jev_ask",
         {
-            "paths": ["big.log"],
+            "paths": ["big.log", "a.log", "b.log", "c.log", "d.log"],
             "questions": {"q1": {"type": "noul", "instructions": "i" * 1_000, "criteria": {}}},
         },
         {},
@@ -166,25 +175,20 @@ async def test_split_refusal_names_a_part_that_cannot_fit_beside_the_questions(t
 
 async def test_the_composed_request_cap_is_a_strict_greater_than(tmp_path: Any, monkeypatch: Any) -> None:
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "a.txt").write_text("a" * 15_000, encoding="utf-8")
-    (tmp_path / "b.txt").write_text("b", encoding="utf-8")
+    (tmp_path / "a.txt").write_text("a" * 60_000, encoding="utf-8")
     args: dict[str, object] = {
-        "questions": {"q1": {"type": "noul", "instructions": "abcdefghij", "criteria": {}}},
+        "questions": {"q1": {"type": "noul", "instructions": "abcdefghij", "criteria": {"true": "yes", "false": "no"}}},
         "paths": ["a.txt", "b.txt"],
     }
     answers = {"q0": {"noul": 0.5}}
-    probe = await call_tool("jev_ask", args, answers)
-    state, questions = probe.requests[0]
-    wire = {"state": state, "questions": questions}
-    size = len(json.dumps(wire, separators=(",", ":")).encode("utf-8"))
-    remaining = STATE_QUESTION_BYTES - size + 1
+    remaining = 120_000 - 60_000 - len("q1") - len("abcdefghij") - len("yes") - len("no")
     (tmp_path / "b.txt").write_text("b" * remaining, encoding="utf-8")
     at_cap = await call_tool("jev_ask", args, answers)
-    assert not at_cap.is_error, at_cap.text
+    assert not at_cap.is_error and len(at_cap.requests) == 1, at_cap.text
     (tmp_path / "b.txt").write_text("b" * (remaining + 1), encoding="utf-8")
     over = await call_tool("jev_ask", args, answers)
     assert over.is_error and over.code == "input_too_large" and over.requests == []
-    assert f"uses {STATE_QUESTION_BYTES + 1} UTF-8 bytes" in over.text
+    assert "120,000-unit cap" in over.text
 
 
 # --- deterministic refusal ordering through the real toolset ------------------------------------------

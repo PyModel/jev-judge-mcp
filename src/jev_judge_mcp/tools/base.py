@@ -19,7 +19,6 @@ from jev_judge_mcp import cache
 from jev_judge_mcp.domain import JsonValue, Question
 from jev_judge_mcp.extract.executor import RegexExecutor
 from jev_judge_mcp.extract.worker import ProcessRegexExecutor
-from jev_judge_mcp.gate_budget import GateBudgetError, check_gate_budget
 from jev_judge_mcp.policy import Action
 from jev_judge_mcp.providers import (
     Evaluation,
@@ -76,8 +75,6 @@ def code_of(error: BaseException) -> str:
         if error.status == 400 and error.error_type == "max_tokens_exceeded":
             return "input_too_large"
         return "provider"
-    if isinstance(error, GateBudgetError):
-        return "input_too_large"
     if isinstance(error, ArgumentsError):
         return "invalid_arguments"
     if isinstance(error, ToolError):
@@ -253,10 +250,6 @@ class Runtime:
         recorded evaluation instead of asking (ADR-0047); the replayed payload is byte-identical to
         the first answer's.
         """
-        try:
-            check_gate_budget(state, questions)
-        except GateBudgetError as error:
-            raise ToolError(str(error), code="input_too_large") from error
         with self.telemetry.span("jev.evaluate", questions=len(questions)) as span:
             if self._close_lock.locked():
                 raise asyncio.CancelledError

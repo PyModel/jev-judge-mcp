@@ -120,3 +120,10 @@ every claim with the same caller evidence and test log. Grounded contradiction a
 threshold takes precedence over verification. One confident verification can stand when there is
 no such contradiction. An invalid required answer holds that claim for review. A patch that cannot
 fit a group and its mandatory review state is withheld as `oversize`. See ADR-0086.
+
+## Amendment (2026-11-19): let the provider judge a larger patch
+
+The byte budget packs claims groups. A patch above the estimate is sent in its own group.
+A claims group rejected for provider context size puts its files on local hold as `oversize`
+and caps the claims at review. The raw per-document, aggregate and file-count guards still apply.
+See the [ADR-0086 amendment](0086-shared-provider-window-and-gate-packing.md#amendment-2026-11-19-the-byte-budget-packs-the-provider-refuses).

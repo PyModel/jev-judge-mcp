@@ -173,16 +173,8 @@ _EXPECTATIONS: dict[str, Expectation] = {
     "unicode-astral/find-truncation-splits-surrogate-pair#0": _drop_split_surrogate,
     "unicode-astral/gate-claim-truncation-splits-surrogate#0": _gate_document_refusal("claims[0]", 2000),
     "truncated/gate-claim-over-cap#0": _gate_document_refusal("claims[0]", 2000),
-    "truncated/gate-evidence-item-over-cap#0": _gate_document_refusal("evidence[0]", 30000),
-    "mock-039#0": _gate_document_refusal("diff", 30000),
-    "truncated/review-request-exactly-at-cap#0": _refused_text(
-        "state plus longest question uses 50755 UTF-8 bytes, limit 30000."
-    ),
-    "truncated/review-tests-over-cap#0": _refused_text(
-        "state plus longest question uses 50756 UTF-8 bytes, limit 30000."
-    ),
-    "mock-018#0": _refused_text("state plus longest question uses 42594 UTF-8 bytes, limit 30000."),
-    "mock-026#0": _refused_text("state plus longest question uses 50607 UTF-8 bytes, limit 30000."),
+    "truncated/gate-evidence-item-over-cap#0": _gate_document_refusal("evidence[0]", 50000),
+    "mock-039#0": _gate_document_refusal("diff", 50000),
     "resolver-error/explicit-vercel-unset#0": _vercel_unsupported,
     "duplicate-id/classify-omitted-ids-get-positional-fallbacks#0": _classify_generated_id_collision,
     "contradicted/gate-contradicted-below-auto-accept#0": _refused_text("ID 'diff' sanitizes to reserved ID 'diff'."),

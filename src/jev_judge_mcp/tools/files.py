@@ -2,8 +2,8 @@
 two budgets, one review request per fitting file, and the frame both tools publish over the result.
 
 The two tools differ only in how they refuse a budget (jev_review raises it typed, jev_gate returns
-the isError payload), in the purpose text each sends, and in what jev_gate adds after the files (one
-verification ask); everything the per-file pass knows lives here once.
+the isError payload), in the purpose text each sends, and in what jev_gate adds after the files
+(claim verification groups); everything the per-file pass knows lives here once.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
@@ -13,14 +13,14 @@ from typing import Any, cast
 import anyio
 
 from jev_judge_mcp.domain import Question, Usage
-from jev_judge_mcp.gate_budget import GateBudgetError, check_gate_budget
+from jev_judge_mcp.gate_budget import fits_budget
 from jev_judge_mcp.gate_diagnostics import Blocker, size_blocker
 from jev_judge_mcp.limits import GATE, GateCaps
 from jev_judge_mcp.policy import Action
 from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.text import length
-from jev_judge_mcp.tools.base import Runtime, ToolError
+from jev_judge_mcp.tools.base import Runtime, ToolError, code_of
 from jev_judge_mcp.tools.gate_evidence import Citations, add_citations, grounded_review
 from jev_judge_mcp.tools.observed import worst_action
 from jev_judge_mcp.tools.review_half import (
@@ -91,11 +91,14 @@ class FileListReview:
     blockers: list[Blocker]
     context_omissions: list[dict[str, object]]
 
-    def review_half(self, action: Action) -> dict[str, object]:
+    def review_half(self, action: Action, *, held_indices: frozenset[int] = frozenset()) -> dict[str, object]:
         """The review half both tools publish: scores from the first file with the worst review, then
         `score_file`, `reviewed_files`, and `file_actions` (ADR-0066 amendment). `tests_weight` is
         the caller's to add, where its payload places it."""
-        actions: list[Action] = [half.action for half in self.halves]
+        actions: list[Action] = [
+            "review" if half.action == "auto" and index in held_indices else half.action
+            for index, half in enumerate(self.halves)
+        ]
         if not actions:
             return {"action": action, "reviewed_files": [], "file_actions": {}}
         index = actions.index(worst_action(actions))
@@ -108,7 +111,7 @@ class FileListReview:
             payload["file_rows"] = [
                 {
                     "path": path,
-                    "action": half.action,
+                    "action": actions[i],
                     "citation_coverage": half.payload["citation_coverage"],
                     "reason_codes": [b["code"] for b in self.blockers if b.get("reviewed_file_index") == i],
                 }
@@ -190,7 +193,7 @@ async def review_file_list(
     """
     fitting = [dict(item) for item in files if length(item["patch"]) <= doc_units]
     unreviewed = [item["path"] for item in files if length(item["patch"]) > doc_units]
-    asked: list[tuple[CapLedger, Evaluation] | None] = [None] * len(fitting)
+    asked: list[Evaluation | None] = [None] * len(fitting)
     failures: list[tuple[int, Exception]] = []
 
     context_limit = min(doc_units, GATE.aggregate_evidence_units // max(1, len(fitting)))
@@ -209,14 +212,9 @@ async def review_file_list(
         while True:
             extra, required, missing = _file_context(index, peers, sources, limit)
             state = {**file_review_state(docs, purpose), **extra}
-            try:
-                check_gate_budget(state, questions)
-            except GateBudgetError:
-                if not (extra["path"] or extra["evidence"] or extra["related_files"]):
-                    raise
-                limit = min(limit, required) // 2
-            else:
+            if fits_budget(state, questions) or not (extra["evidence"] or extra["related_files"]):
                 break
+            limit = min(limit, required) // 2
         if missing:
             omissions[index] = {
                 "path": item["path"],
@@ -229,18 +227,18 @@ async def review_file_list(
         prepared.append((ledger, state, questions))
 
     async def review(index: int) -> None:
-        ledger, state, questions = prepared[index]
+        _, state, questions = prepared[index]
         try:
             async with runtime.file_fanout:
-                evaluation = await runtime.ask(state, questions)
+                asked[index] = await runtime.ask(state, questions)
         except Exception as error:
+            if gate_framing is not None and code_of(error) == "input_too_large":
+                return  # Gate still attempts claim verification and projects this file review as missing.
             # One failed file fails the call, as the sequential pass did. Cancel the siblings so no
             # paid review keeps running, and re-raise outside the group so the kernel maps the error
             # itself, not an ExceptionGroup around it.
             failures.append((index, error))
             task_group.cancel_scope.cancel()
-            return
-        asked[index] = (ledger, evaluation)
 
     async with anyio.create_task_group() as task_group:
         for index in range(len(fitting)):
@@ -254,14 +252,16 @@ async def review_file_list(
     truncated = False
     scopes: frozenset[CapScope] = frozenset()
     blockers: list[Blocker] = []
-    for item, result in zip(fitting, asked, strict=True):
-        assert result is not None  # every task either stored its result or recorded a failure
-        ledger, evaluation = result
-        half = project_review(evaluation.answers, settings, ledger.context_cut)
+    for item, evaluation in zip(fitting, asked, strict=True):
         index = len(reviewed_paths)
+        ledger, _, _ = prepared[index]
+        answers = evaluation.answers if evaluation is not None else {}
+        half = project_review(answers, settings, ledger.context_cut)
         half, reasons = grounded_review(
-            half, evaluation.answers, pointers[index], settings.thresholds.auto_accept, path=item["path"]
+            half, answers, pointers[index], settings.thresholds.auto_accept, path=item["path"]
         )
+        if evaluation is None:
+            reasons[0]["next_check"] = f"Split {item['path']} by hunk and retry the file review."
         if gate_framing is not None and half.action != "auto" and index in omissions:
             names = {
                 "path": item["path"],
@@ -288,7 +288,8 @@ async def review_file_list(
                     "next_check": f"{target}: {reason['next_check']}",
                 }
             )
-        evaluations.append(evaluation)
+        if evaluation is not None:
+            evaluations.append(evaluation)
         reviewed_paths.append(item["path"])
         truncated = truncated or ledger.context_cut
         scopes |= ledger.scopes

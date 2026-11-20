@@ -26,9 +26,8 @@ def anyio_backend() -> str:
 async def test_classify_pair_cap_is_separate_from_the_provider_window() -> None:
     items = [{"text": f"item {i}"} for i in range(64)]
     at_cap = await call_tool("jev_classify", {"items": items, "classes": [{"description": "c"}] * 125}, {})
-    assert at_cap.code == "input_too_large"
-    assert "whole request uses" in at_cap.text
-    assert at_cap.requests == []
+    assert not at_cap.is_error and len(at_cap.requests) == 1
+    assert at_cap.payload["summary"]["invalid_response"] == 64
 
     over = await call_tool("jev_classify", {"items": items, "classes": [{"description": "c"}] * 126}, {})
     assert over.is_error
@@ -40,9 +39,8 @@ async def test_classify_pair_cap_is_separate_from_the_provider_window() -> None:
 
 async def test_rerank_candidate_cap_is_separate_from_the_provider_window() -> None:
     at_cap = await call_tool("jev_rerank", {"query": "q", "candidates": [{"text": "a" * 2000}] * 50}, {})
-    assert at_cap.code == "input_too_large"
-    assert "whole request uses" in at_cap.text
-    assert at_cap.requests == []
+    assert not at_cap.is_error and len(at_cap.requests) == 1
+    assert at_cap.payload["status"] == "invalid_response"
 
     over = await call_tool(
         "jev_rerank", {"query": "q", "candidates": [{"text": "a" * 2000}] * 50 + [{"text": "b"}]}, {}

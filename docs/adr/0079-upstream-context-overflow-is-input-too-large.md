@@ -17,3 +17,10 @@ The caps in `limits.py` are not Jev's context window. jev-1.13 accepts 64k token
 
 - A client that branches on `input_too_large` already splits or trims. It now does that for an overflow too, instead of treating it as an outage.
 - On the file-list path (ADR-0066), the per-file reviews are paid for before the one verification ask overflows. The code tells the caller to split. It does not refund those reviews.
+
+## Amendment (2026-11-19): split advice and packed gates
+
+The provider remains the authority on its context window. The tool result adds split advice to
+the typed `input_too_large` refusal. File-list and range gates use the same provider error code
+internally to hold the files in a rejected claims group as `oversize` and cap its claims at review.
+See the [ADR-0086 amendment](0086-shared-provider-window-and-gate-packing.md#amendment-2026-11-19-the-byte-budget-packs-the-provider-refuses).
