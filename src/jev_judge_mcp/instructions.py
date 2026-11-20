@@ -17,7 +17,7 @@ _HONOR = (
     "Honor action. Do not grep verdict. "
     "auto means the verdict stands and you act on it. A contradicted claim at auto is confidently false. "
     "review means you still own the row: settle it with your own check, not an unchanged re-call. "
-    "Call again only when rollup.next_call is with_input, once, adding the input next_checks names. "
+    "Call again only when next_call is with_input (jev_gate rollup, jev_verify rows), once, adding the missing input. "
     "escalate means stop and decide yourself. This server does not call another model. "
     "Read blockers for the failing file or claim, the comparison, and the next check. Ignoring escalate is not a pass."
 )

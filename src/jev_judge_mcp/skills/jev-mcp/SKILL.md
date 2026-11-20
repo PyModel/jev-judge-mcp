@@ -86,7 +86,7 @@ The review judges the `diff` you send, and claims rest on the supplied evidence.
 | Action | What you do |
 | --- | --- |
 | `auto` | The verdict stands. Act on it. A contradicted claim at `auto` is confidently false. |
-| `review` | You still own this. Settle it with your own check: a test, the source, the code. Call Jev again only when `rollup.next_call` is `with_input`, once, adding the input `next_checks` names. |
+| `review` | You still own this. Settle it with your own check: a test, the source, the code. Call Jev again only when `next_call` is `with_input` (`jev_gate` `rollup`, `jev_verify` rows), once, adding the missing input. |
 | `escalate` | You still own this. Stop on this row. Do not grep `verified`. |
 | `invalid_response` | The row is unjudged. Leave it without a verdict. |
 

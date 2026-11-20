@@ -1,4 +1,4 @@
-# ADR-0089 — The gate says who settles a held row
+# ADR-0089 — Held rows say who settles them
 
 Status: Accepted  
 Date: 2026-11-20
@@ -11,6 +11,8 @@ ask Jev again ("Obtain a valid provider judgment", "Check this exact claim again
 observation"). An agent told to act on anything that is not `auto` read Jev as the stronger check
 and re-called the gate with unchanged input. An unchanged call returns the same judgment, and the
 optional response cache (ADR-0047) replays it byte for byte, so the agent looped on `review`.
+`jev_verify`, which agents run on reports and "done" claims, now also holds a verified claim
+with no named source for review (PR #30), so the same loop can start there.
 
 The thresholds and actions are correct and stay strict. What was missing is which party can
 settle a held row: a new call with more input, or the caller's own check.
@@ -37,14 +39,21 @@ after that call is the caller's to settle.
 Invalid answers are `none`, not a retry. The server is stateless, so "retry once" could only live
 in prose, and the cache can replay the invalid answer.
 
+`jev_verify` rows carry `next_call` too, and `summary.next_call` rolls them up. A row is
+`with_input` when a confident claim is held only for missing support: verified with no named
+source, or a caller note alone. Every other row, including low confidence and invalid answers,
+is `none`. The `jev_verify` description stays frozen to the reference; the rule reaches callers
+through the instructions, the routing skill and the docs.
+
 `next_call` never changes `action`, `reason_codes`, thresholds or any judgment. `jev_review`
-blockers carry it without a rollup. `jev_verify`, `jev_classify` and `jev_compare` return
-`review` without blockers; for them the instruction sentence is the whole change.
+blockers carry it without a rollup. `jev_classify` and `jev_compare` have no evidence to add;
+their `review` is settled by the caller, and the instruction sentence is the whole change there.
 
 ## Consequences
 
 - An agent following the rules makes at most one more call per held gate and then stops calling.
 - Several checks are reworded as caller checks. The tests pin the tag of every blocker code and
   that a `none` check never asks for another call.
-- The parity harness checks the rollup's `next_call` against the blockers and the emitted check.
+- The parity harness checks the rollup's `next_call` against the blockers and the emitted check,
+  and each `jev_verify` row's tag against its own fields and the evidence sent.
 - Copies of the agent rules outside this repository must be updated by their owners.

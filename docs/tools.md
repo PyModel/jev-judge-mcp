@@ -62,7 +62,11 @@ An `auto` contradiction is confidently false. `stands` is true only for a verifi
 `auto`. A sole caller note counts as the policy source without filling `supporting_evidence`.
 A caller note alone cannot earn `auto`. If a source was requested, a missing or malformed source
 answer holds the claim for review. [Caller evidence IDs](#caller-ids) reserve `none` when
-multiple evidence items are sent.
+multiple evidence items are sent. Each row carries `next_call`: `with_input` when a confident
+claim is held only for missing support (verified with no named source, or a caller note alone),
+so evidence it rests on can settle it; `none` otherwise, including low confidence and invalid
+answers. `summary.next_call` is `with_input` when any row is. It never changes `action`
+([ADR-0089](adr/0089-gate-says-who-settles-a-held-row.md)).
 
 **Measured.** L3 live run, 2026-09-23: n=5 claims, contradiction_recall 1.000, macro_f1 1.000,
 brier 0.00004, ece 0.002, selective_accuracy 1.000, auto_coverage 1.000, invalid 0. Five synthetic

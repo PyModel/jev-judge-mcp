@@ -6,7 +6,7 @@ from jev_judge_mcp.domain import ChoiceQuestion, Question
 from jev_judge_mcp.ids import ensure_unique_ids
 from jev_judge_mcp.limits import VERIFY
 from jev_judge_mcp.policy import DEFAULT_AUTO_ACCEPT, fail_closed, verify_claim_action
-from jev_judge_mcp.policy.claims import VERIFIED_WITHOUT_SOURCE
+from jev_judge_mcp.policy.claims import VERIFIED_WITHOUT_SOURCE, note_blocks_auto
 from jev_judge_mcp.responses import claim_extras, summary_extras
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, caller_actions, define, frame, headline
 from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items, identify_evidence
@@ -112,6 +112,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
                 "supporting_evidence": None,
             }
             closed_row.update(claim_extras(closed_row, evidence))
+            closed_row["next_call"] = "none"
             results.append(closed_row)
             continue
         confidence = validated.confidence
@@ -143,6 +144,11 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         if verified_without_source:
             row["reason_codes"] = [VERIFIED_WITHOUT_SOURCE]
         row.update(claim_extras(row, evidence, supporting=support))
+        # Held only for missing support, so evidence the claim rests on can settle it (ADR-0089).
+        note_only = (
+            confidence is not None and confidence >= auto_accept and note_blocks_auto("auto", policy_source, evidence)
+        )
+        row["next_call"] = "with_input" if action == "review" and (verified_without_source or note_only) else "none"
         results.append(row)
 
     item_actions = caller_actions(r["action"] for r in results)
@@ -158,6 +164,7 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
                     "unsupported": sum(1 for r in results if r["verdict"] == "unsupported"),
                     "needs_review": sum(1 for r in results if r["action"] == "review"),
                     **summary_extras(results),
+                    "next_call": "with_input" if any(r["next_call"] == "with_input" for r in results) else "none",
                 },
                 "results": results,
             },

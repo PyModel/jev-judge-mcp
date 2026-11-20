@@ -14,7 +14,7 @@ from jev_judge_mcp.redaction.values import Redactor
 from jev_judge_mcp.security import SecurityGuard
 from jev_judge_mcp.settings import Settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
-from tests.support.next_call import assert_next_call
+from tests.support.next_call import assert_next_call, assert_verify_next_call
 
 TEST_GUARD = SecurityGuard(Path("/nonexistent/jev-test-key"), Redactor(()))
 
@@ -85,6 +85,9 @@ async def call_tool(
     code = _structured_code(result)
     if name in ("jev_gate", "jev_gate_range", "jev_review") and isinstance(payload, dict):
         assert_next_call(cast(dict[str, Any], payload))
+    if name == "jev_verify" and isinstance(payload, dict) and "results" in payload:
+        state = cast(dict[str, Any], provider.requests[0][0])
+        assert_verify_next_call(cast(dict[str, Any], payload), state["evidence"])
     return Outcome(payload, bool(result.is_error), text, provider.requests, code)
 
 

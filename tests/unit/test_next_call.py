@@ -178,3 +178,42 @@ async def test_a_claim_overflow_with_no_held_file_still_asks_for_a_split(
     assert any(check.startswith("Provider context limit reached.") for check in body["next_checks"])
     assert body["rollup"]["next_call"] == "with_input"
     assert_next_call(body)
+
+
+SUPPORTS = ("supports", "contradicts", "says_nothing")
+TWO_ITEMS = [{"id": "log", "text": "3 passed"}, {"id": "diff", "text": "+return n + 2"}]
+VERIFY_SCENARIOS: dict[str, tuple[Any, dict[str, Any], str, str]] = {
+    "verified-with-source": (
+        TWO_ITEMS,
+        {"relation_claim0": choice("supports", *SUPPORTS), "source_claim0": choice("log", "log", "diff", "none")},
+        "auto",
+        "none",
+    ),
+    "verified-without-source": (
+        TWO_ITEMS,
+        {"relation_claim0": choice("supports", *SUPPORTS), "source_claim0": choice("none", "log", "diff", "none")},
+        "review",
+        "with_input",
+    ),
+    "caller-note-only": (
+        [{"id": "note", "kind": "caller_note", "text": "I ran the tests and they passed."}],
+        {"relation_claim0": choice("supports", *SUPPORTS)},
+        "review",
+        "with_input",
+    ),
+    "low-confidence": (
+        "3 passed",
+        {"relation_claim0": {**choice("supports", *SUPPORTS), "confidence": 0.3}},
+        "review",
+        "none",
+    ),
+    "invalid-answer": ("3 passed", {}, "review", "none"),
+}
+
+
+@pytest.mark.parametrize("name", VERIFY_SCENARIOS)
+async def test_a_verify_row_says_whether_evidence_can_settle_it(name: str) -> None:
+    evidence, answers, action, next_call = VERIFY_SCENARIOS[name]
+    body = (await call_tool("jev_verify", {"claims": ["The tests passed"], "evidence": evidence}, answers)).payload
+    (row,) = body["results"]
+    assert (row["action"], row["next_call"], body["summary"]["next_call"]) == (action, next_call, next_call)

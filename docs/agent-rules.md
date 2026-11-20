@@ -67,9 +67,10 @@ Rules:
   request cannot see each other's answers.
 - **No re-asks.** Do not re-ask an unchanged question hoping for a better answer; gather better
   evidence instead. Re-sending with the full diff or the raw logs is a new call, not a re-ask.
-  `jev_gate`'s `rollup.next_call` says whether a call can still help: `with_input` → make one
-  more call that adds the input `next_checks` names; `none` → settle it with your own check and
-  report. A row that holds after that one call is yours to settle, not to ask again.
+  `next_call` (the `jev_gate` `rollup`, `jev_verify` rows and `summary`) says whether a call can
+  still help: `with_input` → make one more call that adds the missing input (what `next_checks`
+  names, or evidence the claim rests on); `none` → settle it with your own check and report. A
+  row that holds after that one call is yours to settle, not to ask again.
 - **Failures are one line.** Tool error or missing key (`TYPESAFE_API_KEY`): say so in one line,
   then fall back to normal checks.
 - **Two skills.** Resource `jev-skill://jev-mcp/SKILL.md` says which tool fits a step. The packaged jev skill
