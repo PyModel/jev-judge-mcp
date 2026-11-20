@@ -66,3 +66,5 @@ after the refresh that observes it completes. The cannot-verify notice requires 
 observation that could not verify the installation.
 A refresh that fails unexpectedly is logged and counts as such an observation, so the server keeps
 serving.
+Shutdown cleanup does not wait for a refresh either: it abandons a running observation and
+discards its result. The worker thread itself ends when its file reads return.

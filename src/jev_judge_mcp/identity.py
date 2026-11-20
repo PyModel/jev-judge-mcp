@@ -263,7 +263,9 @@ class ServerVersion:
 
     async def _refresh(self) -> None:
         try:
-            self._current = await anyio.to_thread.run_sync(self._observe)
+            # Read-only, so shutdown abandons a blocked scan instead of waiting on it; the worker finishes
+            # alone and its result is discarded.
+            self._current = await anyio.to_thread.run_sync(self._observe, abandon_on_cancel=True)
         except Exception:
             # The refresh runs in the server's task group, so an unexpected error reports the
             # installation unverifiable instead of ending every session.
