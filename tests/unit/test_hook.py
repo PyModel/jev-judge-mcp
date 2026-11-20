@@ -16,14 +16,14 @@ import pytest
 
 from jev_judge_mcp.domain import JsonValue, Question, Usage
 from jev_judge_mcp.domain.questions import ChoiceQuestion, NoulQuestion
-from jev_judge_mcp.hook import (
+from jev_judge_mcp.hook import main
+from jev_judge_mcp.policy.guard import (
     DESTRUCTIVE_INTENT_THRESHOLD,
     ESTIMATED_CONFIDENCE_THRESHOLD,
+    FINAL_BLOCK_NOTICE,
     REPORTED_CONFIDENCE_THRESHOLD,
     SECRET_CONTENT_THRESHOLD,
-    main,
 )
-from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.providers import Evaluation, JevProvider, ProviderError, ProviderTimeoutError
 from jev_judge_mcp.providers.base import ProviderName
 from jev_judge_mcp.providers.resolver import resolve_model
@@ -33,7 +33,7 @@ from jev_judge_mcp.server import main as server_main
 from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.tools import TOOLS
 
-_HOOK = Path(__file__).resolve().parents[2] / "src" / "jev_judge_mcp" / "hook.py"
+_ROOT = Path(__file__).resolve().parents[2]
 _SK = "sk-FAKE000000000000"
 _STATE = "production credentials exist in the environment"
 _POSIX_MESSAGE = (
@@ -166,7 +166,7 @@ def test_confident_irreversible_bash_denies_and_never_allows(capsys: pytest.Capt
         }
     }
     assert provider.closed
-    fragment = _HOOK.parents[2] / "docs" / "harness" / "gate.hooks.json"
+    fragment = _ROOT / "docs" / "harness" / "gate.hooks.json"
     timeout = json.loads(fragment.read_text())["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"]
     assert provider.timeout is not None and 0 < provider.timeout < timeout
     assert provider.model == resolve_model(load_settings())
@@ -314,13 +314,22 @@ def test_cancel_asks_unreachable(capsys: pytest.CaptureFixture[str]) -> None:
     assert provider.closed
 
 
-@pytest.mark.parametrize("answers", [None, {"effect": _answered("read_only", 0.9, 0.9, options=_EFFECT)}])
+@pytest.mark.parametrize(
+    ("event", "answers"),
+    [
+        (_event("echo hi"), None),
+        (_event("echo hi"), {"effect": _answered("read_only", 0.9, 0.9, options=_EFFECT)}),
+        (_write_event(), {}),
+        (_event("", tool_name="NotebookEdit"), {}),
+    ],
+    ids=["bash-no-answers", "bash-missing-intent", "write", "fallback"],
+)
 def test_missing_answer_asks_unreachable(
-    answers: Mapping[str, object] | None, capsys: pytest.CaptureFixture[str]
+    event: str, answers: Mapping[str, object] | None, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A missing answer, wholly or in part, is unreachable: the provider never answered the ask."""
     provider = RecordingProvider(answers)
-    code = main(["gate"], text=_event("echo hi"), environ={}, provider=provider)
+    code = main(["gate"], text=event, environ={}, provider=provider)
     body = json.loads(capsys.readouterr().out)
     assert code == 0
     assert body["hookSpecificOutput"]["permissionDecision"] == "ask"
@@ -330,20 +339,21 @@ def test_missing_answer_asks_unreachable(
 @pytest.mark.parametrize(
     ("event", "answers"),
     [
-        ("bash-malformed-effect", {"effect": {"choice": "read_only"}, "destructive_intent": _noul(0.1)}),
+        (_event("echo hi"), {"effect": {"choice": "read_only"}, "destructive_intent": _noul(0.1)}),
         (
-            "bash-malformed-noul",
+            _event("echo hi"),
             {"effect": _answered("read_only", 0.9, 0.9, options=_EFFECT), "destructive_intent": {"noul": "high"}},
         ),
-        ("write-malformed-noul", {"secret_content": {"choice": "ok"}}),
+        (_write_event(), {"secret_content": {"choice": "ok"}}),
+        (_event("", tool_name="NotebookEdit"), {"gate": {"choice": "allow"}}),
     ],
+    ids=["bash-malformed-effect", "bash-malformed-noul", "write-malformed-noul", "fallback-malformed-choice"],
 )
 def test_malformed_answer_asks_unsure(
     event: str, answers: dict[str, object], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    body_text = _event("echo hi") if event.startswith("bash") else _write_event()
     provider = RecordingProvider(answers)
-    code = main(["gate"], text=body_text, environ={}, provider=provider)
+    code = main(["gate"], text=event, environ={}, provider=provider)
     body = json.loads(capsys.readouterr().out)
     assert code == 0
     assert body["hookSpecificOutput"]["permissionDecision"] == "ask"
@@ -359,7 +369,7 @@ def test_outside_repo_write_denies_without_a_provider(
         del args, kwargs
         raise AssertionError("provider constructed")
 
-    monkeypatch.setattr("jev_judge_mcp.hook.resolve_provider", boom)
+    monkeypatch.setattr("jev_judge_mcp.hook.gate.resolve_provider", boom)
     code = main(["gate"], text=_write_event(file_path="/elsewhere/evil.py"), environ={}, provider=None)
     captured = capsys.readouterr()
     assert code == 0
@@ -394,7 +404,7 @@ def test_credential_literal_write_denies_without_a_provider(
         del args, kwargs
         raise AssertionError("provider constructed")
 
-    monkeypatch.setattr("jev_judge_mcp.hook.resolve_provider", boom)
+    monkeypatch.setattr("jev_judge_mcp.hook.gate.resolve_provider", boom)
     event = _write_event(tool_name=tool, tool_input={"file_path": "src/a.py", **content})
     code = main(["gate"], text=event, environ={}, provider=None)
     captured = capsys.readouterr()
@@ -500,7 +510,7 @@ def test_symlink_escape_denies_as_outside(
         del args, kwargs
         raise AssertionError("provider constructed")
 
-    monkeypatch.setattr("jev_judge_mcp.hook.resolve_provider", boom)
+    monkeypatch.setattr("jev_judge_mcp.hook.gate.resolve_provider", boom)
     repo = tmp_path / "repo"
     repo.mkdir()
     outside = tmp_path / "outside"
@@ -807,7 +817,7 @@ def test_posix_guard_covers_the_hook(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_required_flag_asks_when_stdin_exceeds_the_utf16_cap(capsys: pytest.CaptureFixture[str]) -> None:
-    from jev_judge_mcp.hook import HOOK_INPUT_UNITS
+    from jev_judge_mcp.hook.gate import HOOK_INPUT_UNITS
 
     body = json.dumps({"tool_name": "Bash", "tool_input": "\U0001f600" * HOOK_INPUT_UNITS}, ensure_ascii=False)
     code = main(["gate"], text=body, environ={"JEV_HOOK_REQUIRED": "1"})
@@ -901,7 +911,7 @@ def _run_cli_hook(
     def resolve_provider(_settings: Settings) -> RecordingProvider:
         return provider
 
-    monkeypatch.setattr("jev_judge_mcp.hook.resolve_provider", resolve_provider)
+    monkeypatch.setattr("jev_judge_mcp.hook.gate.resolve_provider", resolve_provider)
     root = logging.getLogger()
     monkeypatch.setattr(root, "handlers", [])
     monkeypatch.setattr(root, "level", root.level)
@@ -934,7 +944,7 @@ def test_cli_hook_contains_a_crash_inside_the_hook(
     def crash(*_args: object) -> NoReturn:
         raise RuntimeError("unexpected")
 
-    monkeypatch.setattr("jev_judge_mcp.hook._plan", crash)
+    monkeypatch.setattr("jev_judge_mcp.hook.gate._plan", crash)
     provider = _run_cli_hook(monkeypatch, required, ["hook", "gate"], _event("echo hi").encode())
     _assert_contained(capsys, required, ["hook", "gate"])
     assert provider.states == []
@@ -948,7 +958,7 @@ def test_deeply_nested_tool_input_is_judged(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_hook_module_is_not_the_completion_tool() -> None:
-    source = _HOOK.read_text(encoding="utf-8")
+    source = (_ROOT / "src/jev_judge_mcp/hook/gate.py").read_text(encoding="utf-8")
     assert "jev_gate" not in source
     tree = ast.parse(source)
     imported: list[str] = []
@@ -958,7 +968,7 @@ def test_hook_module_is_not_the_completion_tool() -> None:
         elif isinstance(node, ast.ImportFrom) and node.module is not None:
             imported.append(node.module)
     assert "jev_judge_mcp.policy" not in imported
-    assert all(not name.startswith("jev_judge_mcp.policy") for name in imported)
+    assert all(name == "jev_judge_mcp.policy.guard" or not name.startswith("jev_judge_mcp.policy") for name in imported)
 
 
 def test_hook_is_not_a_published_tool() -> None:

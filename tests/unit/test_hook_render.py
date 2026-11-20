@@ -2,7 +2,8 @@
 
 import json
 
-from jev_judge_mcp.hook_render import FINAL_BLOCK_NOTICE, deny_reason, render_decision
+from jev_judge_mcp.hook.render import deny_reason, render_decision
+from jev_judge_mcp.policy.guard import FINAL_BLOCK_NOTICE
 
 
 def test_every_deny_reason_ends_with_the_final_block_notice() -> None:
