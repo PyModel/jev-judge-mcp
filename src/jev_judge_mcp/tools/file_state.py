@@ -12,6 +12,7 @@ with the ADR-0076 credential-literal detector before it becomes state, so a judg
 config file never ships its secrets to the provider.
 """
 
+import errno
 import logging
 import os
 import stat
@@ -59,7 +60,11 @@ def is_secret_store(path: Path, key_path: Path | None = None) -> bool:
                 return True
         except FileNotFoundError:
             pass
-        except (OSError, RuntimeError):
+        except OSError as error:
+            # A name too long to be a file cannot be the key; any other failure is a match.
+            if error.errno != errno.ENAMETOOLONG:
+                return True
+        except RuntimeError:
             return True
     name = path.name.lower()
     if name in _SECRET_EXACT:

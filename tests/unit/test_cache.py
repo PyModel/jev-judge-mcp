@@ -16,6 +16,7 @@ from jev_judge_mcp import cache
 from jev_judge_mcp.domain import JsonValue, Question, Usage
 from jev_judge_mcp.providers import Evaluation, ProviderName
 from jev_judge_mcp.settings import load_settings
+from jev_judge_mcp.telemetry import Span
 from jev_judge_mcp.tools import Runtime
 from tests.support.jev import FakeProvider
 
@@ -350,10 +351,10 @@ def _observe_follower(monkeypatch: pytest.MonkeyPatch) -> asyncio.Event:
     joined = asyncio.Event()
     original = _Pending.replay
 
-    async def wait(pending: _Pending) -> Evaluation:
+    async def wait(pending: _Pending, span: Span) -> Evaluation:
         if pending.subscribers:
             joined.set()
-        return await original(pending)
+        return await original(pending, span)
 
     monkeypatch.setattr(_Pending, "replay", wait)
     return joined
@@ -532,6 +533,8 @@ async def test_scout_035_cancel_and_failure_release_waiters(
             release.set()
             assert await follower == await runtime.ask({}, _question())
             assert evaluate.await_count == 1
+            # The provider call's usage is counted once, on the caller still waiting for it.
+            assert runtime.telemetry.metrics.snapshot()['tokens{direction="input"}'] == 1
         else:
             release.set()
             for task in (leader, follower):
@@ -676,6 +679,38 @@ def test_legacy_cache_metering_uses_available_evidence(cache_env: Path, count: i
     record["usage"]["reported"] = "unknown"
     entry.write_text(json.dumps(record))
     assert cache.lookup(settings, "compatible", "local", "fixture", {}, _question()) is None
+
+
+@pytest.mark.parametrize("cap", [0, 1])
+async def test_last_subscriber_leaving_after_dispatch_cancels_the_provider_call(
+    cache_env: Path, monkeypatch: pytest.MonkeyPatch, cap: int
+) -> None:
+    monkeypatch.setenv("JEV_MCP_MAX_INFLIGHT", str(cap))
+    provider = FakeProvider(ANSWERS)
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def hold(
+        state: JsonValue, questions: Mapping[str, Question], model: str, timeout: float | None
+    ) -> Evaluation:
+        entered.set()
+        try:
+            return await asyncio.get_running_loop().create_future()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(provider, "evaluate", hold)
+    runtime = Runtime(load_settings(), provider_factory=lambda _: provider)
+    async with asyncio.timeout(5):
+        caller = asyncio.create_task(runtime.ask({}, _question()))
+        await entered.wait()
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        await cancelled.wait()
+        while runtime._pending:  # pyright: ignore[reportPrivateUsage]
+            await asyncio.sleep(0)
 
 
 async def test_last_subscriber_leaving_before_dispatch_avoids_provider_call(
