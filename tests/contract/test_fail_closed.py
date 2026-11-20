@@ -255,9 +255,9 @@ CASES: list[Case] = [
             "questions": {"q1": {"type": "noul", "instructions": "Is the port live?", "criteria": {}}},
             "state": "server.listen(8080)",
         },
-        {"q1": {"noul": 0.9}},
+        {"q0": {"noul": 0.9}},
         judged,
-        {"q1": noul_mutations()},
+        {"q0": noul_mutations()},
     ),
     Case(
         "jev_verify",

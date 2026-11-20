@@ -34,12 +34,11 @@ Headless runs need an allow-rule. `acceptEdits` covers file edits. Add the publi
 
 `mcp__jev` allows the whole server in one rule. The installer does not write either form.
 
-`jev_ask` is safe to allow because its `command` argument is off unless the operator sets
-`JEV_ASK_COMMANDS=1` in the server environment: enabling it lets the server run what Jev judges
-read-only without a harness prompt, so decide that in the server's launch configuration, not in a
-permission file. Enabling it is not containment: the denylist blocks named clients such as `curl`
-and `ssh`, but an interpreter one-liner like `python -c` or `node -e` passes the denylist and can
-still reach the network. Run the server under your own sandbox when command isolation matters.
+`jev_ask` accepts commands only when the operator sets `JEV_ASK_COMMANDS=1` in the server's
+launch environment. It validates commands and their options against closed read-only allowlists
+and runs them directly as argv without a shell or harness prompt. An accepted command adds redacted
+output to state and uses one provider call for the questions. See the `jev_ask` section of the
+[tool contract](../tools.md) for allowed commands, allowed options, and limits.
 
 ## Routing skill
 

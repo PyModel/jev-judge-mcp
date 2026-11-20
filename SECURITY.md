@@ -20,6 +20,17 @@ The installer keeps its own state file (`~/.local/state/jev-mcp/install.json`, m
 
 Pattern redaction of command text runs in the opt-in command hook, `jev-judge-mcp hook gate` (`docs/adr/0034-action-pattern-redaction-beside-configured-secrets.md`, `docs/adr/0035-command-hook-is-not-jev-gate.md`). `install` does not enable that hook. The tools do not call it. With no credentials or on an unexpected local failure, the hook exits 0 and emits a decision only when `JEV_HOOK_REQUIRED=1`, in which case it asks. On a provider failure it asks. With `JEV_HOOK_REQUIRED=1`, an internal tool failure makes the completion hook ask. `JEV_GATE_STATE` is sent as the operator wrote it and is not a place to put a key.
 
+## jev_ask command execution
+
+`jev_ask` runs commands only with `JEV_ASK_COMMANDS=1`. It executes a fixed allowlist of read-only
+Git and file inspection commands directly as argv without a shell. It refuses unquoted shell
+operators, options outside each command's closed allowlist, working-directory executables, and
+arguments naming known secret stores or private directories. The child gets a scrubbed environment
+and closed stdin. Both output streams are bounded and redacted. Git runs with fsmonitor, hooks, paging, external diffs,
+and text conversion disabled. Commands read with the server account's filesystem permissions.
+Only the caller's questions and their composed state go to the provider, in one call.
+[Command and option allowlists](docs/tools.md#jev_ask--your-questions-over-composed-state).
+
 ## Reporting a vulnerability
 
 Report a vulnerability in private with a GitHub Security Advisory on [PyModel/jev-judge-mcp](https://github.com/PyModel/jev-judge-mcp/security/advisories/new).

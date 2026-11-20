@@ -18,7 +18,7 @@ Call a tool when the step judges material you already have. Write the result you
 | Where the facts are | What you do |
 | --- | --- |
 | Already in your context | One call. Batch every question about that state into it. |
-| Composed from your framing, files, or a command's output | `jev_ask`: your own questions (noul, choice, score) in one call; the server reads the paths and runs only a gate-judged read-only command, redacted. |
+| Composed from your framing, files, or a command's output | `jev_ask`: your own questions (noul, choice, score) in one call; the server reads the paths and can add redacted output from a read-only command with allowlisted options if the operator enables execution. |
 | In a file you have not read | `jev_file_judge`: the server reads the file as state and returns the typed answer, so the bytes never enter your context. For many files at once, `jev_files_judge` takes globs and directories and prunes before asking. |
 | Already fetched into your context (tool output, a paste) | Pass excerpts the tool accepts. Leave the rest of the file out of the chat. |
 | Still to be written | You write it. |
@@ -51,7 +51,7 @@ through `jev_decide`, and traversing a catalog too big for one call.
 | Two passages | `jev_compare` | Same fact, a contradiction, or different facts. |
 | Where on an ordered scale | `jev_score` | Your rubric of 2-10 levels, low to high. A fractional level index plus the per-level probabilities. Threshold it; do not interpolate a magnitude. |
 | A judgment inside a file you have not read | `jev_file_judge` | Name the path and one question (noul, choice, or score). The server reads the file as state and returns the typed answer. Paths must stay inside the server's working directory; over-cap and binary files refuse typed. |
-| Several judgments over one composed state | `jev_ask` | Your questions keyed by your ids; state is your framing text, server-read paths, and a gate-judged command's redacted output. Typed answers per id; overflow refuses with a split suggestion, never truncates. The gate judges the command; the tool does not sandbox. |
+| Several judgments over one composed state | `jev_ask` | Your questions keyed by your ids; state is your framing text, server-read paths, and redacted output from an opt-in command. The server runs allowlisted commands and options directly without a shell. One provider call returns typed answers per id. Overflow refuses with a split suggestion. |
 | The same judgment over many files | `jev_files_judge` | Files, directories, and globs in; one provider call per surviving file; every skipped path comes back with a reason. Picking among the answers is `jev_find` fed those answers. |
 | A value sitting in a document | `jev_extract` | Your regex proposes the matches. Jev picks. The value is one of those matches, or null. |
 | Is this patch acceptable | `jev_review` | Pull-request triage. The diff against the request. |

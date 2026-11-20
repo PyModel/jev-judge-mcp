@@ -219,7 +219,7 @@ enumerated into bounded options; or when the same unchanged decision was already
 | `jev_extract` | Your regex proposes candidates, Jev picks, the value comes back verbatim (versions, prices, dates, IDs) | 50,000 units per document, ≤32 fields |
 | `jev_score` | Grade severity or risk on your own ordered rubric; threshold the level, never interpolate a magnitude between levels | 2–10 levels |
 | `jev_file_judge` | Judge a file without reading it: the server reads the path as state, you get the typed answer, the bytes never enter your context | 100,000 units per file, refused over |
-| `jev_ask` | Your own questions (noul, choice, score) over one composed state: framing text, server-read files, a gate-judged command's output. Typed answers keyed by your ids; overflow refuses with a split suggestion | 1–20 questions, ≤20 paths, 120,000 units of state plus questions |
+| `jev_ask` | Your own questions (noul, choice, score) over one composed state: framing text, server-read files, or redacted output from an opt-in read-only command with allowlisted options. One provider call returns typed answers keyed by your ids; overflow refuses with a split suggestion | 1–20 questions, ≤20 paths, 120,000 units of state plus questions |
 | `jev_files_judge` | The same judgment over many files: glob patterns, directories, and paths in, one call per surviving file, skips reported with reasons | ≤64 files, ≤32 path entries |
 
 Caps are UTF-16 code units, frozen in the server's `limits.py`. "no length bound" is not a token budget: Jev's context is 64k tokens per request (32k for state), and an input inside the table can still overflow it. `jev_gate` sends the diff and the test log twice. An overflow comes back as `input_too_large` (ADR-0079): split the call.
@@ -341,6 +341,7 @@ The server reads environment variables only. It does not load a `.env` file.
 | `JEV_MCP_KEY_FILE` | `~/.config/jev-mcp/key` | where `setup` stores the key and the server reads it |
 | `JEV_PROVIDER` | `auto` | `auto` takes the first provider with credentials: typesafe, openrouter, cloudflare, compatible. The reference's vercel provider (`AI_GATEWAY_API_KEY`) is not supported |
 | `JEV_MCP_MODEL` | `jev-latest` | Jev model to ask |
+| `JEV_ASK_COMMANDS` | off | Set to `1` to let `jev_ask` run read-only commands with allowlisted options directly without a shell. An ask uses one provider call for its questions |
 | `JEV_MCP_CACHE` | off | replay identical requests from disk at no API cost; leave it off when answers must be fresh, and delete the directory to clear it |
 | `JEV_MCP_CACHE_DIR` | `~/.cache/jev-mcp` | where the cache lives |
 | `JEV_MCP_CACHE_MAX_ENTRIES` | `4096` | cache entry cap; a store past it evicts the oldest entries first (`0` disables) |

@@ -280,11 +280,8 @@ CASES: tuple[ToolCase, ...] = (
             payload["status"] == "ok" and payload["answer"]["nearest_level"] == 0 and not auto_anywhere(payload)
         ),
     ),
-    # ADR-0077, registry order. The question id and `command` are deliberately absent from
-    # text_paths: an id is a map key the payload echoes, and a command is judged by the gate
-    # before anything runs — their hostile-input contracts live in tests/unit/test_ask.py and
-    # the injection suite, not in a same-decision replay here. The fields that reach the
-    # provider are listed.
+    # Caller IDs and command strings stay off the provider wire. Command output is exercised
+    # through the execution boundary in test_ask_command.py.
     ToolCase(
         "jev_ask",
         {
@@ -303,8 +300,8 @@ CASES: tuple[ToolCase, ...] = (
             ("questions", "q1", "criteria", 0),
             ("questions", "q1", "criteria", 1),
         ],
-        {"q1": {"score": 0.2, "probabilities": {"0": 0.8, "1": 0.2}, "confidence": 0.95}},
-        {"q1": dressed({"score": 0.9, "probabilities": {"0": 0.1, "1": 0.9}, "confidence": 0.3})},
+        {"q0": {"score": 0.2, "probabilities": {"0": 0.8, "1": 0.2}, "confidence": 0.95}},
+        {"q0": dressed({"score": 0.9, "probabilities": {"0": 0.1, "1": 0.9}, "confidence": 0.3})},
         lambda payload: (
             payload["status"] == "ok" and payload["answers"]["q1"]["nearest_level"] == 0 and not auto_anywhere(payload)
         ),

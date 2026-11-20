@@ -333,29 +333,56 @@ answer yourself.
 test failure a real regression and how severe, does this diff carry a credential and which class of
 change is it. Write the questions — noul, choice, or score, keyed by your ids — and compose the
 state: your own framing in `state`, files the server reads in `paths` (the `jev_file_judge` rules),
-and an optional `command` (only when the operator has enabled command execution with
-`JEV_ASK_COMMANDS=1`; without it `command` refuses `command_disabled` with no run and no call)
-whose redacted output joins the state after a deterministic denylist and the command hook's gate
-judge it read-only with confidence and no destructive intent. The gate judges; the tool does not
-sandbox. Answers come back keyed by your ids, fail-closed per question, with a state summary and
-summed usage.
+and an optional `command` whose redacted output joins the state. An accepted command uses one
+provider call for your questions, just like an ask without a command. Answers come back keyed by
+your ids, fail-closed per question, with a state summary and usage. The provider receives generated
+question keys such as `q0` in place of caller ids.
+
+Command execution is off by default. Set `JEV_ASK_COMMANDS=1` in the server environment to enable it.
+The server parses POSIX shell-style quoting into arguments and invokes the executable directly.
+The fixed allowlist is `git status`, `git diff`, `git log`, `git show`, `ls`, `rg`, `grep`, `wc`,
+`head`, and `tail`. There is no shell, expansion, pipeline, or redirection. Malformed quoting,
+unquoted shell operators (including backticks and `$(`), executable paths, Git options before
+the subcommand, and executables found inside the working directory tree are refused.
+
+Each command has a **closed option allowlist**. Exact spellings are required. Any unlisted option
+refuses with `command_refused`, the command's allowed options, and the final-block notice. A
+disabled command returns `command_disabled` with the same notice. Both refusals happen before
+execution or a provider call.
+
+| Command | Flags | Options with required values | Options with optional attached values |
+| --- | --- | --- | --- |
+| `git status` | `-s`, `--short`, `--branch` | — | `--porcelain[=version]` |
+| `git diff` | `-p`, `--name-only`, `--name-status`, `--no-color`, `--cached`, `--staged` | `-U`, `--unified` | `--stat[=width[,name-width[,count]]]` |
+| `git log`, `git show` | `-p`, `--name-only`, `--name-status`, `--no-color`, `--oneline` | `-U`, `--unified`, `-n`, `--max-count`, `--since`, `--until`, `--author`, `--format`, `--pretty` | `--stat[=width[,name-width[,count]]]` |
+| Both `rg` and `grep` | `-i`/`--ignore-case`, `-w`/`--word-regexp`, `-F`/`--fixed-strings`, `-n`/`--line-number`, `-c`/`--count`, `-l`/`--files-with-matches`, `-v`/`--invert-match`, `-x`/`--line-regexp` | `-A`/`--after-context`, `-B`/`--before-context`, `-C`/`--context`, `-e`/`--regexp`, `-f`/`--file`, `-m`/`--max-count` | — |
+| `rg` only | `-s`/`--case-sensitive`, `-S`/`--smart-case`, `--hidden`, `--no-ignore` | `-g`/`--glob`, `--iglob`, `-t`/`--type`, `-T`/`--type-not` | — |
+| `grep` only | `-r`, `-R`, `--recursive` | `--include`, `--exclude`, `--exclude-dir` | — |
+| `ls` | `-l`, `-a`, `-A`, `-h`, `-R`, `-1`, `-t`, `-S` | — | — |
+| `wc` | `-l`, `-w`, `-c`, `-m` | — | — |
+| `head`, `tail` | — | `-n`, `-c` | — |
+
+Required values can be attached or separate, as in `--max-count=5`, `--max-count 5`, `-n5`,
+or `-n 5` where the option takes a value. Short flags can be bundled, as in `grep -in`.
+A bare `--` ends option parsing and can delimit Git paths. The secret-store and private-directory
+rules apply to every positional argument and option value.
+
+Git runs with paging, fsmonitor, hooks, external diffs, and text conversion disabled, and ignores
+system and global Git configuration. Configured worktree filters cause `git status` and `git diff`
+to refuse.
 
 **Measured.** No recorded live eval, and no bench corpus yet (extension tool, ADR-0077).
 
-**Weak spots.** Nothing truncates: state plus questions is capped at 120,000 UTF-16 units, and an
-over-budget call refuses with every part's size and a first-fit split suggestion naming which parts
-go to which call — re-ask the same questions on each. Own `state` is framing, capped at 20,000
+**Weak spots.** Nothing truncates. The total state plus questions is capped at 120,000 UTF-16 units,
+including choice option keys. An over-budget call refuses with every part's size and a first-fit
+split suggestion naming which parts go to which call. Re-ask the same questions on each.
+Own `state` is framing, capped at 20,000
 units; command output is capped at 30,000 units and an over-cap run is killed and refused; the
-command runs under a 30-second timeout, in the working directory, with no stdin and no sandbox, in
-an environment scrubbed of the server's configured secrets. Command execution is off unless the
-operator enables it; when enabled, a denylist (network clients, secret stores, private config
-directories, environment readers) refuses before the gate, and a refused command makes no
-execution and no ask call — but the gate judgment itself is one provider call. The denylist is
-not a sandbox: an interpreter one-liner such as `python -c` or `node -e` names no network client,
-so it passes the denylist and can still reach the network once commands are enabled. Enabling
-`command` trusts the gate's judgment and the operator's own isolation, not a containment
-boundary. 1 to 20 questions per call, at most 20 paths. Choice option IDs use the same 1 to 64
-UTF-16 unit limit as `jev_file_judge`. Questions in one request cannot see each other's answers. Every
+command runs under a 30-second timeout, in the working directory, with closed stdin and a scrubbed
+environment. Both output streams are redacted. Commands read with the server account's filesystem
+permissions, including when traversing directories. 1 to 20 questions
+per call, at most 20 paths. Choice option IDs use the same 1 to 64 UTF-16 unit limit as
+`jev_file_judge`. Questions in one request cannot see each other's answers. Every
 answer is typed: a probability, one option, or a scale position — never an explanation.
 
 **Not for** exact lookups, counting, math, or anything grep answers — run that in your own shell

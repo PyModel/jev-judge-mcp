@@ -192,7 +192,7 @@ The extension family that makes the server a first-class coding-agent helper; th
 |---|---|---|
 | `jev_file_judge` | extension tool: one kind-discriminated judgment over a server-read file; typed zero-call refusals; the file's bytes never reach the payload | ADR-0077 caps in `limits.py`, schema pinning, refusal matrix |
 | `jev_files_judge` | extension tool: prune before any call, one call per surviving file under the ADR-0069 in-flight cap, per-path answers and skipped-with-reason | follows `jev_file_judge`; usage sums across calls |
-| `jev_ask` | extension tool: caller-written questions as a typed Noul/Choice/Score union, own state + server-read files + a gate-first optional command; overflow refuses with a Split suggestion, never truncates | follows the file tools and the gate judge; command refusal makes no execution and no call |
+| `jev_ask` | extension tool: caller-written questions as a typed Noul/Choice/Score union, own state, server-read files, and optional output from an allowlisted read-only command. Overflow refuses with a Split suggestion | allowlisted commands and options run as argv when enabled. Refusals use zero provider calls, and an accepted ask uses one |
 | `hook screen` | opt-in Claude Code PostToolUse annotator, default off, never blocks, other hosts unverified | abstain-on-error pinned; no `JEV_HOOK_REQUIRED` arm |
 | `hook compact-cut` | opt-in Claude Code SessionStart(`compact`) cut point returning one additionalContext line (PreCompact cannot inject instructions, ADR-0077), default off; no turn-end advisor | abstains on a non-compact source, below two turns, or without a usable transcript |
 

@@ -235,7 +235,7 @@ async def test_reader_masks_pem_and_both_exact_secret_sources(tool: str, tmp_pat
             "state": text,
             "questions": {"q": {"type": "noul", "instructions": "OK?", "criteria": {}}},
         }
-    outcome = await call_tool(tool, args, {"q": {"noul": 1}, "file": {"noul": 1}})
+    outcome = await call_tool(tool, args, {"q0": {"noul": 1}, "file": {"noul": 1}})
     assert not outcome.is_error, outcome.text
     state = outcome.requests[0][0]
     parts = cast(dict[str, str], state)
@@ -257,7 +257,7 @@ async def test_configured_value_in_path_label_stays_local(tool: str, tmp_path: A
         args["paths"] = [path]
     elif tool == "jev_ask":
         args = {"paths": [path], "questions": {"q": {"type": "noul", "instructions": "OK?", "criteria": {}}}}
-    result = await call_tool(tool, args, {"q": {"noul": 1}, "file": {"noul": 1}})
+    result = await call_tool(tool, args, {"q0": {"noul": 1}, "file": {"noul": 1}})
     assert not result.is_error
     assert "ordinary text" in str(result.requests)
     assert marker not in str(result.requests)
