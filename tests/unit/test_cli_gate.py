@@ -11,7 +11,7 @@ import anyio
 import pytest
 
 from jev_judge_mcp import cli, git
-from jev_judge_mcp.cli import completion_hook_main, completion_matches, gate_main, judge_main
+from jev_judge_mcp.cli import completion_hook_main, completion_targets, gate_main, judge_main
 from jev_judge_mcp.domain import JsonValue, Question
 from jev_judge_mcp.git import split_unified
 from jev_judge_mcp.limits import GATE
@@ -287,7 +287,7 @@ def test_completion_matching_reads_tokens_not_a_string_prefix(command: str, matc
     A command that does not tokenize (`git push -m \"unterminated`) abstains: the shell cannot
     run it either, so there is nothing to gate.
     """
-    assert completion_matches(command) is matches
+    assert bool(completion_targets(command, Path.cwd())) is matches
 
 
 def test_cli_gate_does_not_mark_a_file_it_read_self_reported(
@@ -565,7 +565,7 @@ def test_git_options_select_the_repository_and_keep_the_shell_directory(
     tmp_path: Path, command: str, repository: str | None
 ) -> None:
     """`-C` resolves like git (chained, empty, absolute); a target git options could redirect is unknown."""
-    (target,) = cli._completion_targets(command, tmp_path)
+    (target,) = completion_targets(command, tmp_path)
     assert target.shell_cwd == tmp_path
     assert target.git_cwd == (None if repository is None else tmp_path / repository)
 
