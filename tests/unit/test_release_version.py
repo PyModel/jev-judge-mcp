@@ -189,6 +189,13 @@ def test_release_guide_matches_current_version_configuration() -> None:
         assert "pins it with `release-as`" not in (project / "CONTRIBUTING.md").read_text()
 
 
+def test_every_release_bumps_the_minor_version() -> None:
+    project = SCRIPT.parents[1]
+    package = json.loads((project / "release-please-config.json").read_text())["packages"]["."]
+    assert package["versioning"] == "always-bump-minor"
+    assert "always-bump-minor" in (project / "CONTRIBUTING.md").read_text()
+
+
 @pytest.mark.parametrize("path", ["CONTRIBUTING.md", "docs/adr/0060-release-pr-ci-is-maintainer-approved.md"])
 def test_release_docs_explain_how_to_start_pending_ci(path: str) -> None:
     project = SCRIPT.parents[1]
