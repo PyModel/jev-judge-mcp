@@ -81,6 +81,7 @@ ALLOWED_RUN = {
     "uv sync --locked --all-extras": "uv sync --locked --all-extras",
     "python scripts/ci_old_python_entry.py": "scripts/ci_old_python_entry.py",
     "bash scripts/ci/install_actionlint.sh": "scripts/ci/install_actionlint.sh",
+    "bash scripts/ci/install_ripgrep.sh": "scripts/ci/install_ripgrep.sh",
 }
 PAID_TARGETS = ("security-live", "eval-live", "ab", "load")
 PAID_FLAGS = ("JEV_EVAL_LIVE", "JEV_AB_LIVE")
