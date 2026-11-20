@@ -4,6 +4,8 @@ status: accepted
 
 # One command installs the `jev` MCP entry into local agent configs
 
+> Partially superseded. ADR-0051 supersedes the pre-publication checkout-only pin. ADR-0084 removes the TypeSafe extra from generated launches.
+
 Agents each keep their own MCP config, and several of those files are shared with a desktop app. A hand-edited snippet drifts, and a rewriter that parses and dumps TOML drops comments in `~/.codex/config.toml`. The installer is a subcommand of the existing console script so that running `jev-judge-mcp` with no arguments stays the stdio server.
 
 ## Decision

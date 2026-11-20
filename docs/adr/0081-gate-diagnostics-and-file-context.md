@@ -3,6 +3,8 @@ status: accepted
 ---
 # ADR-0081. Explain held gates and bound the context shared between file reviews
 
+> Partially superseded. ADR-0083 revises validation of source and defect answers and changed-line diagnostics. The ADR-0086 amendment uses byte estimates to pack optional context.
+
 ## Context
 
 The frozen review returns the worst action across safety, rubric confidence and the composite.

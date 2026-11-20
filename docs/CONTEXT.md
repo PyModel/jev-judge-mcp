@@ -121,7 +121,7 @@ _Avoid_: strict validation, schema enforcement (the schema advertises stricter t
 ### Providers and parity
 
 **Provider**:
-A transport that delivers questions to Jev and returns answers: TypeSafe direct, OpenRouter, Cloudflare, Vercel, or a Jev-compatible endpoint.
+A transport that delivers questions to Jev and returns answers: TypeSafe direct, OpenRouter, Cloudflare, or a Jev-compatible endpoint. The resolver reserves the Vercel slot and returns a configuration error if selected (ADR-0007).
 _Avoid_: backend, adapter, client
 
 **Envelope**:

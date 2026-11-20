@@ -3,6 +3,8 @@ status: accepted
 ---
 # jev_extract accepts a restricted ECMAScript subset, matched in UTF-16 units, in a killable process pool
 
+> Partially superseded. ADR-0016 supersedes the queueing guarantee: time waiting for a worker counts against the deadline. ADR-0018 selects the standard-library regex engine.
+
 `jev_extract`'s `pattern` is JavaScript regex source. The reference compiles it with `new RegExp` and runs `document.matchAll` in a worker thread killed at 1,000 ms (`index.ts:890-940`, commit `69ffb4b`). Without the `u` flag, V8 matches UTF-16 code units. Python `str` and the `regex` module match Unicode code points. `.{3}` matches a document of one BMP character plus U+1F600 in V8 (three units) and matches nothing in Python (two code points). Translating classes and anchors leaves that gap in place.
 
 The subset we accept is translated and matched in unit space:

@@ -3,6 +3,8 @@ status: accepted
 ---
 # The HTTP transport refuses to run without access control
 
+> Partially superseded. ADR-0087 binds validation and redaction to the key snapshot used to construct the provider.
+
 The critique of v0.1.1 reproduced the gap: with `JEV_MCP_TRANSPORT=streamable-http` and any
 non-loopback `JEV_MCP_HTTP_HOST` — the standard way to publish a container port — the server was
 an unauthenticated service. The SDK validates Host/Origin only when the host is literally

@@ -28,7 +28,7 @@ from jev_judge_mcp.domain import Usage
 from jev_judge_mcp.policy import thresholds as policy_thresholds
 from jev_judge_mcp.providers import Evaluation
 from jev_judge_mcp.registry import TOOL_NAMES
-from jev_judge_mcp.settings import load_settings
+from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.telemetry import Telemetry
 from jev_judge_mcp.tools import TOOLS
 
@@ -52,13 +52,10 @@ _PRUNED = {
 _TEXT_SUFFIXES = {".md", ".py", ".json", ".toml", ".yml", ".jsonl"}
 
 _COUNT_WORDS = {"ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15}
-# "ten tools", "the ten tools", "Ten JevTools", "10/10 tools": a claim that the tool count is N.
-# "the reference's ten, plus an extension" is not a count claim and must not match.
 _COUNT_CLAIM = re.compile(
-    r"\bthe (ten|eleven|twelve|thirteen|fourteen|fifteen) tools\b"
-    r"|\b(ten|eleven|twelve|thirteen|fourteen|fifteen) (?:published |judgment )?tools\b"
-    r"|\bTen JevTools\b"
-    r"|\b(\d+)/\3 tools\b"
+    rf"\b(?P<count>{'|'.join(_COUNT_WORDS)}|\d+)(?:/(?P=count))? "
+    r"(?:(?:published|original|judgment|Jev) )?(?:tools|JevTools)\b",
+    re.IGNORECASE,
 )
 _CITED_ADR = re.compile("ADR" + r"-(\d{4})")
 _NAMED_DIVERGENCE = re.compile(r"divergence `([a-z0-9-]+)`")
@@ -111,8 +108,8 @@ def test_numeric_tool_count_claims_match_the_registry() -> None:
     wrong: list[tuple[Path, str]] = []
     for path in checked:
         for match in _COUNT_CLAIM.finditer(path.read_text(encoding="utf-8")):
-            word = next(group for group in match.groups() if group is not None and group.isalpha())
-            if _COUNT_WORDS[word] != len(TOOLS):
+            word = match["count"].lower()
+            if (int(word) if word.isdigit() else _COUNT_WORDS[word]) != len(TOOLS):
                 wrong.append((path, match.group(0)))
     assert wrong == []
 
@@ -336,11 +333,16 @@ _MEASURED_CLAIMS: dict[str, tuple[tuple[str, int] | tuple[str, int, str], ...]] 
         ("jev-1.13.0", 2),
     ),
     "evals/reports/agent-study-2026-09-27.md": (
-        ("5/9", 1),
-        ("38.9", 1),
-        ("22.6", 1),
-        ("140,032", 1),
-        ("36,328", 1),
+        ("39/39", 1),
+        ("38.9 s", 1, "38.9"),
+        ("22.6 s", 1, "22.6"),
+        ("700,161", 1),
+        ("326,948", 1),
+        ("16/150", 1),
+        ("4.38 s", 1),
+        ("88/92", 1),
+        ("85/86", 1),
+        ("hard-opus-b-ambiguous-03", 1),
     ),
     "docs/evals/README.md": (
         ("| 6/9 / 6/9 |", 1),
@@ -353,7 +355,7 @@ _MEASURED_CLAIMS: dict[str, tuple[tuple[str, int] | tuple[str, int, str], ...]] 
         ("+85.8 s", 1),
         ("$1.4953", 1),
         ("$0.0006", 1),
-        ("slower with Jev", 3),
+        ("slower with Jev", 1),
     ),
 }
 
@@ -439,6 +441,11 @@ def test_agent_rule_block_caps_match_limits() -> None:
         "jev_extract": [f"{limits.EXTRACT.document_max:,} units", f"\u2264{limits.EXTRACT.fields_max} fields"],
         "jev_score": [f"{limits.SCORE.levels_min}\u2013{limits.SCORE.levels_max} levels"],
         "jev_file_judge": [f"{limits.FILE_JUDGE.file_units_max:,} units per file read"],
+        "jev_files_judge": [
+            f"≤{limits.FILES_JUDGE.files_max} files",
+            f"≤{limits.FILES_JUDGE.patterns_max} path entries",
+            f"{limits.FILES_JUDGE.file_units_max:,} units per file read",
+        ],
         "jev_ask": [
             f"{limits.ASK.questions_min}\u2013{limits.ASK.questions_max} questions",
             f"\u2264{limits.ASK.files_max} paths",
@@ -446,6 +453,7 @@ def test_agent_rule_block_caps_match_limits() -> None:
             f"{limits.ASK.command_output_units_max:,} units of command output",
         ],
     }
+    assert set(expected) == set(TOOL_NAMES)
     missing = [
         f"{tool} row lacks {needle!r}"
         for tool, needles in expected.items()
@@ -460,6 +468,48 @@ def test_agent_rule_block_caps_match_limits() -> None:
     assert missing == [] and stale_unbounded == [], (
         f"docs/agent-rules.md caps drifted from limits.py: {missing + stale_unbounded}"
     )
+
+
+def test_readme_lists_ci_prerequisites_in_order() -> None:
+    makefile = (ROOT / "Makefile").read_text()
+    prerequisites = next(line for line in makefile.splitlines() if line.startswith("ci:")).split()[1:]
+    readme = (ROOT / "README.md").read_text()
+    listed = re.search(r"^CI stages in order: (.+)\.$", readme, re.MULTILINE)
+    assert listed and re.findall(r"`([\w-]+)`", listed[1]) == prerequisites
+
+
+def test_adr_index_links_every_decision() -> None:
+    index = ADR_DIR / "README.md"
+    assert index.is_file(), "missing ADR index"
+    links = re.findall(r"\]\((\d{4}-[^()]+\.md)\)", index.read_text())
+    assert sorted(links) == sorted(path.name for path in ADR_DIR.glob("????-*.md"))
+
+
+def test_configuration_table_covers_settings() -> None:
+    section = (ROOT / "README.md").read_text().split("## Configuration\n", 1)[1].split("\n## ", 1)[0]
+    variables = re.findall(r"^\| `([A-Z_]+)` \| [^|]+ \| [^|]+ \|$", section, re.MULTILINE)
+    assert sorted(variables) == sorted(str(field.validation_alias) for field in Settings.model_fields.values())
+
+
+def test_readme_use_cases_cover_the_tool_registry() -> None:
+    section = (ROOT / "README.md").read_text().split("## What to use it for", 1)[1].split("For example", 1)[0]
+    assert sorted(re.findall(r"^\| [^|]+ \| `(jev_\w+)` \|", section, re.MULTILINE)) == sorted(TOOL_NAMES)
+
+
+def test_readme_cli_inventory_matches_dispatch() -> None:
+    from jev_judge_mcp.__main__ import COMMANDS
+
+    section = (ROOT / "README.md").read_text().split("## Architecture", 1)[1].split("<p", 1)[0]
+    assert re.findall(r"`([a-z-]+)`", section) == [name for names, _, _ in COMMANDS for name in names]
+
+
+def test_manual_pi_entry_matches_installer_allowlist() -> None:
+    from jev_judge_mcp.install.launch import pi_direct_tools
+
+    entries = [json.loads(block).get("mcpServers", {}).get("jev", {}) for block in _readme_fences("json")]
+    assert [entry["directTools"] for entry in entries if "directTools" in entry] == [pi_direct_tools()]
+    pi_page = (ROOT / "docs/harness/pi.md").read_text()
+    assert json.loads(pi_page.split("```json\n", 1)[1].split("```", 1)[0]) == pi_direct_tools()
 
 
 def test_setup_prompt_names_only_real_cli_surface() -> None:

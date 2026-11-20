@@ -3,6 +3,8 @@ status: accepted
 ---
 # An upstream context overflow is input_too_large
 
+> Partially superseded. The ADR-0086 amendment uses byte estimates for packing and split advice. The provider enforces the token window.
+
 The caps in `limits.py` are not Jev's context window. jev-1.13 accepts 64k tokens per request and 32k for `state` plus the longest question. jev_gate sends the diff and the tests log twice, once in the review state and once as implicit evidence (ADR-0063). So a call inside every cap can still overflow. The API answers 400 with `{"detail": {"error_type": "max_tokens_exceeded"}}`. That was coded `provider`, which reads as an outage. The real cause is the caller's input size, and the caller fixes it by splitting the call.
 
 ## Decision

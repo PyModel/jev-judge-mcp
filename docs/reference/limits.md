@@ -297,7 +297,7 @@ and cannot be set per call.
 
 Other defaults, in prose: the model is `jev-latest` unless `JEV_MCP_MODEL` says otherwise (README
 § Configuration); `jev_find`'s `top_k` defaults to 5; `jev_rerank`'s omitted `top_k` returns every
-candidate; `jev_decide`'s escape hatches (`ask_user`, `investigate`, `none`) are offered by default.
+candidate; `jev_decide`'s escape hatches (`ask_user`, `investigate`, `none`) are offered by default. Set `escape_hatches: false` to offer only the caller's options.
 Thresholding guidance — including raising your own bar before destructive steps — is in
 [`docs/guidance.md`](../guidance.md); what is certified on recorded traffic is in
 [`docs/EVIDENCE.md`](../EVIDENCE.md).

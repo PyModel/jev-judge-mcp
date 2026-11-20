@@ -1,5 +1,7 @@
 # ADR-0082 Actionable completion gate escalations
 
+> Partially superseded. ADR-0083 revises diagnostic validation, citation provenance, and the distinction between summary and detailed reason codes.
+
 Accepted 2026-11-18.
 
 ## Context

@@ -128,7 +128,7 @@ of noul or choice questions, not a catalog.
 candidate when it should have escaped), with escape-hatch accuracy and requirement-check F1.
 
 **Weak spots.** Escape hatches (`ask_user`, `investigate`, `none`) are enabled by default and
-reserve those keys while enabled. Every candidate requires a [caller ID](#caller-ids).
+reserve those keys while enabled. Set `escape_hatches: false` to remove them and release the keys. Every candidate requires a [caller ID](#caller-ids).
 Requirements are capped at 3, each up to 500 UTF-16 units — a decision with a longer rulebook
 does not fit and belongs in code (ADR-0002), not in the question.
 
@@ -346,7 +346,7 @@ is this generated module, does any file in the diff root still name the old flag
 files, directories, or glob patterns — plus the same one question `jev_file_judge` takes, and the
 server expands, prunes, and makes one provider call per surviving file. The payload reports
 `{path, answer, status}` per judged file and `{path, reason}` per skipped one — a directory not
-entered (`skipped_directory`), a secret store (`secret_file`), a binary or empty read, an over-cap
+entered (`skipped_directory`), a secret store (`secret_file`), a missing, unreadable or non-regular file, unmatched path or empty directory (`not_found`), a binary or empty read, an over-cap
 file (`too_large`), the hard cap (`over_the_file_cap`), a failed call (`call_failed:<code>`) — and
 no file's bytes enter your context. Directories are walked to the leaves only with `recursive:
 true`; dependency, build, cache, and VCS-internal directories are never entered either way. Picking
@@ -417,8 +417,11 @@ size and split advice. The split estimate includes JSON framing and question cri
 Re-ask the same questions on each proposed call.
 Own `state` is framing, capped at 20,000
 units; command output is capped at 30,000 units and an over-cap run is killed and refused; the
-command runs under a 30-second timeout, in the working directory, with closed stdin and a scrubbed
-environment. Both output streams are redacted. Commands read with the server account's filesystem
+command runs under a 30-second timeout, in the working directory, with closed stdin. The child inherits only present values of `PATH`, `TZ`, `LANG`,
+`LANGUAGE`, `LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, `LC_NUMERIC`, `LC_TIME`, `LC_COLLATE`, and
+`LC_MONETARY`, excluding configured secret variable names. Values pass through verbatim.
+Git also gets `GIT_NO_LAZY_FETCH=1`, an empty `GIT_ALLOW_PROTOCOL`, and both `GIT_CONFIG_SYSTEM`
+and `GIT_CONFIG_GLOBAL` set to `/dev/null`. Both output streams are redacted. Commands read with the server account's filesystem
 permissions, including when traversing directories. 1 to 20 questions
 per call, at most 20 paths. Choice option IDs use the same 1 to 64 UTF-16 unit limit as
 `jev_file_judge`. Questions in one request cannot see each other's answers. Every
@@ -430,10 +433,10 @@ and read the result; `command` is for output you want judged, not output you wan
 ## jev_gate_range — did the work finish, read from git
 
 **Use when** the change is in git and you would otherwise paste its diff into `jev_gate`. Name the
-range (`main..HEAD`, or `HEAD` for staged and unstaged tracked changes since the last commit). A
-single revision or two-dot range also accepts a subtree named by its commit and repository path
-(such as `HEAD:pkg`) or the empty tree ID. A bare nonempty tree ID has no repository path and is
-refused. Three-dot ranges require commits. The server reads `git diff <range> -- .` in its working
+range (`main..HEAD`, or `HEAD` for staged and unstaged tracked changes since the last commit). For a
+single revision or either end of a two-dot range, use a commit, a subtree named by its commit
+and repository path (such as `HEAD:pkg`), or the empty tree ID. A bare nonempty tree ID has no repository path and is
+refused. Three-dot ranges require commits. An omitted range endpoint defaults to `HEAD`. The server reads `git diff <range> -- .` in its working
 directory and checks each file's repository path on both sides before passing its patch to
 jev_gate (ADR-0080).
 
@@ -457,10 +460,6 @@ A bad or empty range, a missing repository, or a patch whose origin cannot be ve
 `invalid_arguments`. If either the ordinary diff or its full-file context exceeds the Git capture
 limit, git is stopped mid-read and the tool returns `input_too_large`. These refusals precede any
 provider call.
-`tests_path` is read under jev_file_judge's path rules and is not self-reported. The working
-directory is wherever the harness started the server: an entry that moves it
-(`uv run --directory <checkout>`) reads that checkout from every project, so a range from your
-project refuses; launch a checkout with `uv run --project <checkout>`, which keeps the working
-directory. Git refusals name the server's working directory so the mismatch shows.
+`tests_path` is read under jev_file_judge's path rules and is not self-reported. The range is relative to the [server working directory](harness/hooks.md#working-directory). Git refusals name the server's working directory so the mismatch shows.
 
 **Not for** a patch that is not in the working tree or its history — use jev_gate.

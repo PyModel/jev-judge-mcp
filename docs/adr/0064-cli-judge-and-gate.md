@@ -3,6 +3,8 @@ status: accepted
 ---
 # The CLI is the harness-agnostic path
 
+> Partially superseded. ADR-0083 makes completion consume the tool action and unresolved status. ADR-0087 shares scoped evidence reads between the CLI and file tools.
+
 MCP stays the product surface for clients that speak it. A client that cannot is not a reason to fork policy. `jev-judge-mcp judge` and `jev-judge-mcp gate` call the same tools.
 
 ## Decision

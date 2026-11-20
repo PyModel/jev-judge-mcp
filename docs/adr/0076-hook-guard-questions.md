@@ -3,6 +3,8 @@ status: accepted
 ---
 # The hook gate asks guard questions, not one bare allow
 
+> Partially superseded. The command-hook guard amendment in ADR-0002 supersedes the threshold location. `policy/guard.py` owns the questions, confidence floors and decision.
+
 `hook gate` judged every event with one generic allow/deny Choice. That flattened two different
 judgments into one: what a shell command would do to the working directory, and whether a written
 file carries material that must never leave the machine. One question also had to carry both the
