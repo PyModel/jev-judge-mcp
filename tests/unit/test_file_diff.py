@@ -1,7 +1,7 @@
 """A file list is not silently cut, and an unreviewed file is not auto."""
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, cast, override
 
 import anyio
@@ -9,7 +9,7 @@ import pytest
 from mcp.types import CallToolResult, TextContent
 
 from jev_judge_mcp.domain import JsonValue, Usage
-from jev_judge_mcp.limits import GATE
+from jev_judge_mcp.limits import GATE, REVIEW
 from jev_judge_mcp.providers import Evaluation, ProviderError
 from jev_judge_mcp.providers.base import parse_envelope
 from jev_judge_mcp.settings import Settings
@@ -30,7 +30,7 @@ async def test_an_oversized_file_is_unreviewed_and_not_auto() -> None:
         "jev_review",
         {
             "request": "fix the parser",
-            "diff": [{"path": "src/parser.py", "patch": "x" * (GATE.doc_units + 1)}],
+            "diff": [{"path": "src/parser.py", "patch": "x" * (REVIEW.doc_units + 1)}],
         },
         {},
     )
@@ -313,15 +313,16 @@ async def test_file_list_gate_asks_the_claims_once_not_per_file() -> None:
     assert diff_items == ["diff_mathutil.py", "diff_limits.py"]
 
 
-async def test_gate_refuses_an_oversized_primary_patch_before_reviewing_other_files() -> None:
+async def test_gate_holds_an_oversized_patch_and_reviews_its_sibling() -> None:
     result, provider = await _call_gate_raw(
         [{"path": "ok.py", "patch": "+ ok"}, {"path": "large.py", "patch": "x" * (GATE.doc_units + 1)}],
         [{"id": "log", "text": "1 passed"}],
     )
-    assert result.is_error and result.structured_content == {"code": "input_too_large"}
-    error = json.loads(cast(TextContent, result.content[0]).text)["error"]
-    assert "diff[1].patch" in error and str(GATE.doc_units) in error and "hunk" in error
-    assert provider.requests == []
+    assert not result.is_error
+    payload = json.loads(cast(TextContent, result.content[0]).text)
+    assert payload["skipped"] == [{"path": "large.py", "reason": "oversize"}]
+    assert payload["unreviewed_files"] == ["large.py"] and payload["action"] != "auto"
+    assert len(provider.requests) == 2 and "large.py" not in str(provider.requests)
 
 
 async def test_gate_checks_exact_utf8_budget_including_longest_question_and_duplicated_documents() -> None:
@@ -348,8 +349,8 @@ async def test_gate_checks_exact_utf8_budget_including_longest_question_and_dupl
 
 
 async def test_gate_preflights_canonical_verification_and_all_expanded_questions() -> None:
-    result, provider = await _call_gate_raw(_patches(10, 3500), [{"id": "proof", "text": "ok"}])
-    assert result.is_error and "30000" in str(result.content[0]) and not provider.requests
+    result, provider = await _call_gate_raw(_patches(10, 3500), [{"id": "proof", "text": "\x01" * 5_100}])
+    assert result.is_error and "caller evidence" in str(result.content[0]) and not provider.requests
     outcome = await call_tool(
         "jev_gate",
         {
@@ -360,8 +361,12 @@ async def test_gate_preflights_canonical_verification_and_all_expanded_questions
         },
         _GATE_ANSWERS,
     )
-    assert outcome.is_error and outcome.code == "input_too_large" and not outcome.requests
-    assert "60000" in outcome.text and "claim" in outcome.text
+    assert not outcome.is_error, outcome.text
+    groups = [questions for state, questions in outcome.requests if isinstance(state, dict) and "claims" in state]
+    assert len(groups) >= 2 and outcome.payload["calls"] == 48 + len(groups)
+    for questions in groups:
+        assert sum(key.startswith("claim_") for key in questions) == 16
+        assert len(json.dumps(questions, ensure_ascii=False, separators=(",", ":")).encode()) < 60_000
 
 
 async def test_a_file_list_over_the_patch_budget_refuses_naming_the_diff() -> None:
@@ -400,7 +405,7 @@ _ESCALATE_REVIEW = {
 class DriftProvider(FakeProvider):
     """Answers that drift per call, as a live model can between the requests of one tool call."""
 
-    def __init__(self, answer_sets: list[Mapping[str, Any]]) -> None:
+    def __init__(self, answer_sets: Sequence[Mapping[str, Any]]) -> None:
         super().__init__(answer_sets[0])
         self._answer_sets = answer_sets
         self._calls = 0
@@ -415,7 +420,7 @@ class DriftProvider(FakeProvider):
         return Evaluation(dict(answers), Usage(1, 1), self.name, model)
 
 
-async def _call_drift(tool: str, arguments: Mapping[str, Any], answer_sets: list[Mapping[str, Any]]) -> Outcome:
+async def _call_drift(tool: str, arguments: Mapping[str, Any], answer_sets: Sequence[Mapping[str, Any]]) -> Outcome:
     """Call any tool through the real toolset against answers that drift per provider call."""
     provider = DriftProvider(answer_sets)
     toolset = Toolset(Runtime(Settings(), provider_factory=lambda _: provider), TOOLS)
@@ -427,8 +432,38 @@ async def _call_drift(tool: str, arguments: Mapping[str, Any], answer_sets: list
     return Outcome(json.loads(text), bool(result.is_error), text, provider.requests)
 
 
-async def _call_gate_drift(arguments: Mapping[str, Any], answer_sets: list[Mapping[str, Any]]) -> Outcome:
+async def _call_gate_drift(arguments: Mapping[str, Any], answer_sets: Sequence[Mapping[str, Any]]) -> Outcome:
     return await _call_drift("jev_gate", arguments, answer_sets)
+
+
+@pytest.mark.parametrize(
+    ("second", "verdict", "action"),
+    [
+        ("contradicted", "contradicted", "escalate"),
+        ("missing", "verified", "review"),
+    ],
+)
+async def test_split_claims_fail_closed_across_groups(second: str, verdict: str, action: str) -> None:
+    verification = {**_GATE_ANSWERS, "source_0": choice("diff_a", "log", "diff_a", "none")}
+    contradiction = {
+        "claim_0": choice("contradicted", "verified", "contradicted", "unsupported"),
+        "source_0": choice("none", "log", "diff_b", "none"),
+        "counterexample_0": choice("L1", "none", "L1", "L2"),
+    }
+    outcome = await _call_gate_drift(
+        {
+            "request": "fix the parser",
+            "diff": [{"path": path, "patch": "+ " + "x" * 16_000} for path in ("a", "b")],
+            "claims": ["the parser succeeds"],
+            "evidence": [{"id": "log", "text": "the parser fails"}],
+        },
+        [_REVIEW_ANSWERS, _REVIEW_ANSWERS, verification, contradiction if second == "contradicted" else {}],
+    )
+    assert not outcome.is_error, outcome.text
+    row = outcome.payload["verification"]["results"][0]
+    assert (row["verdict"], row["action"]) == (verdict, action)
+    assert outcome.payload["action"] == action
+    assert outcome.payload["calls"] == 4
 
 
 async def test_file_list_gate_payload_rows_agree_with_the_action_under_drift() -> None:
@@ -485,7 +520,7 @@ async def test_file_list_review_names_each_files_action_under_drift() -> None:
             "diff": [
                 {"path": "src/a.py", "patch": "+ a"},
                 {"path": "src/b.py", "patch": "+ b"},
-                {"path": "src/big.py", "patch": "x" * (GATE.doc_units + 1)},
+                {"path": "src/big.py", "patch": "x" * (REVIEW.doc_units + 1)},
             ],
         },
         [_ESCALATE_REVIEW, _REVIEW_ANSWERS],
@@ -512,7 +547,7 @@ async def test_a_clamped_review_keeps_each_files_own_action() -> None:
             "diff": [
                 {"path": "src/a.py", "patch": "+ a"},
                 {"path": "src/b.py", "patch": "+ b"},
-                {"path": "src/big.py", "patch": "x" * (GATE.doc_units + 1)},
+                {"path": "src/big.py", "patch": "x" * (REVIEW.doc_units + 1)},
             ],
         },
         _REVIEW_ANSWERS,
@@ -638,9 +673,7 @@ async def test_a_file_list_over_the_file_cap_is_refused_before_any_request() -> 
     assert not (await call_tool("jev_review", {"request": "r", "diff": at_cap}, {})).is_error
 
 
-async def test_the_review_file_list_reports_a_cut_as_its_string_path_does() -> None:
-    """A request over the document cap is cut for every file review; the payload says so and the
-    telemetry outcome carries the scope, exactly like a string diff."""
+async def test_the_review_file_list_refuses_an_oversized_request_as_its_string_path_does() -> None:
     answers = {
         "correctness": {"score": 2, "confidence": 0.95},
         "spec_match": {"score": 2, "confidence": 0.95},
@@ -652,12 +685,10 @@ async def test_the_review_file_list_reports_a_cut_as_its_string_path_does() -> N
     assert not clean.is_error and clean.payload["truncated"] is False
     cut = await call_tool(
         "jev_review",
-        {"request": "r" * (GATE.doc_units + 1), "diff": [{"path": "a.py", "patch": "+x"}]},
+        {"request": "r" * (REVIEW.doc_units + 1), "diff": [{"path": "a.py", "patch": "+x"}]},
         answers,
     )
-    assert not cut.is_error, cut.text
-    assert cut.payload["truncated"] is True
-    assert cut.payload["action"] != "auto"
+    assert cut.is_error and cut.code == "input_too_large" and cut.requests == []
 
 
 class SlowReviewProvider(FakeProvider):
@@ -791,8 +822,17 @@ def _patches(count: int, units: int) -> list[dict[str, str]]:
 
 
 async def test_gate_keeps_the_accepted_decision_across_file_list_sizes() -> None:
-    # The gate must preserve accepted decisions inside its budget and refuse an oversized verification before fan-out.
-    for count, units in ((2, 2000), (4, 4000), (6, 6000), (10, 2400), (10, 3000), (10, 7000), (20, 2000), (30, 1000)):
+    for count, units, per_group in (
+        (2, 2000, 2),
+        (4, 4000, 4),
+        (6, 6000, 4),
+        (10, 2400, 10),
+        (10, 3000, 9),
+        (10, 7000, 4),
+        (20, 2000, 13),
+        (30, 1000, 26),
+        (64, 3000, 9),
+    ):
         args = {
             "request": "fix the parser",
             "diff": _patches(count, units),
@@ -800,12 +840,17 @@ async def test_gate_keeps_the_accepted_decision_across_file_list_sizes() -> None
             "claims": ["parser fixed"],
             "evidence": [{"id": "log", "text": "2 passed"}],
         }
-        answers = _verified_with_source("log", "tests", *(f"diff_src_f{i}.py" for i in range(count)))
-        outcome = await call_tool("jev_gate", args, answers)
+        groups = [
+            _verified_with_source(
+                "log", "tests", *(f"diff_src_f{i}.py" for i in range(start, min(start + per_group, count)))
+            )
+            for start in range(0, count, per_group)
+        ]
+        outcome = await _call_gate_drift(args, [_REVIEW_ANSWERS] * count + groups)
         body = outcome.payload
-        if count * units >= 30_000:
-            assert outcome.is_error and outcome.code == "input_too_large" and not outcome.requests, (count, units)
-            continue
+        assert not outcome.is_error and len(outcome.requests) == count + len(groups), (count, units)
+        if len(groups) > 1:
+            assert body["calls"] == len(outcome.requests)
         assert (body["action"], body["reason_codes"]) == ("auto", ["accepted"]), (count, units)
         assert body["next_checks"] == ["The row stands. Proceed."]
         assert "blockers" not in body
@@ -856,7 +901,10 @@ async def test_gate_checks_every_file_before_dispatch_and_preserves_provider_win
         [{"path": "tiny", "patch": "+"}, {"path": "second", "patch": "+" * 31_000}],
         [{"id": "log", "text": "ok"}],
     )
-    assert result.is_error and "30000" in str(result.content[0]) and not provider.requests
+    assert not result.is_error and len(provider.requests) == 2
+    payload = json.loads(cast(TextContent, result.content[0]).text)
+    assert payload["skipped"] == [{"path": "second", "reason": "oversize"}]
+    assert payload["action"] != "auto"
     error = ProviderError("opaque provider error")
     error.status, error.error_type = 400, "max_tokens_exceeded"
     provider = FakeProvider({}, error=error)

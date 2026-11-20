@@ -17,6 +17,7 @@ import anyio
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question, ScoreQuestion
 from jev_judge_mcp.errors import Redactor
+from jev_judge_mcp.gate_budget import GateBudgetError, check_gate_budget
 from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import ASK, FILE_JUDGE, SANITIZE_ID_UNITS
 from jev_judge_mcp.text import length
@@ -24,7 +25,7 @@ from jev_judge_mcp.tools.ask_state import (
     Part,
     command_disabled_refusal,
     file_parts,
-    git_command,
+    named_state,
     own_part,
     prepare_command,
     question_units,
@@ -182,6 +183,15 @@ def _expected(question: Question) -> tuple[str, ...]:
     return ()
 
 
+def _preflight(parts: list[Part], questions: dict[str, Question]) -> dict[str, str]:
+    state = named_state(parts)
+    try:
+        check_gate_budget(state, questions)
+    except GateBudgetError as error:
+        split_refusal(parts, questions, error)
+    return state
+
+
 async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     questions = _build_questions(args["questions"])
     command = args.get("command")
@@ -199,8 +209,9 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     file_result, skipped = await anyio.to_thread.run_sync(file_parts, args.get("paths", []), key_path, redact)
     parts.extend(file_result)
     units = question_units(questions)
-    if units + sum(part.units for part in parts) > ASK.request_units_max:
-        split_refusal(parts, units)
+    wire_keys = {identifier: f"q{index}" for index, identifier in enumerate(questions)}
+    wire_questions = {wire_keys[name]: question for name, question in questions.items()}
+    state = _preflight(parts, wire_questions)
     if not parts and command is None:
         raise ToolError(
             "no state: give `state`, at least one readable `paths` entry, or a `command`.",
@@ -209,18 +220,12 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
     output: Part | None = None
     if prepared is not None:
         program, argv = prepared
-        if program == "git":
-            argv = await anyio.to_thread.run_sync(git_command, argv, env)
         output = await anyio.to_thread.run_sync(
-            run_command, argv, ASK.command_timeout_seconds, ASK.command_output_units_max, env, secrets
+            run_command, argv, ASK.command_timeout_seconds, ASK.command_output_units_max, env, secrets, program == "git"
         )
         parts.append(output)
-        if units + sum(part.units for part in parts) > ASK.request_units_max:
-            split_refusal(parts, units)
-    wire_keys = {identifier: f"q{index}" for index, identifier in enumerate(questions)}
-    evaluation = await runtime.ask(
-        _named_state(parts), {wire_keys[name]: question for name, question in questions.items()}
-    )
+        state = _preflight(parts, wire_questions)
+    evaluation = await runtime.ask(state, wire_questions)
     answers: dict[str, Any] = {}
     statuses: list[str] = []
     for identifier, question in questions.items():
@@ -241,24 +246,6 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         },
     }
     return ToolResult(frame("jev_ask", evaluation, body))
-
-
-def _named_state(parts: list[Part]) -> dict[str, str]:
-    """The parts as named state fields; a name already taken gets a `_2`-style suffix.
-
-    File parts are named by the caller's path, so a file literally called `state` must not
-    silently replace the caller's own framing part, and the suffix itself is never trusted
-    free: the loop re-checks until the name is fresh.
-    """
-    state: dict[str, str] = {}
-    for part in parts:
-        name = part.name
-        counter = 1
-        while name in state:
-            counter += 1
-            name = f"{part.name}_{counter}"
-        state[name] = part.text
-    return state
 
 
 TOOL = JevTool(DEFINITION, handle)

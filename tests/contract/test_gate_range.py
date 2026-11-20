@@ -176,9 +176,12 @@ async def test_a_range_of_only_secret_stores_is_refused_without_a_provider_call(
         pytest.param("diff.noprefix", "true", id="no-prefix"),
         pytest.param("diff.mnemonicPrefix", "true", id="mnemonic-prefix"),
         pytest.param("diff.external", "false", id="external-driver"),
+        pytest.param("diff.context", "0", id="zero-context"),
     ],
 )
 async def test_the_operators_git_settings_do_not_reshape_the_diff(repo: Path, key: str, value: str) -> None:
+    commit_files(repo, {"x.py": "before\nx = 1\nafter\n"})
+    commit_files(repo, {"x.py": "before\nx = 2\nafter\n"})
     set_config(repo, key, value)
     outcome = await call_tool("jev_gate_range", gate_args(), {})
     assert not outcome.is_error, outcome.text
@@ -186,7 +189,64 @@ async def test_the_operators_git_settings_do_not_reshape_the_diff(repo: Path, ke
     review_state = cast(dict[str, object], outcome.requests[0][0])
     diff = cast(str, review_state["diff"])
     assert "-x = 1\n+x = 2\n" in diff
+    assert " before\n" in diff and " after\n" in diff
     assert "\x1b" not in diff
+
+
+async def test_large_range_packs_claims_and_accounts_for_every_call(repo: Path) -> None:
+    files = {f"{i}.txt": (f"line {i} " + "x" * 92 + "\n") * size for i, size in enumerate((220, 110, 110))}
+    commit_files(repo, files)
+    outcome = await call_tool("jev_gate_range", gate_args(), {})
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["review"]["reviewed_files"] == list(files)
+    groups = [state for state, _ in outcome.requests if isinstance(state, dict) and "claims" in state]
+    assert len(groups) == 2
+    patches = [
+        item["id"]
+        for group in groups
+        for item in cast(list[dict[str, str]], group["evidence"])
+        if item.get("kind") == "diff"
+    ]
+    assert patches == ["diff_0.txt", "diff_1.txt", "diff_2.txt"]
+    assert outcome.payload["usage"] == {"input_tokens": 5, "output_tokens": 5}
+
+
+@pytest.mark.parametrize(
+    ("name", "reason"),
+    [("extra.txt", "untracked"), ("hidden.txt", "binary"), ("large.txt", "oversize")],
+)
+async def test_incomplete_worktree_range_names_each_withheld_file(repo: Path, name: str, reason: str) -> None:
+    commit_files(repo, {"hidden.txt": "before\n", ".gitignore": "ignored.txt\n.gitattributes\n"})
+    (repo / "x.py").write_text("x = 3\n")
+    (repo / "ignored.txt").touch()
+    if reason == "binary":
+        (repo / ".gitattributes").write_text("hidden.txt -diff\n")
+    if reason == "oversize":
+        commit_files(repo, {name: "before\n"})
+    (repo / name).write_text("changed\n" if reason != "oversize" else "x" * 40_000)
+    for fixture in ("claims.json", "tests.log"):
+        (repo / fixture).unlink()
+
+    outcome = await call_tool("jev_gate_range", gate_args("HEAD"), {})
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["skipped"] == [{"path": name, "reason": reason}]
+    assert outcome.payload["partial"] and outcome.payload["action"] != "auto"
+    assert outcome.payload["unreviewed_files"] == [name]
+    assert outcome.payload["review"]["reviewed_files"] == ["x.py"]
+    if reason == "untracked":
+        assert any("git add -N extra.txt" in check for check in outcome.payload["next_checks"])
+
+
+async def test_foreign_git_dir_cannot_redirect_a_gate_range(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    foreign_home = repo.parent / "foreign"
+    foreign_home.mkdir()
+    foreign = repo_with_diff(foreign_home)
+    commit_files(foreign, {"other.txt": "this belongs to another repository\n"})
+    monkeypatch.setenv("GIT_DIR", str(foreign / ".git"))
+    outcome = await call_tool("jev_gate_range", gate_args(), {})
+    assert not outcome.is_error, outcome.text
+    assert outcome.payload["review"]["reviewed_files"] == ["x.py"]
+    assert "other.txt" not in _sent_text(outcome)
 
 
 async def test_a_quoted_header_preserves_the_filename(repo: Path) -> None:
@@ -258,13 +318,14 @@ async def test_a_flooding_git_is_killed_at_the_budget_not_read_to_its_end(
     fake.parent.mkdir()
     fake.write_text(
         "#!/bin/sh\n"
-        'if [ "$3" = "diff" ]; then head -c 20000000 /dev/zero | tr "\\000" y; exec sleep 60; fi\n'
+        'for arg in "$@"; do if [ "$arg" = "diff" ]; then head -c 20000000 /dev/zero | tr "\\000" y; '
+        "exec sleep 60; fi; done\n"
         f'exec {real_git} "$@"\n',
         encoding="utf-8",
     )
     fake.chmod(0o755)
     monkeypatch.setenv("PATH", f"{fake.parent}:{os.environ['PATH']}")
-    monkeypatch.setattr("jev_judge_mcp.git_diff.GIT_TIMEOUT_SECONDS", 20)
+    monkeypatch.setattr("jev_judge_mcp.git.GIT_TIMEOUT_SECONDS", 20)
     started = time.monotonic()
     outcome = await call_tool("jev_gate_range", gate_args(), {})
     assert time.monotonic() - started < 10
@@ -293,7 +354,7 @@ async def test_scout_004_configured_key_path_refused(repo: Path, monkeypatch: py
 
 
 async def test_scout_016_incomplete_quoted_header_is_refused(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from jev_judge_mcp.git_diff import split_unified
+    from jev_judge_mcp.git import split_unified
     from jev_judge_mcp.tools import gate_range
 
     header = 'diff --git "a/ordinary" "b/ordinary'
@@ -373,9 +434,9 @@ async def test_an_unattributed_subtree_object_is_refused(repo: Path) -> None:
 
 
 async def test_working_tree_change_between_inspections_refuses(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from jev_judge_mcp import git_diff
+    from jev_judge_mcp import git
 
-    original = git_diff.split_unified
+    original = git.split_unified
     target = repo / "x.py"
     target.write_text("first working version\n")
 
@@ -384,6 +445,6 @@ async def test_working_tree_change_between_inspections_refuses(repo: Path, monke
         target.write_text("second working version\n")
         return patch
 
-    monkeypatch.setattr(git_diff, "split_unified", read)
+    monkeypatch.setattr(git, "split_unified", read)
     result = await call_tool("jev_gate_range", gate_args("HEAD"), {})
     assert result.code == "invalid_arguments" and not result.requests

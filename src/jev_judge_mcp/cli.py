@@ -22,7 +22,7 @@ import anyio
 from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.git_diff import GitDiffError, GitDiffTooLarge, repo_root
+from jev_judge_mcp.git import GitDiffError, GitDiffTooLarge, repo_root
 from jev_judge_mcp.hook import fail_open_or_ask, hook_required
 from jev_judge_mcp.hook_render import render_decision
 from jev_judge_mcp.identity import reported_version

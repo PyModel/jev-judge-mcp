@@ -28,7 +28,7 @@ enumerated into bounded options; or when the same unchanged decision was already
 | Tool | Use it to | Caps |
 |------|-----------|--------|
 | `jev_verify` | Check claims against evidence → verified / contradicted / unsupported. Subagent or research reports, PR descriptions, your own "done" claims | no length bound on claims or evidence |
-| `jev_gate` | Before declaring done: the patch plus its completion claims checked against diff and test-log evidence in one call → auto / review / escalate | ≤16 claims, ≤16 evidence items; 200,000 units of evidence, 50,000 units per diff or test log |
+| `jev_gate` | Before declaring done: the patch plus its completion claims checked against diff and test-log evidence → auto / review / escalate | ≤16 claims, ≤16 evidence items; ≤64 files, 200,000 units of patches in aggregate |
 | `jev_gate_range` | `jev_gate` for a change already in git: name the range (`main..HEAD`) and the server reads the diff itself, so the whole patch is reviewed, never an excerpt you typed; optional server-read test log | `jev_gate`'s caps: ≤16 claims, ≤16 evidence items, ≤64 files |
 | `jev_review` | Score a diff against the request: correctness, spec match, test gap, blast radius, `safe_to_apply` | 50,000 units per document, truncated |
 | `jev_screen` | Screen fetched or pasted external text for prompt injection and relevance **before** reading it → pass / review / block / skip | no length bound |
@@ -39,11 +39,11 @@ enumerated into bounded options; or when the same unchanged decision was already
 | `jev_decide` | One bounded choice among 2–6 options with evidence and priorities; escape hatches `ask_user` / `investigate` / `none` | 2–6 options |
 | `jev_extract` | Your regex proposes candidates, Jev picks, the value comes back verbatim (versions, prices, dates, IDs) | 50,000 units per document, ≤32 fields |
 | `jev_score` | Grade severity or risk on your own ordered rubric; threshold the level, never interpolate a magnitude between levels | 2–10 levels |
-| `jev_file_judge` | Judge a file without reading it: the server reads the path as state, you get the typed answer, the bytes never enter your context | 100,000 units per file, refused over |
-| `jev_ask` | Your own questions (noul, choice, score) over one composed state: framing text, server-read files, or redacted output from an opt-in read-only command with allowlisted options. One provider call returns typed answers keyed by your ids; overflow refuses with a split suggestion | 1–20 questions, ≤20 paths, 120,000 units of state plus questions |
+| `jev_file_judge` | Judge a file without reading it: the server reads the path as state, you get the typed answer, the bytes never enter your context | 30,000 units per file read, refused over |
+| `jev_ask` | Your own questions (noul, choice, score) over one composed state: framing text, server-read files, or redacted output from an opt-in read-only command with allowlisted options. One provider call returns typed answers keyed by your ids; overflow refuses with a split suggestion | 1–20 questions, ≤20 paths, shared request limits |
 | `jev_files_judge` | The same judgment over many files: glob patterns, directories, and paths in, one call per surviving file, skips reported with reasons | ≤64 files, ≤32 path entries |
 
-Caps are UTF-16 code units, frozen in the server's `limits.py`. "no length bound" is not a token budget: Jev's context is 64k tokens per request (32k for state), and an input inside the table can still overflow it. `jev_gate` sends the diff and the test log twice. An overflow comes back as `input_too_large` (ADR-0079): split the call.
+The table uses UTF-16 code units. Jev accepts 64k tokens per request and 32k for state plus its longest question. Every provider request must fit 30,000 compact UTF-8 bytes for state plus its longest question and 60,000 bytes total. Oversized requests return `input_too_large` (ADR-0079, ADR-0086). A string gate sends the diff and test log twice. A file-list gate packs patches into groups for claim verification and holds oversized files for local review.
 
 Rules:
 
@@ -55,7 +55,8 @@ Rules:
 - **Pack the real diff.** `jev_gate` and `jev_review` judge exactly the `diff` you send, and they
   read no files. Paste the real `git diff` output, never an excerpt, a paraphrase, an elided
   `...`, a path, or "see evidence item". A large change goes as a `[{path, patch}]` file list or
-  as separate calls split by concern. Test logs go in `tests` (`tests_path` for
+  as separate calls split by concern. For a range against one revision, staged and unstaged tracked
+  changes are included. Untracked files hold the gate. Run `git add -N <path>` and recheck. Test logs go in `tests` (`tests_path` for
   `jev_gate_range`) as the raw pass/fail lines. Per-file gates read caller evidence and sibling patches as space permits. The review lists optional omissions in `context_omissions`.
 - **Act on `action`:** `auto` → the verdict stands and you act on it. A contradicted claim at
   `auto` is confidently false. `review` → confirm with tests, source reading, or a stronger check.

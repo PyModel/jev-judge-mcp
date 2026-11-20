@@ -133,7 +133,7 @@ def _classify_sanitized_ids(
     return bodies, stringify(payload), is_error
 
 
-def _refuse_ids(message: str) -> Expectation:
+def _refused_text(message: str) -> Expectation:
     def expect(
         bodies: list[Any], text: str, is_error: bool, arguments: Mapping[str, Any]
     ) -> tuple[list[Any], str, bool]:
@@ -173,28 +173,38 @@ _EXPECTATIONS: dict[str, Expectation] = {
     "unicode-astral/find-truncation-splits-surrogate-pair#0": _drop_split_surrogate,
     "unicode-astral/gate-claim-truncation-splits-surrogate#0": _gate_document_refusal("claims[0]", 2000),
     "truncated/gate-claim-over-cap#0": _gate_document_refusal("claims[0]", 2000),
-    "truncated/gate-evidence-item-over-cap#0": _gate_document_refusal("evidence[0]", 50000),
-    "mock-039#0": _gate_document_refusal("diff", 50000),
+    "truncated/gate-evidence-item-over-cap#0": _gate_document_refusal("evidence[0]", 30000),
+    "mock-039#0": _gate_document_refusal("diff", 30000),
+    "truncated/review-request-exactly-at-cap#0": _refused_text(
+        "state plus longest question uses 50755 UTF-8 bytes, limit 30000."
+    ),
+    "truncated/review-tests-over-cap#0": _refused_text(
+        "state plus longest question uses 50756 UTF-8 bytes, limit 30000."
+    ),
+    "mock-018#0": _refused_text("state plus longest question uses 42594 UTF-8 bytes, limit 30000."),
+    "mock-026#0": _refused_text("state plus longest question uses 50607 UTF-8 bytes, limit 30000."),
     "resolver-error/explicit-vercel-unset#0": _vercel_unsupported,
     "duplicate-id/classify-omitted-ids-get-positional-fallbacks#0": _classify_generated_id_collision,
-    "contradicted/gate-contradicted-below-auto-accept#0": _refuse_ids("ID 'diff' sanitizes to reserved ID 'diff'."),
-    "duplicate-id/classify-duplicate-class-id#0": _refuse_ids("IDs 'x' and 'x' both sanitize to 'x'."),
-    "duplicate-id/classify-duplicate-item-id#0": _refuse_ids("IDs 't1' and 't1' both sanitize to 't1'."),
-    "duplicate-id/decide-candidate-collides-with-escape-hatch#0": _refuse_ids(
+    "contradicted/gate-contradicted-below-auto-accept#0": _refused_text("ID 'diff' sanitizes to reserved ID 'diff'."),
+    "duplicate-id/classify-duplicate-class-id#0": _refused_text("IDs 'x' and 'x' both sanitize to 'x'."),
+    "duplicate-id/classify-duplicate-item-id#0": _refused_text("IDs 't1' and 't1' both sanitize to 't1'."),
+    "duplicate-id/decide-candidate-collides-with-escape-hatch#0": _refused_text(
         "ID 'investigate' sanitizes to reserved ID 'investigate'."
     ),
-    "duplicate-id/decide-duplicate-candidate-id#0": _refuse_ids("IDs 'same' and 'same' both sanitize to 'same'."),
-    "duplicate-id/extract-duplicate-field-id#0": _refuse_ids("IDs 'n' and 'n' both sanitize to 'n'."),
-    "duplicate-id/find-ids-sanitized-and-suffixed#0": _refuse_ids(
+    "duplicate-id/decide-duplicate-candidate-id#0": _refused_text("IDs 'same' and 'same' both sanitize to 'same'."),
+    "duplicate-id/extract-duplicate-field-id#0": _refused_text("IDs 'n' and 'n' both sanitize to 'n'."),
+    "duplicate-id/find-ids-sanitized-and-suffixed#0": _refused_text(
         "IDs 'naïve café' and 'naïve café' both sanitize to 'na_ve_caf'."
     ),
-    "duplicate-id/rerank-duplicate-id#0": _refuse_ids("IDs 'dup' and 'dup' both sanitize to 'dup'."),
+    "duplicate-id/rerank-duplicate-id#0": _refused_text("IDs 'dup' and 'dup' both sanitize to 'dup'."),
     "duplicate-id/rerank-fallback-avoids-supplied-ids#0": _rerank_generated_id_collision,
-    "duplicate-id/verify-duplicate-evidence-ids-suffixed#0": _refuse_ids("IDs 'doc' and 'doc' both sanitize to 'doc'."),
-    "low-confidence/gate-claim-confidence-tiers#0": _refuse_ids("ID 'diff' sanitizes to reserved ID 'diff'."),
-    "normal/gate-accepted#0": _refuse_ids("ID 'diff' sanitizes to reserved ID 'diff'."),
+    "duplicate-id/verify-duplicate-evidence-ids-suffixed#0": _refused_text(
+        "IDs 'doc' and 'doc' both sanitize to 'doc'."
+    ),
+    "low-confidence/gate-claim-confidence-tiers#0": _refused_text("ID 'diff' sanitizes to reserved ID 'diff'."),
+    "normal/gate-accepted#0": _refused_text("ID 'diff' sanitizes to reserved ID 'diff'."),
     "unicode-astral/classify-astral-ids-preserved#0": _classify_sanitized_ids,
-    "unsupported/gate-unsupported-confident#0": _refuse_ids("ID 'diff' sanitizes to reserved ID 'diff'."),
+    "unsupported/gate-unsupported-confident#0": _refused_text("ID 'diff' sanitizes to reserved ID 'diff'."),
 }
 
 

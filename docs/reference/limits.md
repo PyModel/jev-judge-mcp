@@ -14,7 +14,9 @@ Astral-plane characters (emoji, some CJK) count as two.
 
 These caps are not Jev's context window. The model accepts 64k tokens per request and 32k for
 `state` plus the longest question (https://docs.typesafe.ai/models.md). An input inside every cap
-on this page can still exceed that window. Before sending, jev_gate limits compact UTF-8 to 30,000 bytes for state plus the longest question and 60,000 bytes total. Split by file, hunk or claim. A string gate sends the diff and test log once in
+on this page can still exceed that window. Before sending, every tool limits compact UTF-8 to 30,000 bytes for state plus the longest
+question and 60,000 bytes total, including the encoded question IDs and criteria. A string gate
+sends the diff and test log once in
 the review state and once as evidence (ADR-0063), so budget about twice their size. The server does
 not count tokens. When the API refuses a request as over its window (a 400 with `error_type`
 `max_tokens_exceeded`), the code is `input_too_large` and the remedy is to split the call (ADR-0079).
@@ -26,7 +28,7 @@ not count tokens. When the API refuses a request as over its window (a 400 with 
    code is `invalid_arguments`. Nothing is sent to the provider.
 2. **Truncate** — the text is cut to the cap, marked ` […truncated]`, and the result carries
    `truncated` scopes. Not an error. A cut over *context* (a document the judgment is made over:
-   review/gate inputs, gate claims and evidence, extract's candidate universe) keeps the action off
+   review inputs, extract's candidate universe) keeps the action off
    `auto`; a cut over *item* text (find/rerank candidates, classify items and class descriptions)
    is telemetry only and does not change the action ([`docs/CONTEXT.md`](../CONTEXT.md) "Truncated
    Context").
@@ -184,9 +186,13 @@ The aspects array may be empty.
 | `claims_max` | 16 | above → reject |
 | `claim_units` | 2000 | over → `input_too_large` before sending. Split into narrower claims with their evidence. |
 | `evidence_items` | 16 | over → budget error (`input_too_large`) |
-| `aggregate_evidence_units` | 200000 | over → budget error (`input_too_large`), rendered `200,000` |
-| `doc_units` | 50000 | over → `input_too_large` before sending for a request, string diff, test log, evidence item or individual file patch. Split by file or hunk and keep the supporting evidence with its claim. |
+| `aggregate_evidence_units` | 200000 | bounds the sum of file-list patches and provides a raw aggregate guard on caller evidence |
+| `doc_units` | 30000 | raw document guard derived from `STATE_QUESTION_BYTES`; the encoded byte check usually binds first |
 | `files_max` | 64 | a file-list `diff` with more entries refuses `input_too_large` before any request, for `jev_gate` and `jev_review` alike: one review request runs per file (ADR-0066 amendment) |
+
+File-list gates pack patches into groups under both byte ceilings and withhold a patch as
+`oversize` when it cannot fit with the shared inputs. A string gate or shared input that exceeds the
+budget refuses `input_too_large`. Gate inputs are never cut and the result retains `"truncated": false`.
 
 ### jev_score (`limits.SCORE`, ADR-0048)
 
@@ -212,7 +218,7 @@ the instructions bound.
 
 | Cap | Value | Over the bound |
 | --- | --- | --- |
-| `file_units_max` | 100000 | refuse `file_too_large` |
+| `file_units_max` | 30000 | refuse `file_too_large` |
 | `instructions_units_max` | 2000 | refuse |
 | `choice_options_min` | 2 | below → reject |
 | `choice_options_max` | 250 | above → reject |
@@ -225,7 +231,8 @@ the instructions bound.
 ### jev_files_judge (`limits.FILES_JUDGE`, ADR-0077)
 
 A bound over the input entries rejects the call; a bound over one file skips that file with a
-reason, before the first provider call either way. The per-file units and the NUL sniff window are
+reason, before the first provider call either way. An over-budget serialized request for any surviving file
+refuses the batch before fan-out. The per-file units and the NUL sniff window are
 shared with `jev_file_judge` — one number to calibrate, both constants move together. The two shape
 bounds keep a real tree inside one call: discovery stops at the candidate bound (glob expansion
 never enters a skip-listed directory on the way), reading stops once the file cap's survivors
@@ -236,7 +243,7 @@ plus the first few paths — instead of one row per file.
 | --- | --- | --- |
 | `files_max` | 64 | surviving paths over it are skipped `over_the_file_cap`, before any call |
 | `patterns_max` | 32 | above → reject |
-| `file_units_max` | 100000 | that file is skipped `too_large` |
+| `file_units_max` | 30000 | that file is skipped `too_large` |
 | `binary_sniff_bytes` | 8000 | the NUL-scan window that classifies the file `binary` |
 | `discovery_max` | 512 | candidates over it are never read; one aggregate `over_the_file_cap` row names the count |
 | `skip_rows_max` | 64 | further skips collapse into one aggregate row per reason |
@@ -244,7 +251,7 @@ plus the first few paths — instead of one row per file.
 ### jev_ask (`limits.ASK`, ADR-0077)
 
 No part truncates: an over-budget call refuses typed, with each part's size and a Split
-suggestion. The question and path caps reject; the composed aggregate is a strict greater-than
+suggestion. The question and path caps reject; either shared byte ceiling is a strict greater-than
 error, and the output cap and the timeout refuse after or around the run.
 
 | Cap | Value | Over the bound |
@@ -254,7 +261,6 @@ error, and the output cap and the timeout refuse after or around the run.
 | `files_max` | 20 | above → reject |
 | `state_units_max` | 20000 | refuse before any call |
 | `command_output_units_max` | 30000 | refuse `output_too_large` after the run |
-| `request_units_max` | 120000 | strict greater-than refuses with the Split suggestion |
 | `command_timeout_seconds` | 30 | the run is killed and the call refuses |
 
 ### shared caps

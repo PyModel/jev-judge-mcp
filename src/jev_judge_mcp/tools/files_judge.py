@@ -25,6 +25,7 @@ import anyio
 from jev_judge_mcp.credential_literal import redact_credential_literals
 from jev_judge_mcp.domain import ChoiceQuestion, ScoreQuestion
 from jev_judge_mcp.errors import Redactor
+from jev_judge_mcp.gate_budget import GateBudgetError, check_gate_budget
 from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import FILE_JUDGE, FILES_JUDGE
 from jev_judge_mcp.providers import Evaluation, ProviderConfigError
@@ -503,17 +504,23 @@ async def handle(args: dict[str, Any], runtime: Runtime) -> ToolResult:
         )
     )
 
+    questions = {QUESTION_ID: question}
+    states = [{"path": redact_credential_literals(path, redact), "content": content} for path, content in survivors]
+    for path, state in zip(survivors, states, strict=True):
+        try:
+            check_gate_budget(state, questions)
+        except GateBudgetError as error:
+            raise GateBudgetError(f"{path[0]}: {error}") from error
+
     evaluations: list[Evaluation | None] = [None] * len(survivors)
     failures: list[tuple[int, dict[str, str]]] = []
     config_error: list[ProviderConfigError] = []
 
     async def judge(index: int) -> None:
-        path_text, content = survivors[index]
+        path_text, _ = survivors[index]
         try:
             async with runtime.file_fanout:
-                evaluations[index] = await runtime.ask(
-                    {"path": redact_credential_literals(path_text, redact), "content": content}, {QUESTION_ID: question}
-                )
+                evaluations[index] = await runtime.ask(states[index], questions)
         except ProviderConfigError as error:
             # The server cannot ask at all — not a per-file failure. Cancel the siblings and re-raise
             # outside the group, so the kernel's `auth` refusal keeps its code (the raw group would

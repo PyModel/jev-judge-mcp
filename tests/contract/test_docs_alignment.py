@@ -262,7 +262,10 @@ def test_tool_cards_state_the_frozen_numbers() -> None:
             (limits.FILE_JUDGE.file_units_max,),
         ),
         (r"a NUL byte in the first ([\d,]+) bytes", (limits.FILE_JUDGE.binary_sniff_bytes,)),
-        (r"state plus questions is capped at ([\d,]+) UTF-16 units", (limits.ASK.request_units_max,)),
+        (
+            r"([\d,]+) compact UTF-8 bytes for state plus the\s+longest question and ([\d,]+) bytes",
+            (limits.STATE_QUESTION_BYTES, limits.REQUEST_BYTES),
+        ),
         (r"Own `state` is framing, capped at ([\d,]+)\s+units", (limits.ASK.state_units_max,)),
         (r"command output is capped at ([\d,]+) units", (limits.ASK.command_output_units_max,)),
         (r"runs under a\s+(\d+)-second timeout", (limits.ASK.command_timeout_seconds,)),
@@ -417,7 +420,7 @@ def test_agent_rule_block_caps_match_limits() -> None:
             f"\u2264{limits.GATE.claims_max} claims",
             f"\u2264{limits.GATE.evidence_items} evidence items",
             f"{limits.GATE.aggregate_evidence_units:,} units",
-            f"{limits.GATE.doc_units:,} units",
+            f"≤{limits.GATE.files_max} files",
         ],
         "jev_gate_range": [
             f"\u2264{limits.GATE.claims_max} claims",
@@ -436,7 +439,7 @@ def test_agent_rule_block_caps_match_limits() -> None:
         "jev_ask": [
             f"{limits.ASK.questions_min}\u2013{limits.ASK.questions_max} questions",
             f"\u2264{limits.ASK.files_max} paths",
-            f"{limits.ASK.request_units_max:,} units",
+            "shared request limits",
         ],
     }
     missing = [
@@ -693,7 +696,7 @@ def test_gate_card_discloses_implicit_diff_and_tests_while_they_are_sent() -> No
     if sent == ["diff", "tests"]:
         assert "ADR-0063" in section
         assert "again as implicit evidence" in section
-        assert "100k extra UTF-16" in section
+        assert "count both copies" in section
     else:
         assert "again as implicit evidence" not in section
 

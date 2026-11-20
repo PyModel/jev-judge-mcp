@@ -106,7 +106,7 @@ async def test_extract_records_regex_spans_and_timeouts() -> None:
     assert metrics['duration_ms_count{span="regex.extract"}'] == 3
 
 
-async def test_metrics_count_calls_errors_fail_closed_actions_tokens_and_truncation() -> None:
+async def test_metrics_count_calls_errors_fail_closed_actions_tokens_and_budget_refusals() -> None:
     malformed = {key: {"noul": float("nan")} for key in CASE["jev_review"].permissive}
     telemetry = await run(
         [
@@ -126,10 +126,11 @@ async def test_metrics_count_calls_errors_fail_closed_actions_tokens_and_truncat
     assert metrics['fail_closed{kind="score"}'] == 4
     assert metrics['actions{action="auto"}'] == 1
     assert metrics['actions{action="escalate"}'] == 1
-    assert metrics['actions{action="review"}'] == 1
-    assert metrics['truncated{scope="context"}'] == 1
+    assert metrics['actions{action="review"}'] == 0
+    assert metrics['outcomes{tool="jev_review",outcome="tool_error"}'] == 1
+    assert 'truncated{scope="context"}' not in metrics
     assert 'truncated{scope="item"}' not in metrics
-    assert metrics['tokens{direction="input"}'] == 3
+    assert metrics['tokens{direction="input"}'] == 2
     assert metrics['duration_ms_count{span="mcp.tool"}'] == 5
     assert metrics['duration_ms_bucket{span="mcp.tool",le="+Inf"}'] == 5
 
@@ -216,8 +217,7 @@ async def test_item_truncation_is_recorded_at_cap_plus_one_without_changing_the_
 
 
 async def test_inputs_the_schema_bounds_are_never_counted_as_cut() -> None:
-    """jev_compare's passages and jev_extract's document go through the ledger, but the schema rejects
-    anything over their cap first, so a call at the cap records no cut."""
+    """Schema-length inputs are never recorded as cut, even when the provider budget refuses them."""
     compare = {**CASE["jev_compare"].arguments, "passage_a": "x" * 20_000}
     extract = {**CASE["jev_extract"].arguments, "document": CASE["jev_extract"].arguments["document"].ljust(50_000)}
     telemetry = await run(
@@ -228,7 +228,7 @@ async def test_inputs_the_schema_bounds_are_never_counted_as_cut() -> None:
     )
     metrics = telemetry.metrics.snapshot()
     assert metrics['outcomes{tool="jev_compare",outcome="ok"}'] == 1
-    assert metrics['outcomes{tool="jev_extract",outcome="ok"}'] == 1
+    assert metrics['outcomes{tool="jev_extract",outcome="tool_error"}'] == 1
     assert not [name for name in metrics if name.startswith("truncated")]
 
 

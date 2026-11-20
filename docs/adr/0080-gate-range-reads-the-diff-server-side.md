@@ -21,7 +21,7 @@ the last extension, with its own pinning tests, and nothing in a frozen tool cha
   thresholds, the fail-closed paths, and the payload are jev_gate's. The only change to the result
   is its `tool` field, which names `jev_gate_range`, on a success and on the isError budget
   refusal alike.
-- **One boundary reads git.** `git_diff.py` owns the repository lookup (`repo_root`), the range
+- **One boundary reads git.** `git.py` owns the repository lookup (`repo_root`), the range
   check (empty, a leading `-`, or a NUL refuses), `git diff <range>`, and the `diff --git` splitter
   with its header rules; `diff_argument` returns the file list, or the raw text when a header does
   not split, exactly as the CLI always sent it. `cli.py` and the tool import it, and each wraps its
@@ -104,3 +104,15 @@ tool's git refusals (`invalid_arguments`) now end with `(server working director
 the caller can tell a wrong range from a server started outside its project. The CLI's refusal
 text is unchanged: it runs in the operator's own shell, where the directory is already known.
 The path names the local process's directory and reaches only the client, never the provider.
+## Amendment (2026-11-19): canonical worktree diff and one Git runner
+
+Range reads, build identity and ask use the same bounded Git runner. It selects the repository
+via `-C`, drops all inherited `GIT_*` variables, disables paging, fsmonitor, hooks and replacement
+objects, and disables lazy fetch and transport protocols. Ask retains its own configuration and
+filter restrictions. The canonical patch pins three lines of context and zero inter-hunk context,
+disables renames, external diff and textconv, and uses fixed prefixes. The header parser accepts
+only the symmetric form those flags produce.
+
+A single revision compares to the worktree and includes staged and unstaged tracked changes.
+`jev_gate_range` holds non-ignored untracked paths for local review. Use `git add -N <path>` and
+recheck. Git binary markers, including markers produced by `-diff` attributes, also hold a file.

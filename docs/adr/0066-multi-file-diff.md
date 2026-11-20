@@ -110,3 +110,13 @@ were even asked.
 [ADR-0085](0085-shared-caller-id-policy.md) reserves the generated `diff:<path>` evidence keys in
 the caller's evidence namespace. A collision fails before the per-file reviews begin. The
 verification result uses canonical evidence IDs and has no `renamed_ids` field.
+
+
+## Amendment (2026-11-19): pack claim verification by provider window
+
+Each fitting file still has one review request. First-fit grouping in input order packs whole
+patches into as few groups as the heuristic finds under the shared provider limits. Each group asks
+every claim with the same caller evidence and test log. Grounded contradiction at the automatic
+threshold takes precedence over verification. One confident verification can stand when there is
+no such contradiction. An invalid required answer holds that claim for review. A patch that cannot
+fit a group and its mandatory review state is withheld as `oversize`. See ADR-0086.

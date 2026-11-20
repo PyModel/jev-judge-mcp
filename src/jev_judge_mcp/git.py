@@ -11,10 +11,11 @@ import codecs
 import os
 import re
 import subprocess
-import threading
+from collections.abc import Mapping
 from pathlib import Path
 
 from jev_judge_mcp.limits import GATE
+from jev_judge_mcp.process import OutputTooLarge, capture
 
 GIT_TIMEOUT_SECONDS = 30
 """Each git call's bound, so a hung git (a lock, a slow filesystem) cannot hold a gate open
@@ -29,10 +30,12 @@ _CANONICAL = (
     "--no-ext-diff",
     "--no-textconv",
     "--no-renames",
+    "--unified=3",
+    "--inter-hunk-context=0",
     "--src-prefix=a/",
     "--dst-prefix=b/",
 )
-"""Flags that pin `git diff` to plain unified output whatever the operator's config sets: forced
+"""Flags that pin the patch format and normal hunk context independently of the operator's config: forced
 color would put escape codes in the patch, `diff.noprefix` would defeat the `a/`/`b/` header split,
 an external diff driver or textconv filter would replace the patch or run a program, and rename
 detection would show a renamed file's old lines under its new name, past a guard keyed on names."""
@@ -46,12 +49,50 @@ class GitDiffTooLarge(GitDiffError):
     """A range whose diff passed the gate's aggregate budget while it was being read."""
 
 
+_CAPTURE_BYTES = 3 * GATE.aggregate_evidence_units + 3
+
+
+def run(
+    cwd: Path,
+    *args: str,
+    binary: str = "git",
+    env: Mapping[str, str] | None = None,
+    byte_cap: int = _CAPTURE_BYTES,
+    ignore_user_config: bool = False,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run fixed Git policy in cwd; only explicit caller options can select a different Git directory."""
+    source = os.environ if env is None else env
+    clean = {name: value for name, value in source.items() if not name.startswith("GIT_")}
+    clean.update(GIT_NO_LAZY_FETCH="1", GIT_ALLOW_PROTOCOL="")
+    if ignore_user_config:
+        clean.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+    return capture(
+        [
+            binary,
+            "-C",
+            str(cwd),
+            "--no-pager",
+            "--no-optional-locks",
+            "--no-replace-objects",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            f"core.hooksPath={os.devnull}",
+            *args,
+        ],
+        cwd=cwd,
+        env=clean,
+        timeout_seconds=GIT_TIMEOUT_SECONDS,
+        byte_cap=byte_cap,
+    )
+
+
 def repo_root(cwd: Path) -> Path:
     """The resolved top level of the git work tree containing `cwd`."""
-    run = _git(cwd, "rev-parse", "--show-toplevel")
-    if run is None or run.returncode != 0 or not run.stdout.strip():
+    result = _git(cwd, "rev-parse", "--show-toplevel")
+    if result is None or result.returncode or not result.stdout.strip():
         raise GitDiffError("gate refuses to run outside a git repo")
-    return Path(run.stdout.strip()).resolve()
+    return Path(result.stdout.rstrip("\n")).resolve()
 
 
 def scoped_range(repo: Path, rev_range: str) -> tuple[str, set[Path]]:
@@ -79,7 +120,10 @@ def scoped_range(repo: Path, rev_range: str) -> tuple[str, set[Path]]:
                 tree = _git(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{oid}:{subtree}")
                 if tree is None or tree.returncode:
                     raise GitDiffError("refusing that git range")
-                oid = tree.stdout.strip()
+                picked = _git(repo, "rev-parse", "--verify", "--quiet", f"{tree.stdout.strip()}^{{tree}}")
+                if picked is None or picked.returncode:
+                    raise GitDiffError("refusing that git range")
+                oid = picked.stdout.strip()
             ids.append(oid)
             origins.add(Path(subtree))
         else:
@@ -92,106 +136,44 @@ def scoped_range(repo: Path, rev_range: str) -> tuple[str, set[Path]]:
     return sep.join(ids), origins
 
 
-def git_diff(repo: Path, rev_range: str, *, paths: tuple[str, ...] = (), flags: tuple[str, ...] = ()) -> str:
-    """`git diff <rev_range> [-- paths]` run in `repo`, read no further than the gate's budget.
-
-    Refuses an empty range, a leading `-`, a NUL, and an end that does not name a commit or a tree:
-    a blob diff's header carries an object id instead of a file name, so no per-path guard could
-    see what it holds. `paths` are pathspecs resolved against `repo`, so `.` keeps the diff inside
-    that directory.
-    """
-    if not rev_range or rev_range.startswith("-") or "\x00" in rev_range:
-        raise GitDiffError("refusing that git range")
-    for end in _range_ends(rev_range):
-        if not _names_a_tree(repo, end):
-            raise GitDiffError("refusing that git range")
-    out = _bounded_diff(repo, [*_CANONICAL, *flags, rev_range, "--", *paths])
-    if not out.strip():
-        raise GitDiffError("git diff was empty")
-    return out
-
-
 def diff_argument(
-    repo: Path, rev_range: str, *, paths: tuple[str, ...] = (), flags: tuple[str, ...] = ()
+    repo: Path, rev_range: str, *, paths: tuple[str, ...], flags: tuple[str, ...]
 ) -> str | list[dict[str, str]]:
-    """The range as jev_gate's `diff`: the file list, or the raw text when a header does not split."""
-    diff = git_diff(repo, rev_range, paths=paths, flags=flags)
+    """Read a range pinned by scoped_range and split the canonical unified output."""
+    try:
+        result = run(repo, "diff", *_CANONICAL, *flags, rev_range, "--", *paths)
+        if result.returncode:
+            raise GitDiffError("git diff failed")
+        diff = result.stdout.decode("utf-8")
+    except OutputTooLarge as error:
+        raise GitDiffTooLarge(
+            f"the range's diff exceeds the {_CAPTURE_BYTES:,}-byte Git capture limit; narrow the range"
+        ) from error
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError) as error:
+        raise GitDiffError("git diff failed") from error
+    if not diff.strip():
+        return []
     files = split_unified(diff)
     return files if files is not None else diff
 
 
-def _names_a_tree(repo: Path, end: str) -> bool:
-    """Whether one end resolves to an object that peels to a tree: a commit, a tag of one, or a
-    tree, including `rev:path`. Resolved to its id first, because `^{tree}` after `rev:path` would
-    be read as part of the path."""
-    resolved = _git(repo, "rev-parse", "--verify", "--quiet", end)
-    if resolved is None or resolved.returncode != 0 or not resolved.stdout.strip():
-        return False
-    peeled = _git(repo, "rev-parse", "--verify", "--quiet", f"{resolved.stdout.strip()}^{{tree}}")
-    return peeled is not None and peeled.returncode == 0
-
-
-def _range_ends(rev_range: str) -> list[str]:
-    """The named ends of `A..B`, `A...B`, or one revision; an omitted end is git's HEAD."""
-    for separator in ("...", ".."):
-        if separator in rev_range:
-            return [end for end in rev_range.split(separator, 1) if end]
-    return [rev_range]
-
-
-def _bounded_diff(repo: Path, args: list[str]) -> str:
-    """git's stdout, killed once it passes the byte bound or the timeout.
-
-    Worst-case UTF-16 encoding is three UTF-8 bytes per unit, so crossing the byte bound proves the
-    text is over the gate's aggregate budget: the kill is never a false refusal.
-    """
-    byte_cap = 3 * GATE.aggregate_evidence_units + 3
+def untracked_paths(cwd: Path) -> list[str]:
     try:
-        process = subprocess.Popen(  # noqa: S603 - fixed argv0; the range was checked above
-            ["git", "-C", str(repo), "diff", *args],  # noqa: S607
-            env={name: value for name, value in os.environ.items() if name != "GIT_DIFF_OPTS"},
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError as error:
-        raise GitDiffError("git diff failed") from error
-    # The context closes the pipe and reaps git on every path, the over-budget kill included.
-    with process:
-        timer = threading.Timer(GIT_TIMEOUT_SECONDS, process.kill)
-        timer.start()
-        try:
-            assert process.stdout is not None  # stdout=PIPE
-            data = process.stdout.read(byte_cap + 1)
-            if len(data) > byte_cap:
-                process.kill()
-                raise GitDiffTooLarge(
-                    f"the range's diff is over the {GATE.aggregate_evidence_units:,}-unit gate budget; "
-                    "narrow the range or gate it in parts"
-                )
-            returncode = process.wait()
-        finally:
-            timer.cancel()
-    if returncode != 0:
-        raise GitDiffError("git diff failed")
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise GitDiffError("git diff failed") from error
+        result = run(cwd, "ls-files", "--others", "--exclude-standard", "-z", "--", ".")
+        if result.returncode:
+            raise GitDiffError("git could not list untracked files")
+        return result.stdout.decode("utf-8").split("\0")[:-1]
+    except OutputTooLarge as error:
+        raise GitDiffTooLarge("the range exceeds the Git capture limit for untracked paths") from error
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError) as error:
+        raise GitDiffError("git could not list untracked files") from error
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str] | None:
-    """One git call, or `None` when git could not run or did not finish in time."""
     try:
-        return subprocess.run(  # noqa: S603 - fixed argv0; every caller checks its arguments first
-            ["git", "-C", str(cwd), *args],  # noqa: S607
-            check=False,
-            capture_output=True,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            timeout=GIT_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
+        result = run(cwd, *args)
+        return subprocess.CompletedProcess(result.args, result.returncode, result.stdout.decode("utf-8"))
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError, OutputTooLarge):
         return None
 
 
@@ -212,15 +194,8 @@ def split_unified(diff: str) -> list[dict[str, str]] | None:
 
 
 def _path_from_header(chunk: str) -> str | None:
-    """The post-image path of one `diff --git a/X b/X` header.
-
-    Both halves name the same path unless the file was renamed, so the header is split at its
-    midpoint rather than at the last ` b/`, which a path containing ` b/` would defeat. A rename
-    (`a/old b/new`) has no such symmetry: its `+++ b/` line names the new path when the content
-    changed (git ends that line with a tab when the path holds spaces), else the last ` b/` stands.
-    """
-    lines = chunk.split("\n")
-    first = lines[0]
+    """Decode the symmetric a/ and b/ names emitted with renames disabled."""
+    first = chunk.partition("\n")[0]
     rest = first.removeprefix("diff --git ")
     path: str | None = None
     if rest.startswith('"'):
@@ -241,15 +216,6 @@ def _path_from_header(chunk: str) -> str | None:
         left, right = rest[:middle], rest[middle + 1 :]
         if left.startswith("a/") and right.startswith("b/") and left[2:] == right[2:]:
             path = right[2:]
-    if path is None:
-        plus = next((line for line in lines[1:] if line.startswith("+++ b/")), None)
-        if plus is not None:
-            path = plus.removeprefix("+++ b/").rstrip("\t")
-    if path is None:
-        marker = " b/"
-        if marker not in first:
-            return None
-        path = first.rsplit(marker, 1)[-1]
     if not path or "\x00" in path or path.startswith("/") or ".." in Path(path).parts:
         return None
     return path

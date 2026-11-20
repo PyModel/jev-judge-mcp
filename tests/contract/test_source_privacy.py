@@ -36,12 +36,14 @@ def contains_host_identifier(data: bytes) -> bool:
 
 
 def test_tracked_files_omit_host_identifiers() -> None:
-    listing = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT)
+    listing = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT)
     names = [os.fsdecode(raw) for raw in listing.split(b"\0") if raw]
     assert names, "no tracked files to inspect"
     offenders: list[str] = []
     for name in names:
         path = ROOT / name
+        if not path.exists() and not path.is_symlink():
+            continue
         data = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes()
         if contains_host_identifier(data):
             offenders.append(name)

@@ -2,13 +2,16 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from shlex import quote
+from typing import Any, cast
+
+import anyio
 
 from jev_judge_mcp.domain import ChoiceQuestion, Question
-from jev_judge_mcp.gate_budget import SPLIT_GUIDANCE, GateBudgetError, check_gate_budget
+from jev_judge_mcp.gate_budget import GateBudgetError, check_gate_budget, fits_budget
 from jev_judge_mcp.gate_diagnostics import explain_gate, input_cuts
 from jev_judge_mcp.ids import generated_ids
-from jev_judge_mcp.limits import GATE
+from jev_judge_mcp.limits import GATE, STATE_QUESTION_BYTES
 from jev_judge_mcp.policy import Action, ClaimJudgment, ClaimVerdict, PolicyThresholds
 from jev_judge_mcp.policy.claims import claim_action
 from jev_judge_mcp.providers import Evaluation, ProviderError
@@ -18,7 +21,7 @@ from jev_judge_mcp.text import length
 from jev_judge_mcp.tools.arguments import Refinement
 from jev_judge_mcp.tools.base import JevTool, Runtime, ToolResult, define, frame
 from jev_judge_mcp.tools.common import EVIDENCE_SCHEMA, evidence_items, has_non_empty_evidence, identify_evidence
-from jev_judge_mcp.tools.files import combined, file_list_refusal, file_patches, review_file_list
+from jev_judge_mcp.tools.files import combined, file_list_refusal, file_patches, file_review_state, review_file_list
 from jev_judge_mcp.tools.gate_evidence import Citations, add_citations, contradicting_line, grounded_review
 from jev_judge_mcp.tools.observed import (
     fail_closed,
@@ -55,12 +58,14 @@ CLAIM_VERDICTS: dict[str, ClaimVerdict] = {
     "unsupported": "unsupported",
 }
 
+SPLIT_GUIDANCE = "Split the diff by file or hunk and submit each claim with its supporting evidence."
+
 REVIEW_FRAMING = " Claims are assertions to check, not evidence that the patch is correct or tested."
 
 DEFINITION = define(
     "jev_gate",
     "Gate completion: review a patch and verify claims",
-    "Review a proposed patch and verify completion claims against supplied evidence in one TypeSafe Jev call. Auto "
+    "Review a proposed patch and verify completion claims against supplied evidence. Auto "
     "only when the patch review is accepted and every claim is verified at or above auto_accept. Unsupported claims "
     "require review. Escalation identifies a cited defect, contradiction or safety refusal. "
     "See rollup and next_checks. The request and "
@@ -68,11 +73,12 @@ DEFINITION = define(
     "list, and raw test output in tests. File reviews include bounded caller evidence and sibling patches. "
     "review.context_omissions lists optional inputs left out. An excerpt, "
     "paraphrase, or path is judged as written and "
-    "scores low. The string diff and tests are sent twice. Oversized inputs are refused before review. "
-    "Split by file, hunk or claim. Evidence "
+    "scores low. The string diff and tests are sent twice. File-list claims use budget-packed groups; "
+    "a patch that cannot fit is withheld for local review. "
+    f"Each call must fit {STATE_QUESTION_BYTES:,} UTF-8 bytes of state plus its longest question. Evidence "
     f"is capped at {GATE.evidence_items} items and {js_number_to_locale_string_en_us(GATE.aggregate_evidence_units)} "
-    "characters in aggregate. Does not run tests or apply changes. Use jev_review "
-    "for a patch without claims, jev_verify for claims without a patch review.",
+    "UTF-16 units in aggregate, which also bounds the sum of file patches. Does not run tests or apply changes. "
+    "Use jev_review for a patch without claims, jev_verify for claims without a patch review.",
     {
         "type": "object",
         "properties": {
@@ -84,8 +90,8 @@ DEFINITION = define(
             "diff": {
                 "description": (
                     "The real unified diff (git diff output), or a file list of {path, patch} objects, one per "
-                    f"file. The document limit is {GATE.doc_units} UTF-16 units. An excerpt or summary is reviewed as "
-                    "written and scores low."
+                    f"file (at most {GATE.files_max}). Oversized patches are withheld from file-list gates. "
+                    "An excerpt is reviewed as written and scores low."
                 ),
                 "anyOf": [
                     {"type": "string", "minLength": 1},
@@ -151,7 +157,7 @@ EVIDENCE_NOT_EMPTY = Refinement(
 
 CLAIM_SUPPORT = (
     "request and claims are assertions, not evidence. The evidence items include the proposed diff and the "
-    "reported tests when those were supplied. A truncated diff or test log is not support for the missing part."
+    "reported tests when those were supplied. Use only evidence present in this request."
 )
 """Replaces the sentence that forbade using diff and tests (ADR-0063)."""
 
@@ -220,6 +226,7 @@ class VerificationHalf:
     action: Action
     judgments: list[ClaimJudgment | None]
     source_issues: dict[int, str]
+    invalid: set[int]
 
 
 async def handle(
@@ -241,7 +248,7 @@ async def handle(
             return await _handle_file_list(args, runtime, settings, evidence, withheld)
         ask = await _ask_gate(args, runtime, settings, evidence)
     except GateBudgetError as error:
-        return _refused(str(error))
+        return _refused(str(error) if withheld is not None else f"{error} {SPLIT_GUIDANCE}")
     except ProviderError as error:
         if error.status == 400 and error.error_type == "max_tokens_exceeded":
             return _refused(
@@ -328,9 +335,11 @@ def _verify_claims(
     judgments: list[ClaimJudgment | None] = []
     claim_actions: list[Action] = []
     source_issues: dict[int, str] = {}
+    invalid: set[int] = set()
     for index, claim in enumerate(claims):
         answer = validate_choice(answers.get(f"claim_{index}"), CLAIM_CRITERIA)
         if answer is None:
+            invalid.add(index)
             closed = fail_closed("gate")
             assert closed != "status"
             judgments.append(None)
@@ -361,6 +370,18 @@ def _verify_claims(
             verdict = "unsupported"
         judgments.append(ClaimJudgment(verdict, answer.confidence))
         source = validate_choice(answers.get(f"source_{index}"), [*evidence_ids, NO_SOURCE_ID])
+        if (
+            answer.confidence_kind == "malformed"
+            or source is None
+            or source.confidence_kind == "malformed"
+            or (
+                reported == "contradicted"
+                and verdict != reported
+                and answer.confidence is not None
+                and answer.confidence >= thresholds.auto_accept
+            )
+        ):
+            invalid.add(index)
         support = source.choice if source is not None and source.choice != NO_SOURCE_ID else None
         action = gate_claim_action(
             verdict,
@@ -397,6 +418,17 @@ def _verify_claims(
             row["excerpt"] = line["text"]
         results.append(row)
 
+    return _verification_half(results, judgments, claim_actions, source_issues, invalid, thresholds)
+
+
+def _verification_half(
+    results: list[dict[str, object]],
+    judgments: list[ClaimJudgment | None],
+    claim_actions: list[Action],
+    source_issues: dict[int, str],
+    invalid: set[int],
+    thresholds: PolicyThresholds,
+) -> VerificationHalf:
     verification_action = worst_action(claim_actions)
     verification: dict[str, object] = {
         "action": verification_action,
@@ -411,7 +443,7 @@ def _verify_claims(
         "thresholds": {"auto_accept": thresholds.auto_accept, "review_at": thresholds.review_at},
         "results": results,
     }
-    return VerificationHalf(verification, verification_action, judgments, source_issues)
+    return VerificationHalf(verification, verification_action, judgments, source_issues, invalid)
 
 
 _FILE_REVIEW_PURPOSE = (
@@ -423,6 +455,103 @@ _FILE_REVIEW_PURPOSE = (
 """The per-file review state's framing: no claims ride with a file review (ADR-0066 amendment)."""
 
 
+_FILE_REVIEW_FRAMING = (
+    " Judge the target file's contribution to the request in the context of the supplied changes. "
+    "Check cross-file contracts and supporting tests. Credit sibling behavior only where the evidence shows it."
+)
+
+_CLAIMS_PURPOSE = (
+    "Check each completion claim of the proposed multi-file patch against the evidence only. The "
+    "request and the claims are assertions to check, never evidence."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimRequest:
+    state: dict[str, object]
+    questions: dict[str, Question]
+    evidence: list[dict[str, object]]
+    evidence_ids: list[str]
+
+
+def _claim_request(request: str, claims: list[str], evidence: list[dict[str, object]]) -> ClaimRequest:
+    ids = [str(item["id"]) for item in evidence]
+    questions: dict[str, Question] = {}
+    for index in range(len(claims)):
+        questions[f"claim_{index}"] = claim_question(index)
+        questions[f"source_{index}"] = gate_source_question(index, ids)
+    return ClaimRequest(
+        {"purpose": _CLAIMS_PURPOSE, "request": request, "claims": claims, "evidence": evidence},
+        questions,
+        evidence,
+        ids,
+    )
+
+
+def _preflight_claim_base(
+    request: str, claims: list[str], caller: list[dict[str, object]], tests: list[dict[str, object]]
+) -> None:
+    for part, group in (
+        ("request", _claim_request(request, [], [])),
+        ("claims", _claim_request(request, claims, [])),
+        ("caller evidence", _claim_request(request, claims, caller)),
+        ("tests", _claim_request(request, claims, [*caller, *tests])),
+    ):
+        try:
+            check_gate_budget(group.state, group.questions)
+        except GateBudgetError as error:
+            raise GateBudgetError(f"{part} cannot fit in the claims request: {error}") from error
+
+
+def _aggregate_claims(groups: list[VerificationHalf], thresholds: PolicyThresholds) -> VerificationHalf:
+    if len(groups) == 1:
+        return groups[0]
+    results: list[dict[str, object]] = []
+    judgments: list[ClaimJudgment | None] = []
+    actions: list[Action] = []
+    issues: dict[int, str] = {}
+    invalid = {index for group in groups for index in group.invalid}
+    for index in range(len(groups[0].judgments)):
+        rows = [cast(list[dict[str, object]], group.payload["results"])[index] for group in groups]
+        confirmed = [
+            (group, row)
+            for group, row in zip(groups, rows, strict=True)
+            if isinstance(score := row["confidence"], float | int) and score >= thresholds.auto_accept
+        ]
+        winner = next(((group, row) for group, row in confirmed if row["verdict"] == "contradicted"), None)
+        if winner is None:
+            verified = [(group, row) for group, row in confirmed if row["verdict"] == "verified"]
+            winner = next(((group, row) for group, row in verified if row["action"] == "auto"), None)
+            if winner is None and verified:
+                winner = verified[0]
+        if winner is None:
+            winner = next(
+                ((group, row) for group, row in zip(groups, rows, strict=True) if row["verdict"] == "unsupported"),
+                None,
+            )
+        if winner is None:
+            row = {
+                "claim": rows[0]["claim"],
+                "id": rows[0]["id"],
+                "verdict": "unsupported",
+                "confidence": None,
+                "probabilities": None,
+                "action": "review",
+            }
+        else:
+            group, selected = winner
+            row = dict(selected)
+            if (issue := group.source_issues.get(index)) is not None:
+                issues[index] = issue
+        if index in invalid:
+            row.update(action="review", status="invalid_response")
+            issues[index] = "source_invalid"
+        judgments.append(ClaimJudgment(cast(ClaimVerdict, row["verdict"]), cast(float | None, row["confidence"])))
+        results.append(row)
+        actions.append(cast(Action, row["action"]))
+    return _verification_half(results, judgments, actions, issues, invalid, thresholds)
+
+
 async def _handle_file_list(
     args: dict[str, Any],
     runtime: Runtime,
@@ -430,18 +559,10 @@ async def _handle_file_list(
     evidence: list[dict[str, object]],
     withheld: Sequence[dict[str, str]] | None,
 ) -> ToolResult:
-    """Per-file review plus one claims verification (ADR-0066 and its amendment).
-
-    Preflight the complete verification envelope before paying for any file. Each file review
-    has its own budget check before fan-out. The claims are verified once over the full evidence.
-    """
     files = file_patches(args["diff"])
     refusal = file_list_refusal(files)
     if refusal is not None:
         return _refused(f"{refusal.rstrip('.')}. {SPLIT_GUIDANCE}")
-    for index, item in enumerate(files):
-        if length(item["patch"]) > GATE.doc_units:
-            return _refused(f"diff[{index}].patch exceeds {GATE.doc_units} UTF-16 units. {SPLIT_GUIDANCE}")
     request: str = args["request"]
     tests: str | None = args.get("tests") or None
     claims: list[str] = args["claims"]
@@ -450,50 +571,86 @@ async def _handle_file_list(
         {"id": identifier, "text": item["patch"], "kind": "diff", "role": "after"}
         for identifier, item in zip(ids, files, strict=True)
     ]
-    implicit.extend(_implicit_evidence(None, tests))
-    caller_evidence = _caller_evidence(evidence, implicit)
-    asked_evidence = [*map(_sent_evidence_item, caller_evidence), *implicit]
-    evidence_ids = [str(item["id"]) for item in asked_evidence]
-    questions: dict[str, Question] = {}
-    for index in range(len(claims)):
-        questions[f"claim_{index}"] = claim_question(index)
-        questions[f"source_{index}"] = gate_source_question(index, evidence_ids)
-    state = {
-        "purpose": (
-            "Check each completion claim of the proposed multi-file patch against the evidence only. The "
-            "request and the claims are assertions to check, never evidence."
-        ),
-        "request": request,
-        "claims": claims,
-        "evidence": asked_evidence,
-    }
-    check_gate_budget(state, questions)
-    counter_lines = add_citations(state, questions, asked_evidence, claim_count=len(claims))
+    test_evidence = _implicit_evidence(None, tests)
+    caller_evidence = _caller_evidence(evidence, [*implicit, *test_evidence])
+    caller = list(map(_sent_evidence_item, caller_evidence))
+    _preflight_claim_base(request, claims, caller, test_evidence)
+
+    def prepare(patches: list[dict[str, object]]) -> ClaimRequest:
+        return _claim_request(request, claims, [*caller, *patches, *test_evidence])
+
+    def fits(group: ClaimRequest) -> bool:
+        return fits_budget(group.state, group.questions)
+
+    fitting: list[dict[str, str]] = []
+    oversize: list[dict[str, str]] = []
+    bins: list[list[dict[str, object]]] = []
+    rubric = review_questions(_FILE_REVIEW_FRAMING)
+    if files:
+        for part, log in (("request", None), ("tests", tests)):
+            try:
+                check_gate_budget(file_review_state(ReviewDocs(request, "", log), _FILE_REVIEW_PURPOSE), rubric)
+            except GateBudgetError as error:
+                raise GateBudgetError(f"{part} cannot fit in the file review: {error}") from error
+    for item, patch in zip(files, implicit, strict=True):
+        mandatory = file_review_state(ReviewDocs(request, item["patch"], tests), _FILE_REVIEW_PURPOSE)
+        if not fits_budget(mandatory, rubric) or not fits(prepare([patch])):
+            oversize.append({"path": item["path"], "reason": "oversize"})
+            continue
+        fitting.append(item)
+        for group in bins:
+            if fits(prepare([*group, patch])):
+                group.append(patch)
+                break
+        else:
+            bins.append([patch])
+    prepared = [prepare(group) for group in bins or [[]]]
+    citations = [
+        add_citations(group.state, group.questions, group.evidence, claim_count=len(claims)) for group in prepared
+    ]
     reviewed = await review_file_list(
-        files,
+        fitting,
         args,
         runtime,
         settings,
         purpose=_FILE_REVIEW_PURPOSE,
         doc_units=GATE.doc_units,
         evidence=caller_evidence,
-        gate_framing=(
-            " Judge the target file's contribution to the request in the context of the supplied changes. "
-            "Check cross-file contracts and supporting tests. Credit sibling behavior only where the evidence shows it."
-        ),
+        gate_framing=_FILE_REVIEW_FRAMING,
     )
-    evaluation = await runtime.ask(state, questions)
-    verification = _verify_claims(
-        evaluation.answers, claims, asked_evidence, evidence_ids, settings.thresholds, counter_lines
+    evaluated: dict[int, Evaluation] = {}
+    failures: dict[int, Exception] = {}
+
+    async def verify(index: int, group: ClaimRequest) -> None:
+        try:
+            async with runtime.file_fanout:
+                evaluated[index] = await runtime.ask(group.state, group.questions)
+        except Exception as error:
+            failures[index] = error
+            tasks.cancel_scope.cancel()
+
+    async with anyio.create_task_group() as tasks:
+        for index, group in enumerate(prepared):
+            tasks.start_soon(verify, index, group)
+    if failures:
+        raise failures[min(failures)]
+    evaluations = [evaluated[index] for index in range(len(prepared))]
+    verification = _aggregate_claims(
+        [
+            _verify_claims(evaluation.answers, claims, group.evidence, group.evidence_ids, settings.thresholds, lines)
+            for evaluation, group, lines in zip(evaluations, prepared, citations, strict=True)
+        ],
+        settings.thresholds,
     )
 
-    review_action = worst_action([half.action for half in reviewed.halves])
+    skipped = [*(withheld or ()), *oversize]
+    review_action = worst_action([half.action for half in reviewed.halves]) if fitting else "review"
     review_payload = reviewed.review_half(review_action)
     if tests and withheld is None and not runtime.tests_read_from_file:
         review_payload["tests_weight"] = "self_reported"
-    action = file_list_action([review_action, verification.action], bool(withheld))
+    action = file_list_action([review_action, verification.action], bool(skipped))
     reason_codes = gate_reason_codes(
-        truncated=bool(withheld),
+        truncated=bool(skipped),
         review_action=review_action,
         review_invalid=any(half.invalid for half in reviewed.halves)
         or any(b["code"] == "defect_kind_invalid" for b in reviewed.blockers),
@@ -509,20 +666,35 @@ async def _handle_file_list(
         "reason_codes": reason_codes,
         "review": review_payload,
         "verification": verification.payload,
-        "partial": bool(withheld),
-        "unreviewed_files": [item["path"] for item in withheld or ()],
+        "partial": bool(skipped),
+        "unreviewed_files": [item["path"] for item in skipped],
     }
+    if len(prepared) > 1:
+        payload["calls"] = len(reviewed.evaluations) + len(evaluations)
+    if skipped:
+        payload["skipped"] = skipped
     withheld_blockers = [
         {
             **item,
             "field": "diff",
             "code": "file_withheld",
-            "next_check": f"Review {item['path']} locally. Its patch was withheld ({item['reason']}).",
+            "next_check": _withheld_check(item["path"], item["reason"]),
         }
-        for item in withheld or ()
+        for item in skipped
     ]
     explain_gate(payload, [*reviewed.blockers, *withheld_blockers], args["diff"], verification.source_issues)
-    return ToolResult(frame("jev_gate", combined([*reviewed.evaluations, evaluation]), payload), action=action)
+    next_checks = cast(list[str], payload["next_checks"])
+    for blocker in withheld_blockers:
+        if blocker["reason"] == "untracked" and blocker["next_check"] not in next_checks:
+            next_checks.append(blocker["next_check"])
+    return ToolResult(frame("jev_gate", combined([*reviewed.evaluations, *evaluations]), payload), action=action)
+
+
+def _withheld_check(path: str, reason: str) -> str:
+    if reason == "untracked":
+        literal = f"./{path}" if path.startswith(("-", ":")) else path
+        return f"Run git add -N {quote(literal)} and recheck the range."
+    return f"Review {path} locally. Its patch was withheld ({reason})."
 
 
 TOOL = JevTool(DEFINITION, handle, {"evidence": EVIDENCE_NOT_EMPTY})

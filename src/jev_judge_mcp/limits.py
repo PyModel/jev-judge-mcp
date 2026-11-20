@@ -1,6 +1,6 @@
 """The frozen input caps, typed per tool (ADR-0014); the manifest is the oracle, not the source.
 
-Every value is transcribed from `docs/reference/parity-manifest.json` `caps`, and
+Reference values are transcribed from `docs/reference/parity-manifest.json` `caps`, and
 `tests/contract/test_limits.py` fails when the two disagree, so a re-freeze points here. VALUES
 ONLY: UTF-16 measurement stays in `text.py` (ADR-0005) and applying a cap — reject is the schema
 itself — lives in the tools and `validation/caps.py`. A tool that hardcodes one of these numbers is
@@ -149,7 +149,8 @@ class ReviewCaps:
 
 @dataclass(frozen=True, slots=True)
 class GateCaps:
-    """jev_gate: claim/item/text caps and the two aggregate isError budgets.
+    """jev_gate: claim/item caps and aggregate admission guards. The raw document bound derives from
+    the shared provider window.
 
     `files_max` bounds a `[{path, patch}]` diff for jev_gate and jev_review alike (ADR-0066
     amendment): one review request runs per file, so the count is capped like the evidence item
@@ -189,8 +190,8 @@ class ScoreCaps:
 class FileJudgeCaps:
     """jev_file_judge (extension tool, ADR-0077): one kind-discriminated judgment about a file the
     server reads. No parity-manifest block exists, so the ADR owns every value (the ScoreCaps
-    precedent). The file cap is the per-request state budget shared with the question, in UTF-16
-    units (ADR-0005); the option bounds are the `jev_classify` convention for caller-supplied sets;
+    precedent). The raw file read bound derives from the shared provider window. The option bounds
+    follow the `jev_classify` convention for caller-supplied sets;
     the score bounds are the ADR-0048 rubric freeze; the sniff window is the first-8,000-byte NUL
     scan git uses.
     """
@@ -211,9 +212,8 @@ class AskCaps:
     """jev_ask (extension tool, ADR-0077): the caller writes the questions over a composed state —
     own text, server-read files, and a gated command's output. No parity-manifest block exists, so
     the ADR owns every value (the ScoreCaps precedent). No part truncates: an over-budget call
-    refuses typed, with each part's size and a Split suggestion. The request cap is the composed
-    aggregate of question and state units, strict greater-than; the command timeout is the budget
-    the hook passes its provider call; `questions_min`/`questions_max` and `files_max` reject.
+    refuses typed, with each part's size and a Split suggestion. The shared provider window bounds
+    the composed request. `questions_min`/`questions_max` and `files_max` reject.
     """
 
     questions_min: int
@@ -221,8 +221,15 @@ class AskCaps:
     files_max: int
     state_units_max: int
     command_output_units_max: int
-    request_units_max: int
     command_timeout_seconds: int
+
+
+STATE_QUESTION_BYTES: Final = 30_000
+REQUEST_BYTES: Final = 60_000
+"""Compact UTF-8 byte ceilings conservatively budget for byte-level tokenization and leave
+provider framing room within the documented 32k state-plus-question and 64k whole-request
+token windows (docs/jev_docs/models.md).
+"""
 
 
 CANDIDATES: Final = CandidatesCaps(min_items=1, max_items=250, text_units=2000)
@@ -289,7 +296,7 @@ GATE: Final = GateCaps(
     claim_units=2000,
     evidence_items=16,
     aggregate_evidence_units=200_000,
-    doc_units=50_000,
+    doc_units=STATE_QUESTION_BYTES,
     files_max=64,
 )
 SCORE: Final = ScoreCaps(
@@ -325,7 +332,7 @@ class FilesJudgeCaps:
 
 
 FILE_JUDGE: Final = FileJudgeCaps(
-    file_units_max=100_000,
+    file_units_max=STATE_QUESTION_BYTES,
     instructions_units_max=2_000,
     choice_options_min=CLASSIFY.classes_min,
     choice_options_max=CLASSIFY.classes_max,
@@ -340,8 +347,7 @@ ASK: Final = AskCaps(
     questions_max=20,
     files_max=20,
     state_units_max=20_000,
-    command_output_units_max=30_000,
-    request_units_max=120_000,
+    command_output_units_max=STATE_QUESTION_BYTES,
     command_timeout_seconds=30,
 )
 FILES_JUDGE: Final = FilesJudgeCaps(

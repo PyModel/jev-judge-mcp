@@ -7,6 +7,7 @@ moves the probes with the caps. Lengths are UTF-16 units (ADR-0005): padding is 
 import json
 import time
 from collections.abc import Iterator
+from pathlib import Path as FilePath
 from typing import Any, cast
 
 import pytest
@@ -22,6 +23,32 @@ from tests.support.jev import Outcome, call_tool
 pytestmark = pytest.mark.anyio
 
 SCHEMA_REJECT = "MCP error -32602"
+
+
+@pytest.mark.parametrize(
+    "tool", ["jev_review", "jev_verify", "jev_screen", "jev_ask", "jev_file_judge", "jev_files_judge"]
+)
+async def test_provider_window_refuses_encoded_state_before_any_request(
+    tool: str, tmp_path: FilePath, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Under every raw UTF-16 cap. Escaped control characters cost six bytes on the wire.
+    large = "\x01" * 5_100
+    (tmp_path / "large.txt").write_text(large)
+    monkeypatch.chdir(tmp_path)
+    noul: dict[str, object] = {"instructions": "Does the state have a marker?", "criteria": {}}
+    args: dict[str, dict[str, object]] = {
+        "jev_review": {"request": "fix", "diff": large},
+        "jev_verify": {"claims": ["a marker exists"], "evidence": large},
+        "jev_screen": {"text": large},
+        "jev_ask": {"state": large, "questions": {"marker": {"type": "noul", **noul}}},
+        "jev_file_judge": {"path": "large.txt", "kind": "noul", **noul},
+        "jev_files_judge": {"paths": ["large.txt"], "kind": "noul", **noul},
+    }
+    outcome = await call_tool(tool, args[tool], {})
+    assert outcome.is_error and outcome.code == "input_too_large", outcome.text
+    assert "30000" in outcome.text and "state plus longest question" in outcome.text
+    assert outcome.requests == []
+
 
 UNICODE = [
     "😀a😀",  # astral beside BMP
@@ -136,16 +163,13 @@ async def test_truncated_input_is_never_auto(tool: str, field: str) -> None:
     case = BY_TOOL[tool]
     cap = REVIEW.doc_units if tool == "jev_review" else GATE.doc_units
     at_cap = await call_tool(tool, with_value(case.arguments, (field,), pad(cap)), case.permissive)
-    if tool == "jev_gate":
-        assert at_cap.code == "input_too_large" and not at_cap.requests and "30000" in at_cap.text
-    else:
-        assert case.acts(at_cap.payload), at_cap.text
+    assert at_cap.code == "input_too_large" and not at_cap.requests and "30000" in at_cap.text
     over = await call_tool(tool, with_value(case.arguments, (field,), pad(cap + 1)), case.permissive)
     if tool == "jev_gate":
         assert over.code == "input_too_large" and not over.requests and field in over.text
         assert "action" not in over.payload
     else:
-        assert not case.acts(over.payload), over.text
+        assert over.code == "input_too_large" and not over.requests and "30000" in over.text
 
 
 async def test_gate_evidence_budgets_are_errors_not_truncation() -> None:

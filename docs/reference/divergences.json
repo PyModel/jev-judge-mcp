@@ -959,7 +959,40 @@
         "ADR-0062"
       ],
       "reference_behavior": "Oversized primary documents are clipped and sent.",
-      "python_behavior": "The gate refuses oversized input before any review or verification. The response gives the bound and a split suggestion."
+      "python_behavior": "String gates refuse oversized input before any review or verification. ADR-0086 derives the raw document guard from the 30,000-byte provider limit."
+    },
+    {
+      "id": "shared-provider-request-window",
+      "surface": "result",
+      "tier": "tier_a",
+      "status": "sanctioned",
+      "adr": "docs/adr/0086-shared-provider-window-and-gate-packing.md",
+      "tests": [
+        "tests/security/test_inputs.py",
+        "tests/parity/test_tool_fixtures.py"
+      ],
+      "fixtures": [
+        "truncated/review-request-exactly-at-cap#0",
+        "truncated/review-tests-over-cap#0",
+        "mock-018#0",
+        "mock-026#0"
+      ],
+      "reference_behavior": "Admitted review and extract states are sent even if their compact JSON exceeds the provider window.",
+      "python_behavior": "Every tool preflights both compact UTF-8 request limits. These calls return input_too_large before dispatch."
+    },
+    {
+      "id": "gate-packed-claims",
+      "surface": "result",
+      "tier": "tier_a",
+      "status": "sanctioned",
+      "adr": "docs/adr/0086-shared-provider-window-and-gate-packing.md",
+      "tests": [
+        "tests/unit/test_file_diff.py",
+        "tests/contract/test_gate_range.py"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The reference supports string diffs and has no server-read range gate.",
+      "python_behavior": "File-list and server-read range gates pack claim verification into bounded groups and hold oversized, binary, and untracked files as applicable."
     }
   ]
 }

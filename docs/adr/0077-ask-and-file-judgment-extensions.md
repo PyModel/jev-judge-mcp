@@ -126,7 +126,7 @@ pinning tests. Nothing here touches a frozen tool's schema, policy, or fixtures.
 | `jev_ask` | `files_max` | 20 | an ask composes several state parts, so files keep a small share of the window |
 | `jev_ask` | `state_units_max` | 20,000 | own state is framing, not a document dump; bulk material belongs in `paths` |
 | `jev_ask` | `command_output_units_max` | 30,000 | room beside own state and file parts inside one request |
-| `jev_ask` | `request_units_max` | 120,000 | the composed aggregate stays under the 64k-token window at worst-case encoding; over it the split refusal fires |
+| `jev_ask` | `request_units_max` | 120,000 | historical UTF-16 aggregate used by the original split refusal; superseded below |
 | `jev_ask` | command timeout | 30 s | the same budget the hook passes its provider call; a longer run belongs in the agent's own shell |
 | `hook screen` | `SCREEN_INPUT_CHARS` | 6,000 | caps the judged prefix of tool output; typical reads are far smaller and the call stays cheap |
 | `hook compact-cut` | `turns_max` | 20 | covers any realistic session segment while bounding the state |
@@ -202,6 +202,14 @@ Deterministic refusals keep their reason codes and final-block notice and use ze
 An accepted command contributes redacted output to state and uses a single provider call for the
 caller's questions. The composed UTF-16 budget counts choice option keys. Server-generated wire
 keys keep caller question ids out of the provider request keys. Results use the original caller ids.
+
+## Amendment (2026-11-19): measure the encoded provider request
+
+The previous claim that 120,000 UTF-16 units fit inside 64k tokens at worst-case encoding was
+incorrect. That count also omitted the provider's 32k state-plus-question window. Ask, its split
+suggestions, and file judgment now use the shared compact UTF-8 limits in ADR-0086. The raw file
+read bound derives from the state window. File-list judgment preflights every surviving request
+before starting fan-out.
 
 ## Considered Options
 

@@ -1,5 +1,6 @@
 """State assembly, command lifecycle, and request budgeting for jev_ask."""
 
+import json
 import os
 import sys
 import time
@@ -8,17 +9,15 @@ from typing import Any
 import pytest
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, ScoreQuestion
-from jev_judge_mcp.limits import ASK
+from jev_judge_mcp.limits import ASK, STATE_QUESTION_BYTES
 from jev_judge_mcp.settings import Settings, load_settings
 from jev_judge_mcp.text import length
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
 from jev_judge_mcp.tools.ask_state import (
-    Part,
     file_parts,
     own_part,
     question_units,
     run_command,
-    split_refusal,
 )
 from tests.support.jev import FakeProvider, call_tool
 
@@ -125,46 +124,67 @@ def test_question_units_count_ids_instructions_and_criteria() -> None:
     assert question_units(questions) == 33
 
 
-def test_split_refusal_names_every_part_and_the_first_fit_calls() -> None:
-    parts = [Part("state", "s" * 3_000, 3_000), Part("a.md", "a" * 45_000, 45_000), Part("b.md", "b" * 80_000, 80_000)]
-    with pytest.raises(Exception) as raised:
-        split_refusal(parts, questions_units=800)
-    text = str(raised.value)
-    assert "state 3,000" in text and "a.md 45,000" in text and "b.md 80,000" in text
-    assert "call 1: state, a.md" in text and "call 2: b.md" in text
-    assert "Re-ask the same questions on every call" in text
+async def test_split_refusal_names_every_part_and_the_first_fit_calls(tmp_path: Any, monkeypatch: Any) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "a.md").write_text("a" * 23_000)
+    (tmp_path / "b.md").write_text("b" * 9_000)
+    args = {key: value for key, value in allow_args(state="s" * 9_000).items() if key != "command"}
+    answers = {"q0": {"noul": 0.5}}
+    over = await call_tool("jev_ask", {**args, "paths": ["a.md", "b.md"]}, answers)
+    assert over.is_error and over.code == "input_too_large" and not over.requests
+    assert all(part in over.text for part in ("state 9,000", "a.md 23,000", "b.md 9,000"))
+    assert "call 1: state, b.md" in over.text and "call 2: a.md" in over.text
+    assert "Re-ask the same questions on every call" in over.text
+    first = await call_tool("jev_ask", {**args, "paths": ["b.md"]}, answers)
+    second = await call_tool("jev_ask", {"questions": args["questions"], "paths": ["a.md"]}, answers)
+    assert not first.is_error and not second.is_error
 
 
-def test_split_refusal_says_what_to_trim_when_the_questions_alone_are_over() -> None:
-    with pytest.raises(Exception) as raised:
-        split_refusal([Part("state", "s", 1)], questions_units=ASK.request_units_max + 1)
-    assert "trim the question set" in str(raised.value)
+async def test_split_refusal_says_what_to_trim_when_the_questions_alone_are_over() -> None:
+    questions = {
+        f"q{i}": {"type": "noul", "instructions": "i" * 1_999, "criteria": {"true": "a" * 1_900}} for i in range(16)
+    }
+    result = await call_tool("jev_ask", {"state": "s", "questions": questions}, {})
+    assert result.is_error and result.code == "input_too_large" and not result.requests
+    assert "whole request" in result.text and "trim the question set" in result.text
 
 
-def test_split_refusal_names_a_part_that_cannot_fit_beside_the_questions() -> None:
-    parts = [Part("big.log", "b" * 100_000, 100_000)]
-    with pytest.raises(Exception) as raised:
-        split_refusal(parts, questions_units=50_000)
-    assert "cannot fit beside the questions" in str(raised.value)
+async def test_split_refusal_names_a_part_that_cannot_fit_beside_the_questions(tmp_path: Any, monkeypatch: Any) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "big.log").write_text("b" * 29_500)
+    result = await call_tool(
+        "jev_ask",
+        {
+            "paths": ["big.log"],
+            "questions": {"q1": {"type": "noul", "instructions": "i" * 1_000, "criteria": {}}},
+        },
+        {},
+    )
+    assert result.is_error and result.code == "input_too_large" and not result.requests
+    assert "big.log cannot fit beside the questions" in result.text
 
 
 async def test_the_composed_request_cap_is_a_strict_greater_than(tmp_path: Any, monkeypatch: Any) -> None:
-    """A 20-unit question set over two files: exactly 120,000 units asks; one unit over refuses split."""
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "a.txt").write_text("a" * 59_990, encoding="utf-8")
-    (tmp_path / "b.txt").write_text("b" * 59_990, encoding="utf-8")
-    args: dict[str, Any] = {
+    (tmp_path / "a.txt").write_text("a" * 15_000, encoding="utf-8")
+    (tmp_path / "b.txt").write_text("b", encoding="utf-8")
+    args: dict[str, object] = {
         "questions": {"q1": {"type": "noul", "instructions": "abcdefghij", "criteria": {}}},
         "paths": ["a.txt", "b.txt"],
     }
-    at_cap = await call_tool("jev_ask", args, {"q0": {"noul": 0.5}})
+    answers = {"q0": {"noul": 0.5}}
+    probe = await call_tool("jev_ask", args, answers)
+    state, questions = probe.requests[0]
+    wire = {"state": state, "questions": questions}
+    size = len(json.dumps(wire, separators=(",", ":")).encode("utf-8"))
+    remaining = STATE_QUESTION_BYTES - size + 1
+    (tmp_path / "b.txt").write_text("b" * remaining, encoding="utf-8")
+    at_cap = await call_tool("jev_ask", args, answers)
     assert not at_cap.is_error, at_cap.text
-    assert at_cap.payload["state_summary"]["units"] == ASK.request_units_max
-    (tmp_path / "b.txt").write_text("b" * 59_991, encoding="utf-8")
-    over = await call_tool("jev_ask", args, {"q0": {"noul": 0.5}})
-    assert over.is_error and over.code == "input_too_large"
-    assert "a.txt 59,990" in over.text and "b.txt 59,991" in over.text
-    assert over.requests == []
+    (tmp_path / "b.txt").write_text("b" * (remaining + 1), encoding="utf-8")
+    over = await call_tool("jev_ask", args, answers)
+    assert over.is_error and over.code == "input_too_large" and over.requests == []
+    assert f"uses {STATE_QUESTION_BYTES + 1} UTF-8 bytes" in over.text
 
 
 # --- deterministic refusal ordering through the real toolset ------------------------------------------

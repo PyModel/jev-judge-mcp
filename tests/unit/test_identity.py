@@ -181,25 +181,31 @@ def test_help_flag_prints_usage_and_exits_zero_without_serving(flag: str) -> Non
 async def test_every_result_reports_loaded_version_and_source_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    _manifest(tmp_path)
-    module = _start(tmp_path)
+    repo = tmp_path / "subject"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    _manifest(repo)
+    module = _start(repo)
     commit_files(
-        tmp_path,
+        repo,
         {
-            "pyproject.toml": (tmp_path / "pyproject.toml").read_text(),
-            str(module.relative_to(tmp_path)): "clean = True",
+            "pyproject.toml": (repo / "pyproject.toml").read_text(),
+            str(module.relative_to(repo)): "clean = True",
         },
     )
-    sha = subprocess.check_output(["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True).strip()
+    sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
     monkeypatch.setattr(identity, "__file__", str(module))
+    foreign = tmp_path / "foreign"
+    subprocess.run(["git", "init", "-q", str(foreign)], check=True)
+    commit_files(foreign, {"other.txt": "foreign"})
     module.write_text("dirty = 1")
     service = JevMCPServer(
         toolset=Toolset(Runtime(Settings(), provider_factory=lambda _: FakeProvider({})), TOOLS), log_level="WARNING"
     )
     try:
         args = {"request": "r", "diff": "+x", "claims": ["x"], "evidence": "e"}
-        initial = await service.call_tool("jev_gate", args)
+        with monkeypatch.context() as isolated:
+            isolated.setenv("GIT_DIR", str(foreign / ".git"))
+            initial = await service.call_tool("jev_gate", args)
         info = (initial.meta or {})["jev/version"]
         assert info["loaded"]["commit"] == sha and info["loaded"]["dirty"] is True
         assert info["restart_needed"] is False
@@ -208,7 +214,7 @@ async def test_every_result_reports_loaded_version_and_source_drift(
         assert (changed.meta or {})["jev/version"]["restart_needed"] is True
         assert text_of(changed) == text_of(initial)
         assert "restart" in changed.content[-1].model_dump()["text"].lower()
-        commit_files(tmp_path, {str(module.relative_to(tmp_path)): "clean = False"})
+        commit_files(repo, {str(module.relative_to(repo)): "clean = False"})
         repeated = await service.call_tool("jev_gate", {})
         assert repeated.is_error and (repeated.meta or {})["jev/version"]["loaded"] == info["loaded"]
         assert (repeated.meta or {})["jev/version"]["current_commit"] != sha
@@ -223,7 +229,7 @@ async def test_every_result_reports_loaded_version_and_source_drift(
         "dirty": False,
     }
     assert restarted["restart_needed"] is False
-    (tmp_path / ".git" / "HEAD").write_bytes(bytes([255]))
+    (repo / ".git" / "HEAD").write_bytes(bytes([255]))
     unavailable = await identity.ServerVersion().field()
     assert unavailable["restart_needed"] is True and "cannot verify" in str(unavailable["notice"])
 

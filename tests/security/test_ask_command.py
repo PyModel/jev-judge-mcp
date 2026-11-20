@@ -369,22 +369,26 @@ async def test_git_does_not_run_repository_fsmonitor_or_diff_drivers(tmp_path: A
     _git("config", "diff.fixture.command", f"./{script.name}", cwd=tmp_path)
     _git("config", "diff.fixture.textconv", f"./{script.name}", cwd=tmp_path)
 
-    for command, expected in (
-        ("git status --short", "M notes.txt"),
-        ("git status --porcelain=v1", "M notes.txt"),
-        ("git diff", "+after"),
-        ("git diff -U0 -- notes.txt", "+after"),
-        ("git log -n1 --oneline", "initial"),
-        ("git log --max-count 1 --format=%s", "initial"),
-        ("git show HEAD -- notes.txt", "+before"),
-        ("git show --pretty oneline -n1 -- notes.txt", "+before"),
-    ):
-        provider = FakeProvider({"q0": {"noul": 0.9}})
-        outcome = await _run(provider, command, tmp_path, monkeypatch)
-        assert not outcome.is_error, outcome.text
-        assert not marker.exists(), command
-        assert expected in str(provider.requests[-1][0])
-        assert len(provider.requests) == 1
+    foreign = tmp_path / "foreign"
+    _git("init", str(foreign), cwd=tmp_path)
+    with monkeypatch.context() as isolated:
+        isolated.setenv("GIT_DIR", str(foreign / ".git"))
+        for command, expected in (
+            ("git status --short", "M notes.txt"),
+            ("git status --porcelain=v1", "M notes.txt"),
+            ("git diff", "+after"),
+            ("git diff -U0 -- notes.txt", "+after"),
+            ("git log -n1 --oneline", "initial"),
+            ("git log --max-count 1 --format=%s", "initial"),
+            ("git show HEAD -- notes.txt", "+before"),
+            ("git show --pretty oneline -n1 -- notes.txt", "+before"),
+        ):
+            provider = FakeProvider({"q0": {"noul": 0.9}})
+            outcome = await _run(provider, command, tmp_path, monkeypatch)
+            assert not outcome.is_error, outcome.text
+            assert not marker.exists(), command
+            assert expected in str(provider.requests[-1][0])
+            assert len(provider.requests) == 1
 
     _git("config", "filter.fixture.clean", f"./{script.name}", cwd=tmp_path)
     (tmp_path / ".gitattributes").write_text("notes.txt diff=fixture filter=fixture\n")

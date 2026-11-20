@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from jev_judge_mcp import cli, git_diff
+from jev_judge_mcp import cli, git
 from jev_judge_mcp.cli import completion_hook_main, completion_matches, gate_main, judge_main
-from jev_judge_mcp.git_diff import split_unified
+from jev_judge_mcp.git import split_unified
 from jev_judge_mcp.limits import GATE
 from tests.support.git_repo import repo_with_diff
 from tests.support.jev import FakeProvider
@@ -291,8 +291,7 @@ def test_cli_gate_does_not_mark_a_file_it_read_self_reported(
 
 
 def test_a_path_containing_space_b_slash_is_split_at_the_header_midpoint() -> None:
-    """`a/dir b/c b/dir b/c` has two ` b/` markers; the last one names `c`, the midpoint names the
-    file. A rename falls back to the `+++ b/` line (git ends it with a tab when the path has spaces)."""
+    """The midpoint finds the full path, and the canonical parser requires symmetric headers."""
     same = "diff --git a/dir b/c b/dir b/c\nindex 1..2 100644\n--- a/dir b/c\n+++ b/dir b/c\t\n@@ -1 +1 @@\n-x\n+y\n"
     files = split_unified(same)
     assert files is not None and [item["path"] for item in files] == ["dir b/c"]
@@ -300,8 +299,7 @@ def test_a_path_containing_space_b_slash_is_split_at_the_header_midpoint() -> No
         "diff --git a/old b/new\nsimilarity index 90%\nrename from old\nrename to new\n"
         "--- a/old\n+++ b/new\n@@ -1 +1 @@\n-x\n+y\n"
     )
-    files = split_unified(renamed)
-    assert files is not None and [item["path"] for item in files] == ["new"]
+    assert split_unified(renamed) is None
 
 
 def test_the_completion_range_is_what_the_push_sends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -383,7 +381,7 @@ def test_gate_guards_local_inputs_before_judgment(
         def unsplittable(_text: str) -> None:
             return None
 
-        monkeypatch.setattr(git_diff, "split_unified", unsplittable)
+        monkeypatch.setattr(git, "split_unified", unsplittable)
     else:
         path = repo / "claims.json"
         path.write_text(" " * (GATE.aggregate_evidence_units + 1) + path.read_text())

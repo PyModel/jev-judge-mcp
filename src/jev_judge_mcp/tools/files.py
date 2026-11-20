@@ -24,6 +24,7 @@ from jev_judge_mcp.tools.base import Runtime, ToolError
 from jev_judge_mcp.tools.gate_evidence import Citations, add_citations, grounded_review
 from jev_judge_mcp.tools.observed import worst_action
 from jev_judge_mcp.tools.review_half import (
+    ReviewDocs,
     ReviewHalf,
     ReviewSettings,
     project_review,
@@ -95,6 +96,8 @@ class FileListReview:
         `score_file`, `reviewed_files`, and `file_actions` (ADR-0066 amendment). `tests_weight` is
         the caller's to add, where its payload places it."""
         actions: list[Action] = [half.action for half in self.halves]
+        if not actions:
+            return {"action": action, "reviewed_files": [], "file_actions": {}}
         index = actions.index(worst_action(actions))
         payload = dict(self.halves[index].payload)
         payload["action"] = action
@@ -155,6 +158,18 @@ def _file_context(
     return context, required, omitted
 
 
+def file_review_state(docs: ReviewDocs, purpose: str) -> dict[str, object]:
+    return {
+        "purpose": purpose,
+        "request": docs.request,
+        "diff": docs.diff,
+        "tests": docs.tests,
+        "path": "",
+        "evidence": [],
+        "related_files": [],
+    }
+
+
 async def review_file_list(
     files: Sequence[Mapping[str, str]],
     args: dict[str, Any],
@@ -193,9 +208,7 @@ async def review_file_list(
         limit = context_limit
         while True:
             extra, required, missing = _file_context(index, peers, sources, limit)
-            state = {"purpose": purpose, "request": docs.request, "diff": docs.diff, "tests": docs.tests, **extra}
-            if gate_framing is None:
-                break
+            state = {**file_review_state(docs, purpose), **extra}
             try:
                 check_gate_budget(state, questions)
             except GateBudgetError:
