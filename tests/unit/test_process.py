@@ -39,12 +39,30 @@ def gone(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return True
-    stat = Path(f"/proc/{pid}/stat")
     try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0] == "Z"
+    except (FileNotFoundError, ProcessLookupError):
+        # On Linux the child was reaped between the kill and the read (open gives ENOENT, read gives ESRCH).
         # macOS has no /proc, so a live pid stays not gone there.
-        return stat.exists() and stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
-    except ProcessLookupError:  # reaped between the kill and the read
+        return Path("/proc").is_dir()
+
+
+@pytest.mark.parametrize("vanished", [FileNotFoundError, ProcessLookupError])
+def test_gone_counts_a_child_reaped_between_the_probe_and_the_read(
+    monkeypatch: pytest.MonkeyPatch, vanished: type[OSError]
+) -> None:
+    """On Linux the child can be reaped after kill(pid, 0) succeeds and before /proc/<pid>/stat is read."""
+    assert not gone(os.getpid())
+
+    def reaped(self: Path, *args: object, **kwargs: object) -> str:
+        raise vanished(errno.ENOENT, "reaped", str(self))
+
+    def proc_exists(self: Path) -> bool:
         return True
+
+    monkeypatch.setattr(Path, "read_text", reaped)
+    monkeypatch.setattr(Path, "is_dir", proc_exists)  # a /proc filesystem exists
+    assert gone(os.getpid())
 
 
 def wait_until(condition: Callable[[], bool], seconds: float = 3) -> bool:
