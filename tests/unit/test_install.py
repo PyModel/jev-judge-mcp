@@ -1939,7 +1939,7 @@ def test_backup_retention_applies_only_after_a_successful_write(tmp_path: Path) 
         assert execute(tmp_path, agents=(target,))[0] == 0
         assert execute(tmp_path, agents=(target,), launch=PYPI_LAUNCH)[0] == 0
     for attempt in range(7):
-        launch = Launch(uvx=UVX, spec=f"jev-judge-mcp[typesafe]==1.{attempt}")
+        launch = Launch(uvx=UVX, spec=f"jev-judge-mcp==1.{attempt}")
         result = run(
             Request(
                 layout=paths, launch=launch, agents=("claude-code",), stamp=f"20990101T00000{attempt}Z", assume_yes=True
