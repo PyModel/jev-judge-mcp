@@ -37,7 +37,7 @@ RUN npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}" "@anthropic-a
 	&& node -e "require('fs').accessSync('/usr/local/lib/node_modules/pi-mcp-adapter/index.ts')"
 ENV PI_MCP_ADAPTER=/usr/local/lib/node_modules/pi-mcp-adapter/index.ts
 
-# The build context contains this checkout's wheel and its locked TypeSafe runtime dependencies.
+# The build context contains this checkout's wheel and its locked runtime dependencies.
 COPY *.whl requirements.txt /tmp/confinement/
 RUN set -- /tmp/confinement/*.whl; \
 	test "$#" -eq 1 && test -f "$1" \

@@ -241,10 +241,10 @@ only through the offline bench dry run. A live bench will require `run_confined`
 A/B startup uses the confined provider probe. The host agent-prompt preflight and wheel-installed
 host interpreter are removed. Confined Pi runs use the adapter packaged in the agent image.
 
-## Amendment 2026-11-19: build the image with the locked TypeSafe runtime
+## Amendment 2026-11-19: build the image with the locked runtime
 
 `make confinement-image` creates a temporary Docker context with one wheel from the current
-checkout and a hashed export of the TypeSafe runtime from `uv.lock`. The image requires a
+checkout and a hashed export of the runtime dependencies from `uv.lock`. The image requires a
 single wheel, installs the exported runtime with hash enforcement, and installs the wheel
 with dependency resolution disabled. This ties the installed dependency versions to the lock
 used for the build.

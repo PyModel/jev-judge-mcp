@@ -59,7 +59,7 @@ def test_roadmap_mcp_row_quotes_the_pyproject_pin() -> None:
     assert f"`{pin}`" in row
 
 
-def test_confinement_image_stages_a_fresh_wheel_and_locked_typesafe_runtime(tmp_path: Path) -> None:
+def test_confinement_image_stages_a_fresh_wheel_and_locked_runtime(tmp_path: Path) -> None:
     shutil.copy(ROOT / "Makefile", tmp_path)
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -72,7 +72,7 @@ def test_confinement_image_stages_a_fresh_wheel_and_locked_typesafe_runtime(tmp_
         "  build) shift; out=dist; while [[ $# -gt 0 ]]; do\n"
         '    if [[ "$1" == --out-dir ]]; then out=$2; shift; fi; shift; done\n'
         '    touch "$out/jev_judge_mcp-current.whl" ;;\n'
-        '  export) printf "%s\\n" "$*" > export-args; printf "typesafe-sdk==1 --hash=sha256:abc\\n" ;;\n'
+        '  export) printf "%s\\n" "$*" > export-args; printf "httpx==1 --hash=sha256:abc\\n" ;;\n'
         "  *) exit 2 ;;\n"
         "esac\n"
     )
@@ -100,10 +100,8 @@ def test_confinement_image_stages_a_fresh_wheel_and_locked_typesafe_runtime(tmp_
         "--frozen",
         "--no-dev",
         "--no-emit-project",
-        "--extra",
-        "typesafe",
     ]
-    assert (tmp_path / "requirements").read_text() == "typesafe-sdk==1 --hash=sha256:abc\n"
+    assert (tmp_path / "requirements").read_text() == "httpx==1 --hash=sha256:abc\n"
     assert stale.exists()
     assert not Path((tmp_path / "context").read_text().strip()).exists()
 
@@ -114,7 +112,7 @@ def test_confinement_install_consumes_one_wheel_and_locked_requirements(tmp_path
     before, command = dockerfile.rsplit("\nRUN ", 1)
     copy = next(line for line in reversed(before.splitlines()) if line.startswith("COPY "))
     destination = shlex.split(copy)[-1].rstrip("/")
-    (tmp_path / "requirements.txt").write_text("typesafe-sdk==1 --hash=sha256:abc\n")
+    (tmp_path / "requirements.txt").write_text("httpx==1 --hash=sha256:abc\n")
     for i in range(count):
         (tmp_path / f"jev_judge_mcp-0.{i}-py3-none-any.whl").touch()
     result = subprocess.run(
