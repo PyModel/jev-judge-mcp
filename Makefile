@@ -17,7 +17,7 @@ endif
 
 .PHONY: ci sync lint typecheck unit property policy-coverage contract parity policy-replay security build smoke eval eval-live security-live ab load load_canary hooks ci-linux confinement-adversarial confinement-image
 
-ci: sync lint typecheck unit property policy-coverage contract parity policy-replay security build smoke eval load_canary
+ci: sync lint typecheck unit property contract parity policy-replay security build smoke eval load_canary
 
 # ci.yml syncs the extras before every job; a fresh worktree needs the same before typecheck.
 sync:
@@ -44,15 +44,17 @@ lint:
 typecheck:
 	uv run pyright
 
+# ROADMAP P3: the policy package keeps 100% branch coverage from its unit and property tests alone.
+# The one run that measures the package enforces it, so the unit suite is not run twice.
 unit:
-	$(PYTEST) tests/unit --cov=jev_judge_mcp --cov-report=term-missing
+	$(PYTEST) tests/unit tests/property --cov=jev_judge_mcp --cov-branch --cov-report=term-missing
+	uv run coverage report --include='*/jev_judge_mcp/policy/*' --fail-under=100 --show-missing
 
 property:
 	$(PYTEST) tests/property
 
-# ROADMAP P3: the policy package keeps 100% branch coverage from its unit and property tests alone.
-policy-coverage:
-	$(PYTEST) tests/unit tests/property -q --cov=jev_judge_mcp.policy --cov-branch --cov-fail-under=100 --cov-report=term-missing
+# The policy coverage gate by its own name: `make unit` measures and enforces it.
+policy-coverage: unit
 
 contract:
 	$(PYTEST) tests/contract

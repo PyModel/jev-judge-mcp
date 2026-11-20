@@ -75,7 +75,6 @@ jobs:
           checksum: "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
       - run: uv sync --locked --all-extras
       - run: make property
-      - run: make policy-coverage
 
   contract:
     runs-on: ubuntu-latest
