@@ -7,7 +7,8 @@ import sys
 from collections.abc import Callable
 from importlib.metadata import version
 from pathlib import Path
-from threading import Event
+from threading import Event, Timer
+from time import monotonic
 
 import anyio
 import pytest
@@ -369,6 +370,42 @@ async def test_a_failed_refresh_reports_an_unverifiable_installation(
         server.refresh(tasks)
     assert "cannot verify" in str(server.field()["notice"])
     assert "installation observation failed" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_a_blocked_refresh_never_holds_shutdown_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _git(tmp_path, HEAD, None)
+    module = _start(tmp_path)
+    monkeypatch.setattr(identity, "__file__", str(module))
+    server = identity.ServerVersion()
+    entered = Event()
+    release = Event()
+    finished = Event()
+
+    def blocked(_: Path) -> tuple[tuple[str, int, int, int], ...]:
+        entered.set()
+        release.wait()
+        finished.set()
+        return ()  # differs from the startup stamp, so a result that landed would report a restart
+
+    monkeypatch.setattr(identity, "_source_stamp", blocked)
+    backstop = Timer(5, release.set)  # frees a scan the lifespan waited on, so a failure cannot hang the suite
+    backstop.start()
+    try:
+        started = monotonic()
+        async with anyio.create_task_group() as tasks:
+            server.refresh(tasks)
+            while not entered.is_set():
+                await anyio.sleep(0.01)
+            tasks.cancel_scope.cancel()
+        assert monotonic() - started < 2  # the lifespan's cancellation abandons the scan instead of waiting on it
+        release.set()
+        assert finished.wait(2)
+        await anyio.sleep(0.05)
+        assert server.field()["restart_needed"] is False  # the abandoned scan finished, and its result was discarded
+    finally:
+        release.set()
+        backstop.cancel()
 
 
 @pytest.mark.anyio
