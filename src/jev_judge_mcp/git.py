@@ -60,7 +60,10 @@ def run(
     byte_cap: int = _CAPTURE_BYTES,
     ignore_user_config: bool = False,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run fixed Git policy in cwd; only explicit caller options can select a different Git directory."""
+    """Run fixed Git policy in cwd; only explicit caller options can select a different Git directory.
+
+    `-C` alone selects cwd: the process starts in the server's directory, and a relative cwd resolves
+    against it once (ADR-0088)."""
     source = os.environ if env is None else env
     clean = {name: value for name, value in source.items() if not name.startswith("GIT_")}
     clean.update(GIT_NO_LAZY_FETCH="1", GIT_ALLOW_PROTOCOL="")
@@ -80,7 +83,6 @@ def run(
             f"core.hooksPath={os.devnull}",
             *args,
         ],
-        cwd=cwd,
         env=clean,
         timeout_seconds=GIT_TIMEOUT_SECONDS,
         byte_cap=byte_cap,

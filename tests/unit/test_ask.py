@@ -227,6 +227,7 @@ async def test_a_disabled_or_unallowlisted_command_refuses_before_any_file_is_re
 def test_scout_012_command_receives_only_operating_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     from unittest.mock import patch
 
+    from jev_judge_mcp import process
     from jev_judge_mcp.tools.ask_state import scrubbed_environment
     from jev_judge_mcp.tools.base import ToolError
 
@@ -235,6 +236,6 @@ def test_scout_012_command_receives_only_operating_environment(monkeypatch: pyte
     env = scrubbed_environment(Settings())
     assert "BENIGN_PARENT_MARKER" not in env
     assert env["LANG"] == "C" and env["PATH"]
-    with patch("subprocess.Popen", side_effect=OSError("fixture")) as spawn, pytest.raises(ToolError):
+    with patch.object(process, "_launch", side_effect=OSError("fixture")) as spawn, pytest.raises(ToolError):
         run_command([os.path.abspath(sys.executable)], 1, 100, guard=TEST_GUARD)
-    assert spawn.call_args.kwargs["env"] == env
+    assert spawn.call_args.args[1] == env

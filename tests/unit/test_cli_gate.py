@@ -613,3 +613,10 @@ def test_gate_reports_a_missing_tests_file_by_type(tmp_path: Path, monkeypatch: 
     result = cli.run_gate(["--diff", "HEAD~1", "--claims", "claims.json", "--tests", "missing.log"], provider=provider)
     assert (result.exit_code, result.error_code) == (2, "not_found")
     assert not provider.requests
+
+
+def test_a_missing_git_directory_is_gits_own_failure(tmp_path: Path) -> None:
+    """Commands start in the server's directory and Git selects its own with -C (ADR-0088)."""
+    missing = tmp_path / "missing"
+    assert git.run(missing, "status").returncode == 128
+    assert git.range_has_changes(missing, "HEAD~1..HEAD") is None

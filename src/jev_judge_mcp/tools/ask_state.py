@@ -401,7 +401,6 @@ def run_command(
         else:
             result = capture(
                 argv,
-                cwd=Path.cwd(),
                 env=env if env is not None else scrubbed_environment(),
                 timeout_seconds=timeout_seconds,
                 byte_cap=byte_cap,

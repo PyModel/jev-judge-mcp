@@ -10,6 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from jev_judge_mcp import process
 from jev_judge_mcp.policy.guard import FINAL_BLOCK_NOTICE
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.tools import TOOLS, Runtime, Toolset
@@ -102,7 +103,7 @@ async def test_hostile_command_text_is_argv_data(command: str, line: str, tmp_pa
 
 async def test_a_command_that_cannot_spawn_is_a_typed_refusal(tmp_path: Any, monkeypatch: Any) -> None:
     spawn = Mock(side_effect=OSError("fixture spawn error"))
-    monkeypatch.setattr(subprocess, "Popen", spawn)
+    monkeypatch.setattr(process, "_launch", spawn)
     provider = FakeProvider({"q0": {"noul": 0.9}})
     outcome = await _run(provider, "head notes.txt", tmp_path, monkeypatch)
     assert outcome.is_error
@@ -143,12 +144,12 @@ async def test_the_child_env_lacks_configured_secrets_and_output_redacts_them(tm
     url_fixture = "opaque-fixture-password"
     monkeypatch.setenv("TYPESAFE_BASE_URL", f"https://username:{url_fixture}@fixture.invalid")
     (tmp_path / "notes.txt").write_text(f"literal={key}\npassword={url_fixture}\n")
-    spawn = Mock(wraps=subprocess.Popen)
-    monkeypatch.setattr(subprocess, "Popen", spawn)
+    spawn = Mock(wraps=process._launch)  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(process, "_launch", spawn)
     provider = FakeProvider({"q0": {"noul": 0.9}})
     outcome = await _run(provider, "head notes.txt", tmp_path, monkeypatch)
     assert not outcome.is_error, outcome.text
-    assert "JEV_API_KEY" not in spawn.call_args.kwargs["env"]
+    assert "JEV_API_KEY" not in spawn.call_args.args[1]
     output = str(provider.requests[0][0])
     assert key not in output
     assert "literal=[redacted]" in output
@@ -191,7 +192,7 @@ async def test_named_store_is_refused_before_review_and_execution(
         store.write_text("benign fixture")
     monkeypatch.setenv("JEV_MCP_KEY_FILE", str(store))
     runner = Mock(side_effect=AssertionError("unexpected execution"))
-    monkeypatch.setattr(subprocess, "Popen", runner)
+    monkeypatch.setattr(process, "_launch", runner)
     provider = FakeProvider({"q0": {"noul": 0.9}})
     outcome = await _run(provider, f'{program} {prefix}"ordinary fixture" notes.txt', tmp_path, monkeypatch)
     assert outcome.error_code == "command_refused"
@@ -323,7 +324,7 @@ async def test_command_allowlist_refuses_without_provider_or_execution(
     command: str, allowed_option: str | None, tmp_path: Any, monkeypatch: Any
 ) -> None:
     spawn = Mock(side_effect=OSError("execution intercepted"))
-    monkeypatch.setattr(subprocess, "Popen", spawn)
+    monkeypatch.setattr(process, "_launch", spawn)
     provider = FakeProvider({"q0": {"noul": 0.9}})
     outcome = await _run(provider, command, tmp_path, monkeypatch)
     assert outcome.error_code == "command_refused", outcome.text
