@@ -1,8 +1,8 @@
 """MCP entry point: stdio by default, Streamable HTTP when `JEV_MCP_TRANSPORT=streamable-http`.
 
-stdout belongs to the protocol. Logging goes to stderr, and SIGINT/SIGTERM stop the
-server and exit 0 without a traceback. `install`, `hook`, and `doctor` are dispatched
-before the server starts.
+stdout belongs to the protocol. Logging goes to stderr. SIGINT and SIGTERM stop the server
+with exit status 0. Uvicorn can log requests cancelled at its shutdown deadline. `install`,
+`hook`, and `doctor` are dispatched before the server starts.
 """
 
 import contextlib
@@ -11,6 +11,7 @@ import gc
 import io
 import logging
 import os
+import select
 import signal
 import socket
 import sys
@@ -24,11 +25,12 @@ import uvicorn
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.shared.exceptions import MCPError
 from mcp.types import INTERNAL_ERROR, CallToolResult, CancelledNotificationParams, NotificationParams, TextContent, Tool
+from pydantic import ValidationError
 from starlette.types import ASGIApp
 
 from jev_judge_mcp import keyfile
 from jev_judge_mcp.errors import RedactingFilter, Redactor
-from jev_judge_mcp.http_auth import BearerTokenMiddleware, ensure_http_access_control
+from jev_judge_mcp.http_auth import BearerTokenMiddleware, ensure_http_access_control, require_http_token
 from jev_judge_mcp.identity import ServerVersion, reported_version
 from jev_judge_mcp.instructions import server_instructions
 from jev_judge_mcp.serialize import stringify
@@ -141,34 +143,34 @@ HTTP_BIND_ATTEMPTS = 4
 HTTP_BIND_BUDGET_S = 2.0
 """Seconds those tries may take, waits included. The port never changes."""
 
+HTTP_CONNECT_PROBE_MS = 50
+"""Maximum time for an asynchronous local TCP probe to report its result."""
+
+
+HTTP_GRACEFUL_SHUTDOWN_SECONDS = 2
+"""Time in seconds for in-flight HTTP requests to drain before uvicorn cancels them."""
+
 
 def http_port_in_use_message(port: int) -> str:
     """The one line a taken Streamable HTTP port exits with (ADR-0055)."""
     return f"JEV_MCP_HTTP_PORT={port} is already in use; set JEV_MCP_HTTP_PORT to a free port"
 
 
-def ensure_http_port_free(
+def http_serve_sockets(
     settings: Settings,
     *,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
-) -> None:
-    """Refuse a Streamable HTTP start whose port stays taken (ADR-0055).
-
-    The configured port is tried `HTTP_BIND_ATTEMPTS` times, and the waits stay inside
-    `HTTP_BIND_BUDGET_S`. It is never replaced with another port. Any other bind error fails on
-    the first try. Runs before logging and before the server listens, so a refusal is one line on
-    stderr, exit 1, and no listener or worker. stdio never binds. A host that does not resolve is
-    left to the server. `sleep` and `clock` are the production clock unless a test injects them.
-    """
+) -> list[socket.socket] | None:
+    """Hold the configured HTTP port before warming workers (ADR-0055). stdio never binds."""
     if settings.transport != "streamable-http":
-        return
+        return None
     host, port = settings.http_host, settings.http_port
     deadline = clock() + HTTP_BIND_BUDGET_S
     gap = HTTP_BIND_BUDGET_S / (HTTP_BIND_ATTEMPTS - 1)
     for attempt in range(1, HTTP_BIND_ATTEMPTS + 1):
         try:
-            _bind_http(host, port)
+            return _bind_http_sockets(host, port)
         except OSError as exc:
             if exc.errno != errno.EADDRINUSE:
                 raise
@@ -176,46 +178,46 @@ def ensure_http_port_free(
             if attempt == HTTP_BIND_ATTEMPTS or remaining <= 0:
                 raise SystemExit(http_port_in_use_message(port)) from None
             sleep(min(gap, remaining))
-        else:
-            return
     raise SystemExit(http_port_in_use_message(port))
 
 
 def _bind_http_sockets(host: str, port: int) -> list[socket.socket]:
-    """Bind every address `host` resolves to and keep the sockets open. A taken port raises
-    `EADDRINUSE`; a host that does not resolve returns no sockets.
-
-    `SO_REUSEADDR` matches the socket uvicorn binds on POSIX. Without it, a restart while the
-    previous process's connections sit in `TIME_WAIT` looks taken, and the process exits even
-    though the real bind would succeed. A socket that is still listening is still `EADDRINUSE`.
-    `IPV6_V6ONLY` stays set so an IPv6 probe does not also claim the IPv4 port.
-    """
+    """Listen on every address `host` resolves to, with cleanup on a partial bind."""
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror:
-        return []
+        raise SystemExit("JEV_MCP_HTTP_HOST does not resolve to a listen address") from None
     sockets: list[socket.socket] = []
-    for family, socktype, proto, _canon, sockaddr in infos:
-        sock = socket.socket(family, socktype, proto)
-        try:
+    with contextlib.ExitStack() as opened:
+        for family, socktype, proto, _canon, sockaddr in infos:
+            host_ip = sockaddr[0]
+            # Reuse permits TIME_WAIT restarts. Where reuse allows wildcard overlap,
+            # a connected or still-pending probe must refuse the bind.
+            if not sys.platform.startswith("linux") and isinstance(host_ip, str):
+                loopback = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host_ip)  # noqa: S104
+                address = (loopback, *sockaddr[1:]) if loopback else sockaddr
+                pending = (errno.EINPROGRESS, errno.EALREADY, errno.EWOULDBLOCK, errno.EINTR)
+                with socket.socket(family, socktype, proto) as probe:
+                    probe.setblocking(False)
+                    error = probe.connect_ex(address)
+                    if error in pending:
+                        poller = select.poll()
+                        poller.register(probe, select.POLLOUT)
+                        if poller.poll(HTTP_CONNECT_PROBE_MS):
+                            error = probe.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                if error in (0, errno.EISCONN, errno.ECONNRESET, *pending):
+                    raise OSError(errno.EADDRINUSE, os.strerror(errno.EADDRINUSE))
+                if error != errno.ECONNREFUSED:
+                    raise OSError(error, os.strerror(error))
+            sock = opened.enter_context(socket.socket(family, socktype, proto))
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             if family == socket.AF_INET6:
                 sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
             sock.bind(sockaddr)
-        except BaseException:
-            sock.close()
-            for opened in sockets:
-                opened.close()
-            raise
-        sockets.append(sock)
+            sock.listen(socket.SOMAXCONN)
+            sockets.append(sock)
+        opened.pop_all()
     return sockets
-
-
-def _bind_http(host: str, port: int) -> None:
-    """The probe form of `_bind_http_sockets`: bind every address, then close. A taken port
-    raises `EADDRINUSE`."""
-    for sock in _bind_http_sockets(host, port):
-        sock.close()
 
 
 def warn_unexpanded_references() -> None:
@@ -273,68 +275,47 @@ async def _stop_on_signal(stop: Callable[[], None]) -> None:
             return
 
 
-async def serve(server: JevMCPServer, settings: Settings) -> None:
+async def serve(server: JevMCPServer, settings: Settings, sockets: list[socket.socket] | None = None) -> None:
     try:
         # The served pool starts warm (ADR-0058): filled before any transport runs, so a burst
         # arrival never pays worker startup inside a call's deadline.
         await server.toolset.awarm()
-        await _serve(server, settings)
+        await _serve(server, settings, sockets)
     finally:
         with anyio.CancelScope(shield=True):
             await server.toolset.aclose()
 
 
-async def _serve(server: JevMCPServer, settings: Settings) -> None:
-    sockets = http_serve_sockets(settings)
+async def _serve(server: JevMCPServer, settings: Settings, sockets: list[socket.socket] | None) -> None:
     async with anyio.create_task_group() as tg:
         if settings.transport == "stdio":
             tg.start_soon(_stop_on_signal, tg.cancel_scope.cancel)
             await server.run_stdio_async()
         else:
+            assert sockets is not None
             app = http_asgi_app(server, settings)
             # log_config=None: uvicorn's loggers propagate to the stderr root handler.
-            config = uvicorn.Config(app, host=settings.http_host, port=settings.http_port, log_config=None)
+            config = uvicorn.Config(
+                app,
+                host=settings.http_host,
+                port=settings.http_port,
+                log_config=None,
+                timeout_graceful_shutdown=HTTP_GRACEFUL_SHUTDOWN_SECONDS,
+            )
             http = _UvicornServer(config)
 
             def stop() -> None:
                 http.should_exit = True
 
             tg.start_soon(_stop_on_signal, stop)
-            # The sockets this process bound are the ones uvicorn listens on: nothing can take
-            # the port between the startup gate and the listen (ADR-0055 amendment).
             await http.serve(sockets=sockets)
         tg.cancel_scope.cancel()
 
 
-def http_serve_sockets(settings: Settings) -> list[socket.socket] | None:
-    """The listening sockets `serve` hands to uvicorn, or `None` when uvicorn binds its own.
-
-    The startup gate (`ensure_http_port_free`) probes and closes; this bind is the listen. A
-    port taken in that gap refuses here with ADR-0055's one line, not with uvicorn's own bind
-    error. Any other bind error fails as itself, and a host that does not resolve is left to
-    the server, exactly as in the gate.
-    """
-    if settings.transport != "streamable-http":
-        return None
-    try:
-        return _bind_http_sockets(settings.http_host, settings.http_port) or None
-    except OSError as exc:
-        if exc.errno == errno.EADDRINUSE:
-            raise SystemExit(http_port_in_use_message(settings.http_port)) from None
-        raise
-
-
 def http_asgi_app(server: JevMCPServer, settings: Settings) -> ASGIApp:
-    """The Streamable HTTP app, behind the bearer-token gate when a token is set (ADR-0050).
-
-    The Host/Origin (DNS-rebinding) validation is the SDK's own: automatic exactly on the
-    protected hosts (`127.0.0.1`, `localhost`, `::1`), untouched here. Every other host must have
-    passed the startup gate, and the token is its access control.
-    """
-    app: ASGIApp = server.streamable_http_app(host=settings.http_host)
-    if settings.http_token is not None:
-        app = BearerTokenMiddleware(app, settings.http_token)
-    return app
+    """Require a bearer token in addition to the SDK's automatic Host/Origin checks."""
+    token = require_http_token(settings)
+    return BearerTokenMiddleware(server.streamable_http_app(host=settings.http_host), token)
 
 
 def freeze_startup_heap() -> None:
@@ -415,7 +396,7 @@ Streamable HTTP instead (JEV_MCP_HTTP_PORT, JEV_MCP_HTTP_TOKEN).
 
 subcommands:
   install            install the server into a harness config
-  hook               run the completion gate hook
+  hook               run gate, screen, or compact-cut
   doctor             diagnose the local setup
   setup              store the TypeSafe API key
   calibrate          advisory threshold fitting on your labeled rows (offline)
@@ -449,6 +430,8 @@ def _configure_process_logging(settings: Settings) -> None:
 def _run_hook(argv: list[str]) -> int:
     from jev_judge_mcp.hook import fail_open_or_ask, hook_required
 
+    annotates = argv[1:3] in (["hook", "screen"], ["hook", "compact-cut"])
+    required = not annotates and hook_required(os.environ)
     try:
         stdin = sys.stdin
         if isinstance(stdin, io.TextIOWrapper):
@@ -463,15 +446,44 @@ def _run_hook(argv: list[str]) -> int:
         validate_secrets_redactable(settings)
         _configure_process_logging(settings)
         return completion_hook_main(argv[2:])
+    except ValidationError as error:
+        sys.stderr.write(_settings_error(error) + "\n")
+        return fail_open_or_ask(required, "", "invalid settings")
     except Exception:
-        # A diagnostic must not expose stdin, credentials, or invalid settings values.
-        annotates = argv[1:3] in (["hook", "screen"], ["hook", "compact-cut"])
-        return fail_open_or_ask(
-            not annotates and hook_required(os.environ), "jev-judge-mcp hook: unexpected error\n", "hook failed"
-        )
+        return fail_open_or_ask(required, "jev-judge-mcp hook: unexpected error\n", "hook failed")
+
+
+def _settings_error(error: ValidationError) -> str:
+    problems: list[str] = []
+    for issue in error.errors(include_input=False, include_context=True, include_url=False):
+        variable = issue["loc"][0]
+        kind = issue["type"]
+        if kind.startswith("bool"):
+            accepted = "true/false, 1/0, yes/no, on/off, y/n or t/f"
+        elif variable == "JEV_MCP_HTTP_PORT":
+            accepted = "an integer from 1 through 65535"
+        elif kind.startswith("int") or variable in ("JEV_MCP_MAX_INFLIGHT", "JEV_MCP_CACHE_MAX_ENTRIES"):
+            accepted = "a non-negative integer"
+        elif variable == "JEV_MCP_CACHE_TTL_SECONDS":
+            accepted = "a non-negative number of seconds"
+        elif kind == "literal_error":
+            accepted = str(issue.get("ctx", {}).get("expected", "a supported value"))
+        elif variable in ("JEV_MCP_KEY_FILE", "JEV_MCP_CACHE_DIR", "XDG_CACHE_HOME", "XDG_CONFIG_HOME"):
+            accepted = "a filesystem path with a resolvable home directory"
+        else:
+            accepted = "text"
+        problems.append(f"{variable} must be {accepted}")
+    return "Invalid settings: " + ", ".join(problems)
 
 
 def main() -> None:
+    try:
+        _main()
+    except ValidationError as error:
+        raise SystemExit(_settings_error(error)) from None
+
+
+def _main() -> None:
     # The platform gate covers the installer, the command hook, the doctor, setup, and the server.
     # No arguments keep stdout protocol-only (ADR-0032, ADR-0033).
     require_posix()
@@ -500,29 +512,36 @@ def main() -> None:
 
         sys.exit(calibrate_main(sys.argv[2:]))
     if judge_requested(sys.argv) or gate_cli_requested(sys.argv):
-        subcommand_settings = load_settings()
-        ensure_secrets_redactable(subcommand_settings)
+        from jev_judge_mcp.cli import emit_configuration_failure, gate_main, judge_main
+
+        judge = judge_requested(sys.argv)
+        args = sys.argv[2:]
+        tool = (args[0] if args else "") if judge else "jev_gate"
+        try:
+            subcommand_settings = load_settings()
+        except ValidationError as error:
+            sys.exit(emit_configuration_failure(tool, "invalid_arguments", _settings_error(error)))
+        try:
+            validate_secrets_redactable(subcommand_settings)
+        except ValueError as error:
+            sys.exit(emit_configuration_failure(tool, "auth", str(error)))
         _configure_process_logging(subcommand_settings)
-    if judge_requested(sys.argv):
-        from jev_judge_mcp.cli import judge_main
-
-        sys.exit(judge_main(sys.argv[2:]))
-    if gate_cli_requested(sys.argv):
-        from jev_judge_mcp.cli import gate_main
-
-        sys.exit(gate_main(sys.argv[2:]))
+        sys.exit((judge_main if judge else gate_main)(args))
     settings = load_settings()
     # The gates run before logging and before anything binds, so a misconfiguration is one clear
     # line on stderr and a non-zero exit, never a live unauthenticated server (ADR-0050).
-    ensure_secrets_redactable(settings)
     ensure_http_access_control(settings)
-    ensure_http_port_free(settings)
-    _configure_process_logging(settings)
-    server = build_server(settings)
-    # One line, the same identity `initialize` will report (ADR-0054). Not logged by `--version`.
-    logger.info("identity %s %s", server.name, server.version)
-    freeze_startup_heap()
-    anyio.run(serve, server, settings)
+    ensure_secrets_redactable(settings)
+    with contextlib.ExitStack() as listeners:
+        sockets = http_serve_sockets(settings)
+        for sock in sockets or ():
+            listeners.enter_context(sock)
+        _configure_process_logging(settings)
+        server = build_server(settings)
+        # One line, the same identity `initialize` will report (ADR-0054).
+        logger.info("identity %s %s", server.name, server.version)
+        freeze_startup_heap()
+        anyio.run(serve, server, settings, sockets)
     # A stdin read abandoned at shutdown still blocks one of anyio's non-daemon worker threads, and
     # interpreter exit would join it until the client closes stdin. `serve` has already closed
     # everything the server owns: the wire wrapper flushed every frame it wrote, and flushing fd 1

@@ -6,6 +6,8 @@ It does not scrub caller-written tool state. The command hook is the caller.
 
 import re
 
+from jev_judge_mcp.credential_literal import _mixed_case_with_digit  # pyright: ignore[reportPrivateUsage]
+
 REDACTED = "[redacted]"
 
 # `$NAME`, `${NAME}`, `%NAME%`, or `$(...)`. The judge still sees the name.
@@ -19,10 +21,13 @@ def _compile(pattern: str, *, ignore_case: bool = False) -> re.Pattern[str]:
     return re.compile(pattern, flags)
 
 
+_SK_TOKEN = _compile(r"(?<![A-Za-z0-9_-])(sk-(?:proj-|ant-|live-|test-)?)([A-Za-z0-9_-]{16,})")
+
 # Group 1 is kept. Group 2 is the secret. A secret stops at a quote or a
 # backslash so the `\` of a JSON `\"` stays in the text.
 _RULES: tuple[re.Pattern[str], ...] = (
-    _compile(r"(\b[a-z][\w+.-]*://[^\s:/@]+:)([^\s@/]+)(?=@)", ignore_case=True),
+    # Visit each scheme-like run once. Every candidate start in the run has the same suffix.
+    _compile(r"((?<![\w+.-])(?>[\w+.-]*?\b[a-z])[\w+.-]*://[^\s:/@]+:)([^\s@/]+)(?=@)", ignore_case=True),
     _compile(
         r"((?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|api-key|x-auth-token)"
         r""""?\s*:\s*"?(?:(?:bearer|basic|token|digest)\s+)?)([^"'\n\\]+)""",
@@ -43,12 +48,12 @@ _RULES: tuple[re.Pattern[str], ...] = (
         r"""private[_-]?key|credentials?)["']?\s*[:=]\s*"?)([^\s"',;}\\]+)""",
         ignore_case=True,
     ),
-    _compile(r"(sk-(?:proj-|ant-|live-|test-)?)([A-Za-z0-9_-]{16,})"),
-    _compile(r"(gh[pousr]_|github_pat_)([A-Za-z0-9_]{20,})"),
+    _SK_TOKEN,
+    _compile(r"(?<![A-Za-z0-9_-])(gh[pousr]_|github_pat_)([A-Za-z0-9_]{20,})"),
     _compile(r"(xox[abdeporsu]-)([A-Za-z0-9-]{10,})"),
     _compile(r"(AKIA)([0-9A-Z]{16})\b"),
-    _compile(r"(AIza)([\w-]{30,})"),
-    _compile(r"(eyJ)([\w-]{8,}\.[\w-]{8,}\.[\w-]+)"),
+    _compile(r"(?<![A-Za-z0-9_-])(AIza)([\w-]{30,})"),
+    _compile(r"(?<![A-Za-z0-9_-])(eyJ)([\w-]{8,}\.[\w-]{8,}\.[\w-]+)"),
 )
 
 
@@ -60,7 +65,7 @@ def _replace(match: re.Match[str]) -> str:
     keep = match.group(1)
     secret = match.group(2)
     assert keep is not None and secret is not None
-    if _is_reference(secret):
+    if _is_reference(secret) or (match.re is _SK_TOKEN and not _mixed_case_with_digit(match)):
         return match.group(0)
     return keep + REDACTED
 

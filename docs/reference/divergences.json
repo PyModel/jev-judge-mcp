@@ -206,7 +206,7 @@
       ],
       "fixtures": [],
       "reference_behavior": "The reference is stdio-only; no HTTP transport exists to compare against.",
-      "python_behavior": "streamable-http is an experimental Tier B extension for 1.0: localhost by default, no reliability contract of its own (provider attempts are bounded per ADR-0057, but there is no admission control and no load-tested limits), promotion requires P9 evidence. A bind outside 127.0.0.1/localhost/::1 additionally requires a bearer token (http-bearer-token-required)."
+      "python_behavior": "streamable-http is an experimental Tier B extension for 1.0: localhost by default, no reliability contract of its own (provider attempts are bounded per ADR-0057, but there is no admission control and no load-tested limits), promotion requires P9 evidence. Every bind requires a bearer token (http-bearer-token-required)."
     },
     {
       "id": "http-bearer-token-required",
@@ -220,7 +220,7 @@
       ],
       "fixtures": [],
       "reference_behavior": "The reference is stdio-only; no HTTP transport exists to compare against.",
-      "python_behavior": "streamable-http refuses to start without JEV_MCP_HTTP_TOKEN on any host the SDK does not protect (exactly 127.0.0.1, localhost, ::1 get Host/Origin validation; every other host, including other loopback spellings, requires the token); with a token set, every request must carry Authorization: Bearer or get 401 with WWW-Authenticate: Bearer before any MCP handling."
+      "python_behavior": "streamable-http requires an expanded JEV_MCP_HTTP_TOKEN of at least 32 characters on all bind addresses including loopback. Every request must carry Authorization: Bearer or get 401 with WWW-Authenticate: Bearer before any MCP handling."
     },
     {
       "id": "same-origin-redirects-only",

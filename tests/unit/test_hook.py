@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import sys
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import ClassVar, NoReturn, override
@@ -19,7 +20,6 @@ from jev_judge_mcp.errors import Redactor
 from jev_judge_mcp.hook import (
     DESTRUCTIVE_INTENT_THRESHOLD,
     ESTIMATED_CONFIDENCE_THRESHOLD,
-    PROVIDER_TIMEOUT_SECONDS,
     REPORTED_CONFIDENCE_THRESHOLD,
     SECRET_CONTENT_THRESHOLD,
     main,
@@ -166,7 +166,9 @@ def test_confident_irreversible_bash_denies_and_never_allows(capsys: pytest.Capt
         }
     }
     assert provider.closed
-    assert provider.timeout == PROVIDER_TIMEOUT_SECONDS
+    fragment = _HOOK.parents[2] / "docs" / "harness" / "gate.hooks.json"
+    timeout = json.loads(fragment.read_text())["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"]
+    assert provider.timeout is not None and 0 < provider.timeout < timeout
     assert provider.model == resolve_model(load_settings())
     state = provider.states[0]
     assert isinstance(state, str)
@@ -541,9 +543,11 @@ def test_redacts_the_action_and_keeps_operator_state(capsys: pytest.CaptureFixtu
         }
     )
     description = f"deploy with token {_SK}"
+    targets = "build/task-runner-cache-2024-old build/risk-cache-2024-for-removal build/disk-cache-2024-for-removal"
+    ordinary = "build/sk-runner-cache-2024-old"
     code = main(
         ["gate"],
-        text=_event("echo hi", description=description),
+        text=_event(f"rm -rf {targets} {ordinary}", description=description),
         environ={"JEV_GATE_STATE": _STATE},
         provider=provider,
     )
@@ -553,6 +557,7 @@ def test_redacts_the_action_and_keeps_operator_state(capsys: pytest.CaptureFixtu
     assert isinstance(state, str)
     assert _STATE in state
     assert "working in: /work/repo" in state
+    assert targets in state and ordinary in state
     assert "Permission mode: acceptEdits" in state
     assert "[redacted]" in state
     assert _SK not in state
@@ -796,12 +801,29 @@ def test_posix_guard_covers_the_hook(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_required_flag_asks_when_stdin_exceeds_the_utf16_cap(capsys: pytest.CaptureFixture[str]) -> None:
     from jev_judge_mcp.hook import HOOK_INPUT_UNITS
 
-    body = json.dumps({"tool_name": "Bash", "tool_input": "\U0001f600" * HOOK_INPUT_UNITS})
+    body = json.dumps({"tool_name": "Bash", "tool_input": "\U0001f600" * HOOK_INPUT_UNITS}, ensure_ascii=False)
     code = main(["gate"], text=body, environ={"JEV_HOOK_REQUIRED": "1"})
     captured = capsys.readouterr()
     assert code == 0
     assert json.loads(captured.out)["hookSpecificOutput"]["permissionDecision"] == "ask"
     assert "allow" not in captured.out
+
+
+@pytest.mark.parametrize("required", ["0", "1"])
+def test_gate_sizes_stdin_before_planning(required: str, capsys: pytest.CaptureFixture[str]) -> None:
+    body = _event("a." * 100_000)
+    provider = RecordingProvider({})
+    started = time.monotonic()
+    code = main(["gate"], text=body, environ={"JEV_HOOK_REQUIRED": required}, provider=provider)
+    assert time.monotonic() - started < 0.1
+    captured = capsys.readouterr()
+    assert code == 0
+    assert not provider.states
+    if required == "1":
+        assert json.loads(captured.out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+        assert "allow" not in captured.out
+    else:
+        assert captured.out == "" and "input_too_large" in captured.err
 
 
 def test_required_flag_asks_on_bad_stdin_instead_of_silence(capsys: pytest.CaptureFixture[str]) -> None:
@@ -849,7 +871,8 @@ def test_cli_hook_contains_unexpected_failures(
     if setting is not None:
         monkeypatch.setenv(*setting)
     provider = _run_cli_hook(monkeypatch, required, command, body)
-    _assert_contained(capsys, required, command)
+    expected_setting = "JEV_MCP_LOG_LEVEL" if setting and setting[0] == "JEV_MCP_LOG_LEVEL" else None
+    _assert_contained(capsys, required, command, invalid_setting=expected_setting)
     assert provider.states == []
 
 
@@ -880,14 +903,20 @@ def _run_cli_hook(
     return provider
 
 
-def _assert_contained(capsys: pytest.CaptureFixture[str], required: bool, command: list[str]) -> None:
+def _assert_contained(
+    capsys: pytest.CaptureFixture[str], required: bool, command: list[str], *, invalid_setting: str | None = None
+) -> None:
     captured = capsys.readouterr()
     if required and command[-1] in {"gate", "completion-hook"}:
         assert json.loads(captured.out)["hookSpecificOutput"]["permissionDecision"] == "ask"
-        assert captured.err == ""
+        if invalid_setting is None:
+            assert captured.err == ""
     else:
         assert captured.out == ""
         assert captured.err.count("\n") == 1
+    if invalid_setting is not None:
+        assert captured.err.count("\n") == 1
+        assert f"{invalid_setting} must be" in captured.err and "INFO" in captured.err
 
 
 @pytest.mark.parametrize("required", [False, True], ids=["optional", "required"])
@@ -963,3 +992,14 @@ def test_hook_gate_with_bad_stdin_and_an_invalid_env_fails_open(
     assert captured.out == ""
     assert "stdin was not hook-event JSON" in captured.err
     assert "ValidationError" not in captured.err
+
+
+def test_help_describes_the_hook_subcommands(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "--help"])
+    server_main()
+    lines = [line.split(maxsplit=1) for line in capsys.readouterr().out.splitlines() if line.startswith("  ")]
+    commands = dict(lines)
+    assert all(name in commands["hook"] for name in ("gate", "screen", "compact-cut"))
+    assert "completion gate" in commands["completion-hook"]

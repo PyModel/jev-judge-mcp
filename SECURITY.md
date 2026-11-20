@@ -12,6 +12,14 @@ Telemetry keeps recent spans in memory. By default, they contain counts, flags a
 
 Configured secret values are removed from error text and from log records. The set is every `SecretStr` field on Settings plus a stored API key when one is read (`docs/adr/0017-redaction-secret-set-derives-from-settings-schema.md`).
 
+## HTTP access
+
+HTTP startup requires an expanded `JEV_MCP_HTTP_TOKEN` of at least 32 characters on every
+bind address. Every request must send it in `Authorization: Bearer`. Any process that can reach
+the endpoint and obtain the token can call tools, spend the configured provider credential, and
+access files within tool limits. With `JEV_ASK_COMMANDS=1`, the same caller can run allowlisted
+commands. Treat the token as a credential even on loopback. [ADR-0050](docs/adr/0050-http-access-control-refuses-unauthenticated-start.md)
+
 ## Keys
 
 A key configured in the environment is redacted from logs and from provider error text, so it is not logged. If `TYPESAFE_API_KEY` is unset or empty, the resolver falls back to the key file `jev-judge-mcp setup` writes (`~/.config/jev-mcp/key`, or `JEV_MCP_KEY_FILE`), mode 0600 inside a 0700 directory (`docs/adr/0046-stored-api-key-and-setup-command.md`). A non-empty key in the variable takes precedence. The server accepts a regular key file owned by its effective user or root with no group or other write permission, including qualifying read-only mounts. A file that fails these checks is ignored with a warning that names the path and reason. The stored value is redacted like a configured secret. The server does not read a dotenv file. It never prints the stored value; `jev-judge-mcp doctor` reports only present or absent.

@@ -79,3 +79,18 @@ ask with it, never as a judgment). And the matcher read the whole line as one ar
   each simple command, skipping git's global options (`-C <dir>`, `-c <k=v>`, `--git-dir=…`, and
   the flag-only ones) before the subcommand. `git pushback`, `GIT PUSH`, and a line that does
   not tokenize still abstain.
+
+## Amendment (2026-11-19): configuration failures and local evidence
+
+Settings validation reports all invalid variable names and accepted values on one stderr line.
+For `gate` and `judge`, bad settings also produce a DecisionResult with
+`error.code=invalid_arguments` and a short configured secret produces one with
+`error.code=auth`. Both exit 1.
+
+Relative evidence paths resolve from the caller's working directory and remain confined to the
+checkout. A claims file can be a JSON object containing `request` and `claims`, or plain text
+with one claim per non-empty line. The standalone command still requires `--request` for plain
+text. The completion hook supplies the matched, redacted Bash command as the default request.
+Its 90-second harness limit reserves ten seconds for startup, cleanup, and the reply. Evidence
+preparation consumes part of the remaining 80-second judgment budget, which includes provider
+retries.

@@ -3,16 +3,20 @@
 import json
 import re
 import subprocess
+from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
+import anyio
 import pytest
 
 from jev_judge_mcp import cli, git
 from jev_judge_mcp.cli import completion_hook_main, completion_matches, gate_main, judge_main
+from jev_judge_mcp.domain import JsonValue, Question
 from jev_judge_mcp.git import split_unified
 from jev_judge_mcp.limits import GATE
+from jev_judge_mcp.providers.base import Evaluation
 from tests.support.git_repo import repo_with_diff
 from tests.support.jev import FakeProvider
 
@@ -64,16 +68,40 @@ def test_gate_refuses_an_undecodable_tests_file(
     del tests
 
 
-def test_judge_refuses_a_secret_too_short_to_redact(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(("args", "tool"), [(["judge", "jev_verify"], "jev_verify"), (["gate"], "jev_gate")])
+@pytest.mark.parametrize(
+    ("variable", "value", "code", "message"),
+    [
+        ("JEV_API_KEY", "xy", "auth", "shorter than"),
+        ("JEV_MCP_HTTP_PORT", "invalid-port-value", "invalid_arguments", "integer"),
+    ],
+)
+def test_cli_configuration_failures_emit_a_result(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    args: list[str],
+    tool: str,
+    variable: str,
+    value: str,
+    code: str,
+    message: str,
+) -> None:
     import sys
 
     from jev_judge_mcp.server import main
 
-    monkeypatch.setenv("TYPESAFE_API_KEY", "x" * 2)
-    monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", "judge", "jev_verify"])
+    monkeypatch.setenv(variable, value)
+    monkeypatch.setattr(sys, "argv", ["jev-judge-mcp", *args])
     with pytest.raises(SystemExit) as caught:
         main()
-    assert "shorter than" in str(caught.value)
+    assert caught.value.code == 1
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert result["tool"] == tool and result["action"] is None and result["unresolved"]
+    assert result["error"]["code"] == code
+    assert variable in result["error"]["message"] and message in result["error"]["message"]
+    assert len(captured.err.splitlines()) == 1 and variable in captured.err
+    assert value not in captured.out + captured.err
 
 
 def test_judge_usage_is_exit_2(capsys: pytest.CaptureFixture[str]) -> None:
@@ -276,7 +304,7 @@ def test_cli_gate_does_not_mark_a_file_it_read_self_reported(
     raw = (repo / "tests.log").read_bytes()
     provider = FakeProvider({})
     code = gate_main(
-        ["--diff", "HEAD~1", "--claims", "claims.json", "--tests", "tests.log"],
+        ["--diff", "HEAD~1", "--claims", "../claims.json", "--tests", "../tests.log"],
         provider=provider,
     )
     captured = capsys.readouterr()
@@ -432,3 +460,65 @@ def test_required_completion_hook_asks_when_the_gate_handler_crashes(
     assert code == 0
     assert captured.out and _ask(captured.out) == "ask"
     assert "(internal)" in captured.out
+
+
+def test_gate_resolves_evidence_from_the_shell_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = repo_with_diff(tmp_path)
+    directory = repo / "subdir"
+    directory.mkdir()
+    (directory / "here.log").write_text("2 passed\n", encoding="utf-8")
+    monkeypatch.chdir(directory)
+    provider = FakeProvider({})
+    assert gate_main(["--diff", "HEAD~1", "--claims", "../claims.json", "--tests", "here.log"], provider=provider) == 0
+    assert provider.requests
+    assert json.loads(capsys.readouterr().out)["error"] is None
+
+
+@pytest.mark.parametrize("claims_format", ["json", "plain"])
+def test_completion_claims_and_provider_deadline(
+    claims_format: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = repo_with_diff(tmp_path)
+    monkeypatch.chdir(repo)
+    claim = "The patch sets x to 2."
+    second = "The tests report one passing case."
+    claims = repo / "claims.json"
+    if claims_format == "plain":
+        claims.write_text(f"{claim}\n\n{second}\n", encoding="utf-8")
+    remaining = float("inf")
+
+    class DeadlineProvider(FakeProvider):
+        @override
+        async def evaluate(
+            self, state: JsonValue, questions: Mapping[str, Question], model: str, timeout: float | None
+        ) -> Evaluation:
+            nonlocal remaining
+            remaining = anyio.current_effective_deadline() - anyio.current_time()
+            return await super().evaluate(state, questions, model, timeout)
+
+    provider = DeadlineProvider({})
+    assert (
+        completion_hook_main(
+            [],
+            text=_PUSH,
+            environ={
+                "JEV_COMPLETION_DIFF": "HEAD~1",
+                "JEV_COMPLETION_CLAIMS": claims.name,
+                "JEV_COMPLETION_TESTS": "tests.log",
+            },
+            provider=provider,
+        )
+        == 0
+    )
+    assert _ask(capsys.readouterr().out) == "ask"
+    state = next(state for state, _ in provider.requests if isinstance(state, dict) and "claims" in state)
+    assert claim in str(state)
+    if claims_format == "plain":
+        assert second in str(state) and "git push origin main" in str(state)
+    else:
+        assert "Set x to 2" in str(state)
+    fragment = Path(__file__).resolve().parents[2] / "docs/harness/completion.hooks.json"
+    timeout = json.loads(fragment.read_text())["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"]
+    assert 0 < remaining < timeout

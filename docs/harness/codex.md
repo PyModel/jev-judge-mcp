@@ -2,6 +2,10 @@
 
 `jev-judge-mcp install` writes the `[mcp_servers.jev]` table in `~/.codex/config.toml` (ADR-0033). The TOML shape is in the README install section. The installer does not merge or enable the command hook.
 
+For a separately configured Streamable HTTP connection, set an expanded `JEV_MCP_HTTP_TOKEN`
+of at least 32 characters on the server and send it as a bearer token on every request, including
+loopback. [HTTP setup](../../README.md#running-over-http-experimental)
+
 The command hook is not the `jev_gate` MCP tool, which stays the completion gate (ADR-0035).
 
 ## Routing skill
@@ -21,7 +25,7 @@ The hook is opt-in. It can deny or ask, and it can never allow. Empty stdout mea
 
 The judgment is routed by the event's tool name (ADR-0076). A `Bash` action is judged by two questions in one provider call: what the command would do to material in the working directory (`read_only`, `reversible`, or `irreversible`), and whether destroying work is its purpose. A `Write` or `Edit` gets two checks computed in code first: a target outside the working directory is denied before the provider is even constructed, and so is content carrying a credential literal — a well-known token format, or a quoted high-entropy value assigned to a secret-named key. Ordinary code is never a hit and is judged as written. What survives both is judged by one credential-in-content question. Any other tool name keeps the generic allow/deny question. Every deny reason names the failure and its confidence or probability, and ends with a final-block notice telling the agent not to retry, split, or reroute the action.
 
-`jev-judge-mcp install` does not merge [`gate.hooks.json`](gate.hooks.json) and does not enable it. The same fragment can be placed in `~/.codex/hooks.json` or a repo `.codex/hooks.json`. Codex runs that file after you trust it with `/hooks`. The sample command is `/absolute/path/to/jev-judge-mcp hook gate`. Real settings need the absolute path of the `jev-judge-mcp` executable. Do not use `uv run --directory`: that flag changes the working directory, so the hook judges the checkout instead of the caller's repo. `uv run --project <repo>` keeps the caller's cwd. The matcher is `Bash|Write|Edit` and the timeout is 30 seconds.
+`jev-judge-mcp install` does not merge [`gate.hooks.json`](gate.hooks.json) and does not enable it. The same fragment can be placed in `~/.codex/hooks.json` or a repo `.codex/hooks.json`. Codex runs that file after you trust it with `/hooks`. The sample command is `/absolute/path/to/jev-judge-mcp hook gate`. Real settings need the absolute path of the `jev-judge-mcp` executable. Do not use `uv run --directory`: that flag changes the working directory, so the hook judges the checkout instead of the caller's repo. `uv run --project <repo>` keeps the caller's cwd. The matcher is `Bash|Write|Edit`. The harness allows 30 seconds, with 25 for the provider call and its retries. The gate caps the event at 100,000 UTF-16 units before parsing or redacting it. An oversized event abstains by default and asks with `JEV_HOOK_REQUIRED=1`.
 
 `JEV_GATE_STATE` is the environment variable `src/jev_judge_mcp/hook.py` reads when it builds judged state. Unset, or whitespace only, it is omitted. Otherwise the stripped value is the next line after the event's cwd and permission mode, before the proposed action. `redact_action` runs on the action description and input. It does not run on `JEV_GATE_STATE`. That text is sent to the provider, so it is not a place to put a key. The hook reads no further hook variable. The thresholds — the 0.5 / 0.4 confidence floors for the effect and fallback questions, 0.7 for the destructive-intent and credential questions — are constants in `src/jev_judge_mcp/hook.py`, not environment variables.
 

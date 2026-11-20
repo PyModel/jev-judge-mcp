@@ -339,3 +339,12 @@ def test_an_unexpanded_reference_is_named_without_its_value(
     out = capsys.readouterr().out
     assert _field(out, "warning") == "TYPESAFE_API_KEY holds an unexpanded reference and counts as unset"
     assert _field(out, "key file") == "absent at /nonexistent/jev-mcp-key"
+
+
+def test_oversized_claude_settings_are_ignored(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    content = json.dumps({"permissions": {"allow": ["mcp__jev"]}})
+    (claude / "settings.json").write_text(" " * (2 * 1024 * 1024) + content)
+    assert main([], home=tmp_path, cwd=tmp_path) == 1
+    assert "no allow rules" in _field(capsys.readouterr().out, "claude")

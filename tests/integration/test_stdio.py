@@ -1,14 +1,16 @@
 """The server over stdio, spawned as a subprocess (ROADMAP P1 acceptance)."""
 
 import json
+import os
 import signal
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
 from jev_judge_mcp.identity import reported_version
-from tests.support.stdio import PROTOCOL_VERSION, StdioServer
+from tests.support.stdio import PROTOCOL_VERSION, StdioServer, server_command
 
 
 def test_initialize_negotiates_2025_06_18() -> None:
@@ -173,3 +175,73 @@ for line in sys.stdin:
         assert reply["id"] == 2
         with pytest.raises(TimeoutError):
             server.receive_until(before_start)
+
+
+def test_a_bare_carriage_return_is_json_whitespace() -> None:
+    with StdioServer() as server:
+        server.initialize()
+        stdin = server.process.stdin
+        assert stdin is not None
+        stdin.write(b'{"jsonrpc":"2.0",\r"id":2,"method":"ping"}\n')
+        stdin.flush()
+        assert server.receive(timeout=2) == {"jsonrpc": "2.0", "id": 2, "result": {}}
+
+
+@pytest.mark.parametrize(
+    ("args", "body"),
+    [
+        ([], ""),
+        (["doctor"], ""),
+        (["setup"], ""),
+        (["hook", "gate"], '{"tool_name":"Bash","tool_input":{"command":"pwd"}}'),
+        (["hook", "screen"], '{"tool_name":"Bash","tool_response":"output"}'),
+        (["completion-hook"], ""),
+    ],
+    ids=["server", "doctor", "setup", "gate-hook", "screen-hook", "completion-hook"],
+)
+@pytest.mark.parametrize(
+    ("variable", "value", "accepted"),
+    [
+        ("JEV_MCP_CACHE", "${JEV_MCP_CACHE}", "true"),
+        ("JEV_MCP_HTTP_PORT", "abc-invalid-value", "integer"),
+    ],
+)
+def test_invalid_settings_report_one_line(args: list[str], body: str, variable: str, value: str, accepted: str) -> None:
+    with StdioServer([*server_command(), *args], env={variable: value}) as server:
+        if body:
+            assert server.process.stdin is not None
+            server.process.stdin.write(body.encode())
+        server.close_stdin()
+        returncode, stderr = server.wait()
+    assert returncode == (0 if args and args[0] in ("hook", "completion-hook") else 1)
+    assert server.stdout_lines == []
+    assert len(stderr.splitlines()) == 1
+    assert variable in stderr and accepted in stderr and value not in stderr
+
+
+@pytest.mark.parametrize("args", [["doctor"], ["hook", "compact-cut"]], ids=["doctor", "compact"])
+def test_local_config_and_transcript_ignore_fifos(args: list[str], tmp_path: Path) -> None:
+    claude = tmp_path / ".claude"
+    claude.mkdir()
+    fifo = claude / "settings.json"
+    os.mkfifo(fifo)
+    with StdioServer([*server_command(), *args], env={"HOME": str(tmp_path)}, cwd=tmp_path) as server:
+        if args[0] == "hook":
+            assert server.process.stdin is not None
+            server.process.stdin.write(
+                json.dumps(
+                    {
+                        "hook_event_name": "SessionStart",
+                        "source": "compact",
+                        "transcript_path": str(fifo),
+                    }
+                ).encode()
+            )
+        server.close_stdin()
+        returncode, stderr = server.wait(timeout=4)
+    if args[0] == "doctor":
+        assert returncode == 1
+        assert b"no allow rules" in b"".join(server.stdout_lines)
+    else:
+        assert returncode == 0 and not server.stdout_lines
+    assert stderr == ""

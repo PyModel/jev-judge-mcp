@@ -11,7 +11,6 @@ import pytest
 from jev_judge_mcp.domain import JsonValue, Question, Usage
 from jev_judge_mcp.domain.questions import ChoiceQuestion
 from jev_judge_mcp.errors import Redactor
-from jev_judge_mcp.hook import PROVIDER_TIMEOUT_SECONDS
 from jev_judge_mcp.hook_compact import (
     TRANSCRIPT_TAIL_BYTES,
     TURN_UNITS_MAX,
@@ -206,7 +205,9 @@ def test_confident_pick_emits_one_line_naming_a_real_turn(capsys: pytest.Capture
         }
     }
     assert provider.closed
-    assert provider.timeout == PROVIDER_TIMEOUT_SECONDS
+    fragment = Path(__file__).resolve().parents[2] / "docs" / "harness" / "compact.hooks.json"
+    timeout = json.loads(fragment.read_text())["hooks"]["SessionStart"][0]["hooks"][0]["timeout"]
+    assert provider.timeout is not None and 0 < provider.timeout < timeout
     assert provider.questions is not None
     question = provider.questions["cut"]
     assert isinstance(question, ChoiceQuestion)

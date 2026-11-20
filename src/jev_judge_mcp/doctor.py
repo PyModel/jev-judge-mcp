@@ -15,11 +15,11 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
-import anyio
 from pydantic import SecretStr
 
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.errors import Redactor
+from jev_judge_mcp.fsutil import read_bounded
 from jev_judge_mcp.keyfile import redaction_values, stored_key, stored_key_path
 from jev_judge_mcp.policy.thresholds import (
     DEFAULT_AUTO_ACCEPT,
@@ -35,13 +35,14 @@ from jev_judge_mcp.policy.thresholds import (
     SCREEN_RELEVANCE_SKIP_BELOW,
     SCREEN_SUBSTANCE_SKIP_BELOW,
 )
-from jev_judge_mcp.providers import PRIMARY_CREDENTIAL, JevProvider, ProviderConfigError, resolve_provider
-from jev_judge_mcp.providers.resolver import KeySource, typesafe_key
+from jev_judge_mcp.providers import PRIMARY_CREDENTIAL, ProviderConfigError
+from jev_judge_mcp.providers.resolver import KeySource, select_provider, typesafe_key
 from jev_judge_mcp.settings import Settings, load_settings, unexpanded_references
 from jev_judge_mcp.tools import TOOLS
 
 _BARE_SERVER = "mcp__jev"
 _UNSET = "(unset)"
+_MAX_CLAUDE_SETTINGS_BYTES = 1_048_576
 
 ALLOW_RULES: tuple[str, ...] = tuple(f"mcp__jev__{tool.name}" for tool in TOOLS)
 
@@ -61,7 +62,7 @@ _POLICY: tuple[tuple[str, float], ...] = (
 _KNOWN_EXPLICIT = frozenset(PRIMARY_CREDENTIAL)
 
 
-def main(argv: Sequence[str] | None = None, *, home: Path | None = None, cwd: Path | None = None) -> int:
+def main(argv: Sequence[str], *, home: Path | None = None, cwd: Path | None = None) -> int:
     """Print the configuration report. Exit 0 when a provider resolves, 1 when it does not, 2 on usage."""
     parser = argparse.ArgumentParser(
         prog="jev-judge-mcp doctor",
@@ -73,7 +74,7 @@ def main(argv: Sequence[str] | None = None, *, home: Path | None = None, cwd: Pa
         ),
     )
     try:
-        parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+        parser.parse_args(list(argv))
     except SystemExit as parse_exit:
         # `--help` is a help page (exit 0), the same argparse shape `setup` and `install` print;
         # a stray argument is the usage error (exit 2).
@@ -141,19 +142,12 @@ def _line(label: str, value: str) -> str:
 
 
 def _resolve(settings: Settings) -> tuple[str | None, str | None]:
-    """Provider name, or the configuration error. Closing a resolved provider does not send."""
+    """Provider name, or the configuration error, without opening a client."""
     try:
-        provider = resolve_provider(settings)
+        provider, _ = select_provider(settings)
     except ProviderConfigError as error:
         return None, str(error)
-    try:
-        return provider.name, None
-    finally:
-        anyio.run(_close, provider)
-
-
-async def _close(provider: JevProvider) -> None:
-    await provider.aclose()
+    return provider, None
 
 
 def _via(settings: Settings, name: str | None, source: KeySource) -> str:
@@ -183,24 +177,14 @@ def _cloudflare_token_name(settings: Settings) -> str | None:
 
 def _set_names(settings: Settings) -> tuple[str, ...]:
     """Credential variable names that are non-empty. Values stay in `Settings`."""
-    names: list[str] = []
-    if _filled(settings.typesafe_api_key):
-        names.append("TYPESAFE_API_KEY")
-    if _filled(settings.openrouter_api_key):
-        names.append("OPENROUTER_API_KEY")
-    if _filled(settings.jev_cloudflare_api_token):
-        names.append("JEV_CLOUDFLARE_API_TOKEN")
-    if _filled(settings.cloudflare_api_token):
-        names.append("CLOUDFLARE_API_TOKEN")
+    names = {name for name, _ in settings.named_secrets()}
     if settings.cloudflare_account_id:
-        names.append("CLOUDFLARE_ACCOUNT_ID")
-    if _filled(settings.ai_gateway_api_key):
-        names.append("AI_GATEWAY_API_KEY")
-    if _filled(settings.jev_api_key):
-        names.append("JEV_API_KEY")
-    if _filled(settings.jev_api_base_url):
-        names.append("JEV_API_BASE_URL")
-    return tuple(names)
+        names.add("CLOUDFLARE_ACCOUNT_ID")
+    return tuple(
+        alias
+        for field in Settings.model_fields.values()
+        if isinstance(alias := field.validation_alias, str) and alias in names
+    )
 
 
 def _filled(secret: SecretStr | None) -> bool:
@@ -227,12 +211,9 @@ def _expanded(rules: Sequence[str]) -> tuple[str, ...]:
 
 def _allow_rules(path: Path) -> tuple[str, ...]:
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return ()
-    try:
-        parsed = decode_json(text)
-    except ValueError:
+        data = read_bounded(path, max_bytes=_MAX_CLAUDE_SETTINGS_BYTES, follow_symlinks=True)
+        parsed = decode_json(data.decode("utf-8"))
+    except (OSError, ValueError):
         return ()
     if not is_json_object(parsed):
         return ()

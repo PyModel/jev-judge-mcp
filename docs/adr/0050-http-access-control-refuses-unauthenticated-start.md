@@ -64,3 +64,26 @@ untouched.
   plus a forged-Host 421 on each exempt host so the SDK's protected list is pinned) and
   `tests/integration/test_http_auth.py` (a real loopback socket: refusal exits, 401/200, and
   the token's absence from stderr).
+
+## Amendment (2026-11-19): HTTP authenticates on every bind address
+
+Require `JEV_MCP_HTTP_TOKEN` on every Streamable HTTP bind, including loopback. Other local
+processes may reach a loopback listener and act with its provider credential, local read
+permissions, and enabled tools. Host and Origin validation addresses DNS rebinding and remains
+in effect where the SDK enables it. It cannot distinguish one process on the host from another.
+
+The startup gate refuses absent tokens, values shorter than 32 characters, and unexpanded
+environment references even when they meet the length floor. Errors name the setting without
+printing its value. All HTTP requests pass through the bearer middleware.
+
+This amendment supersedes the port probe in ADR-0055. Startup binds and listens within its
+existing retry budget before warming workers, then hands those open sockets to uvicorn. It sets
+`SO_REUSEADDR` on POSIX to allow restarts during `TIME_WAIT`. Linux's bind rejects live wildcard
+overlaps. On macOS and other non-Linux POSIX systems, startup makes a non-blocking connection
+probe before binding, using loopback for a wildcard address. It gives a pending probe up to 50 ms
+to report a result. A connected, reset, or still-pending probe uses the same port-taken diagnostic
+as a bind conflict. A refused connection permits the bind attempt without a retry delay. IPv6
+sockets remain IPv6-only. An unresolved address exits with a diagnostic naming `JEV_MCP_HTTP_HOST`.
+
+On SIGINT or SIGTERM, uvicorn gives active requests two seconds to finish before cancelling
+them, including any open event stream.

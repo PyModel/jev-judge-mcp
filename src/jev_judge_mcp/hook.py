@@ -28,7 +28,6 @@ from jev_judge_mcp.domain.answers import ChoiceAnswer
 from jev_judge_mcp.domain.json import decode_json, is_json_object
 from jev_judge_mcp.domain.questions import ChoiceQuestion, NoulCriteria, NoulQuestion, Question
 from jev_judge_mcp.hook_render import deny_reason, render_decision
-from jev_judge_mcp.hook_runtime import PROVIDER_TIMEOUT_SECONDS as PROVIDER_TIMEOUT_SECONDS
 from jev_judge_mcp.hook_runtime import HookFailure, judge, prepare
 from jev_judge_mcp.providers import (
     Evaluation,
@@ -157,9 +156,11 @@ def main(
     if args != ["gate"]:
         sys.stderr.write(_USAGE)
         return 2
-    body = sys.stdin.read() if text is None else text
+    body = sys.stdin.read(HOOK_INPUT_UNITS + 1) if text is None else text
     env = os.environ if environ is None else environ
     required = hook_required(env)
+    if length(body) > HOOK_INPUT_UNITS:
+        return fail_open_or_ask(required, "error.code=input_too_large\n", "input_too_large")
     try:
         parsed = decode_json(body)
     except ValueError:
@@ -179,8 +180,6 @@ def main(
         matched = _Outcome("deny", deny_reason("the written content contains a credential literal"))
         sys.stdout.write(_decision(matched) + "\n")
         return 0
-    if required and length(body) > HOOK_INPUT_UNITS:
-        return fail_open_or_ask(True, "", "input_too_large")
 
     prepared = prepare(provider, resolve=resolve_provider)
     if isinstance(prepared, HookFailure):

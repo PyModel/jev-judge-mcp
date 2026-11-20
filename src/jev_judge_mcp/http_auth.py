@@ -1,11 +1,7 @@
 """HTTP access control for the Streamable HTTP transport (ADR-0050).
 
-A host the SDK does not protect is reachable without Host/Origin validation, and every tool call
-spends the operator's provider credential, so the transport refuses to start unauthenticated:
-only `127.0.0.1`, `localhost`, and `::1` are exempt from the token requirement, and every other
-host requires `JEV_MCP_HTTP_TOKEN`. With a token configured, it is required on every request
-whatever the host. stdio is untouched. Nothing here prints the token: error text names the
-variables, never their values.
+Every HTTP request uses the operator's bearer token, including requests on loopback.
+Startup errors name the setting without exposing its value.
 """
 
 import hmac
@@ -16,54 +12,33 @@ from starlette.datastructures import Headers
 from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from jev_judge_mcp.settings import Settings
+from jev_judge_mcp.settings import Settings, is_unexpanded_reference
 
 logger = logging.getLogger("jev_judge_mcp.http_auth")
 
 HTTP_TOKEN_MIN_LENGTH = 32
 """Shortest acceptable `JEV_MCP_HTTP_TOKEN`: long enough that online guessing is hopeless."""
 
-PROTECTED_HOSTS = ("127.0.0.1", "localhost", "::1")
-"""Hosts exempt from the token: exactly the literals the SDK itself protects.
-
-The SDK auto-enables Host/Origin (DNS-rebinding) validation only when the configured host equals
-one of these strings (`mcp` `streamable_http_app`: `host in ("127.0.0.1", "localhost", "::1")`).
-Any other loopback spelling — `127.9.9.9`, `0:0:0:0:0:0:0:1` — gets neither mechanism, so it
-requires the token (ADR-0050). A pinning test fails CI if the SDK's list ever changes.
-"""
-
 _GENERATE_TOKEN = 'python -c "import secrets; print(secrets.token_urlsafe(32))"'  # noqa: S105 — an operator command, not a credential
 
 
-def is_protected_host(host: str) -> bool:
-    """True only for a host the SDK protects with Host/Origin validation (ADR-0050)."""
-    return host in PROTECTED_HOSTS
-
-
 def ensure_http_access_control(settings: Settings) -> None:
-    """Refuse to start an HTTP server that would run without access control (ADR-0050).
+    """Require a valid bearer token before the HTTP transport starts (ADR-0050)."""
+    if settings.transport == "streamable-http":
+        require_http_token(settings)
 
-    Runs before anything binds, so a misconfiguration is a non-zero exit with a clear error, not a
-    live unauthenticated service. stdio never enters the gates. A configured token shorter than
-    `HTTP_TOKEN_MIN_LENGTH` is refused on any host: it would be the only thing standing between
-    the network and the operator's credential.
-    """
-    if settings.transport != "streamable-http":
-        return
+
+def require_http_token(settings: Settings) -> SecretStr:
     token = settings.http_token
-    if token is not None and len(token.get_secret_value()) < HTTP_TOKEN_MIN_LENGTH:
-        raise SystemExit(
-            f"JEV_MCP_HTTP_TOKEN is shorter than {HTTP_TOKEN_MIN_LENGTH} characters; refusing to start. "
-            f"Generate a token with: {_GENERATE_TOKEN}"
-        )
-    if token is None and not is_protected_host(settings.http_host):
-        raise SystemExit(
-            f"JEV_MCP_HTTP_HOST={settings.http_host} has neither Host/Origin validation (the SDK grants "
-            f"that only to {', '.join(PROTECTED_HOSTS)}) nor a token, so the HTTP transport would expose "
-            "an unauthenticated server that spends the provider credential. Set JEV_MCP_HTTP_TOKEN to a "
-            f"secret of at least {HTTP_TOKEN_MIN_LENGTH} characters to require a bearer token on every "
-            f"request. Generate one with: {_GENERATE_TOKEN}"
-        )
+    if token is None:
+        problem = f"is required for HTTP and must be at least {HTTP_TOKEN_MIN_LENGTH} characters"
+    elif is_unexpanded_reference(token.get_secret_value()):
+        problem = "holds an unexpanded environment reference"
+    elif len(token.get_secret_value()) < HTTP_TOKEN_MIN_LENGTH:
+        problem = f"is shorter than {HTTP_TOKEN_MIN_LENGTH} characters"
+    else:
+        return token
+    raise SystemExit(f"JEV_MCP_HTTP_TOKEN {problem}; refusing to start. Generate a token with: {_GENERATE_TOKEN}")
 
 
 class BearerTokenMiddleware:

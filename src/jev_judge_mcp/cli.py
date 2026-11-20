@@ -12,6 +12,7 @@ import shlex
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,7 @@ from jev_judge_mcp.keyfile import redaction_values, stored_key_path
 from jev_judge_mcp.limits import GATE
 from jev_judge_mcp.policy import POLICY_VERSION
 from jev_judge_mcp.providers import JevProvider
+from jev_judge_mcp.redact_action import redact_action
 from jev_judge_mcp.serialize import stringify
 from jev_judge_mcp.settings import load_settings
 from jev_judge_mcp.text import length
@@ -37,6 +39,12 @@ from jev_judge_mcp.tools import TOOLS, Runtime, Toolset, gate_range
 from jev_judge_mcp.tools.base import ToolError, code_of
 from jev_judge_mcp.tools.file_state import is_secret_store, pinned_directory, resolve_scoped
 from jev_judge_mcp.tools.toolset import ToolOutcome
+
+COMPLETION_HARNESS_TIMEOUT_SECONDS = 90.0
+"""Command timeout in the shipped completion hook fragment."""
+
+COMPLETION_PROCESS_MARGIN_SECONDS = 10.0
+"""Time reserved for interpreter startup, cleanup, and emitting the hook response."""
 
 SCHEMA_VERSION = 1
 _USAGE_JUDGE = "jev-judge-mcp judge: usage: jev-judge-mcp judge <tool>\n"
@@ -87,7 +95,7 @@ def gate_main(argv: Sequence[str], *, provider: JevProvider | None = None) -> in
     return _emit(run_gate(argv, provider=provider))
 
 
-def run_gate(argv: Sequence[str], *, provider: JevProvider | None = None) -> Decision:
+def run_gate(argv: Sequence[str], *, provider: JevProvider | None = None, deadline: float | None = None) -> Decision:
     """In-process gate. Does not write stdout. The completion hook reads this; `gate_main` emits it."""
     try:
         options = _gate_options(argv)
@@ -97,7 +105,7 @@ def run_gate(argv: Sequence[str], *, provider: JevProvider | None = None) -> Dec
         arguments = _gate_arguments(options)
     except CliError as error:
         return _failure(error.code, str(error), tool="jev_gate", exit_code=error.exit_code)
-    return _run_tool("jev_gate", arguments, provider=provider, tests_read_from_file=True)
+    return _run_tool("jev_gate", arguments, provider=provider, tests_read_from_file=True, deadline=deadline)
 
 
 def calibrate_main(argv: Sequence[str]) -> int:
@@ -108,9 +116,6 @@ def calibrate_main(argv: Sequence[str]) -> int:
 
 
 def _gate_options(argv: Sequence[str]) -> dict[str, str]:
-    if not argv or (argv[0].startswith("-") and argv[0] not in ("--diff", "--claims", "--tests", "--request")):
-        if argv and argv[0] in ("-h", "--help"):
-            raise CliError("invalid_arguments", _USAGE_GATE.strip(), exit_code=2)
     options: dict[str, str] = {}
     index = 0
     flags = {"--diff", "--claims", "--tests", "--request"}
@@ -167,7 +172,7 @@ def _repo_root() -> Path:
 
 def _read_evidence(name: str, repo: Path, key: Path, units: int) -> str:
     """CLI evidence is strict UTF-8. Validate and read the same bounded file descriptor."""
-    path = resolve_scoped(name, repo)
+    path = resolve_scoped(str(Path.cwd() / name), repo)
     if is_secret_store(path, key):
         raise CliError("secret_file", "refusing a credential store", exit_code=2)
     ceiling = 3 * units  # maximum UTF-8 bytes per UTF-16 unit
@@ -227,13 +232,18 @@ def _claims(text: str, request: str | None) -> tuple[str, list[str]]:
 
 
 def _run_tool(
-    name: str, arguments: Mapping[str, object], *, provider: JevProvider | None, tests_read_from_file: bool = False
+    name: str,
+    arguments: Mapping[str, object],
+    *,
+    provider: JevProvider | None,
+    tests_read_from_file: bool = False,
+    deadline: float | None = None,
 ) -> Decision:
     known = {tool.name for tool in TOOLS}
     if name not in known:
         return _failure("invalid_arguments", f"unknown tool {name}", tool=name, exit_code=2)
     try:
-        outcome = anyio.run(_execute, name, dict(arguments), provider, tests_read_from_file)
+        outcome = anyio.run(_execute, name, dict(arguments), provider, tests_read_from_file, deadline)
     except Exception as error:
         return _failure(code_of(error), str(error), tool=name)
     if outcome.is_error:
@@ -253,11 +263,18 @@ def _run_tool(
 
 
 async def _execute(
-    name: str, arguments: dict[str, Any], provider: JevProvider | None, tests_read_from_file: bool
+    name: str,
+    arguments: dict[str, Any],
+    provider: JevProvider | None,
+    tests_read_from_file: bool,
+    deadline: float | None,
 ) -> ToolOutcome:
     toolset = Toolset(_runtime(provider, tests_read_from_file=tests_read_from_file), TOOLS)
     try:
-        return await toolset.execute(name, arguments)
+        remaining = None if deadline is None else max(0, deadline - time.monotonic())
+        with anyio.move_on_after(remaining):
+            return await toolset.execute(name, arguments)
+        raise ToolError("completion hook judgment deadline expired", code="timeout")
     finally:
         await toolset.aclose()
 
@@ -267,6 +284,11 @@ def _runtime(provider: JevProvider | None, *, tests_read_from_file: bool) -> Run
     if provider is None:
         return Runtime(settings, tests_read_from_file=tests_read_from_file)
     return Runtime(settings, provider_factory=lambda _settings: provider, tests_read_from_file=tests_read_from_file)
+
+
+def emit_configuration_failure(tool: str, code: str, message: str) -> int:
+    sys.stderr.write(message + "\n")
+    return _emit(_failure(code, message, tool=tool))
 
 
 def _emit(decision: Decision) -> int:
@@ -530,6 +552,7 @@ def completion_hook_main(
     if list(argv):
         sys.stderr.write("jev-judge-mcp completion-hook: usage: jev-judge-mcp completion-hook\n")
         return 2
+    deadline = time.monotonic() + COMPLETION_HARNESS_TIMEOUT_SECONDS - COMPLETION_PROCESS_MARGIN_SECONDS
     body = sys.stdin.read() if text is None else text
     env = os.environ if environ is None else environ
     required = hook_required(env)
@@ -539,7 +562,8 @@ def completion_hook_main(
         return fail_open_or_ask(required, "error.code=invalid_arguments\n", "stdin was not hook-event JSON")
     if not is_json_object(parsed):
         return fail_open_or_ask(required, "", "stdin was not hook-event JSON")
-    if not completion_matches(command_from_hook_event(parsed)):
+    command = command_from_hook_event(parsed)
+    if not completion_matches(command):
         return 0
     claims = env.get("JEV_COMPLETION_CLAIMS")
     tests = env.get("JEV_COMPLETION_TESTS")
@@ -551,7 +575,11 @@ def completion_hook_main(
         sys.stderr.write("jev-judge-mcp completion-hook: nothing to gate; the push sends no commits\n")
         return 0
     try:
-        decision = run_gate(["--diff", diff, "--claims", claims, "--tests", tests], provider=provider)
+        decision = run_gate(
+            ["--diff", diff, "--claims", claims, "--tests", tests, "--request", redact_action(command)],
+            provider=provider,
+            deadline=deadline,
+        )
     except Exception:
         return fail_open_or_ask(required, "error.code=provider\n", "provider")
     if decision.exit_code != 0:

@@ -11,6 +11,17 @@ import pytest
 from tests.support.stdio import INITIALIZE, PROTOCOL_VERSION, StdioServer
 from tests.support.workers import worker_pids
 
+TOKEN = "integration-token-" + "x" * 32
+HEADERS = {"Accept": "application/json, text/event-stream", "Authorization": f"Bearer {TOKEN}"}
+
+
+def http_env(port: int) -> dict[str, str]:
+    return {
+        "JEV_MCP_TRANSPORT": "streamable-http",
+        "JEV_MCP_HTTP_PORT": str(port),
+        "JEV_MCP_HTTP_TOKEN": TOKEN,
+    }
+
 
 def free_port() -> int:
     with socket.socket() as sock:
@@ -19,17 +30,22 @@ def free_port() -> int:
         return port
 
 
-def post_initialize(url: str) -> dict[str, object]:
+def initialize(url: str) -> httpx.Response:
     deadline = time.monotonic() + 15
     while True:
         try:
-            response = httpx.post(url, json=INITIALIZE, headers={"Accept": "application/json, text/event-stream"})
+            response = httpx.post(url, json=INITIALIZE, headers=HEADERS)
             break
         except httpx.ConnectError:
             if time.monotonic() > deadline:
                 raise
             time.sleep(0.1)
     response.raise_for_status()
+    return response
+
+
+def post_initialize(url: str) -> dict[str, object]:
+    response = initialize(url)
     data = next(line[len("data: ") :] for line in response.text.splitlines() if line.startswith("data: "))
     message: dict[str, object] = json.loads(data)
     return message
@@ -38,20 +54,10 @@ def post_initialize(url: str) -> dict[str, object]:
 def test_http_serves_skill_resources_and_prompts() -> None:
     """Resources and prompts are the same handlers on HTTP as on stdio (ADR-0071)."""
     port = free_port()
-    env = {"JEV_MCP_TRANSPORT": "streamable-http", "JEV_MCP_HTTP_PORT": str(port)}
     url = f"http://127.0.0.1:{port}/mcp"
-    headers = {"Accept": "application/json, text/event-stream"}
-    with StdioServer(env=env) as server:
-        deadline = time.monotonic() + 15
-        while True:
-            try:
-                init_response = httpx.post(url, json=INITIALIZE, headers=headers)
-                break
-            except httpx.ConnectError:
-                if time.monotonic() > deadline:
-                    raise
-                time.sleep(0.1)
-        init_response.raise_for_status()
+    headers = HEADERS.copy()
+    with StdioServer(env=http_env(port)) as server:
+        init_response = initialize(url)
         session = init_response.headers.get("mcp-session-id")
         if session:
             headers = {**headers, "mcp-session-id": session}
@@ -83,8 +89,7 @@ def test_http_serves_skill_resources_and_prompts() -> None:
 @pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM], ids=["SIGINT", "SIGTERM"])
 def test_http_initialize_and_clean_shutdown(signum: signal.Signals) -> None:
     port = free_port()
-    env = {"JEV_MCP_TRANSPORT": "streamable-http", "JEV_MCP_HTTP_PORT": str(port)}
-    with StdioServer(env=env) as server:
+    with StdioServer(env=http_env(port)) as server:
         reply = post_initialize(f"http://127.0.0.1:{port}/mcp")
         server.process.send_signal(signum)
         returncode, stderr = server.wait()
@@ -96,6 +101,27 @@ def test_http_initialize_and_clean_shutdown(signum: signal.Signals) -> None:
     assert returncode == 0
     assert "Traceback" not in stderr
     assert stdout == b""
+
+
+def test_sigterm_shuts_down_an_open_get_stream() -> None:
+    port = free_port()
+    url = f"http://127.0.0.1:{port}/mcp"
+    with StdioServer(env=http_env(port)) as server:
+        init = initialize(url)
+        headers = {
+            **HEADERS,
+            "Mcp-Session-Id": init.headers["mcp-session-id"],
+            "MCP-Protocol-Version": PROTOCOL_VERSION,
+        }
+        httpx.post(
+            url, json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=headers
+        ).raise_for_status()
+        with httpx.stream("GET", url, headers={**headers, "Accept": "text/event-stream"}, timeout=4) as stream:
+            assert stream.status_code == 200
+            assert stream.headers["content-type"].startswith("text/event-stream")
+            server.process.send_signal(signal.SIGTERM)
+            returncode, _ = server.wait(timeout=4)
+        assert returncode == 0
 
 
 def _port_is_free(port: int) -> bool:
@@ -117,7 +143,7 @@ def test_a_taken_port_exits_with_one_line_and_leaves_nothing() -> None:
     holder.listen(1)
     port: int = holder.getsockname()[1]
     try:
-        with StdioServer(env={"JEV_MCP_TRANSPORT": "streamable-http", "JEV_MCP_HTTP_PORT": str(port)}) as server:
+        with StdioServer(env=http_env(port)) as server:
             returncode, stderr = server.wait()
             stdout = b"".join(server.stdout_lines)
     finally:
@@ -136,8 +162,8 @@ def test_http_lone_surrogate_escape_is_refused_with_a_reply() -> None:
     not dropped (divergence `lone-surrogate-http-parse-error`; stdio serves it as the reference does)."""
     port = free_port()
     url = f"http://127.0.0.1:{port}/mcp"
-    headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
-    with StdioServer(env={"JEV_MCP_TRANSPORT": "streamable-http", "JEV_MCP_HTTP_PORT": str(port)}) as server:
+    headers = {**HEADERS, "Content-Type": "application/json"}
+    with StdioServer(env=http_env(port)) as server:
         post_initialize(url)
         frame = '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"x\\ud83dy","arguments":{}}}'
         response = httpx.post(url, content=frame.encode(), headers=headers)

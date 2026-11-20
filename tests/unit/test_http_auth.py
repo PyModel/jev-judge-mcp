@@ -17,7 +17,6 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from jev_judge_mcp.http_auth import (
     HTTP_TOKEN_MIN_LENGTH,
-    PROTECTED_HOSTS,
     BearerTokenMiddleware,
     ensure_http_access_control,
 )
@@ -27,10 +26,8 @@ from tests.support.stdio import INITIALIZE, server_env
 
 TOKEN = "test-token-" + "x" * 32
 
-# Exactly the literals the SDK protects with Host/Origin validation — and only these.
-PROTECTED = ["localhost", "127.0.0.1", "::1"]
-# Every other host needs the token, including other 127.0.0.0/8 addresses and other ::1 spellings.
-TOKEN_REQUIRED = [
+LOOPBACK = ["localhost", "127.0.0.1", "::1"]
+OTHER_HOSTS = [
     "127.9.9.9",
     "0:0:0:0:0:0:0:1",
     "0.0.0.0",
@@ -67,13 +64,10 @@ def http_settings(monkeypatch: pytest.MonkeyPatch, *, token: str | None) -> Sett
 def token_app(monkeypatch: pytest.MonkeyPatch, token: str) -> tuple[BearerTokenMiddleware, Starlette]:
     """The middleware over the real SDK app, wired as `_serve` does, with the inner app for its lifespan."""
     settings = http_settings(monkeypatch, token=token)
-    inner = build_server(settings).streamable_http_app(host=settings.http_host)
-    return BearerTokenMiddleware(inner, SecretStr(token)), inner
-
-
-def bare_app(monkeypatch: pytest.MonkeyPatch) -> Starlette:
-    settings = http_settings(monkeypatch, token=None)
-    return build_server(settings).streamable_http_app(host=settings.http_host)
+    wrapped = http_asgi_app(build_server(settings), settings)
+    assert isinstance(wrapped, BearerTokenMiddleware)
+    assert isinstance(wrapped.app, Starlette)
+    return wrapped, wrapped.app
 
 
 async def post(app: ASGIApp, payload: object, headers: dict[str, str] | None = None) -> httpx.Response:
@@ -89,13 +83,14 @@ async def post(app: ASGIApp, payload: object, headers: dict[str, str] | None = N
 # --- the startup decision ---
 
 
-@pytest.mark.parametrize("host", PROTECTED)
-def test_sdk_protected_hosts_bind_without_a_token(monkeypatch: pytest.MonkeyPatch, host: str) -> None:
+@pytest.mark.parametrize("host", LOOPBACK)
+def test_loopback_without_a_token_refuses_to_start(monkeypatch: pytest.MonkeyPatch, host: str) -> None:
     settings = settings_with(monkeypatch, JEV_MCP_TRANSPORT="streamable-http", JEV_MCP_HTTP_HOST=host)
-    ensure_http_access_control(settings)
+    with pytest.raises(SystemExit, match="JEV_MCP_HTTP_TOKEN"):
+        ensure_http_access_control(settings)
 
 
-@pytest.mark.parametrize("host", TOKEN_REQUIRED)
+@pytest.mark.parametrize("host", OTHER_HOSTS)
 def test_unprotected_hosts_without_a_token_refuse_to_start(monkeypatch: pytest.MonkeyPatch, host: str) -> None:
     settings = settings_with(monkeypatch, JEV_MCP_TRANSPORT="streamable-http", JEV_MCP_HTTP_HOST=host)
     with pytest.raises(SystemExit, match="JEV_MCP_HTTP_TOKEN"):
@@ -214,37 +209,21 @@ async def test_a_non_bearer_scheme_is_rejected(monkeypatch: pytest.MonkeyPatch) 
 
 @pytest.mark.anyio
 async def test_loopback_default_keeps_host_and_origin_validation(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The loopback default without a token is unchanged: forged Host/Origin never reach the tools."""
-    app = bare_app(monkeypatch)
-    async with app.router.lifespan_context(app):
-        forged_host = await post(app, INITIALIZE, headers={"Host": "evil.example"})
+    app, inner = token_app(monkeypatch, TOKEN)
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    async with inner.router.lifespan_context(inner):
+        forged_host = await post(app, INITIALIZE, headers={**auth, "Host": "evil.example"})
         assert forged_host.status_code == 421
-        forged_origin = await post(app, INITIALIZE, headers={"Origin": "http://evil.example"})
+        forged_origin = await post(app, INITIALIZE, headers={**auth, "Origin": "http://evil.example"})
         assert forged_origin.status_code == 403
-        normal = await post(app, INITIALIZE)
+        normal = await post(app, INITIALIZE, headers=auth)
         assert normal.status_code == 200
 
 
-@pytest.mark.anyio
-@pytest.mark.parametrize("host", PROTECTED_HOSTS)
-async def test_each_exempt_host_is_actually_protected_by_the_sdk(monkeypatch: pytest.MonkeyPatch, host: str) -> None:
-    """Pins the SDK's auto-enabled Host/Origin list: every host exempt from the token must answer a
-    forged Host with 421, in process and without binding. If the SDK's list changes, the exemption
-    must change with it (ADR-0050).
-    """
-    settings = settings_with(monkeypatch, JEV_MCP_TRANSPORT="streamable-http", JEV_MCP_HTTP_HOST=host)
-    assert settings.http_token is None
-    ensure_http_access_control(settings)
-    app = http_asgi_app(build_server(settings), settings)
-    assert isinstance(app, Starlette)
-    async with app.router.lifespan_context(app):
-        forged = await post(app, INITIALIZE, headers={"Host": "evil.example"})
-        assert forged.status_code == 421
-
-
-def test_http_asgi_app_wraps_only_when_a_token_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_http_asgi_app_requires_a_token(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = http_settings(monkeypatch, token=None)
-    assert isinstance(http_asgi_app(build_server(settings), settings), Starlette)
+    with pytest.raises(SystemExit, match="JEV_MCP_HTTP_TOKEN"):
+        http_asgi_app(build_server(settings), settings)
     settings = http_settings(monkeypatch, token=TOKEN)
     wrapped = http_asgi_app(build_server(settings), settings)
     assert isinstance(wrapped, BearerTokenMiddleware)
@@ -277,13 +256,12 @@ async def test_a_websocket_handshake_is_refused_and_lifespan_passes_through(monk
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "192.0.2.1"])
 def test_an_unexpanded_token_is_refused_not_dropped(monkeypatch: pytest.MonkeyPatch, host: str) -> None:
-    """A `${...}` token the harness never expanded is a short token, refused, never an unset one that
-    would let a loopback bind serve without auth."""
+    """An unexpanded environment reference is refused even above the token length floor."""
     settings = settings_with(
         monkeypatch,
         JEV_MCP_TRANSPORT="streamable-http",
         JEV_MCP_HTTP_HOST=host,
-        JEV_MCP_HTTP_TOKEN="${env:JEV_MCP_HTTP_TOKEN}",
+        JEV_MCP_HTTP_TOKEN="${env:LONG_CONFIGURED_HTTP_TOKEN_VARIABLE}",
     )
-    with pytest.raises(SystemExit, match="JEV_MCP_HTTP_TOKEN"):
+    with pytest.raises(SystemExit, match=r"JEV_MCP_HTTP_TOKEN.*unexpanded"):
         ensure_http_access_control(settings)

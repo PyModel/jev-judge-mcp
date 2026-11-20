@@ -28,7 +28,13 @@ from jev_judge_mcp.providers import (
 )
 from jev_judge_mcp.settings import Settings, load_settings
 
-PROVIDER_TIMEOUT_SECONDS = 30.0
+HOOK_HARNESS_TIMEOUT_SECONDS = 30.0
+"""Command timeout shared by the shipped gate, screen, and compact hook fragments."""
+
+HOOK_PROCESS_MARGIN_SECONDS = 5.0
+"""Time reserved for process startup, event handling, and writing the hook output."""
+
+PROVIDER_TIMEOUT_SECONDS = HOOK_HARNESS_TIMEOUT_SECONDS - HOOK_PROCESS_MARGIN_SECONDS
 """Bound on a hook process's provider call. Retries run inside it (ADR-0057); whatever survives the
 budget is still a failure the hook renders as unreachable."""
 

@@ -347,7 +347,7 @@ the same defaults as unset variables. Path settings expand a leading `~`.
 | `JEV_MCP_CACHE_MAX_ENTRIES` | `4096` | cache entry cap; a store past it evicts the oldest entries first (`0` disables) |
 | `JEV_MCP_CACHE_TTL_SECONDS` | `604800` | cache entry age in seconds before it stops replaying (`0` disables) |
 | `JEV_MCP_TRANSPORT` | `stdio` | `streamable-http` is experimental and binds `JEV_MCP_HTTP_HOST:JEV_MCP_HTTP_PORT`, default `127.0.0.1:8088`. Port 8000 is often already taken, so it is not the default |
-| `JEV_MCP_HTTP_TOKEN` | unset | bearer token for the HTTP transport; required on every request, and required for any non-loopback `JEV_MCP_HTTP_HOST` |
+| `JEV_MCP_HTTP_TOKEN` | unset | bearer token for HTTP startup and every HTTP request, including loopback; at least 32 characters |
 | `JEV_MCP_LOG_LEVEL` | `INFO` | case-insensitive log level for stderr |
 | `JEV_STUDY_USAGE_PROVENANCE` | off | set to `1` to include `usage.reported` in tool results |
 | `JEV_MCP_MAX_INFLIGHT` | `0` | cap on concurrent provider requests per process; extra calls wait instead of fanning out (`0` = no cap) |
@@ -389,9 +389,18 @@ Other operator facts:
 
 ### Running over HTTP (experimental)
 
-The HTTP transport is Tier B experimental: it has no reliability contract and no admission control, and it is not covered by the parity suite. Only `127.0.0.1`, `localhost`, and `::1` are exempt from the token: exactly those hosts get the SDK's automatic Host/Origin validation. Every other host — `127.9.9.9`, `0:0:0:0:0:0:0:1`, `0.0.0.0`, a LAN address, a hostname — refuses to start unless `JEV_MCP_HTTP_TOKEN` is set, because every tool call would otherwise spend your provider key on behalf of anyone who can reach the port.
+The HTTP transport is Tier B experimental, with no reliability contract or admission control.
+Parity coverage is stdio-only. HTTP startup requires an expanded `JEV_MCP_HTTP_TOKEN` of at
+least 32 characters on every bind address, including loopback. A local process that can
+authenticate can spend the configured provider credential and invoke tools with the server's
+filesystem permissions. The SDK's Host and Origin checks still apply where enabled (ADR-0050).
 
-The default port is 8088, not 8000: 8000 is often already taken by a local model server or another dev server (ADR-0055). If 8088 is taken too, the process retries that same port for a couple of seconds and then exits non-zero with one line naming `JEV_MCP_HTTP_PORT` and the port. It does not pick a different port, and it leaves no listener behind. A port taken between that check and the listen refuses the same way, because the server binds the port itself and hands the sockets to the listener. Set the variable to a free port.
+The default port is 8088 (ADR-0055). Startup retries the configured port for up to two seconds
+if a listener already holds it, including a wildcard listener. A refused startup probe proceeds
+to bind without a retry delay. On success the server holds the socket through worker startup and
+hands it to uvicorn. On failure it exits with one line naming `JEV_MCP_HTTP_PORT`. The server can
+restart while connections from its previous listener are in `TIME_WAIT`. On SIGINT or SIGTERM,
+uvicorn gives active HTTP requests two seconds to finish before cancellation.
 
 Generate a token:
 

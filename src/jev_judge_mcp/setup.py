@@ -10,7 +10,6 @@ The key value is never printed.
 import argparse
 import asyncio
 import getpass
-import sys
 from collections.abc import Callable, Sequence
 
 from jev_judge_mcp.domain import NoulCriteria, NoulQuestion, Question
@@ -45,7 +44,7 @@ async def verify_key(settings: Settings, api_key: str) -> None:
 
 
 def main(
-    argv: Sequence[str] | None = None,
+    argv: Sequence[str],
     *,
     settings: Settings | None = None,
     prompt: Callable[[str], str] = getpass.getpass,
@@ -55,7 +54,7 @@ def main(
         prog="jev-judge-mcp setup",
         description="Verify a TypeSafe API key with one live call, then store it for runs without the variable.",
     )
-    parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+    parser.parse_args(list(argv))
     loaded = settings if settings is not None else load_settings()
     env_key = loaded.typesafe_api_key.get_secret_value() if loaded.typesafe_api_key is not None else ""
     try:

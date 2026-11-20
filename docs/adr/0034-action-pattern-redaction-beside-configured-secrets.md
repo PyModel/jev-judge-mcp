@@ -16,3 +16,15 @@ Extending `Redactor` to run the same table was rejected. That class is the ADR-0
 - The ten tools' error text is unchanged. `secret_values()` still means configured values only.
 - The command hook is the caller (ADR-0035). The ten tools do not call `redact_action`.
 - The capture stops at whitespace as well as at a quote or backslash, matching `src/redact.ts`. A reference is kept when that whole captured value is the reference.
+
+## Amendment (2026-11-19): preserve action targets and bound redaction work
+
+Credential prefixes for `sk-`, GitHub, Google and JWT tokens must start at a left boundary
+outside ASCII alphanumerics, underscores and hyphens. The `sk-` rule also uses the credential
+literal mixed-case and digit check. This keeps paths such as `task-runner-cache-2024-old` in the
+action the Bash judge sees. The URL rule scans each scheme-like run once.
+
+The command gate checks its 100,000 UTF-16-unit event ceiling before parsing or redacting in
+both permission modes. A larger event abstains by default and asks when `JEV_HOOK_REQUIRED=1`.
+Gate, screen, and compact-cut reserve five of their 30 harness seconds for local work and
+the reply. Compact-cut reads only regular transcripts and caps each tail read at 8 MiB.

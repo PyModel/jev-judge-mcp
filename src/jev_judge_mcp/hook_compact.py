@@ -8,6 +8,7 @@ PreCompact cannot inject compaction instructions (ADR-0077); this is the documen
 """
 
 import os
+import stat
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -117,11 +118,14 @@ def read_tail(path: str) -> str:
     The seek lands mid-line whenever the file is longer than the window, and a half-line is
     not a transcript event, so that partial first line is dropped.
     """
-    with open(path, "rb") as handle:
-        handle.seek(0, os.SEEK_END)
-        size = handle.tell()
+    flags = os.O_NONBLOCK | os.O_NOCTTY
+    with open(path, "rb", opener=lambda name, mode: os.open(name, mode | flags)) as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            return ""
+        size = info.st_size
         handle.seek(max(0, size - TRANSCRIPT_TAIL_BYTES))
-        data = handle.read()
+        data = handle.read(TRANSCRIPT_TAIL_BYTES)
     text = data.decode("utf-8", errors="replace")
     if size > TRANSCRIPT_TAIL_BYTES:
         newline = text.find("\n")
