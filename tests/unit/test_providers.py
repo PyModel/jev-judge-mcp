@@ -529,15 +529,13 @@ PHASES = ("connect", "read", "write", "pool")
 @pytest.mark.parametrize(
     ("timeout", "sent"),
     [
-        (None, dict.fromkeys(("connect", "read", "write", "pool"), 30.0)),
-        (2.5, dict.fromkeys(("connect", "read", "write", "pool"), 2.5)),
+        (None, {"connect": 7.5, "read": 30.0, "write": 30.0, "pool": 7.5}),
+        (2.5, {"connect": 0.625, "read": 2.5, "write": 2.5, "pool": 0.625}),
     ],
     ids=["stdio-default", "bounded"],
 )
 async def test_typesafe_request_timeout(timeout: float | None, sent: dict[str, float | None]) -> None:
-    """`evaluate` hands each attempt its deadline (ADR-0057): the policy's 30 s when the caller set
-    none (stdio), else the caller's remaining budget. The SDK would read a bare `None` as its 10 s
-    default, so a real number always reaches the transport."""
+    """The SDK receives the attempt cap and shorter limits for pre-delivery operations."""
     seen: list[object] = []
 
     def handler(request: httpx2.Request) -> httpx2.Response:
@@ -618,7 +616,10 @@ async def test_typesafe_gates_the_client_the_sdk_is_given() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("status", [200, 500])
-async def test_scout_019_stream_limit_stops_consumption(status: int, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("buffered", [False, True], ids=["streaming", "buffered"])
+async def test_scout_019_stream_limit_stops_consumption(
+    status: int, buffered: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from jev_judge_mcp.providers import base
 
     monkeypatch.setattr(base, "SUCCESS_BYTES_MAX", 8, raising=False)
@@ -628,22 +629,38 @@ async def test_scout_019_stream_limit_stops_consumption(status: int, monkeypatch
 
     class Body(httpx.AsyncByteStream):
         async def __aiter__(self):
-            for chunk in [b"12345678", b"9", b"unused"]:
+            for chunk in [b"1234", b"56789", b"unused"]:
                 consumed.append(chunk)
                 yield chunk
 
         async def aclose(self):
             closed.append(True)
 
-    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(status, stream=Body())))
+    body = b"123456789" + b"x" * 200 + b"omitted-tail"
+    response = httpx.Response(status, content=body) if buffered else httpx.Response(status, stream=Body())
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: response))
     provider = CompatibleProvider(Redactor([]), api_key="", base_url="https://fixture.invalid", client=client)
     try:
-        with pytest.raises(ProviderError, match="byte limit"):
+        with pytest.raises(ProviderError) as caught:
             await provider.evaluate({}, QUESTIONS, "fixture", 1)
     finally:
         await provider.aclose()
-    assert consumed == [b"12345678", b"9"]
-    assert closed == [True]
+    if status == 200:
+        assert "byte limit" in str(caught.value)
+    else:
+        assert caught.value.status == status
+        assert "12345678" in str(caught.value)
+        if buffered:
+            assert "123456789" in str(caught.value)
+            assert "omitted-tail" not in str(caught.value)
+        else:
+            assert "123456789" not in str(caught.value)
+    if buffered:
+        assert response.content == body
+        assert consumed == closed == []
+    else:
+        assert consumed == [b"1234", b"56789"]
+        assert closed == [True]
 
 
 @pytest.mark.anyio

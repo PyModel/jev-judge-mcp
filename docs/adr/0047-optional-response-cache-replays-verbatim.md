@@ -23,7 +23,8 @@ cost.
 - **Replay is verbatim.** The recorded answers, usage, provider, and model come back as one
   `Evaluation`, so every tool payload built from it is byte-identical to the first answer's. The
   cache never edits a response, never merges, and never synthesizes usage: a hit is the same
-  judgment the provider already gave. Tool outputs stay inside the parity contract.
+  judgment the provider already gave. A record with an invalid model or request ID is a cache
+  miss under ADR-0057's response bounds. Tool outputs stay inside the parity contract.
 - **Where it sits.** `Runtime.ask`, after provider resolution and before `evaluate`: the cache is
   provider access policy, not a provider (the resolved provider's name keys the entry, and its
   lifecycle is untouched). A hit records a `cache=hit` attribute on the `jev.evaluate` span — and

@@ -17,8 +17,11 @@ rates. Certified operating points: none yet ([`docs/EVIDENCE.md`](EVIDENCE.md)).
 
 The `model` field is the requested model on the TypeSafe provider (`jev-latest` unless
 `JEV_MCP_MODEL` is set) and the slug sent on OpenRouter (`typesafe/jev-1.13` for `jev-latest`).
-The compatible and Cloudflare providers report the body's `model` when it has one. A `jev-latest`
-caller on TypeSafe cannot see which version answered (ADR-0001 parity). UTF-16 caps below are not Jev's context
+The compatible and Cloudflare providers report a valid body `model` when available and otherwise
+report the model sent. All providers prefer a valid body request ID, then check the response
+headers, and omit `request_id` if neither supplies one. Upstream metadata strings must be
+nonempty, at most 1,024 characters, and printable ASCII (ADR-0057). A `jev-latest` caller on
+TypeSafe cannot see which version answered (ADR-0001 parity). UTF-16 caps below are not Jev's context
 window (64k tokens per request, 32k for state plus the longest question). An input inside every cap
 can still exceed that window and come back as `input_too_large` (ADR-0079): split the call.
 

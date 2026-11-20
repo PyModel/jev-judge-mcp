@@ -8,13 +8,15 @@ MCP cancellation aborts the in-flight request (ADR-0011), and transient transpor
 retried under one bounded policy that `evaluate` owns for all four providers (ADR-0057).
 """
 
+from __future__ import annotations
+
 import logging
 import math
 import re
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import ClassVar, Literal, Protocol, cast, override
+from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, cast, override
 from urllib.parse import urlsplit
 
 import anyio
@@ -22,7 +24,7 @@ import httpx
 
 import jev_judge_mcp.providers.retry as retries
 from jev_judge_mcp.domain import JsonValue, Question, RawAnswer, Usage, as_number, decode_json, questions_to_wire
-from jev_judge_mcp.errors import Redactor
+from jev_judge_mcp.errors import DEFAULT_PORTS, Redactor
 from jev_judge_mcp.providers.retry import (
     DEFAULT_RETRY_POLICY,
     RetryPolicy,
@@ -31,6 +33,9 @@ from jev_judge_mcp.providers.retry import (
 )
 from jev_judge_mcp.serialize import stringify_compact
 from jev_judge_mcp.text import head
+
+if TYPE_CHECKING:
+    import httpx2
 
 type ProviderName = Literal["typesafe", "openrouter", "cloudflare", "compatible"]
 
@@ -41,7 +46,7 @@ ERROR_BODY_UNITS = 200
 _ERROR_TYPE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 """An upstream `detail.error_type` kept on a status error: a bare identifier only (ADR-0079)."""
 
-_DEFAULT_PORTS = {"http": 80, "https": 443}
+_METADATA_MAX = 1024
 
 
 def origin_of(url: str | httpx.URL) -> tuple[str, str, int]:
@@ -50,7 +55,7 @@ def origin_of(url: str | httpx.URL) -> tuple[str, str, int]:
     Shared by both HTTP transports: the raw providers' redirect hook and the typesafe-sdk wrapper's.
     """
     parsed = url if isinstance(url, httpx.URL) else httpx.URL(url)
-    return (parsed.scheme, parsed.host or "", parsed.port or _DEFAULT_PORTS.get(parsed.scheme, 0))
+    return (parsed.scheme, parsed.host or "", parsed.port or DEFAULT_PORTS.get(parsed.scheme, 0))
 
 
 class ProviderError(Exception):
@@ -59,10 +64,6 @@ class ProviderError(Exception):
     `status` is set at the raise site (`_status_error`, or the exhausted-retry error that quotes
     that status). The kernel maps it to an error code; the text is not parsed (ADR-0062 amendment).
     """
-
-    def __init__(self, message: str, *, delivery_uncertain: bool = False) -> None:
-        super().__init__(message)
-        self.delivery_uncertain = delivery_uncertain
 
     status: int | None = None
     """The HTTP status of a status error; `None` on every other failure. Drives retry classification
@@ -102,7 +103,6 @@ def _redacted(error: ProviderError, redact: Redactor, note: str = "") -> Provide
     `type(error)(text)` alone drops `status`. A 401 would then code `provider` (ADR-0072).
     """
     redacted = type(error)(redact(str(error)) + note)
-    redacted.delivery_uncertain = error.delivery_uncertain
     redacted.status = error.status
     redacted.retry_after = error.retry_after
     redacted.error_type = error.error_type
@@ -133,7 +133,7 @@ class Envelope:
         return default if self.model is None else self.model
 
 
-def parse_envelope(body: object, label: str) -> Envelope:
+def parse_envelope(body: object, label: str, headers: Mapping[str, str] | None = None) -> Envelope:
     """Validate the envelope only, with the reference's `compatible` rules and messages (`provider.ts:175-194`).
 
     `usage` absent or null reports zeros; otherwise both counts must be finite non-negative numbers.
@@ -159,7 +159,12 @@ def parse_envelope(body: object, label: str) -> Envelope:
     model = envelope.get("model")
     if model is not None and not isinstance(model, str):
         raise invalid("model must be absent or a string.")
-    return Envelope(answers=answers, usage=usage, model=model, request_id=request_id_of(envelope))  # pyright: ignore[reportUnknownArgumentType]
+    return Envelope(
+        answers=answers,  # pyright: ignore[reportUnknownArgumentType]
+        usage=usage,
+        model=metadata_text(model),
+        request_id=request_id_of(envelope, headers),
+    )
 
 
 def usage_counts(usage: object) -> tuple[int | float, int | float] | None:
@@ -180,17 +185,22 @@ def usage_counts(usage: object) -> tuple[int | float, int | float] | None:
     return counts[0], counts[1]
 
 
+def metadata_text(value: object) -> str | None:
+    """Bound provider metadata before it is emitted or replayed."""
+    if isinstance(value, str) and 0 < len(value) <= _METADATA_MAX and value.isascii() and value.isprintable():
+        return value
+    return None
+
+
 def request_id_of(body: Mapping[str, object], headers: Mapping[str, str] | None = None) -> str | None:
     """A provider request id, or none. Never invented (ADR-0068)."""
-    value = body.get("request_id")
-    if isinstance(value, str) and value:
-        return value
-    if headers is None:
-        return None
+    identifier = metadata_text(body.get("request_id"))
+    if identifier is not None or headers is None:
+        return identifier
     for name in ("x-request-id", "request-id", "x-typesafe-request-id"):
-        for key, header in headers.items():
-            if key.lower() == name and header:
-                return header
+        identifier = metadata_text(retries.header_value(headers, name))
+        if identifier is not None:
+            return identifier
     return None
 
 
@@ -237,6 +247,11 @@ def refuse_credentials_in_url(url: str, label: str) -> None:
 def encode_json(value: object) -> bytes:
     """`JSON.stringify(value)` as the request body."""
     return stringify_compact(value).encode("utf-8")
+
+
+def pre_send_timeout(attempt_cap: float | None) -> float | None:
+    """Leave room for pool acquisition, TCP and TLS to report their own timeouts."""
+    return None if attempt_cap is None else attempt_cap / 4
 
 
 class JevProvider(ABC):
@@ -302,15 +317,12 @@ class JevProvider(ABC):
             # Redact the text, but keep the status the raise site recorded. Dropping it made a 401
             # look like a generic provider error once the text was no longer parsed (ADR-0072).
             ambiguous = isinstance(error, ProviderDeliveryError) or error.status == 408 or (error.status or 0) >= 500
-            error.delivery_uncertain |= ambiguous
-            raise _redacted(error, self._redact, uncertain if error.delivery_uncertain else "") from None
+            raise _redacted(error, self._redact, uncertain if ambiguous else "") from None
         except (TimeoutError, httpx.TimeoutException) as error:
             ambiguous = not isinstance(error, (httpx.ConnectTimeout, httpx.PoolTimeout))
             note = uncertain if ambiguous else ""
             after = "" if timeout is None else f" after {timeout:g} s"
-            raise ProviderTimeoutError(
-                f"{self.label} request timed out{after}.{note}", delivery_uncertain=ambiguous
-            ) from None
+            raise ProviderTimeoutError(f"{self.label} request timed out{after}.{note}") from None
         except Exception as error:
             # The original may carry a secret-bearing URL or header; only the redacted text leaves.
             # Some carry no message at all (a reset is a bare `RemoteProtocolError`): name the type.
@@ -320,9 +332,7 @@ class JevProvider(ABC):
                 (httpx.ReadError, httpx.WriteError, httpx.CloseError, httpx.RemoteProtocolError, ConnectionResetError),
             )
             note = uncertain if ambiguous else ""
-            raise ProviderError(
-                self._redact(f"{self.label} request failed: {cause}") + note, delivery_uncertain=ambiguous
-            ) from None
+            raise ProviderError(self._redact(f"{self.label} request failed: {cause}") + note) from None
 
     def _transient(self, error: Exception) -> TransientFailure | None:
         """The retryable transport failure `error` describes, or `None` when it must not be retried.
@@ -334,7 +344,7 @@ class JevProvider(ABC):
         if isinstance(error, ProviderConnectionError):
             return TransientFailure("connect", detail=str(error).removeprefix(f"{self.label} request failed: "))
         if isinstance(error, ProviderError):
-            if error.status == 429 and error.status in self._retry.statuses:
+            if error.status == 429:
                 return TransientFailure(
                     "status",
                     status=error.status,
@@ -402,48 +412,61 @@ SUCCESS_BYTES_MAX = 8 * 1024 * 1024
 ERROR_BYTES_MAX = 64 * 1024
 
 
-def response_limit(success: bool, encoding: str | None) -> int:
-    if encoding and encoding.strip().lower() != "identity":
-        raise ProviderError("provider returned an unsupported content encoding; requested identity")
-    return SUCCESS_BYTES_MAX if success else ERROR_BYTES_MAX
-
-
 class _ResponseStream(Protocol):
     def __aiter__(self) -> AsyncIterator[bytes]: ...
     async def aclose(self) -> None: ...
 
 
-class BoundedStream:
+class _BoundedStream:
     """Count before HTTPX buffers bytes. The client owns closure on success and exception."""
 
-    def __init__(self, source: _ResponseStream, limit: int) -> None:
+    def __init__(self, source: _ResponseStream, limit: int, success: bool) -> None:
         self.source = source
         self.limit = limit
+        self.success = success
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
-        consumed = 0
+        left = self.limit
         async for data in self.source:
-            consumed += len(data)
-            if consumed > self.limit:
-                raise ProviderError(f"provider response exceeds the {self.limit}-byte limit")
+            if len(data) > left:
+                if self.success:
+                    raise ProviderError(f"provider response exceeds the {self.limit}-byte limit")
+                yield data[:left]
+                return
+            left -= len(data)
             yield data
+            if not self.success and left == 0:
+                return
 
     async def aclose(self) -> None:
         await self.source.aclose()
 
 
-class _HttpStream(BoundedStream, httpx.AsyncByteStream):
-    pass
+def bounded_response_hook[ResponseT: (httpx.Response, httpx2.Response)](
+    stream_type: type[httpx.AsyncByteStream] | type[httpx2.AsyncByteStream],
+) -> Callable[[ResponseT], Awaitable[None]]:
+    # Both transports require a stream that inherits their own AsyncByteStream class.
+    stream = type("BoundedStream", (_BoundedStream, stream_type), {})
+
+    async def bound(response: ResponseT) -> None:
+        encoding = response.headers.get("content-encoding")
+        if encoding and encoding.strip().lower() != "identity":
+            raise ProviderError("provider returned an unsupported content encoding; requested identity")
+        success = response.is_success
+        limit = SUCCESS_BYTES_MAX if success else ERROR_BYTES_MAX
+        if response.is_stream_consumed:
+            if success and len(response.content) > limit:
+                raise ProviderError(f"provider response exceeds the {limit}-byte limit")
+        else:
+            assert isinstance(response.stream, stream_type)
+            wrapped = stream(response.stream, limit, success)
+            assert isinstance(wrapped, stream_type)
+            response.stream = wrapped
+
+    return bound
 
 
-async def _bound_response(response: httpx.Response) -> None:
-    limit = response_limit(response.is_success, response.headers.get("content-encoding"))
-    if response.is_stream_consumed:
-        if len(response.content) > limit:
-            raise ProviderError(f"provider response exceeds the {limit}-byte limit")
-    else:
-        assert isinstance(response.stream, httpx.AsyncByteStream)
-        response.stream = _HttpStream(response.stream, limit)
+_bound_response: Callable[[httpx.Response], Awaitable[None]] = bounded_response_hook(httpx.AsyncByteStream)
 
 
 class HttpProvider(JevProvider):
@@ -467,7 +490,7 @@ class HttpProvider(JevProvider):
         # The allowed origin is fixed per instance: it comes from process config (ADR-0008), so the
         # lazy first-request assignment races only with itself, writing the same value.
         self._origin: tuple[str, str, int] | None = None
-        # Like `fetch`: no timeout of its own (`evaluate` owns the deadline), and redirects are followed.
+        # Redirects are followed within the attempt deadline set by `evaluate`.
         self._client = client or httpx.AsyncClient(
             timeout=None,  # noqa: S113 - `evaluate` owns the deadline
             follow_redirects=True,
@@ -492,11 +515,13 @@ class HttpProvider(JevProvider):
             logger.warning("blocked a cross-origin redirect to %s://%s", request.url.scheme, request.url.host)
             raise ProviderError(f"{self.label} request failed: a redirect left the configured origin and was blocked")
 
-    async def _post(self, url: str, headers: Mapping[str, str], body: object) -> httpx.Response:
+    async def _post(self, url: str, headers: Mapping[str, str], body: object, timeout: float | None) -> httpx.Response:
+        before_send = pre_send_timeout(timeout)
         return await self._client.post(
             url,
             content=encode_json(body),
             headers={**headers, "Content-Type": "application/json", "Accept-Encoding": "identity"},
+            timeout=httpx.Timeout(timeout, connect=before_send, pool=before_send),
         )
 
     def _error(self, response: httpx.Response) -> ProviderError:

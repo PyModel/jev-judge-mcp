@@ -361,12 +361,11 @@ or latency:
 text are sent to the provider in one request, however large, so token cost and latency scale with
 what the caller passes. Bound the text at the call site when it is not yours.
 - Requests over stdio still carry no whole-call provider deadline (the sanctioned divergence
-`stdio-attempt-deadline`): the client's cancellation remains the recovery path for a call. Every
-provider attempt is bounded, though (ADR-0057): a hung connection times out after 30 s and a
-transient failure — connection errors, timeouts, 408/429/5xx — is retried, up to 3 attempts with
-capped exponential backoff (server `Retry-After` hints honored, capped at 5 s) inside a 90 s
-budget. A call whose attempts all fail reports the provider, the attempt count, and the last
-failure.
+`stdio-attempt-deadline`), and client cancellation stops the call. The provider policy allows
+up to 3 attempts, each capped at 30 s, inside a 90 s budget (ADR-0057). Only connection or
+pool-acquisition failures before delivery and HTTP 429 are retried. Generated backoff is capped at
+5 s, and a server `Retry-After` hint can raise the delay when at least 1 s remains for the next
+attempt. Exhausted retries report the provider, the attempt count, and the last failure.
 
 Other operator facts:
 

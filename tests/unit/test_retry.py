@@ -17,7 +17,7 @@ def test_defaults_match_adr_0057() -> None:
     policy = RetryPolicy()
     assert (policy.max_attempts, policy.per_attempt_timeout, policy.backoff_initial) == (3, 30.0, 0.5)
     assert (policy.backoff_max, policy.backoff_jitter, policy.budget) == (5.0, 0.25, 90.0)
-    assert policy.statuses == frozenset({429})
+    assert not hasattr(policy, "statuses")
 
 
 def _invalid(**overrides: object) -> RetryPolicy:
@@ -59,9 +59,10 @@ def test_backoff_doubles_and_is_jittered_subtractively(monkeypatch: pytest.Monke
     assert retry_timing.backoff_delay(policy, 1) == 0.438  # round(0.5 * (1 - 0.5 * 0.25), 3)
 
 
-def test_retry_after_is_a_minimum_within_the_remaining_budget() -> None:
+def test_retry_after_is_a_minimum_within_the_remaining_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(retry_timing, "uniform", lambda: 0.0)
     policy = RetryPolicy()
-    assert retry_timing.retry_delay(policy, 1, 0.0, policy.budget, retry_after=0.25) == 0.25
+    assert retry_timing.retry_delay(policy, 1, 0.0, policy.budget, retry_after=0.25) == 0.5
     assert retry_timing.retry_delay(policy, 1, 0.0, policy.budget, retry_after=6.0) == 6.0
     assert retry_timing.retry_delay(policy, 1, 0.0, policy.budget, retry_after=3600.0) is None
 
@@ -71,7 +72,7 @@ def test_retry_stops_at_max_attempts_and_at_the_budget(monkeypatch: pytest.Monke
     policy = RetryPolicy()
     assert retry_timing.retry_delay(policy, 3, 0.0, policy.budget) is None  # attempt cap reached
     assert retry_timing.retry_delay(policy, 1, 89.5, policy.budget) is None  # 89.5 + 0.5 reaches budget
-    assert retry_timing.retry_delay(policy, 1, 89.4, policy.budget) == 0.5
+    assert retry_timing.retry_delay(policy, 1, 88.5, policy.budget) == 0.5
     # A caller's whole-call budget binds harder than the policy's.
     assert retry_timing.retry_delay(policy, 1, 9.5, 10.0) is None
 

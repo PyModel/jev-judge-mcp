@@ -165,7 +165,21 @@
       ],
       "fixtures": [],
       "reference_behavior": "askJev passes no timeout of its own. The typesafe path still gets the pinned SDK 0.6.0 default of 10s per attempt; the fetch-based providers pass no timeout, so a hung connection waits until the client cancels.",
-      "python_behavior": "Runtime.ask still passes no whole-call deadline (the client's MCP cancellation is the recovery path for the call), but every provider attempt is bounded by the retry policy's 30 s per-attempt deadline and the whole bounded sequence by its 90 s budget, so a hung connection becomes a bounded, retryable failure and a transient one is retried (ADR-0057)."
+      "python_behavior": "Runtime.ask passes no whole-call deadline. Each provider attempt is capped at 30 s within a 90 s retry budget. Only HTTP 429 and pre-delivery connection or pool failures retry. A retry waits at least the generated backoff and the server hint and requires at least 1 s for the next attempt (ADR-0057)."
+    },
+    {
+      "id": "provider-response-bounds",
+      "surface": "provider",
+      "tier": "both",
+      "status": "sanctioned",
+      "adr": "docs/adr/0057-one-retry-owner-bounded-provider-retries.md",
+      "tests": [
+        "tests/contract/test_providers.py::test_response_metadata_requires_bounded_printable_ascii",
+        "tests/contract/test_providers.py::test_oversized_http_errors_keep_status_and_retry_classification"
+      ],
+      "fixtures": [],
+      "reference_behavior": "The recorded reference contract does not prescribe limits for provider response bodies or metadata strings.",
+      "python_behavior": "Success bodies are capped at 8 MiB. Streamed errors retain up to 64 KiB, already-buffered errors pass through intact, and status is preserved. Upstream model and request-ID strings must be nonempty printable ASCII of at most 1,024 characters."
     },
     {
       "id": "http-tier-b-experimental",

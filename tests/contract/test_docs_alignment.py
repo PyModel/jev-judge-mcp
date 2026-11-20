@@ -601,11 +601,8 @@ def test_limits_page_says_an_upstream_401_is_auth() -> None:
 
 
 def test_limits_page_names_529_as_terminal() -> None:
-    """L3: Keep the documented 529 outcome aligned with the delivery policy."""
-    from jev_judge_mcp.providers.retry import DEFAULT_RETRY_POLICY
-
+    """L3: The provider contract tests pin the terminal 529 outcome."""
     page = _LIMITS_PAGE.read_text(encoding="utf-8")
-    assert 529 not in DEFAULT_RETRY_POLICY.statuses
     assert "`529 Overloaded` ends the attempt because completion is uncertain" in page
 
 

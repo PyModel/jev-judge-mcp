@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from urllib.parse import urlsplit
 
 REDACTED = "[redacted]"
+DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 class Redactor:
@@ -56,7 +57,7 @@ def _normalized_url(secret: str) -> str | None:
         return None
     if not parts.scheme or not host:
         return None
-    default = {"http": 80, "https": 443}.get(parts.scheme.lower())
+    default = DEFAULT_PORTS.get(parts.scheme.lower())
     authority = host.lower() + (f":{port}" if port is not None and port != default else "")
     userinfo, at, _ = parts.netloc.rpartition("@")
     if at:
